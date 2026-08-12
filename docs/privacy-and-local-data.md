@@ -31,15 +31,19 @@ Toastty is designed to run locally on your machine. The app itself does not send
     20 items and may contain URLs or local paths that identify the supporting
     material you opened.
 - `~/.toastty/remote-access/devices.json`
-  - Paired-device IDs, names, scopes, timestamps, revocation state, and hashes
-    of device credentials. Toastty never persists the credential tokens handed
-    to paired browsers. The file and its parent directory use owner-only
-    permissions.
+  - Paired-device IDs, names, browser/native kind, scopes, timestamps,
+    revocation state, and SHA-256 hashes of device credentials. Native records
+    also contain the exact Tailscale login used for identity binding. Persistent
+    native pairing-failure state is keyed by that identity so brute-force
+    lockouts survive gateway restarts. Toastty never persists the credential
+    tokens handed to browsers or native apps. The file and its parent directory
+    use owner-only permissions (0600 file in a 0700 directory).
 - `~/.toastty/remote-access/audit.json`
   - Up to 500 recent remote-access security and lifecycle events, including
-    timestamps, action names, device IDs, device names where relevant, and
-    rejection reasons. It does not contain message text, prompts, transcript
-    content, or credential values. The file and its parent directory use
+    timestamps, action names, device IDs, and bounded non-identifying reason
+    codes where relevant. It does not contain device names, message text,
+    prompts, transcript content, credential values, pairing proofs, Tailscale
+    logins, or gateway hostnames. The file and its parent directory use
     owner-only permissions.
 - `~/.toastty/managed-agent-resume/`
   - Toastty-owned marker files for OpenCode and MiMo Code native resume records.
@@ -156,6 +160,16 @@ can be revoked from the Mac. Remote Access activity is not sent to a Toastty
 cloud service. Network transport and tailnet access remain subject to the
 user's Tailscale account, ACLs, DNS, and Serve configuration. See
 [Remote Access](remote-access.md) for setup and revocation guidance.
+
+Native pairing offers are memory-only. Their QR secret and fallback code are
+discarded on success, cancellation, reissue, expiry, or when Remote Access is
+disabled. Native credentials are bound to the exact Tailscale login stored in
+the owner-only device file; the raw login, offer proofs, credential values, and
+public gateway hostname are excluded from routine remote-access logs and audit
+entries. The transcript tailer likewise does not put provider transcript paths
+or filesystem error descriptions into its routine logs. Optional pending
+interaction previews travel only in bounded gateway snapshots and are not
+copied to audit entries, logs, or diagnostics.
 
 ## Diagnostics upload
 

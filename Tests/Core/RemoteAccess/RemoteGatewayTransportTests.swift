@@ -39,6 +39,76 @@ struct RemoteGatewayHTTPTests {
         #expect(RemoteGatewayHTTPRequest.parse(Data("GET / HT".utf8)) == .needMoreData)
     }
 
+    @Test func parserPreservesRepeatedSecurityHeadersAndRejectsDuplicateContentLength() {
+        let raw = "GET /api/sessions HTTP/1.1\r\nAuthorization: Bearer first\r\nAuthorization: Bearer second\r\nTailscale-User-Login: first@example.com\r\nTailscale-User-Login: second@example.com\r\n\r\n"
+        guard case .request(let request, _) = RemoteGatewayHTTPRequest.parse(Data(raw.utf8)) else {
+            Issue.record("Expected parsed request")
+            return
+        }
+        #expect(request.headerValues("authorization") == ["Bearer first", "Bearer second"])
+        #expect(request.headerValues("tailscale-user-login") == ["first@example.com", "second@example.com"])
+
+        let ambiguousLength = "POST /api/pair HTTP/1.1\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n"
+        #expect(RemoteGatewayHTTPRequest.parse(Data(ambiguousLength.utf8)) == .invalid)
+    }
+
+    @Test func parserRejectsInvalidHeaderNamesAndObsoleteFolding() {
+        let invalidHeaders = [
+            ": value",
+            " Bad: value",
+            "\tBad: value",
+            "Bad : value",
+            "Bad@Name: value",
+            "Bad(Name): value",
+            "X-Good: first\r\n continued",
+            "X-Good: first\r\n\tcontinued",
+        ]
+        for header in invalidHeaders {
+            let raw = "GET / HTTP/1.1\r\n\(header)\r\n\r\n"
+            #expect(RemoteGatewayHTTPRequest.parse(Data(raw.utf8)) == .invalid)
+        }
+
+        let valid = "GET / HTTP/1.1\r\nX_Good-Token:\t value \t\r\n\r\n"
+        guard case .request(let request, _) = RemoteGatewayHTTPRequest.parse(Data(valid.utf8)) else {
+            Issue.record("Expected valid token header")
+            return
+        }
+        #expect(request.header("x_good-token") == "value")
+    }
+
+    @Test func parserRejectsInvalidContentLengthHostAndTransferEncoding() {
+        let invalidRequests = [
+            "POST / HTTP/1.1\r\nContent-Length:\r\n\r\n",
+            "POST / HTTP/1.1\r\nContent-Length:   \r\n\r\n",
+            "POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n",
+            "POST / HTTP/1.1\r\nContent-Length: +1\r\n\r\nx",
+            "POST / HTTP/1.1\r\nContent-Length: nope\r\n\r\n",
+            "POST / HTTP/1.1\r\nContent-Length: 1x\r\n\r\nx",
+            "POST / HTTP/1.1\r\nContent-Length: 999999999999999999999999999999\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost: first\r\nHost: second\r\n\r\n",
+            "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+        ]
+        for raw in invalidRequests {
+            #expect(RemoteGatewayHTTPRequest.parse(Data(raw.utf8)) == .invalid)
+        }
+    }
+
+    @Test func parserAcceptsOnlyOriginFormTargetsAndExactHTTP1Versions() {
+        let invalidRequestLines = [
+            "GET http://example.com/path HTTP/1.1",
+            "CONNECT example.com:443 HTTP/1.1",
+            "OPTIONS * HTTP/1.1",
+            "GET /path#fragment HTTP/1.1",
+            "GET  /path HTTP/1.1",
+            "GET /path  HTTP/1.1",
+            "GET /path HTTP/1.2",
+        ]
+        for requestLine in invalidRequestLines {
+            let raw = "\(requestLine)\r\n\r\n"
+            #expect(RemoteGatewayHTTPRequest.parse(Data(raw.utf8)) == .invalid)
+        }
+    }
+
     @Test func responsesCarrySecurityHeaders() throws {
         let response = RemoteGatewayHTTPResponse.text(status: 200, reason: "OK", "hi")
         let serialized = try #require(String(data: response.serialized(), encoding: .utf8))
@@ -139,6 +209,14 @@ private struct StubFacade: RemoteSessionFacade {
     }
 }
 
+private final class PersistenceWriteBudget: @unchecked Sendable {
+    var remaining: Int
+
+    init(_ remaining: Int) {
+        self.remaining = remaining
+    }
+}
+
 struct RemoteGatewayRequestHandlerTests {
     static let now = Date(timeIntervalSince1970: 1_786_200_000)
     static let origin = "https://mac.tailnet.ts.net"
@@ -154,7 +232,8 @@ struct RemoteGatewayRequestHandlerTests {
         pairingLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 2, windowDuration: 60, lockoutDuration: 300),
         authLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300),
         eventsOutcome: ConversationEventPageOutcome = .conversationNotFound,
-        sendHandler: RemoteGatewayRequestHandler.SendHandler? = nil
+        sendHandler: RemoteGatewayRequestHandler.SendHandler? = nil,
+        nativeIdentityForTesting: String? = nil
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
         let audit = RemoteAccessAuditLog(fileURL: nil)
         let snapshot = RemoteSessionListSnapshot(
@@ -173,6 +252,7 @@ struct RemoteGatewayRequestHandlerTests {
                 ]
             ),
             sendHandler: sendHandler,
+            nativeIdentityForTesting: nativeIdentityForTesting,
             pairingRateLimiter: pairingLimiter,
             authRateLimiter: authLimiter
         )
@@ -193,12 +273,62 @@ struct RemoteGatewayRequestHandlerTests {
         return RemoteGatewayHTTPRequest(method: method, path: path, headers: headers, body: Data(body.utf8))
     }
 
+    static func request(
+        _ method: String,
+        _ path: String,
+        headerFields: [(String, String)],
+        body: Data = Data()
+    ) -> RemoteGatewayHTTPRequest {
+        RemoteGatewayHTTPRequest(method: method, path: path, headerFields: headerFields, body: body)
+    }
+
     static func pairedDeviceCookie(_ store: RemoteDeviceStore) -> String {
         let code = store.issuePairingCode(at: now)
         guard case .paired(_, let token) = try! store.redeemPairingCode(code.code, deviceName: "Phone", at: now) else {
             fatalError("pairing must succeed")
         }
         return "\(RemoteGatewayProtocol.credentialCookieName)=\(token)"
+    }
+
+    static func nativeCredential(
+        handler: RemoteGatewayRequestHandler,
+        store: RemoteDeviceStore,
+        identity: String = "owner@example.com"
+    ) throws -> (credential: String, device: RemoteGatewayDeviceSummary) {
+        let offer = try store.issueNativePairingOffer(
+            gatewayURL: URL(string: "https://mac.tailnet.ts.net")!,
+            at: now
+        )
+        let exchange = RemoteGatewayNativePairingExchangeRequest(
+            deviceName: "Native Phone",
+            offerID: offer.id,
+            secret: offer.qrPayload.secret
+        )
+        let body = try ConversationEventCoding.makeEncoder().encode(exchange)
+        guard case .respond(let response) = handler.handle(
+            request(
+                "POST",
+                "/v1/native-pairing/exchange",
+                headerFields: [("tailscale-user-login", identity)],
+                body: body
+            ),
+            at: now
+        ) else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        #expect(response.status == 200)
+        let decoded = try ConversationEventCoding.makeDecoder().decode(
+            RemoteGatewayNativePairingExchangeResponse.self,
+            from: response.body
+        )
+        // V1 credentials are issued atomically with their device and never
+        // rotate, making the device creation date the credential issue date.
+        #expect(decoded.credentialCreatedAt == now)
+        return (decoded.credential, decoded.device)
+    }
+
+    static func error(_ response: RemoteGatewayHTTPResponse) throws -> RemoteGatewayErrorResponse {
+        try ConversationEventCoding.makeDecoder().decode(RemoteGatewayErrorResponse.self, from: response.body)
     }
 
     @Test func servesStaticIndexAtRoot() {
@@ -227,7 +357,7 @@ struct RemoteGatewayRequestHandlerTests {
             from: response.body
         )
         #expect(hello == RemoteGatewayHelloResponse())
-        #expect(hello.capabilities == [.browserCookiePairing])
+        #expect(hello.capabilities == [.browserCookiePairing, .nativeBearerPairing])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
         #expect(response.body == expectedFixture)
@@ -344,6 +474,228 @@ struct RemoteGatewayRequestHandlerTests {
         #expect(audit.recentEntries().contains { $0.action == .rateLimitLockout })
     }
 
+    @Test func routeCatalogIsCompleteAndEveryKnownPathRejectsWrongMethods() {
+        #expect(RemoteGatewayRoutePolicy.fixed.count == RemoteGatewayRoute.allCases.count)
+        #expect(Set(RemoteGatewayRoutePolicy.fixed.keys) == Set(RemoteGatewayRoute.allCases))
+
+        let (handler, _, _) = Self.makeHandler()
+        for route in RemoteGatewayRoute.allCases {
+            guard let policy = RemoteGatewayRoutePolicy.fixed[route] else {
+                Issue.record("Missing policy for \(route)")
+                continue
+            }
+            let wrongMethod = policy.method == "GET" ? "POST" : "GET"
+            guard case .respond(let response) = handler.handle(
+                Self.request(wrongMethod, route.path),
+                at: Self.now
+            ) else {
+                Issue.record("Expected response for \(route.path)")
+                continue
+            }
+            #expect(response.status == 405)
+            #expect(response.headers.contains { $0.0 == "Allow" && $0.1 == policy.method })
+        }
+    }
+
+    @Test func optionsAndUnknownMethodsNeverEnableCORS() throws {
+        let (handler, _, _) = Self.makeHandler()
+        for path in RemoteGatewayRoute.allCases.map(\.path) + ["/", "/unknown"] {
+            guard case .respond(let response) = handler.handle(
+                Self.request("OPTIONS", path, origin: Self.origin),
+                at: Self.now
+            ) else {
+                Issue.record("Expected response for \(path)")
+                continue
+            }
+            #expect(response.status == (path == "/unknown" ? 404 : 405))
+            let serialized = try #require(String(data: response.serialized(), encoding: .utf8))
+            #expect(serialized.localizedCaseInsensitiveContains("access-control-allow") == false)
+        }
+    }
+
+    @Test func nativeExchangeRejectsEveryBrowserContextBeforeIdentityOrState() throws {
+        let contexts: [[(String, String)]] = [
+            [("authorization", "Bearer ignored")],
+            [("cookie", "a=b")],
+            [("origin", Self.origin)],
+            [("sec-fetch-site", "same-origin")],
+            [("sec-fetch-mode", "cors")],
+        ]
+        for headerFields in contexts {
+            let (handler, store, _) = Self.makeHandler(nativeIdentityForTesting: "owner@example.com")
+            let offer = try store.issueNativePairingOffer(
+                gatewayURL: URL(string: "https://mac.tailnet.ts.net")!,
+                at: Self.now
+            )
+            let body = try ConversationEventCoding.makeEncoder().encode(
+                RemoteGatewayNativePairingExchangeRequest(
+                    deviceName: "Phone",
+                    offerID: offer.id,
+                    secret: offer.qrPayload.secret
+                )
+            )
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/v1/native-pairing/exchange", headerFields: headerFields, body: body),
+                at: Self.now
+            ) else {
+                Issue.record("Expected response")
+                continue
+            }
+            #expect(response.status == 403)
+            #expect(try Self.error(response).code == "browser_context_denied")
+            #expect(store.activeNativePairingOffer(at: Self.now) != nil)
+        }
+    }
+
+    @Test func browserPairRejectsAuthorizationBeforeRedeemingCode() throws {
+        let (handler, store, _) = Self.makeHandler()
+        let code = store.issuePairingCode(at: Self.now)
+        guard case .respond(let response) = handler.handle(
+            Self.request(
+                "POST",
+                "/api/pair",
+                origin: Self.origin,
+                body: #"{"code":"\#(code.code)","deviceName":"Phone"}"#,
+                extraHeaders: ["authorization": "Bearer hostile"]
+            ),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 403)
+        #expect(try Self.error(response).code == "authorization_not_allowed")
+        #expect(store.hasActivePairingCode)
+    }
+
+    @Test func nativeExchangeValidatesProtocolIdentityProofShapeAndTightBodyBound() throws {
+        let (handler, store, _) = Self.makeHandler()
+        let offer = try store.issueNativePairingOffer(
+            gatewayURL: URL(string: "https://mac.tailnet.ts.net")!,
+            at: Self.now
+        )
+        let encoder = ConversationEventCoding.makeEncoder()
+
+        let valid = try encoder.encode(RemoteGatewayNativePairingExchangeRequest(
+            deviceName: "Phone",
+            offerID: offer.id,
+            secret: offer.qrPayload.secret
+        ))
+        guard case .respond(let missingIdentity) = handler.handle(
+            Self.request("POST", "/v1/native-pairing/exchange", headerFields: [], body: valid),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(missingIdentity.status == 401)
+        #expect(try Self.error(missingIdentity).code == "identity_unavailable")
+
+        let mismatch = try encoder.encode(RemoteGatewayNativePairingExchangeRequest(
+            protocolVersion: "99.0",
+            deviceName: "Phone",
+            offerID: offer.id,
+            secret: offer.qrPayload.secret
+        ))
+        guard case .respond(let protocolMismatch) = handler.handle(
+            Self.request("POST", "/v1/native-pairing/exchange", headerFields: [("tailscale-user-login", "owner@example.com")], body: mismatch),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(protocolMismatch.status == 409)
+        #expect(try Self.error(protocolMismatch).code == "protocol_mismatch")
+
+        let bothProofs = try encoder.encode(RemoteGatewayNativePairingExchangeRequest(
+            deviceName: "Phone",
+            offerID: offer.id,
+            secret: offer.qrPayload.secret,
+            fallbackCode: offer.fallbackCode
+        ))
+        guard case .respond(let invalidShape) = handler.handle(
+            Self.request("POST", "/v1/native-pairing/exchange", headerFields: [("tailscale-user-login", "owner@example.com")], body: bothProofs),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(invalidShape.status == 400)
+        #expect(store.activeNativePairingOffer(at: Self.now) != nil)
+
+        guard case .respond(let oversized) = handler.handle(
+            Self.request(
+                "POST",
+                "/v1/native-pairing/exchange",
+                headerFields: [("tailscale-user-login", "owner@example.com")],
+                body: Data(repeating: 0x41, count: 2_049)
+            ),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(oversized.status == 400)
+        #expect(store.activeNativePairingOffer(at: Self.now) != nil)
+    }
+
+    @Test func missingWrongAndConsumedNativeProofsAreIndistinguishable() throws {
+        let decoder = ConversationEventCoding.makeDecoder()
+        let identity = "owner@example.com"
+
+        func exchange(
+            handler: RemoteGatewayRequestHandler,
+            request: RemoteGatewayNativePairingExchangeRequest
+        ) throws -> RemoteGatewayHTTPResponse {
+            let body = try ConversationEventCoding.makeEncoder().encode(request)
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/v1/native-pairing/exchange", headerFields: [("tailscale-user-login", identity)], body: body),
+                at: Self.now
+            ) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            return response
+        }
+
+        let (missingHandler, _, _) = Self.makeHandler()
+        let missing = try exchange(
+            handler: missingHandler,
+            request: RemoteGatewayNativePairingExchangeRequest(
+                deviceName: "Phone",
+                offerID: UUID(),
+                secret: String(repeating: "a", count: 43)
+            )
+        )
+
+        let (wrongHandler, wrongStore, _) = Self.makeHandler()
+        let wrongOffer = try wrongStore.issueNativePairingOffer(gatewayURL: URL(string: "https://mac.tailnet.ts.net")!, at: Self.now)
+        let wrong = try exchange(
+            handler: wrongHandler,
+            request: RemoteGatewayNativePairingExchangeRequest(
+                deviceName: "Phone",
+                offerID: wrongOffer.id,
+                secret: String(repeating: "a", count: 43)
+            )
+        )
+
+        let (consumedHandler, consumedStore, _) = Self.makeHandler()
+        let consumedOffer = try consumedStore.issueNativePairingOffer(gatewayURL: URL(string: "https://mac.tailnet.ts.net")!, at: Self.now)
+        let validRequest = RemoteGatewayNativePairingExchangeRequest(
+            deviceName: "Phone",
+            offerID: consumedOffer.id,
+            secret: consumedOffer.qrPayload.secret
+        )
+        #expect(try exchange(handler: consumedHandler, request: validRequest).status == 200)
+        let consumed = try exchange(handler: consumedHandler, request: validRequest)
+
+        for response in [missing, wrong, consumed] {
+            #expect(response.status == 403)
+            #expect(try decoder.decode(RemoteGatewayErrorResponse.self, from: response.body).code == "invalid_pairing_offer")
+        }
+        #expect(missing.body == wrong.body)
+        #expect(wrong.body == consumed.body)
+    }
+
     @Test func sessionListRequiresCredential() throws {
         let (handler, store, _) = Self.makeHandler()
         guard case .respond(let unauthorized) = handler.handle(Self.request("GET", "/api/sessions"), at: Self.now) else {
@@ -363,6 +715,494 @@ struct RemoteGatewayRequestHandlerTests {
         #expect(authorized.status == 200)
         let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteGatewaySessionListResponse.self, from: authorized.body)
         #expect(decoded.protocolVersion == RemoteGatewayProtocol.version)
+    }
+
+    @Test func nativeBearerAuthorizesDataWithoutOriginAndRejectsIdentityFailures() throws {
+        let identity = "owner@example.com"
+        let (handler, store, _) = Self.makeHandler()
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+
+        guard case .respond(let allowed) = handler.handle(
+            Self.request(
+                "GET",
+                "/api/sessions",
+                headerFields: [
+                    ("authorization", "Bearer \(native.credential)"),
+                    ("tailscale-user-login", identity),
+                ]
+            ),
+            at: Self.now.addingTimeInterval(1)
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(allowed.status == 200)
+
+        guard case .respond(let absentIdentity) = handler.handle(
+            Self.request("GET", "/api/sessions", headerFields: [("authorization", "Bearer \(native.credential)")]),
+            at: Self.now.addingTimeInterval(2)
+        ), case .respond(let mismatchedIdentity) = handler.handle(
+            Self.request(
+                "GET",
+                "/api/sessions",
+                headerFields: [
+                    ("authorization", "Bearer \(native.credential)"),
+                    ("tailscale-user-login", "other@example.com"),
+                ]
+            ),
+            at: Self.now.addingTimeInterval(3)
+        ) else {
+            Issue.record("Expected responses")
+            return
+        }
+        #expect(absentIdentity.status == 401)
+        #expect(try Self.error(absentIdentity).code == "identity_unavailable")
+        #expect(mismatchedIdentity.status == 401)
+        #expect(try Self.error(mismatchedIdentity).code == "identity_mismatch")
+        #expect(String(data: mismatchedIdentity.body, encoding: .utf8)?.contains(identity) == false)
+    }
+
+    @Test func authorizationPresenceAlwaysWinsWithoutCookieFallback() throws {
+        let (handler, store, _) = Self.makeHandler(nativeIdentityForTesting: "owner@example.com")
+        let cookie = Self.pairedDeviceCookie(store)
+        let hostileValues = [
+            "",
+            "Bearer",
+            "Bearer ",
+            "Basic abc",
+            "Bearer token extra",
+            "Bearer bad,second",
+            "Bearer " + String(repeating: "a", count: 257),
+        ]
+        for value in hostileValues {
+            guard case .respond(let response) = handler.handle(
+                Self.request(
+                    "GET",
+                    "/api/sessions",
+                    headerFields: [
+                        ("authorization", value),
+                        ("cookie", cookie),
+                    ]
+                ),
+                at: Self.now
+            ) else {
+                Issue.record("Expected response")
+                continue
+            }
+            #expect(response.status == 401)
+            #expect(try Self.error(response).code == "credential_invalid")
+        }
+
+        guard case .respond(let duplicated) = handler.handle(
+            Self.request(
+                "GET",
+                "/api/sessions",
+                headerFields: [
+                    ("authorization", "Bearer first"),
+                    ("authorization", "Bearer second"),
+                    ("cookie", cookie),
+                ]
+            ),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(duplicated.status == 401)
+        #expect(try Self.error(duplicated).code == "credential_invalid")
+    }
+
+    @Test func malformedNativeAndAmbiguousCookieFailuresDoNotDriveBrowserLimiter() throws {
+        let limiter = RemoteAccessRateLimiter(maximumFailures: 2, windowDuration: 60, lockoutDuration: 300)
+        let identity = "owner@example.com"
+        let (handler, store, audit) = Self.makeHandler(
+            authLimiter: limiter,
+            nativeIdentityForTesting: identity
+        )
+        let validBrowserCookie = Self.pairedDeviceCookie(store)
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+
+        let nonCountingRequests: [RemoteGatewayHTTPRequest] = [
+            Self.request("GET", "/api/sessions"),
+            Self.request("GET", "/api/sessions", cookie: "unrelated=value"),
+            Self.request("GET", "/api/sessions", cookie: "\(RemoteGatewayProtocol.credentialCookieName)="),
+            Self.request(
+                "GET",
+                "/api/sessions",
+                headerFields: [
+                    ("cookie", "\(RemoteGatewayProtocol.credentialCookieName)=first"),
+                    ("cookie", "\(RemoteGatewayProtocol.credentialCookieName)=second"),
+                ]
+            ),
+            Self.request(
+                "GET",
+                "/api/sessions",
+                cookie: "\(RemoteGatewayProtocol.credentialCookieName)=first; \(RemoteGatewayProtocol.credentialCookieName)=second"
+            ),
+            Self.request(
+                "GET",
+                "/api/sessions",
+                headerFields: [
+                    ("authorization", "Bearer"),
+                    ("cookie", validBrowserCookie),
+                ]
+            ),
+            Self.request(
+                "GET",
+                "/api/sessions",
+                headerFields: [
+                    ("authorization", "Bearer first"),
+                    ("authorization", "Bearer second"),
+                    ("cookie", validBrowserCookie),
+                ]
+            ),
+            Self.request(
+                "GET",
+                "/api/sessions",
+                headerFields: [
+                    ("authorization", "Bearer \(String(repeating: "a", count: 43))"),
+                    ("tailscale-user-login", identity),
+                ]
+            ),
+        ]
+        for (offset, request) in nonCountingRequests.enumerated() {
+            guard case .respond(let response) = handler.handle(
+                request,
+                at: Self.now.addingTimeInterval(Double(offset + 1))
+            ) else {
+                Issue.record("Expected response")
+                continue
+            }
+            #expect(response.status == 401)
+            #expect(try Self.error(response).code == "credential_invalid")
+        }
+
+        #expect(try store.revokeDevice(native.device.id, at: Self.now.addingTimeInterval(20)))
+        for offset in 0..<3 {
+            guard case .respond(let response) = handler.handle(
+                Self.request(
+                    "GET",
+                    "/api/sessions",
+                    headerFields: [
+                        ("authorization", "Bearer \(native.credential)"),
+                        ("tailscale-user-login", identity),
+                    ]
+                ),
+                at: Self.now.addingTimeInterval(Double(21 + offset))
+            ) else {
+                Issue.record("Expected response")
+                continue
+            }
+            #expect(response.status == 401)
+        }
+
+        // A first shape-valid unknown browser token still gets 401, proving
+        // the preceding malformed/native failures did not lock the limiter.
+        guard case .respond(let firstInvalidBrowser) = handler.handle(
+            Self.request(
+                "GET",
+                "/api/sessions",
+                cookie: "\(RemoteGatewayProtocol.credentialCookieName)=invalid-browser-one"
+            ),
+            at: Self.now.addingTimeInterval(30)
+        ), case .respond(let validBrowser) = handler.handle(
+            Self.request("GET", "/api/sessions", cookie: validBrowserCookie),
+            at: Self.now.addingTimeInterval(31)
+        ) else {
+            Issue.record("Expected responses")
+            return
+        }
+        #expect(firstInvalidBrowser.status == 401)
+        #expect(validBrowser.status == 200)
+
+        _ = handler.handle(
+            Self.request(
+                "GET",
+                "/api/sessions",
+                cookie: "\(RemoteGatewayProtocol.credentialCookieName)=invalid-browser-two"
+            ),
+            at: Self.now.addingTimeInterval(32)
+        )
+        guard case .respond(let thresholdCrossingFailure) = handler.handle(
+            Self.request(
+                "GET",
+                "/api/sessions",
+                cookie: "\(RemoteGatewayProtocol.credentialCookieName)=invalid-browser-three"
+            ),
+            at: Self.now.addingTimeInterval(33)
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(thresholdCrossingFailure.status == 401)
+
+        guard case .respond(let lockedBrowserFailure) = handler.handle(
+            Self.request(
+                "GET",
+                "/api/sessions",
+                cookie: "\(RemoteGatewayProtocol.credentialCookieName)=invalid-browser-four"
+            ),
+            at: Self.now.addingTimeInterval(34)
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(lockedBrowserFailure.status == 429)
+        #expect(audit.recentEntries().filter { $0.action == .authenticationFailed }.count >= nonCountingRequests.count + 5)
+    }
+
+    @Test func nativeBearerRejectsHostileOriginButAcceptsAllowlistedOrigin() throws {
+        let identity = "owner@example.com"
+        let (handler, store, _) = Self.makeHandler()
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+        let authFields = [
+            ("authorization", "Bearer \(native.credential)"),
+            ("tailscale-user-login", identity),
+        ]
+
+        guard case .respond(let hostile) = handler.handle(
+            Self.request("GET", "/api/sessions", headerFields: authFields + [("origin", "https://evil.example")]),
+            at: Self.now.addingTimeInterval(1)
+        ), case .respond(let allowed) = handler.handle(
+            Self.request("GET", "/api/sessions", headerFields: authFields + [("origin", Self.origin)]),
+            at: Self.now.addingTimeInterval(2)
+        ) else {
+            Issue.record("Expected responses")
+            return
+        }
+        #expect(hostile.status == 403)
+        #expect(allowed.status == 200)
+    }
+
+    @Test func nativeBearerDataRouteMatrixAllowsAbsentOriginWithCorrectScopes() throws {
+        let identity = "owner@example.com"
+        let epoch = RemoteInputEpoch(bindingID: UUID(), counter: 1)
+        var sendCount = 0
+        let (handler, store, _) = Self.makeHandler(sendHandler: { _, _ in
+            sendCount += 1
+            return .accepted(epoch: epoch)
+        })
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+        let authHeaders = [
+            ("authorization", "Bearer \(native.credential)"),
+            ("tailscale-user-login", identity),
+        ]
+        let eventsBody = Data(#"{"conversationID":"11111111-1111-1111-1111-111111111111"}"#.utf8)
+        let sendBody = Data(#"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"native-r1","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":1},"text":"hi"}"#.utf8)
+
+        for (method, path, body) in [
+            ("GET", "/api/sessions", Data()),
+            ("POST", "/api/conversation.events.get", eventsBody),
+            ("POST", "/api/conversation.message.send", sendBody),
+        ] {
+            guard case .respond(let response) = handler.handle(
+                Self.request(method, path, headerFields: authHeaders, body: body),
+                at: Self.now.addingTimeInterval(1)
+            ) else {
+                Issue.record("Expected REST response for \(path)")
+                continue
+            }
+            #expect(response.status == 200)
+        }
+        #expect(sendCount == 1)
+
+        let webSocketHeaders = authHeaders + [
+            ("upgrade", "websocket"),
+            ("connection", "Upgrade"),
+            ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="),
+            ("sec-websocket-version", "13"),
+        ]
+        guard case .upgradeToWebSocket(let deviceID, _) = handler.handle(
+            Self.request("GET", "/api/subscribe", headerFields: webSocketHeaders),
+            at: Self.now.addingTimeInterval(2)
+        ) else {
+            Issue.record("Expected native WebSocket upgrade")
+            return
+        }
+        #expect(deviceID == native.device.id)
+
+        #expect(try store.setScopes([.read], forDevice: native.device.id))
+        guard case .respond(let sendDenied) = handler.handle(
+            Self.request("POST", "/api/conversation.message.send", headerFields: authHeaders, body: sendBody),
+            at: Self.now.addingTimeInterval(3)
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(sendDenied.status == 403)
+        #expect(sendCount == 1)
+    }
+
+    @Test func webSocketRejectsAmbiguousOrIncompleteUpgradeHeaders() throws {
+        let identity = "owner@example.com"
+        let (handler, store, _) = Self.makeHandler()
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+        let authHeaders = [
+            ("authorization", "Bearer \(native.credential)"),
+            ("tailscale-user-login", identity),
+        ]
+        let invalidUpgradeFields: [[(String, String)]] = [
+            [
+                ("upgrade", "websocket"), ("upgrade", "websocket"),
+                ("connection", "Upgrade"),
+                ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="),
+                ("sec-websocket-version", "13"),
+            ],
+            [
+                ("upgrade", "websocket"),
+                ("connection", "Upgrade"), ("connection", "Upgrade"),
+                ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="),
+                ("sec-websocket-version", "13"),
+            ],
+            [
+                ("upgrade", "websocket"),
+                ("connection", "Upgrade"),
+                ("sec-websocket-key", "first"), ("sec-websocket-key", "second"),
+                ("sec-websocket-version", "13"),
+            ],
+            [
+                ("upgrade", "websocket"),
+                ("connection", "Upgrade"),
+                ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="),
+                ("sec-websocket-version", "12"),
+            ],
+        ]
+        for fields in invalidUpgradeFields {
+            guard case .respond(let response) = handler.handle(
+                Self.request("GET", "/api/subscribe", headerFields: authHeaders + fields),
+                at: Self.now.addingTimeInterval(1)
+            ) else {
+                Issue.record("Expected rejected WebSocket upgrade")
+                continue
+            }
+            #expect(response.status == 400)
+        }
+    }
+
+    @Test func browserCredentialsCannotCrossIntoNativeRoutes() throws {
+        let (handler, store, _) = Self.makeHandler()
+        let cookie = Self.pairedDeviceCookie(store)
+        for (method, path, body) in [
+            ("GET", "/v1/native-device", ""),
+            ("POST", "/v1/native-device/revoke", #"{"protocolVersion":"1.0"}"#),
+        ] {
+            guard case .respond(let response) = handler.handle(
+                Self.request(method, path, cookie: cookie, body: body),
+                at: Self.now
+            ) else {
+                Issue.record("Expected response")
+                continue
+            }
+            #expect(response.status == 401)
+            #expect(try Self.error(response).code == "credential_invalid")
+        }
+    }
+
+    @Test func nativeCurrentDeviceIsRedactedAndCredentialDateMatchesCreation() throws {
+        let identity = "owner@example.com"
+        let (handler, store, _) = Self.makeHandler()
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+        guard case .respond(let response) = handler.handle(
+            Self.request(
+                "GET",
+                "/v1/native-device",
+                headerFields: [
+                    ("authorization", "Bearer \(native.credential)"),
+                    ("tailscale-user-login", identity),
+                ]
+            ),
+            at: Self.now.addingTimeInterval(1)
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 200)
+        let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteGatewayCurrentDeviceResponse.self, from: response.body)
+        #expect(decoded.device == native.device)
+        #expect(decoded.credentialCreatedAt == Self.now)
+        let text = try #require(String(data: response.body, encoding: .utf8))
+        #expect(text.contains(native.credential) == false)
+        #expect(text.contains(identity) == false)
+    }
+
+    @Test func nativeSelfRevokeNotifiesOnlyAfterDurableMutation() throws {
+        let identity = "owner@example.com"
+        let (handler, store, audit) = Self.makeHandler()
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+        var callbackDeviceID: UUID?
+        var credentialRejectedInsideCallback = false
+        handler.onDeviceRevoked = { deviceID in
+            callbackDeviceID = deviceID
+            if case .invalidCredential = store.authenticateNativeBearer(
+                native.credential,
+                tailscaleLogin: identity,
+                at: Self.now.addingTimeInterval(2)
+            ) {
+                credentialRejectedInsideCallback = true
+            }
+        }
+        let body = try ConversationEventCoding.makeEncoder().encode(RemoteGatewayRevokeCurrentDeviceRequest())
+        guard case .respond(let response) = handler.handle(
+            Self.request(
+                "POST",
+                "/v1/native-device/revoke",
+                headerFields: [
+                    ("authorization", "Bearer \(native.credential)"),
+                    ("tailscale-user-login", identity),
+                ],
+                body: body
+            ),
+            at: Self.now.addingTimeInterval(1)
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 200)
+        #expect(callbackDeviceID == native.device.id)
+        #expect(credentialRejectedInsideCallback)
+        #expect(audit.recentEntries().contains { $0.action == .deviceRevoked && $0.deviceID == native.device.id })
+    }
+
+    @Test func failedNativeSelfRevokeDoesNotNotifyOrInvalidateCredential() throws {
+        enum ExpectedFailure: Error { case write }
+        let writeBudget = PersistenceWriteBudget(1)
+        let store = RemoteDeviceStore(
+            fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("remote-revoke-failure-\(UUID().uuidString).json")
+        ) { _, _ in
+            guard writeBudget.remaining > 0 else { throw ExpectedFailure.write }
+            writeBudget.remaining -= 1
+        }
+        let identity = "owner@example.com"
+        let (handler, _, _) = Self.makeHandler(deviceStore: store)
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+        var callbackCount = 0
+        handler.onDeviceRevoked = { _ in callbackCount += 1 }
+        let body = try ConversationEventCoding.makeEncoder().encode(RemoteGatewayRevokeCurrentDeviceRequest())
+        guard case .respond(let response) = handler.handle(
+            Self.request(
+                "POST",
+                "/v1/native-device/revoke",
+                headerFields: [
+                    ("authorization", "Bearer \(native.credential)"),
+                    ("tailscale-user-login", identity),
+                ],
+                body: body
+            ),
+            at: Self.now.addingTimeInterval(1)
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 500)
+        #expect(callbackCount == 0)
+        guard case .authenticated = store.authenticateNativeBearer(
+            native.credential,
+            tailscaleLogin: identity,
+            at: Self.now.addingTimeInterval(2)
+        ) else {
+            Issue.record("Failed revoke must preserve the credential")
+            return
+        }
     }
 
     @Test func missingCredentialsDoNotLockOutAPairedDevice() {

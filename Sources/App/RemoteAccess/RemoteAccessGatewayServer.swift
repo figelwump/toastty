@@ -23,6 +23,8 @@ final class RemoteAccessGatewayServer {
         var isWebSocket = false
         var deviceID: UUID?
         var requestTimeoutTask: Task<Void, Never>?
+        var closeFallbackTask: Task<Void, Never>?
+        var isClosing = false
         /// Frames handed to Network.framework that have not completed sending.
         /// A slow client that lets this grow past the bound is dropped rather
         /// than buffered without limit.
@@ -36,6 +38,7 @@ final class RemoteAccessGatewayServer {
     static let maximumPendingSendsPerClient = 32
     static let defaultMaximumConnections = 64
     static let defaultRequestHeaderTimeoutNanoseconds: UInt64 = 10_000_000_000
+    private static let closeFlushTimeoutNanoseconds: UInt64 = 1_000_000_000
 
     private let handler: RemoteGatewayRequestHandler
     private let maximumConnections: Int
@@ -46,6 +49,9 @@ final class RemoteAccessGatewayServer {
     private(set) var listeningPort: UInt16?
 
     var onWebSocketCountChanged: ((Int) -> Void)?
+    var onDeviceRevoked: ((UUID) -> Void)?
+    var onListenerReady: ((UInt16) -> Void)?
+    var onListenerFailed: (() -> Void)?
 
     init(
         handler: RemoteGatewayRequestHandler,
@@ -55,10 +61,21 @@ final class RemoteAccessGatewayServer {
         self.handler = handler
         self.maximumConnections = max(1, maximumConnections)
         self.requestHeaderTimeoutNanoseconds = requestHeaderTimeoutNanoseconds
+        handler.onDeviceRevoked = { [weak self] deviceID in
+            // Self-revocation mutates durable store state synchronously inside
+            // the handler. Queue transport teardown so `handle` can return and
+            // the successful HTTP response can be handed to Network.framework
+            // before every stream for that device receives policy close 1008.
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                self?.disconnectWebSockets(for: deviceID)
+                self?.onDeviceRevoked?(deviceID)
+            }
+        }
     }
 
     var webSocketClientCount: Int {
-        connections.values.filter(\.isWebSocket).count
+        connections.values.filter { $0.isWebSocket && $0.isClosing == false }.count
     }
 
     var connectionCountForTesting: Int {
@@ -82,41 +99,55 @@ final class RemoteAccessGatewayServer {
                 self?.accept(connection)
             }
         }
-        listener.stateUpdateHandler = { state in
-            if case .failed(let error) = state {
-                ToasttyLog.error(
-                    "Remote access listener failed",
-                    category: .automation,
-                    metadata: ["error": "\(error)"]
-                )
+        self.listener = listener
+        self.listeningPort = nil
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            Task { @MainActor [weak self, weak listener] in
+                guard let self,
+                      let listener,
+                      self.listener === listener else {
+                    return
+                }
+                switch state {
+                case .ready:
+                    self.listeningPort = port
+                    self.onListenerReady?(port)
+                    ToasttyLog.info(
+                        "Remote access gateway listening",
+                        category: .automation
+                    )
+                case .failed:
+                    self.listener = nil
+                    self.listeningPort = nil
+                    listener.cancel()
+                    self.onListenerFailed?()
+                    ToasttyLog.error(
+                        "Remote access listener failed",
+                        category: .automation
+                    )
+                case .cancelled:
+                    self.listener = nil
+                    self.listeningPort = nil
+                default:
+                    break
+                }
             }
         }
         listener.start(queue: queue)
-        self.listener = listener
-        self.listeningPort = port
-        ToasttyLog.info(
-            "Remote access gateway listening",
-            category: .automation,
-            metadata: ["port": "\(port)"]
-        )
     }
 
     func stop() {
-        listener?.cancel()
-        listener = nil
-        listeningPort = nil
-        for connection in connections.values {
-            connection.requestTimeoutTask?.cancel()
-            if connection.isWebSocket {
-                connection.connection.send(
-                    content: RemoteWebSocketFraming.encodeServerCloseFrame(code: 1001),
-                    completion: .contentProcessed { _ in }
-                )
-            }
-            connection.connection.cancel()
+        stop(onListenerCancelled: nil)
+    }
+
+    /// Test/lifecycle seam for a deterministic same-port restart. Listener
+    /// cancellation is asynchronous even though `cancel()` itself is not.
+    func stopAndWaitForListenerCancellation() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            stop(onListenerCancelled: {
+                continuation.resume()
+            })
         }
-        connections.removeAll()
-        onWebSocketCountChanged?(0)
     }
 
     /// Immediately terminates subscriptions authenticated as one revoked
@@ -128,8 +159,7 @@ final class RemoteAccessGatewayServer {
         }
         for connectionID in matchingConnectionIDs {
             guard let connection = connections[connectionID] else { continue }
-            sendFrame(RemoteWebSocketFraming.encodeServerCloseFrame(code: 1008), to: connection)
-            drop(connectionID)
+            beginClosing(connection, code: 1008)
         }
     }
 
@@ -137,8 +167,7 @@ final class RemoteAccessGatewayServer {
         let connectionIDs = connections.values.filter(\.isWebSocket).map(\.id)
         for connectionID in connectionIDs {
             guard let connection = connections[connectionID] else { continue }
-            sendFrame(RemoteWebSocketFraming.encodeServerCloseFrame(code: 1008), to: connection)
-            drop(connectionID)
+            beginClosing(connection, code: 1008)
         }
     }
 
@@ -150,12 +179,39 @@ final class RemoteAccessGatewayServer {
             return
         }
         let frame = RemoteWebSocketFraming.encodeServerTextFrame(text)
-        for connection in connections.values where connection.isWebSocket {
+        for connection in connections.values where connection.isWebSocket && connection.isClosing == false {
             sendFrame(frame, to: connection)
         }
     }
 
     // MARK: - Connection lifecycle
+
+    private func stop(onListenerCancelled: (@MainActor @Sendable () -> Void)?) {
+        let listener = listener
+        self.listener = nil
+        listeningPort = nil
+        if let listener {
+            if let onListenerCancelled {
+                listener.stateUpdateHandler = { state in
+                    guard case .cancelled = state else { return }
+                    Task { @MainActor in
+                        onListenerCancelled()
+                    }
+                }
+            }
+            listener.cancel()
+        } else {
+            onListenerCancelled?()
+        }
+
+        for connection in Array(connections.values) {
+            if connection.isWebSocket {
+                beginClosing(connection, code: 1001)
+            } else {
+                drop(connection.id)
+            }
+        }
+    }
 
     private func accept(_ nwConnection: NWConnection) {
         guard connections.count < maximumConnections else {
@@ -268,8 +324,7 @@ final class RemoteAccessGatewayServer {
                 return
 
             case .invalid:
-                sendFrame(RemoteWebSocketFraming.encodeServerCloseFrame(code: 1002), to: connection)
-                drop(connection.id)
+                beginClosing(connection, code: 1002)
                 return
 
             case .frame(let frame, let consumedBytes):
@@ -278,8 +333,15 @@ final class RemoteAccessGatewayServer {
                 case .ping:
                     sendFrame(RemoteWebSocketFraming.encodeServerFrame(opcode: .pong, payload: frame.payload), to: connection)
                 case .close:
-                    sendFrame(RemoteWebSocketFraming.encodeServerCloseFrame(), to: connection)
-                    drop(connection.id)
+                    if connection.isClosing {
+                        // Server-initiated close is complete only after the
+                        // peer acknowledges it with its own close frame.
+                        drop(connection.id)
+                    } else {
+                        // Reply to a peer-initiated close, then leave the
+                        // receive side alive until EOF or the bounded fallback.
+                        beginClosing(connection, code: 1000)
+                    }
                     return
                 case .text, .binary, .pong, .continuation:
                     // v0 clients have nothing to say; ignore.
@@ -290,6 +352,7 @@ final class RemoteAccessGatewayServer {
     }
 
     private func sendFrame(_ frame: Data, to connection: GatewayConnection) {
+        guard connection.isClosing == false else { return }
         guard connection.pendingSendCount < Self.maximumPendingSendsPerClient else {
             ToasttyLog.warning(
                 "Dropping slow remote access client",
@@ -308,13 +371,49 @@ final class RemoteAccessGatewayServer {
         })
     }
 
+    private func beginClosing(_ connection: GatewayConnection, code: UInt16) {
+        guard connections[connection.id] === connection,
+              connection.isClosing == false else {
+            return
+        }
+        connection.isClosing = true
+        connection.requestTimeoutTask?.cancel()
+        connection.requestTimeoutTask = nil
+        onWebSocketCountChanged?(webSocketClientCount)
+
+        let connectionID = connection.id
+        connection.closeFallbackTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: Self.closeFlushTimeoutNanoseconds)
+            } catch {
+                return
+            }
+            self?.drop(connectionID)
+        }
+        connection.connection.send(
+            content: RemoteWebSocketFraming.encodeServerCloseFrame(code: code),
+            completion: .contentProcessed { [weak self] error in
+                // `contentProcessed(nil)` means Network.framework accepted the
+                // bytes, not that the peer received or acknowledged the close.
+                // Keep receiving so the WebSocket handshake can complete.
+                guard error != nil else { return }
+                Task { @MainActor [weak self] in
+                    self?.drop(connectionID)
+                }
+            }
+        )
+    }
+
     private func drop(_ connectionID: UUID) {
         guard let connection = connections.removeValue(forKey: connectionID) else { return }
         connection.requestTimeoutTask?.cancel()
         connection.requestTimeoutTask = nil
+        connection.closeFallbackTask?.cancel()
+        connection.closeFallbackTask = nil
         let wasWebSocket = connection.isWebSocket
+        let wasAlreadyRemovedFromCount = connection.isClosing
         connection.connection.cancel()
-        if wasWebSocket {
+        if wasWebSocket && wasAlreadyRemovedFromCount == false {
             onWebSocketCountChanged?(webSocketClientCount)
         }
     }

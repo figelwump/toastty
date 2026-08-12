@@ -65,6 +65,12 @@ private extension RemoteProtocolGoldenTests {
         let sessionSnapshot = makeSessionSnapshot()
         let eventPage = makeEventPage()
         let epoch = RemoteInputEpoch(bindingID: bindingID, counter: 42)
+        let nativePairingPayload = RemoteNativePairingQRPayload(
+            gatewayURL: URL(string: "https://toastty.example-tailnet.ts.net")!,
+            offerID: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+            secret: String(repeating: "A", count: 43),
+            expiresAt: timestamp.addingTimeInterval(120)
+        )
 
         var fixtures: [Fixture] = [
             try fixture("hello-response.json", RemoteGatewayHelloResponse()),
@@ -84,6 +90,54 @@ private extension RemoteProtocolGoldenTests {
             try fixture(
                 "error-response.json",
                 RemoteGatewayErrorResponse(code: "invalid_code", message: "Invalid or expired pairing code")
+            ),
+            try fixture("native-pairing-qr-payload.json", nativePairingPayload),
+            try fixture(
+                "native-pairing-exchange-qr-request.json",
+                RemoteGatewayNativePairingExchangeRequest(
+                    deviceName: "Native phone",
+                    offerID: nativePairingPayload.offerID,
+                    secret: nativePairingPayload.secret
+                )
+            ),
+            try fixture(
+                "native-pairing-exchange-fallback-request.json",
+                RemoteGatewayNativePairingExchangeRequest(
+                    deviceName: "Native phone",
+                    fallbackCode: "2345-6789-ABCD"
+                )
+            ),
+            try fixture(
+                "native-pairing-exchange-response.json",
+                RemoteGatewayNativePairingExchangeResponse(
+                    device: RemoteGatewayDeviceSummary(
+                        id: deviceID,
+                        name: "Native phone",
+                        scopes: [.read, .send]
+                    ),
+                    credentialCreatedAt: timestamp,
+                    credential: String(repeating: "B", count: 43)
+                )
+            ),
+            try fixture(
+                "current-device-response.json",
+                RemoteGatewayCurrentDeviceResponse(
+                    device: RemoteGatewayDeviceSummary(
+                        id: deviceID,
+                        name: "Native phone",
+                        scopes: [.read, .send]
+                    ),
+                    credentialCreatedAt: timestamp
+                )
+            ),
+            try fixture("revoke-current-device-request.json", RemoteGatewayRevokeCurrentDeviceRequest()),
+            try fixture(
+                "revoke-current-device-response.json",
+                RemoteGatewayRevokeCurrentDeviceResponse(revokedDeviceID: deviceID)
+            ),
+            try fixture(
+                "pending-interaction-preview.json",
+                RemotePendingInteractionPreview(prompt: "Approve the gateway command on the Mac")
             ),
             try fixture("session-list-response.json", RemoteGatewaySessionListResponse(snapshot: sessionSnapshot)),
             try fixture(

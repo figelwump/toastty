@@ -39,3 +39,36 @@ trusted by the host threat model. The result also covers this client and
 Tailscale version, not every future Serve version or multi-user ACL policy;
 the route-level authorization matrix and live integration tests must still
 cover missing and mismatched identities.
+
+## Repeatable authorization-forwarding probe
+
+`scripts/automation/tailscale-serve-auth-probe.mjs` is the durable follow-up to
+the original one-off header capture. It proves through the node's real
+`https://*.ts.net` Serve URL that a generated Bearer sentinel reaches a
+loopback REST handler unchanged, that the same is true on a WebSocket upgrade,
+and that both requests carry exactly one non-empty `Tailscale-User-Login`.
+
+Run it only on the dedicated remote validation host:
+
+```bash
+sv exec -- scripts/remote/validate.sh \
+  --scope working-tree \
+  --require-remote \
+  --run-label tailscale-serve-auth-forwarding \
+  --validation-command './scripts/automation/tailscale-serve-auth-probe.mjs'
+```
+
+The probe keeps the sentinel, identity, MagicDNS hostname, and raw Tailscale
+status documents in memory. Its result file and stdout contain only booleans
+and counts. It chooses an HTTPS port unused by both Serve and Funnel, removes
+only the mapping it added, closes its loopback listener, and verifies the
+canonical Serve and Funnel status documents match their pre-probe snapshots.
+The copied result is
+`artifacts/remote-gui/tailscale-serve-auth-forwarding/remote/artifacts/tailscale-serve-auth-probe-result.json`.
+
+The remote node must represent a signed-in user; tagged nodes do not provide a
+user login for this assertion. Run the probe only when no other operator or
+automation is editing Serve/Funnel configuration. If cleanup reports false,
+inspect `tailscale serve status` on the remote host and remove only the probe's
+high-port loopback proxy; never use `tailscale serve reset`, which would erase
+unrelated mappings.

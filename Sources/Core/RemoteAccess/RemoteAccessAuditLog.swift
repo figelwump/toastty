@@ -24,8 +24,8 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
     public var at: Date
     public var action: Action
     public var deviceID: UUID?
-    /// Short human-readable context (device name, rejection reason). Never
-    /// message text, prompts, or tokens.
+    /// Stable non-identifying context (for example, a rejection reason).
+    /// Never names, identities, paths, message text, prompts, or tokens.
     public var detail: String?
 
     public init(at: Date, action: Action, deviceID: UUID? = nil, detail: String? = nil) {
@@ -97,7 +97,7 @@ public final class RemoteAccessAuditLog {
             ToasttyLog.error(
                 "Failed to persist remote access audit log",
                 category: .automation,
-                metadata: ["error": "\(error)"]
+                metadata: ["error_type": String(reflecting: type(of: error))]
             )
         }
     }

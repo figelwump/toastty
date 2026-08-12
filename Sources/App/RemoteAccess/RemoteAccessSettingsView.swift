@@ -1,4 +1,5 @@
 import CoreState
+import Foundation
 import SwiftUI
 
 /// Management window for the remote-access gateway: kill switch, pairing,
@@ -25,6 +26,7 @@ struct RemoteAccessSettingsView: View {
         .frame(minWidth: 460, minHeight: 420)
         .onAppear {
             service.refreshDevices()
+            service.refreshNativePairingOffer()
         }
     }
 
@@ -65,8 +67,18 @@ struct RemoteAccessSettingsView: View {
     }
 
     private var pairingSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Pair a phone").font(.headline)
+            browserPairingSection
+            Divider()
+            nativePairingSection
+        }
+    }
+
+    private var browserPairingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Browser")
+                .font(.subheadline.weight(.semibold))
             if let code = service.currentPairingCode {
                 HStack(spacing: 12) {
                     Text(code.code)
@@ -85,6 +97,94 @@ struct RemoteAccessSettingsView: View {
                 }
             }
         }
+    }
+
+    private var nativePairingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Native app")
+                .font(.subheadline.weight(.semibold))
+            Text("Scan the QR code in Toastty Mobile. The fallback code is for manual pairing and expires with the QR code.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let offer = service.currentNativePairingOffer {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    nativeOfferContent(offer, at: context.date)
+                }
+            } else {
+                Button("Show Native Pairing QR") {
+                    service.issueNativePairingOffer()
+                }
+            }
+
+            if let nativePairingError = service.nativePairingError {
+                Text(nativePairingError)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func nativeOfferContent(_ offer: RemoteNativePairingOffer, at date: Date) -> some View {
+        let isExpired = date >= offer.expiresAt
+        if isExpired {
+            HStack(spacing: 12) {
+                Text("Pairing offer expired")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Button("Issue New QR") {
+                    service.issueNativePairingOffer()
+                }
+                Button("Cancel") {
+                    service.cancelNativePairingOffer()
+                }
+            }
+        } else {
+            HStack(alignment: .top, spacing: 16) {
+                if let image = service.currentNativePairingQRCode {
+                    Image(nsImage: image)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 176, height: 176)
+                        .accessibilityLabel("Native pairing QR code")
+                        .accessibilityHint("Scan with Toastty Mobile")
+                        .privacySensitive()
+                } else {
+                    VStack(spacing: 6) {
+                        Image(systemName: "qrcode")
+                            .font(.system(size: 36))
+                        Text("QR unavailable")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(width: 176, height: 176)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Fallback code")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(offer.fallbackCode)
+                        .font(.system(size: 22, weight: .bold, design: .monospaced))
+                        .privacySensitive()
+                    Text(nativeOfferExpiryLabel(offer, at: date))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Button("Issue New QR") {
+                        service.issueNativePairingOffer()
+                    }
+                    Button("Cancel") {
+                        service.cancelNativePairingOffer()
+                    }
+                }
+            }
+        }
+    }
+
+    private func nativeOfferExpiryLabel(_ offer: RemoteNativePairingOffer, at date: Date) -> String {
+        RemoteAccessPairingPresentation.expiryLabel(expiresAt: offer.expiresAt, at: date)
     }
 
     private var devicesSection: some View {
@@ -195,10 +295,12 @@ struct RemoteAccessSettingsView: View {
 
     private func deviceDetail(_ device: RemoteDeviceRecord) -> String {
         let scopes = device.scopes.map(\.rawValue).sorted().joined(separator: ", ")
+        let kind = device.authKind == .native ? "Native app" : "Browser"
+        let paired = "paired \(device.createdAt.formatted(date: .abbreviated, time: .shortened))"
         if let lastSeenAt = device.lastSeenAt {
-            return "\(scopes) · last seen \(lastSeenAt.formatted(date: .abbreviated, time: .shortened))"
+            return "\(kind) · \(scopes) · \(paired) · last seen \(lastSeenAt.formatted(date: .abbreviated, time: .shortened))"
         }
-        return scopes
+        return "\(kind) · \(scopes) · \(paired)"
     }
 
     private func auditLabel(_ entry: RemoteAccessAuditEntry) -> String {
