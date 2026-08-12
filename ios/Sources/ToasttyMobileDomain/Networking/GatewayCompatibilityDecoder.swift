@@ -17,8 +17,19 @@ public struct GatewayCompatibilityDecoder: Sendable {
 
     public func decodeHello(_ data: Data) throws -> RemoteGatewayHelloResponse {
         let object = try JSONObject(data)
-        try validateProtocolVersion(try object.requiredString("protocolVersion"))
-        return try decode(RemoteGatewayHelloResponse.self, from: object)
+        let protocolVersion = try object.requiredString("protocolVersion")
+        try validateProtocolVersion(protocolVersion)
+        return RemoteGatewayHelloResponse(
+            protocolVersion: protocolVersion,
+            minimumSupportedProtocolVersion: try object.requiredString(
+                "minimumSupportedProtocolVersion"
+            ),
+            // Capabilities are additive hints. Keep the shared host model
+            // strict, but let an older native client ignore capabilities it
+            // does not understand instead of rejecting the entire handshake.
+            capabilities: try object.requiredStringArray("capabilities")
+                .compactMap(RemoteGatewayCapability.init(rawValue:))
+        )
     }
 
     public func decodePairResponse(_ data: Data) throws -> RemoteGatewayPairResponse {
@@ -162,7 +173,10 @@ public struct GatewayCompatibilityDecoder: Sendable {
             conversationID: pageConversationID,
             projectionRunID: try decodeProjectionRunID(object.requiredString("projectionRunID")),
             projectionGeneration: try object.requiredUInt64("projectionGeneration"),
-            events: events.sorted { $0.sequence < $1.sequence },
+            // Preserve wire order. Sorting here would conceal a malformed or
+            // downgraded host response before the paging/runtime invariants
+            // can reject it, potentially turning corruption into silent gaps.
+            events: events,
             latestSequence: try object.requiredUInt64("latestSequence"),
             firstAvailableSequence: try object.optionalUInt64("firstAvailableSequence"),
             historyTruncated: try object.optionalBool("historyTruncated") ?? false

@@ -138,6 +138,8 @@ private struct ToasttyNeedsYouCard: View {
                 HStack(spacing: 7) { metadata }
                 VStack(alignment: .leading, spacing: 4) { metadata }
             }
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.mutedText)
 
             Text(conversation.title)
                 .font(.headline)

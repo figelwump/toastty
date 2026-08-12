@@ -39,6 +39,17 @@ final class RemoteAccessFacadeBridge: RemoteSessionFacade, @unchecked Sendable {
                 ?? .conversationNotFound
         }
     }
+
+    func conversationEvents(
+        for conversationID: RemoteConversationID,
+        before cursor: ConversationEventBackwardCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome {
+        MainActor.assumeIsolated {
+            service?.facadeConversationEvents(for: conversationID, before: cursor, limit: limit)
+                ?? .conversationNotFound
+        }
+    }
 }
 
 /// Bridges the gateway's synchronous main-actor send call into the service.
@@ -452,6 +463,14 @@ final class RemoteAccessService: ObservableObject {
         limit: Int
     ) -> ConversationEventPageOutcome {
         projectionStore.conversationEvents(for: conversationID, after: cursor, limit: limit)
+    }
+
+    func facadeConversationEvents(
+        for conversationID: RemoteConversationID,
+        before cursor: ConversationEventBackwardCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome {
+        projectionStore.conversationEvents(for: conversationID, before: cursor, limit: limit)
     }
 
     // MARK: - Conversation sync

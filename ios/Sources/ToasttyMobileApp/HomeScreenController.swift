@@ -15,6 +15,8 @@ final class HomeScreenController {
     var freshness: LiveProjectionFreshness
     private(set) var selectedConversationID: UUID?
     private(set) var removedSelectionMessage: String?
+    private var onConversationOpened: @MainActor (UUID) -> Void = { _ in }
+    private var onConversationClosed: @MainActor (UUID) -> Void = { _ in }
 
     init(
         runtimeMode: ToasttyMobileRuntimeMode,
@@ -29,11 +31,11 @@ final class HomeScreenController {
     }
 
     func open(_ conversation: MobileConversation) {
-        selectedConversationID = conversation.id
+        selectConversation(conversation.id)
     }
 
     func dismissConversation() {
-        selectedConversationID = nil
+        selectConversation(nil)
     }
 
     func update(
@@ -47,7 +49,7 @@ final class HomeScreenController {
         self.freshness = freshness
 
         if let removedConversation, conversation(id: removedConversation.id) == nil {
-            selectedConversationID = nil
+            selectConversation(nil)
             removedSelectionMessage = "\(removedConversation.title) is no longer available on your Mac."
         }
     }
@@ -69,11 +71,33 @@ final class HomeScreenController {
 
     var selectedConversationPresentation: SelectedConversationPresentation? {
         get { selectedConversationID.map(SelectedConversationPresentation.init(id:)) }
-        set { selectedConversationID = newValue?.id }
+        set { selectConversation(newValue?.id) }
+    }
+
+    func installConversationLifecycle(
+        onOpen: @escaping @MainActor (UUID) -> Void,
+        onClose: @escaping @MainActor (UUID) -> Void
+    ) {
+        onConversationOpened = onOpen
+        onConversationClosed = onClose
+        if let selectedConversationID {
+            onConversationOpened(selectedConversationID)
+        }
     }
 
     func dismissRemovalMessage() {
         removedSelectionMessage = nil
+    }
+
+    private func selectConversation(_ conversationID: UUID?) {
+        guard selectedConversationID != conversationID else { return }
+        if let selectedConversationID {
+            onConversationClosed(selectedConversationID)
+        }
+        selectedConversationID = conversationID
+        if let conversationID {
+            onConversationOpened(conversationID)
+        }
     }
 
     private static func freshness(for state: MobileConnectionState) -> LiveProjectionFreshness {

@@ -9,6 +9,9 @@ public enum ConversationEventPageOutcome: Equatable, Sendable {
     /// transcript and reload from a fresh snapshot.
     case resnapshotRequired
     case conversationNotFound
+    /// The request boundary or mutually exclusive paging fields were invalid.
+    /// This is terminal for the request and must not trigger a resnapshot loop.
+    case invalidRequest
 }
 
 /// Protocol-facing read surface over the rebuildable projection.
@@ -31,4 +34,22 @@ public protocol RemoteSessionFacade {
         after cursor: ConversationEventCursor?,
         limit: Int
     ) -> ConversationEventPageOutcome
+
+    /// Newest retained page when `cursor` is nil, or the ascending page ending
+    /// immediately before the cursor's exclusive upper boundary.
+    func conversationEvents(
+        for conversationID: RemoteConversationID,
+        before cursor: ConversationEventBackwardCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome
+}
+
+public extension RemoteSessionFacade {
+    func conversationEvents(
+        for conversationID: RemoteConversationID,
+        before cursor: ConversationEventBackwardCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome {
+        .invalidRequest
+    }
 }

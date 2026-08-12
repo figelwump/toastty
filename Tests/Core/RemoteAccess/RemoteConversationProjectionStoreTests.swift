@@ -86,6 +86,128 @@ struct RemoteConversationProjectionStoreTests {
         #expect(collected.map(\.sequence) == Array(1...UInt64(collected.count)))
     }
 
+    @Test func backwardPagingOpensAtTailAndWalksToRetainedHead() {
+        let store = Self.makeStore()
+        Self.ingestBasicSession(into: store)
+
+        guard case .page(let fullPage) = store.conversationEvents(
+            for: Self.conversationID,
+            after: nil,
+            limit: RemoteConversationProjectionStore.defaultPageLimit
+        ), case .page(let tailPage) = store.conversationEvents(
+            for: Self.conversationID,
+            before: nil,
+            limit: 3
+        ) else {
+            Issue.record("Expected forward and tail pages")
+            return
+        }
+        #expect(tailPage.events == Array(fullPage.events.suffix(3)))
+        #expect(tailPage.events.map(\.sequence) == tailPage.events.map(\.sequence).sorted())
+
+        var collected = tailPage.events
+        var boundary = tailPage.events.first?.sequence
+        var iterations = 0
+        while let beforeSequence = boundary, iterations < 100 {
+            iterations += 1
+            let cursor = ConversationEventBackwardCursor(
+                projectionRunID: tailPage.projectionRunID,
+                projectionGeneration: tailPage.projectionGeneration,
+                beforeSequence: beforeSequence
+            )
+            guard case .page(let page) = store.conversationEvents(
+                for: Self.conversationID,
+                before: cursor,
+                limit: 3
+            ) else {
+                Issue.record("Expected backward page")
+                return
+            }
+            guard page.events.isEmpty == false else { break }
+            collected.insert(contentsOf: page.events, at: 0)
+            boundary = page.events.first?.sequence
+        }
+
+        #expect(collected == fullPage.events)
+        #expect(Set(collected.map(\.sequence)).count == collected.count)
+    }
+
+    @Test func backwardPagingValidatesProjectionAndExclusiveBoundary() {
+        let store = Self.makeStore()
+        Self.ingestBasicSession(into: store)
+        guard case .page(let tailPage) = store.conversationEvents(
+            for: Self.conversationID,
+            before: nil,
+            limit: 3
+        ), let firstAvailable = tailPage.firstAvailableSequence else {
+            Issue.record("Expected tail page metadata")
+            return
+        }
+
+        let atHead = ConversationEventBackwardCursor(
+            projectionRunID: tailPage.projectionRunID,
+            projectionGeneration: tailPage.projectionGeneration,
+            beforeSequence: firstAvailable
+        )
+        guard case .page(let emptyPage) = store.conversationEvents(
+            for: Self.conversationID,
+            before: atHead,
+            limit: 3
+        ) else {
+            Issue.record("Expected empty head page")
+            return
+        }
+        #expect(emptyPage.events.isEmpty)
+
+        let immediatelyAfterTail = ConversationEventBackwardCursor(
+            projectionRunID: tailPage.projectionRunID,
+            projectionGeneration: tailPage.projectionGeneration,
+            beforeSequence: tailPage.latestSequence + 1
+        )
+        guard case .page(let pageThroughTail) = store.conversationEvents(
+            for: Self.conversationID,
+            before: immediatelyAfterTail,
+            limit: 3
+        ) else {
+            Issue.record("Expected the exclusive tail boundary to remain valid")
+            return
+        }
+        #expect(pageThroughTail.events == tailPage.events)
+
+        let stale = ConversationEventBackwardCursor(
+            projectionRunID: RemoteProjectionRunID(),
+            projectionGeneration: tailPage.projectionGeneration,
+            beforeSequence: firstAvailable
+        )
+        #expect(store.conversationEvents(
+            for: Self.conversationID,
+            before: stale,
+            limit: 3
+        ) == .resnapshotRequired)
+
+        let staleGeneration = ConversationEventBackwardCursor(
+            projectionRunID: tailPage.projectionRunID,
+            projectionGeneration: tailPage.projectionGeneration + 1,
+            beforeSequence: firstAvailable
+        )
+        #expect(store.conversationEvents(
+            for: Self.conversationID,
+            before: staleGeneration,
+            limit: 3
+        ) == .resnapshotRequired)
+
+        let invalidBoundary = ConversationEventBackwardCursor(
+            projectionRunID: tailPage.projectionRunID,
+            projectionGeneration: tailPage.projectionGeneration,
+            beforeSequence: tailPage.latestSequence + 2
+        )
+        #expect(store.conversationEvents(
+            for: Self.conversationID,
+            before: invalidBoundary,
+            limit: 3
+        ) == .invalidRequest)
+    }
+
     @Test func staleCursorsRequireResnapshot() {
         let store = Self.makeStore()
         Self.ingestBasicSession(into: store)

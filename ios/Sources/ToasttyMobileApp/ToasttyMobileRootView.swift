@@ -5,11 +5,14 @@ struct ToasttyMobileRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var sessionController: AppSessionController
     @State private var showsSettings = false
+    @State private var fixtureHasLoadedOlderTranscript = false
     private let forcesPairingPrivacyShield: Bool
+    private let fixtureScenario: ToasttyMobileFixtureScenario?
 
     init(configuration: ToasttyMobileAppConfiguration) {
         _sessionController = State(initialValue: configuration.makeSessionController())
         forcesPairingPrivacyShield = configuration.fixtureScenario == .pairingPrivacy
+        fixtureScenario = configuration.fixtureScenario
     }
 
     var body: some View {
@@ -84,6 +87,8 @@ struct ToasttyMobileRootView: View {
             ToasttyConversationSheet(
                 conversationID: selection.id,
                 controller: sessionController.homeController,
+                presentation: conversationPresentation(for: selection.id),
+                loadOlder: conversationLoadOlderAction(for: selection.id),
                 onDismiss: sessionController.homeController.dismissConversation
             )
             .presentationDetents([.fraction(0.92)])
@@ -138,6 +143,53 @@ struct ToasttyMobileRootView: View {
             device: sessionController.currentDeviceSummary,
             credentialCreatedAt: paired.credentialCreatedAt
         )
+    }
+
+    private func conversationPresentation(
+        for conversationID: UUID
+    ) -> ToasttyConversationPresentationState? {
+#if DEBUG
+        switch fixtureScenario {
+        case .transcriptPerformance:
+            return ToasttyConversationFixture.performancePresentation(for: conversationID)
+        case .transcriptResyncing:
+            return ToasttyConversationFixture.presentation(for: conversationID, phase: .resyncing)
+        case .transcriptStale:
+            return ToasttyConversationFixture.presentation(for: conversationID, phase: .stale)
+        case .transcriptTruncated:
+            return ToasttyConversationFixture.truncatedPresentation(for: conversationID)
+        case .transcriptPaging:
+            return ToasttyConversationFixture.pagedPresentation(
+                for: conversationID,
+                hasLoadedOlder: fixtureHasLoadedOlderTranscript
+            )
+        case .home, .unpaired, .cameraDenied, .scannerUnsupported,
+             .pairingFailure, .pairingPrivacy, nil:
+            break
+        }
+#endif
+        guard let controller = sessionController.liveController?.activeConversationController,
+              controller.conversationID == conversationID else {
+            return nil
+        }
+        return controller.transcriptPresentation
+    }
+
+    private func conversationLoadOlderAction(
+        for conversationID: UUID
+    ) -> () -> Void {
+#if DEBUG
+        if fixtureScenario == .transcriptPaging {
+            return { fixtureHasLoadedOlderTranscript = true }
+        }
+#endif
+        if let controller = sessionController.liveController?.activeConversationController,
+           controller.conversationID == conversationID {
+            return {
+                Task { await controller.loadOlder() }
+            }
+        }
+        return {}
     }
 
     @MainActor

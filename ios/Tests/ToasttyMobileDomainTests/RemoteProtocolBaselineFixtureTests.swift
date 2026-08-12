@@ -17,7 +17,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
 
         XCTAssertEqual(
             fixtureURLs.count,
-            33,
+            35,
             "Adding or removing canonical v1 fixtures requires an intentional iOS harness update."
         )
 
@@ -47,6 +47,8 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
     func testEveryCanonicalHostFixtureDecodesThroughItsStrictSharedModel() throws {
         let decoders: [String: (Data) throws -> Void] = [
             "error-response": decode(RemoteGatewayErrorResponse.self),
+            "events-request-backward-before": decode(RemoteGatewayEventsRequest.self),
+            "events-request-backward-latest": decode(RemoteGatewayEventsRequest.self),
             "events-request": decode(RemoteGatewayEventsRequest.self),
             "events-response-not-found": decode(RemoteGatewayEventsResponse.self),
             "events-response-page": decode(RemoteGatewayEventsResponse.self),
@@ -81,7 +83,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
             "stream-session-list": decode(RemoteGatewayStreamMessage.self),
         ]
 
-        XCTAssertEqual(decoders.count, 33)
+        XCTAssertEqual(decoders.count, 35)
         for (name, decoder) in decoders {
             try decoder(fixtureData(named: name))
         }

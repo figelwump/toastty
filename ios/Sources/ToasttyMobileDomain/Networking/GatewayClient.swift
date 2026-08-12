@@ -69,7 +69,21 @@ public protocol GatewayClientProtocol: Sendable {
         cursor: ConversationEventCursor?,
         limit: Int?
     ) async throws -> CompatibleGatewayEventsResponse
+    func events(_ request: RemoteGatewayEventsRequest) async throws -> CompatibleGatewayEventsResponse
     func send(_ request: RemoteMessageSendRequest) async throws -> RemoteMessageSendResult
+}
+
+public extension GatewayClientProtocol {
+    func events(_ request: RemoteGatewayEventsRequest) async throws -> CompatibleGatewayEventsResponse {
+        guard request.backward == nil else {
+            throw GatewayFailure.invalidResponse
+        }
+        return try await events(
+            conversationID: request.conversationID,
+            cursor: request.cursor,
+            limit: request.limit
+        )
+    }
 }
 
 public struct GatewayClient: GatewayClientProtocol, Sendable {
@@ -117,18 +131,28 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         cursor: ConversationEventCursor? = nil,
         limit: Int? = nil
     ) async throws -> CompatibleGatewayEventsResponse {
-        let body = try encode(RemoteGatewayEventsRequest(
+        try await events(RemoteGatewayEventsRequest(
             conversationID: conversationID,
             cursor: cursor,
             limit: limit
         ))
+    }
+
+    public func events(
+        _ request: RemoteGatewayEventsRequest
+    ) async throws -> CompatibleGatewayEventsResponse {
+        let body = try encode(request)
         let response = try await perform(
             method: "POST",
             path: "/api/conversation.events.get",
             body: body,
             sendsOrigin: true
         )
-        return try mapCompatibility { try compatibilityDecoder.decodeEventsResponse(response.body) }
+        let decoded = try mapCompatibility { try compatibilityDecoder.decodeEventsResponse(response.body) }
+        if request.backward != nil {
+            try Self.validateBackwardResponse(decoded, request: request)
+        }
+        return decoded
     }
 
     public func send(_ request: RemoteMessageSendRequest) async throws -> RemoteMessageSendResult {
@@ -151,6 +175,54 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
             throw try classifyHTTPError(response)
         }
         return try mapCompatibility { try compatibilityDecoder.decodeSendResult(response.body) }
+    }
+
+    private static func validateBackwardResponse(
+        _ response: CompatibleGatewayEventsResponse,
+        request: RemoteGatewayEventsRequest
+    ) throws {
+        guard let backward = request.backward,
+              request.cursor == nil,
+              let limit = request.limit,
+              limit > 0 else {
+            throw GatewayFailure.invalidResponse
+        }
+        guard case .page(let page) = response else {
+            return
+        }
+        guard page.conversationID == request.conversationID,
+              page.events.count <= limit,
+              page.firstAvailableSequence != nil else {
+            throw GatewayFailure.invalidResponse
+        }
+
+        var previousSequence: UInt64?
+        for event in page.events {
+            guard event.conversationID == request.conversationID,
+                  event.sequence <= page.latestSequence,
+                  page.firstAvailableSequence.map({ event.sequence >= $0 }) ?? true,
+                  previousSequence.map({ event.sequence > $0 }) ?? true else {
+                throw GatewayFailure.invalidResponse
+            }
+            previousSequence = event.sequence
+        }
+
+        switch backward {
+        case .latest:
+            if page.latestSequence == 0 {
+                guard page.events.isEmpty else { throw GatewayFailure.invalidResponse }
+            } else {
+                guard page.events.last?.sequence == page.latestSequence else {
+                    throw GatewayFailure.invalidResponse
+                }
+            }
+        case .before(let cursor):
+            guard page.projectionRunID == cursor.projectionRunID,
+                  page.projectionGeneration == cursor.projectionGeneration,
+                  page.events.last.map({ $0.sequence < cursor.beforeSequence }) ?? true else {
+                throw GatewayFailure.invalidResponse
+            }
+        }
     }
 
     private func perform(

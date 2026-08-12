@@ -15,6 +15,39 @@ public enum ConversationRuntimeDirective: Equatable, Sendable {
     case resnapshot(reason: ConversationResnapshotReason)
 }
 
+public struct ConversationOlderPageRequest: Equatable, Sendable {
+    public var connectionGeneration: UInt64
+    public var projectionRunID: RemoteProjectionRunID
+    public var projectionGeneration: UInt64
+    public var beforeSequence: UInt64
+
+    public init(
+        connectionGeneration: UInt64,
+        projectionRunID: RemoteProjectionRunID,
+        projectionGeneration: UInt64,
+        beforeSequence: UInt64
+    ) {
+        self.connectionGeneration = connectionGeneration
+        self.projectionRunID = projectionRunID
+        self.projectionGeneration = projectionGeneration
+        self.beforeSequence = beforeSequence
+    }
+
+    public var cursor: ConversationEventBackwardCursor {
+        ConversationEventBackwardCursor(
+            projectionRunID: projectionRunID,
+            projectionGeneration: projectionGeneration,
+            beforeSequence: beforeSequence
+        )
+    }
+}
+
+public enum ConversationOlderPageDirective: Equatable, Sendable {
+    case none
+    case continueLoading(ConversationOlderPageRequest)
+    case resnapshot(reason: ConversationResnapshotReason)
+}
+
 public enum ConversationRuntimePhase: Equatable, Sendable {
     case idle
     case catchingUp
@@ -31,9 +64,11 @@ public actor ConversationRuntime {
         public var projectionGeneration: UInt64?
         public var events: [CompatibleConversationEvent]
         public var cursor: ConversationEventCursor?
+        public var oldestObservedSequence: UInt64?
         public var latestSequence: UInt64
         public var firstAvailableSequence: UInt64?
         public var historyTruncated: Bool
+        public var isLoadingOlder: Bool
         public var phase: ConversationRuntimePhase
         public let sendReconciliation: SendReconciliation
 
@@ -44,9 +79,11 @@ public actor ConversationRuntime {
             projectionGeneration: UInt64? = nil,
             events: [CompatibleConversationEvent] = [],
             cursor: ConversationEventCursor? = nil,
+            oldestObservedSequence: UInt64? = nil,
             latestSequence: UInt64 = 0,
             firstAvailableSequence: UInt64? = nil,
             historyTruncated: Bool = false,
+            isLoadingOlder: Bool = false,
             phase: ConversationRuntimePhase = .idle,
             sendReconciliation: SendReconciliation
         ) {
@@ -56,11 +93,21 @@ public actor ConversationRuntime {
             self.projectionGeneration = projectionGeneration
             self.events = events
             self.cursor = cursor
+            self.oldestObservedSequence = oldestObservedSequence
             self.latestSequence = latestSequence
             self.firstAvailableSequence = firstAvailableSequence
             self.historyTruncated = historyTruncated
+            self.isLoadingOlder = isLoadingOlder
             self.phase = phase
             self.sendReconciliation = sendReconciliation
+        }
+
+        public var hasOlder: Bool {
+            guard let oldestObservedSequence,
+                  let firstAvailableSequence else {
+                return false
+            }
+            return oldestObservedSequence > firstAvailableSequence
         }
     }
 
@@ -110,6 +157,7 @@ public actor ConversationRuntime {
             bufferedLivePages.removeAll(keepingCapacity: true)
         }
         state.connectionGeneration = connectionGeneration
+        state.isLoadingOlder = false
         catchUpIsResnapshot = resnapshot
         if resnapshot {
             projectionRunBeforeResnapshot = state.projectionRunID
@@ -149,6 +197,13 @@ public actor ConversationRuntime {
             projectionRunBeforeResnapshot = nil
         }
 
+        if let firstSequence = page.events.first?.sequence {
+            state.oldestObservedSequence = min(
+                state.oldestObservedSequence ?? firstSequence,
+                firstSequence
+            )
+        }
+
         let applied = applyContiguousEvents(page.events)
         if applied.hasGap {
             await observeAndPublish(applied.acceptedEvents)
@@ -162,6 +217,76 @@ public actor ConversationRuntime {
         if bufferedDirective != .none {
             return bufferedDirective
         }
+        if observedSequence < state.latestSequence {
+            return .fetchREST(cursor: state.cursor)
+        }
+        return .none
+    }
+
+    /// Applies the retained tail loaded after the stream subscription opens.
+    /// The tail establishes the live cursor without downloading the full
+    /// retained journal; buffered stream pages are then drained or repaired by
+    /// the existing forward catch-up path.
+    @discardableResult
+    public func applyRESTTail(
+        _ page: CompatibleConversationEventPage,
+        connectionGeneration: UInt64
+    ) async -> ConversationRuntimeDirective {
+        guard connectionGeneration == state.connectionGeneration else { return .none }
+        guard state.phase == .catchingUp else { return .none }
+        guard page.conversationID == state.conversationID else {
+            return await requireResnapshot(.invalidPage, connectionGeneration: connectionGeneration)
+        }
+
+        if let runID = state.projectionRunID {
+            guard runID == page.projectionRunID,
+                  state.projectionGeneration == page.projectionGeneration else {
+                return await requireResnapshot(
+                    .projectionChanged,
+                    connectionGeneration: connectionGeneration
+                )
+            }
+        } else {
+            guard establishTailProjection(for: page) else {
+                return await requireResnapshot(.invalidPage, connectionGeneration: connectionGeneration)
+            }
+            if projectionRunBeforeResnapshot != page.projectionRunID {
+                await sendReconciliation.projectionDidChange(to: page.projectionRunID)
+            }
+            projectionRunBeforeResnapshot = nil
+        }
+
+        guard validateContiguousPageEvents(page.events) else {
+            return await requireResnapshot(.invalidPage, connectionGeneration: connectionGeneration)
+        }
+
+        if let firstSequence = page.events.first?.sequence {
+            if state.cursor == nil {
+                state.cursor = ConversationEventCursor(
+                    projectionRunID: page.projectionRunID,
+                    projectionGeneration: page.projectionGeneration,
+                    afterSequence: firstSequence - 1
+                )
+            }
+            state.oldestObservedSequence = min(
+                state.oldestObservedSequence ?? firstSequence,
+                firstSequence
+            )
+        }
+
+        let applied = applyContiguousEvents(page.events)
+        if applied.hasGap {
+            let directive = await bufferLivePage(page, connectionGeneration: connectionGeneration)
+            await observeAndPublish(applied.acceptedEvents)
+            if directive != .none { return directive }
+            return .fetchREST(cursor: state.cursor)
+        }
+        updatePageMetadata(page)
+        await sendReconciliation.observe(applied.acceptedEvents)
+
+        let bufferedDirective = await drainBufferedLivePages()
+        await publish()
+        if bufferedDirective != .none { return bufferedDirective }
         if observedSequence < state.latestSequence {
             return .fetchREST(cursor: state.cursor)
         }
@@ -241,6 +366,120 @@ public actor ConversationRuntime {
         return true
     }
 
+    /// Begins one user-driven retained-history page. The returned request is
+    /// tagged with both connection and projection identity so a response from
+    /// a dismissed, reconnected, or rebuilt conversation cannot be applied.
+    @discardableResult
+    public func beginLoadingOlder(
+        connectionGeneration: UInt64
+    ) async -> ConversationOlderPageRequest? {
+        guard connectionGeneration == state.connectionGeneration,
+              state.phase == .live,
+              state.isLoadingOlder == false,
+              state.hasOlder,
+              let projectionRunID = state.projectionRunID,
+              let projectionGeneration = state.projectionGeneration,
+              let beforeSequence = state.oldestObservedSequence else {
+            return nil
+        }
+        state.isLoadingOlder = true
+        await publish()
+        return ConversationOlderPageRequest(
+            connectionGeneration: connectionGeneration,
+            projectionRunID: projectionRunID,
+            projectionGeneration: projectionGeneration,
+            beforeSequence: beforeSequence
+        )
+    }
+
+    @discardableResult
+    public func applyOlderREST(
+        _ page: CompatibleConversationEventPage,
+        request: ConversationOlderPageRequest
+    ) async -> ConversationOlderPageDirective {
+        guard request.connectionGeneration == state.connectionGeneration,
+              request.projectionRunID == state.projectionRunID,
+              request.projectionGeneration == state.projectionGeneration,
+              request.beforeSequence == state.oldestObservedSequence,
+              state.isLoadingOlder else {
+            return .none
+        }
+        guard page.conversationID == state.conversationID else {
+            state.isLoadingOlder = false
+            return await olderResnapshot(.invalidPage)
+        }
+        guard page.projectionRunID == request.projectionRunID,
+              page.projectionGeneration == request.projectionGeneration else {
+            state.isLoadingOlder = false
+            return await olderResnapshot(.projectionChanged)
+        }
+        guard validateContiguousPageEvents(page.events),
+              page.events.allSatisfy({ $0.sequence < request.beforeSequence }) else {
+            state.isLoadingOlder = false
+            return await olderResnapshot(.invalidPage)
+        }
+        if let lastSequence = page.events.last?.sequence {
+            let (expectedBoundary, overflow) = lastSequence.addingReportingOverflow(1)
+            guard overflow == false, expectedBoundary == request.beforeSequence else {
+                state.isLoadingOlder = false
+                return await olderResnapshot(.invalidPage)
+            }
+        } else if let firstAvailableSequence = page.firstAvailableSequence,
+                  request.beforeSequence > firstAvailableSequence {
+            state.isLoadingOlder = false
+            return await olderResnapshot(.invalidPage)
+        }
+
+        updatePageMetadata(page)
+        let renderedEvents = page.events.filter { event in
+            if case .unknown = event { return false }
+            return true
+        }
+        if renderedEvents.isEmpty == false {
+            state.events.insert(contentsOf: renderedEvents, at: 0)
+        }
+        if let firstSequence = page.events.first?.sequence {
+            state.oldestObservedSequence = firstSequence
+        } else if let firstAvailableSequence = state.firstAvailableSequence,
+                  request.beforeSequence <= firstAvailableSequence {
+            state.oldestObservedSequence = request.beforeSequence
+        }
+        await sendReconciliation.observe(page.events)
+
+        if renderedEvents.isEmpty,
+           page.events.isEmpty == false,
+           state.hasOlder,
+           let nextBeforeSequence = state.oldestObservedSequence {
+            let next = ConversationOlderPageRequest(
+                connectionGeneration: request.connectionGeneration,
+                projectionRunID: request.projectionRunID,
+                projectionGeneration: request.projectionGeneration,
+                beforeSequence: nextBeforeSequence
+            )
+            await publish()
+            return .continueLoading(next)
+        }
+
+        state.isLoadingOlder = false
+        await publish()
+        return .none
+    }
+
+    @discardableResult
+    public func finishLoadingOlder(
+        request: ConversationOlderPageRequest
+    ) async -> Bool {
+        guard request.connectionGeneration == state.connectionGeneration,
+              request.projectionRunID == state.projectionRunID,
+              request.projectionGeneration == state.projectionGeneration,
+              state.isLoadingOlder else {
+            return false
+        }
+        state.isLoadingOlder = false
+        await publish()
+        return true
+    }
+
     @discardableResult
     public func requireResnapshot(
         _ reason: ConversationResnapshotReason = .explicit,
@@ -248,6 +487,7 @@ public actor ConversationRuntime {
     ) async -> ConversationRuntimeDirective {
         guard connectionGeneration == state.connectionGeneration else { return .none }
         bufferedLivePages.removeAll(keepingCapacity: true)
+        state.isLoadingOlder = false
         state.phase = .resnapshotRequired(reason)
         await publish()
         return .resnapshot(reason: reason)
@@ -258,6 +498,7 @@ public actor ConversationRuntime {
         guard connectionGeneration >= state.connectionGeneration else { return false }
         state.connectionGeneration = connectionGeneration
         state.phase = .suspended
+        state.isLoadingOlder = false
         bufferedLivePages.removeAll(keepingCapacity: true)
         await publish()
         return true
@@ -326,6 +567,39 @@ public actor ConversationRuntime {
         return .valid(adoptedRun: page.projectionRunID)
     }
 
+    private func establishTailProjection(
+        for page: CompatibleConversationEventPage
+    ) -> Bool {
+        guard validateContiguousPageEvents(page.events) else { return false }
+        let baseline: UInt64
+        if let firstSequence = page.events.first?.sequence,
+           let lastSequence = page.events.last?.sequence {
+            guard firstSequence > 0,
+                  lastSequence == page.latestSequence,
+                  page.firstAvailableSequence.map({ $0 > 0 && $0 <= firstSequence }) ?? true else {
+                return false
+            }
+            baseline = firstSequence - 1
+            state.oldestObservedSequence = firstSequence
+        } else {
+            guard page.latestSequence == 0 else { return false }
+            baseline = 0
+            state.oldestObservedSequence = nil
+        }
+
+        state.projectionRunID = page.projectionRunID
+        state.projectionGeneration = page.projectionGeneration
+        state.cursor = ConversationEventCursor(
+            projectionRunID: page.projectionRunID,
+            projectionGeneration: page.projectionGeneration,
+            afterSequence: baseline
+        )
+        state.latestSequence = page.latestSequence
+        state.firstAvailableSequence = page.firstAvailableSequence
+        state.historyTruncated = page.historyTruncated
+        return true
+    }
+
     private func retentionDisposition(
         for page: CompatibleConversationEventPage
     ) -> RetentionDisposition {
@@ -368,9 +642,32 @@ public actor ConversationRuntime {
     private func updatePageMetadata(_ page: CompatibleConversationEventPage) {
         state.latestSequence = max(state.latestSequence, page.latestSequence)
         if let firstAvailableSequence = page.firstAvailableSequence {
-            state.firstAvailableSequence = firstAvailableSequence
+            state.firstAvailableSequence = max(
+                state.firstAvailableSequence ?? firstAvailableSequence,
+                firstAvailableSequence
+            )
         }
         state.historyTruncated = state.historyTruncated || page.historyTruncated
+    }
+
+    private func validateContiguousPageEvents(
+        _ events: [CompatibleConversationEvent]
+    ) -> Bool {
+        var previousSequence: UInt64?
+        for event in events {
+            guard event.conversationID == state.conversationID,
+                  event.sequence > 0 else {
+                return false
+            }
+            if let previousSequence {
+                let (expectedSequence, overflow) = previousSequence.addingReportingOverflow(1)
+                guard overflow == false, event.sequence == expectedSequence else {
+                    return false
+                }
+            }
+            previousSequence = event.sequence
+        }
+        return true
     }
 
     private func bufferLivePage(
@@ -436,9 +733,21 @@ public actor ConversationRuntime {
         state.projectionGeneration = nil
         state.events.removeAll(keepingCapacity: true)
         state.cursor = nil
+        state.oldestObservedSequence = nil
         state.latestSequence = 0
         state.firstAvailableSequence = nil
         state.historyTruncated = false
+        state.isLoadingOlder = false
+    }
+
+    private func olderResnapshot(
+        _ reason: ConversationResnapshotReason
+    ) async -> ConversationOlderPageDirective {
+        bufferedLivePages.removeAll(keepingCapacity: true)
+        state.phase = .resnapshotRequired(reason)
+        state.isLoadingOlder = false
+        await publish()
+        return .resnapshot(reason: reason)
     }
 
     private func observeAndPublish(_ events: [CompatibleConversationEvent]) async {

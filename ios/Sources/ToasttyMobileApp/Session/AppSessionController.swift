@@ -19,6 +19,7 @@ protocol AppLiveSessionsControlling: AnyObject {
     var projectionRunID: String? { get }
     var projectionGeneration: UInt64? { get }
     var activeConversationCursor: UInt64? { get }
+    var activeConversationController: LiveConversationController? { get }
     func start() async
     func foreground() async
     func background() async
@@ -26,6 +27,10 @@ protocol AppLiveSessionsControlling: AnyObject {
 }
 
 extension LiveSessionsController: AppLiveSessionsControlling {}
+
+extension AppLiveSessionsControlling {
+    var activeConversationController: LiveConversationController? { nil }
+}
 
 typealias AppLiveSessionsFactory = @MainActor (
     StoredMobileCredential,

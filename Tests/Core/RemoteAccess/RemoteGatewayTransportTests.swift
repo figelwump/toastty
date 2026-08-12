@@ -207,6 +207,14 @@ private struct StubFacade: RemoteSessionFacade {
     ) -> ConversationEventPageOutcome {
         eventsOutcome
     }
+
+    func conversationEvents(
+        for conversationID: RemoteConversationID,
+        before cursor: ConversationEventBackwardCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome {
+        eventsOutcome
+    }
 }
 
 private final class PersistenceWriteBudget: @unchecked Sendable {
@@ -357,7 +365,11 @@ struct RemoteGatewayRequestHandlerTests {
             from: response.body
         )
         #expect(hello == RemoteGatewayHelloResponse())
-        #expect(hello.capabilities == [.browserCookiePairing, .nativeBearerPairing])
+        #expect(hello.capabilities == [
+            .browserCookiePairing,
+            .nativeBearerPairing,
+            .conversationBackwardPaging,
+        ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
         #expect(response.body == expectedFixture)
@@ -1397,6 +1409,59 @@ struct RemoteGatewayRequestHandlerTests {
             #expect(response.status == 200)
             let decoded = try decoder.decode(RemoteGatewayEventsResponse.self, from: response.body)
             #expect(decoded == expectation)
+        }
+    }
+
+    @Test func eventsEndpointAcceptsExplicitBackwardAnchorsAndRejectsAmbiguity() throws {
+        let conversationID = RemoteConversationID(rawValue: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+        let runID = RemoteProjectionRunID(rawValue: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!)
+        let page = ConversationEventPage(
+            conversationID: conversationID,
+            projectionRunID: runID,
+            projectionGeneration: 7,
+            events: [],
+            latestSequence: 12,
+            firstAvailableSequence: 1,
+            historyTruncated: false
+        )
+        let (handler, store, _) = Self.makeHandler(eventsOutcome: .page(page))
+        let cookie = Self.pairedDeviceCookie(store)
+        let validBodies = [
+            #"{"backward":{"anchor":"latest"},"conversationID":"11111111-1111-1111-1111-111111111111","limit":50}"#,
+            #"{"backward":{"anchor":"latest","future":true},"conversationID":"11111111-1111-1111-1111-111111111111","limit":50}"#,
+            #"{"backward":{"anchor":"before","cursor":{"beforeSequence":10,"projectionGeneration":7,"projectionRunID":"22222222-2222-2222-2222-222222222222"}},"conversationID":"11111111-1111-1111-1111-111111111111","limit":50}"#,
+        ]
+        for body in validBodies {
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/api/conversation.events.get", origin: Self.origin, cookie: cookie, body: body),
+                at: Self.now
+            ) else {
+                Issue.record("Expected backward response")
+                return
+            }
+            #expect(response.status == 200)
+        }
+
+        let invalidBodies = [
+            #"{"backward":null,"conversationID":"11111111-1111-1111-1111-111111111111","limit":50}"#,
+            #"{"backward":{"anchor":"latest"},"conversationID":"11111111-1111-1111-1111-111111111111"}"#,
+            #"{"backward":{"anchor":"latest","cursor":null},"conversationID":"11111111-1111-1111-1111-111111111111","limit":50}"#,
+            #"{"backward":{"anchor":"latest"},"conversationID":"11111111-1111-1111-1111-111111111111","cursor":null,"limit":50}"#,
+            #"{"backward":{"anchor":"before"},"conversationID":"11111111-1111-1111-1111-111111111111","limit":50}"#,
+            #"{"backward":{"anchor":"latest"},"conversationID":"11111111-1111-1111-1111-111111111111","cursor":{"afterSequence":1,"projectionGeneration":7,"projectionRunID":"22222222-2222-2222-2222-222222222222"},"limit":50}"#,
+            #"{"backward":{"anchor":"latest"},"conversationID":"11111111-1111-1111-1111-111111111111","limit":0}"#,
+            #"{"backward":{"anchor":"latest"},"conversationID":"11111111-1111-1111-1111-111111111111","limit":201}"#,
+        ]
+        for body in invalidBodies {
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/api/conversation.events.get", origin: Self.origin, cookie: cookie, body: body),
+                at: Self.now
+            ) else {
+                Issue.record("Expected invalid request response")
+                return
+            }
+            #expect(response.status == 400)
+            #expect(try Self.error(response).code == "invalid_body")
         }
     }
 

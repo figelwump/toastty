@@ -233,6 +233,47 @@ extension RemoteConversationProjectionStore: RemoteSessionFacade {
         ))
     }
 
+    public func conversationEvents(
+        for conversationID: RemoteConversationID,
+        before cursor: ConversationEventBackwardCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome {
+        guard let projector = projectorsByID[conversationID] else {
+            return .conversationNotFound
+        }
+        let clampedLimit = max(1, min(limit, Self.defaultPageLimit))
+        let events: [ConversationEvent]
+        if let cursor {
+            guard cursor.projectionRunID == runID,
+                  cursor.projectionGeneration == projector.generation else {
+                return .resnapshotRequired
+            }
+            let latestSequence = projector.latestSequence
+            if latestSequence < UInt64.max,
+               cursor.beforeSequence > latestSequence + 1 {
+                return .invalidRequest
+            }
+            events = projector.retainedEvents(
+                beforeSequence: cursor.beforeSequence,
+                limit: clampedLimit
+            )
+        } else {
+            events = projector.retainedTail(limit: clampedLimit)
+        }
+
+        return .page(ConversationEventPage(
+            conversationID: conversationID,
+            projectionRunID: runID,
+            projectionGeneration: projector.generation,
+            events: events,
+            latestSequence: projector.latestSequence,
+            firstAvailableSequence: projector.firstAvailableSequence,
+            // Conversation-scoped: true when earlier events have fallen out of
+            // the host's bounded retained projection, independent of page mode.
+            historyTruncated: projector.firstAvailableSequence > 1
+        ))
+    }
+
     private func makeSummary(for conversationID: RemoteConversationID) -> RemoteConversationSummary? {
         guard let projector = projectorsByID[conversationID],
               let descriptor = descriptorsByID[conversationID] else {

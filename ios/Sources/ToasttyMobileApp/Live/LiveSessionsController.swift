@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import RemoteProtocol
 import ToasttyMobileDomain
 
 enum LiveConnectionTerminal: Equatable, Sendable {
@@ -15,6 +16,9 @@ protocol LiveConnectionRuntime: Sendable {
     func connectIfNeeded() async
     func restart() async
     func suspend() async
+    func openConversation(_ conversationID: RemoteConversationID) async -> ConversationRuntime
+    func closeConversation(_ conversationID: RemoteConversationID) async
+    func loadOlder(_ conversationID: RemoteConversationID) async
 }
 
 struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
@@ -44,6 +48,18 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     func suspend() async {
         await coordinator.suspend()
     }
+
+    func openConversation(_ conversationID: RemoteConversationID) async -> ConversationRuntime {
+        await coordinator.openConversation(conversationID)
+    }
+
+    func closeConversation(_ conversationID: RemoteConversationID) async {
+        await coordinator.closeConversation(conversationID)
+    }
+
+    func loadOlder(_ conversationID: RemoteConversationID) async {
+        await coordinator.loadOlder(conversationID)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -58,7 +74,11 @@ final class LiveSessionsController {
 
     private(set) var projectionRunID: String?
     private(set) var projectionGeneration: UInt64?
-    private(set) var activeConversationCursor: UInt64?
+    private(set) var activeConversationController: LiveConversationController?
+
+    var activeConversationCursor: UInt64? {
+        activeConversationController?.cursor?.afterSequence
+    }
 
     private let runtime: any LiveConnectionRuntime
     private let hostName: String
@@ -68,6 +88,10 @@ final class LiveSessionsController {
     private var sessionsTask: Task<Void, Never>?
     private var coordinatorState = ConnectionCoordinator.State()
     private var sessionsState = SessionsRuntime.State()
+    private var desiredConversationID: UUID?
+    private var conversationRequestID = UUID()
+    private var conversationOpenOperations: [UUID: ConversationOpenOperation] = [:]
+    private var conversationRuntimeOwners: [RemoteConversationID: UUID] = [:]
 
     init(
         runtime: any LiveConnectionRuntime,
@@ -81,6 +105,18 @@ final class LiveSessionsController {
         self.homeController = homeController
         self.onFreshness = onFreshness
         self.onTerminal = onTerminal
+        homeController.installConversationLifecycle(
+            onOpen: { [weak self] conversationID in
+                Task { @MainActor [weak self] in
+                    await self?.openConversation(conversationID)
+                }
+            },
+            onClose: { [weak self] conversationID in
+                Task { @MainActor [weak self] in
+                    await self?.closeConversation(conversationID)
+                }
+            }
+        )
     }
 
     convenience init(
@@ -109,6 +145,9 @@ final class LiveSessionsController {
     func foreground() async {
         startObservingIfNeeded()
         await runtime.connectIfNeeded()
+        if let desiredConversationID {
+            await openConversation(desiredConversationID)
+        }
     }
 
     func refresh() async {
@@ -117,12 +156,89 @@ final class LiveSessionsController {
     }
 
     func background() async {
+        await tearDownActiveConversation(clearDesiredConversation: false)
         await runtime.suspend()
         applyPresentation(freshnessOverride: .stale)
     }
 
-    func updateActiveConversationCursor(_ cursor: UInt64?) {
-        activeConversationCursor = cursor
+    func openConversation(_ conversationID: UUID) async {
+        desiredConversationID = conversationID
+
+        while desiredConversationID == conversationID {
+            if activeConversationController?.conversationID == conversationID {
+                return
+            }
+            if let operation = conversationOpenOperations[conversationID] {
+                await operation.task.value
+                continue
+            }
+            break
+        }
+        guard desiredConversationID == conversationID else { return }
+
+        if activeConversationController != nil {
+            await tearDownActiveConversation(clearDesiredConversation: false)
+        }
+        guard desiredConversationID == conversationID else { return }
+
+        conversationRequestID = UUID()
+        let requestID = conversationRequestID
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await performOpenConversation(conversationID, requestID: requestID)
+            if conversationOpenOperations[conversationID]?.requestID == requestID {
+                conversationOpenOperations[conversationID] = nil
+            }
+        }
+        conversationOpenOperations[conversationID] = ConversationOpenOperation(
+            requestID: requestID,
+            task: task
+        )
+        await task.value
+    }
+
+    private func performOpenConversation(
+        _ conversationID: UUID,
+        requestID: UUID
+    ) async {
+        let remoteID = RemoteConversationID(rawValue: conversationID)
+        let conversationRuntime = await runtime.openConversation(remoteID)
+        conversationRuntimeOwners[remoteID] = requestID
+        guard conversationRequestID == requestID,
+              desiredConversationID == conversationID else {
+            await closeConversationRuntime(remoteID, ownedBy: requestID)
+            return
+        }
+
+        let controller = LiveConversationController(
+            conversationID: conversationID,
+            runtime: conversationRuntime,
+            loadOlder: { [runtime] in
+                await runtime.loadOlder(remoteID)
+            }
+        )
+        controller.consumeConnectionPhase(coordinatorState.phase)
+        activeConversationController = controller
+        await controller.start()
+
+        guard conversationRequestID == requestID,
+              desiredConversationID == conversationID else {
+            controller.stop()
+            if activeConversationController === controller {
+                activeConversationController = nil
+            }
+            await closeConversationRuntime(remoteID, ownedBy: requestID)
+            return
+        }
+    }
+
+    func closeConversation(_ conversationID: UUID) async {
+        guard desiredConversationID == conversationID
+                || activeConversationController?.conversationID == conversationID else {
+            return
+        }
+        await tearDownActiveConversation(clearDesiredConversation: true)
     }
 
     func stopObserving() {
@@ -130,9 +246,20 @@ final class LiveSessionsController {
         sessionsTask?.cancel()
         coordinatorTask = nil
         sessionsTask = nil
+        conversationRequestID = UUID()
+        desiredConversationID = nil
+        let activeConversationID = activeConversationController?.conversationID
+        activeConversationController?.stop()
+        activeConversationController = nil
+        if let activeConversationID {
+            conversationRuntimeOwners[RemoteConversationID(rawValue: activeConversationID)] = nil
+        }
         // Dropping the UI observers is not enough: an unpaired or replaced
         // controller must also close its socket and cancel in-flight REST.
         Task { [runtime] in
+            if let activeConversationID {
+                await runtime.closeConversation(RemoteConversationID(rawValue: activeConversationID))
+            }
             await runtime.suspend()
         }
     }
@@ -161,6 +288,7 @@ final class LiveSessionsController {
 
     func consumeCoordinatorState(_ state: ConnectionCoordinator.State) {
         coordinatorState = state
+        activeConversationController?.consumeConnectionPhase(state.phase)
         applyPresentation()
         // Terminal admission/authorization state must be the final callback.
         // In particular, the stale projection presented for a retained 403
@@ -209,6 +337,35 @@ final class LiveSessionsController {
             freshness: freshness
         )
         onFreshness(freshness)
+    }
+
+    private func tearDownActiveConversation(
+        clearDesiredConversation: Bool
+    ) async {
+        conversationRequestID = UUID()
+        if clearDesiredConversation {
+            desiredConversationID = nil
+        }
+        guard let controller = activeConversationController else { return }
+        activeConversationController = nil
+        controller.stop()
+        let remoteID = RemoteConversationID(rawValue: controller.conversationID)
+        conversationRuntimeOwners[remoteID] = nil
+        await runtime.closeConversation(remoteID)
+    }
+
+    private func closeConversationRuntime(
+        _ conversationID: RemoteConversationID,
+        ownedBy requestID: UUID
+    ) async {
+        guard conversationRuntimeOwners[conversationID] == requestID else { return }
+        conversationRuntimeOwners[conversationID] = nil
+        await runtime.closeConversation(conversationID)
+    }
+
+    private struct ConversationOpenOperation {
+        let requestID: UUID
+        let task: Task<Void, Never>
     }
 
     private var resolvedFreshness: LiveProjectionFreshness {

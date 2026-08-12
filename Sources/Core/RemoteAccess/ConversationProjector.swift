@@ -250,6 +250,29 @@ public struct ConversationProjector: Sendable {
         return Array(events[lowerBound..<endIndex])
     }
 
+    /// Returns the ascending retained prefix immediately before an exclusive
+    /// sequence boundary. Work remains bounded by the requested page size.
+    func retainedEvents(beforeSequence: UInt64, limit: Int) -> [ConversationEvent] {
+        var lowerBound = 0
+        var upperBound = events.count
+        while lowerBound < upperBound {
+            let midpoint = lowerBound + (upperBound - lowerBound) / 2
+            if events[midpoint].sequence < beforeSequence {
+                lowerBound = midpoint + 1
+            } else {
+                upperBound = midpoint
+            }
+        }
+        guard lowerBound > 0 else { return [] }
+        let startIndex = max(0, lowerBound - max(1, limit))
+        return Array(events[startIndex..<lowerBound])
+    }
+
+    func retainedTail(limit: Int) -> [ConversationEvent] {
+        guard events.isEmpty == false else { return [] }
+        return Array(events.suffix(max(1, limit)))
+    }
+
     public var firstAvailableSequence: UInt64 {
         events.first?.sequence ?? nextSequence
     }

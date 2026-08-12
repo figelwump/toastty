@@ -362,16 +362,41 @@ public final class RemoteGatewayRequestHandler {
         guard let eventsRequest = try? ConversationEventCoding.makeDecoder().decode(RemoteGatewayEventsRequest.self, from: request.body) else {
             return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected events request JSON"))
         }
-        let outcome = facade.conversationEvents(
-            for: eventsRequest.conversationID,
-            after: eventsRequest.cursor,
-            limit: eventsRequest.limit ?? 200
-        )
+        let outcome: ConversationEventPageOutcome
+        if let backward = eventsRequest.backward {
+            guard eventsRequest.cursor == nil,
+                  let limit = eventsRequest.limit,
+                  (1...RemoteConversationProjectionStore.defaultPageLimit).contains(limit) else {
+                return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Invalid events paging request"))
+            }
+            switch backward {
+            case .latest:
+                outcome = facade.conversationEvents(
+                    for: eventsRequest.conversationID,
+                    before: nil,
+                    limit: limit
+                )
+            case .before(let cursor):
+                outcome = facade.conversationEvents(
+                    for: eventsRequest.conversationID,
+                    before: cursor,
+                    limit: limit
+                )
+            }
+        } else {
+            outcome = facade.conversationEvents(
+                for: eventsRequest.conversationID,
+                after: eventsRequest.cursor,
+                limit: eventsRequest.limit ?? RemoteConversationProjectionStore.defaultPageLimit
+            )
+        }
         let response: RemoteGatewayEventsResponse
         switch outcome {
         case .page(let page): response = .page(page)
         case .resnapshotRequired: response = .resnapshotRequired
         case .conversationNotFound: response = .conversationNotFound
+        case .invalidRequest:
+            return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Invalid events paging request"))
         }
         let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))

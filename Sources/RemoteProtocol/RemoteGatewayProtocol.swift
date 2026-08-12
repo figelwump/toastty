@@ -15,13 +15,16 @@ public enum RemoteGatewayProtocol {
 /// Implemented unauthenticated capability hints. Keep this list narrow: the
 /// native client must not infer that a future authentication mechanism exists
 /// until the host actually implements and advertises it.
-public enum RemoteGatewayCapability: String, Codable, Equatable, Sendable {
+public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Sendable {
     /// The existing web flow exchanges a short pairing code for an HttpOnly
     /// browser session cookie. This does not imply native Bearer support.
     case browserCookiePairing = "browser_cookie_pairing"
     /// A native client may exchange a Mac-created, short-lived offer for an
     /// opaque Bearer credential bound to its Tailscale login.
     case nativeBearerPairing = "native_bearer_pairing"
+    /// Conversation history can be opened at the retained tail and paged
+    /// backward without eagerly downloading the whole retained journal.
+    case conversationBackwardPaging = "conversation_backward_paging"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -33,7 +36,11 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
         minimumSupportedProtocolVersion: String = RemoteGatewayProtocol.minimumSupportedVersion,
-        capabilities: [RemoteGatewayCapability] = [.browserCookiePairing, .nativeBearerPairing]
+        capabilities: [RemoteGatewayCapability] = [
+            .browserCookiePairing,
+            .nativeBearerPairing,
+            .conversationBackwardPaging,
+        ]
     ) {
         self.protocolVersion = protocolVersion
         self.minimumSupportedProtocolVersion = minimumSupportedProtocolVersion
@@ -283,16 +290,131 @@ public struct RemoteGatewaySessionListResponse: Codable, Equatable, Sendable {
     }
 }
 
+/// Identity and exclusive upper sequence boundary for backward event paging.
+/// This is intentionally distinct from `ConversationEventCursor`: calling a
+/// field `afterSequence` while using it as a before-boundary is too easy to
+/// apply with the wrong inequality.
+public struct ConversationEventBackwardCursor: Codable, Equatable, Sendable {
+    public var projectionRunID: RemoteProjectionRunID
+    public var projectionGeneration: UInt64
+    public var beforeSequence: UInt64
+
+    public init(
+        projectionRunID: RemoteProjectionRunID,
+        projectionGeneration: UInt64,
+        beforeSequence: UInt64
+    ) {
+        self.projectionRunID = projectionRunID
+        self.projectionGeneration = projectionGeneration
+        self.beforeSequence = beforeSequence
+    }
+}
+
+/// Explicit backward-page anchor. Every valid wire object names its intent;
+/// a missing cursor can never accidentally turn a load-older request into a
+/// tail request.
+public enum RemoteGatewayEventsBackwardAnchor: Equatable, Sendable {
+    case latest
+    case before(ConversationEventBackwardCursor)
+
+    private enum CodingKeys: String, CodingKey {
+        case anchor
+        case cursor
+    }
+
+    private enum Anchor: String, Codable {
+        case latest
+        case before
+    }
+}
+
+extension RemoteGatewayEventsBackwardAnchor: Codable {
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Anchor.self, forKey: .anchor) {
+        case .latest:
+            guard container.contains(.cursor) == false else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .cursor,
+                    in: container,
+                    debugDescription: "A latest backward anchor cannot include a cursor"
+                )
+            }
+            self = .latest
+        case .before:
+            self = .before(try container.decode(ConversationEventBackwardCursor.self, forKey: .cursor))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .latest:
+            try container.encode(Anchor.latest, forKey: .anchor)
+        case .before(let cursor):
+            try container.encode(Anchor.before, forKey: .anchor)
+            try container.encode(cursor, forKey: .cursor)
+        }
+    }
+}
+
 /// Body of `POST /api/conversation.events.get`.
+///
+/// Omitting `backward` preserves the original forward-cursor behavior.
+/// Backward requests require an explicit bounded `limit`; their events remain
+/// ascending on the wire so every consumer has one ordering contract.
 public struct RemoteGatewayEventsRequest: Codable, Equatable, Sendable {
     public var conversationID: RemoteConversationID
     public var cursor: ConversationEventCursor?
     public var limit: Int?
+    public var backward: RemoteGatewayEventsBackwardAnchor?
 
-    public init(conversationID: RemoteConversationID, cursor: ConversationEventCursor? = nil, limit: Int? = nil) {
+    public init(
+        conversationID: RemoteConversationID,
+        cursor: ConversationEventCursor? = nil,
+        limit: Int? = nil,
+        backward: RemoteGatewayEventsBackwardAnchor? = nil
+    ) {
         self.conversationID = conversationID
         self.cursor = cursor
         self.limit = limit
+        self.backward = backward
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationID
+        case cursor
+        case limit
+        case backward
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        conversationID = try container.decode(RemoteConversationID.self, forKey: .conversationID)
+        cursor = try container.decodeIfPresent(ConversationEventCursor.self, forKey: .cursor)
+        limit = try container.decodeIfPresent(Int.self, forKey: .limit)
+        if container.contains(.backward) {
+            // Explicit null is invalid rather than silently becoming a forward
+            // request on a client encoding bug.
+            backward = try container.decode(RemoteGatewayEventsBackwardAnchor.self, forKey: .backward)
+            guard container.contains(.cursor) == false else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .cursor,
+                    in: container,
+                    debugDescription: "Forward and backward cursors are mutually exclusive"
+                )
+            }
+        } else {
+            backward = nil
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(conversationID, forKey: .conversationID)
+        try container.encodeIfPresent(cursor, forKey: .cursor)
+        try container.encodeIfPresent(limit, forKey: .limit)
+        try container.encodeIfPresent(backward, forKey: .backward)
     }
 }
 

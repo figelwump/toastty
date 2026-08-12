@@ -4,31 +4,33 @@ import ToasttyMobileDomain
 struct ToasttyConversationSheet: View {
     let conversationID: UUID
     let controller: HomeScreenController
+    let presentation: ToasttyConversationPresentationState?
+    let loadOlder: () -> Void
     let onDismiss: () -> Void
+
+    init(
+        conversationID: UUID,
+        controller: HomeScreenController,
+        presentation: ToasttyConversationPresentationState? = nil,
+        loadOlder: @escaping () -> Void = {},
+        onDismiss: @escaping () -> Void
+    ) {
+        self.conversationID = conversationID
+        self.controller = controller
+        self.presentation = presentation
+        self.loadOlder = loadOlder
+        self.onDismiss = onDismiss
+    }
 
     var body: some View {
         Group {
             if let conversation = controller.conversation(id: conversationID) {
                 VStack(spacing: 0) {
                     header(conversation)
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text(conversation.lastActivity)
-                                .font(.body)
-                                .foregroundStyle(ToasttyDesignTokens.primaryText)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                            if case .pendingInteraction(let preview) = conversation.inputAvailability {
-                                pendingInteraction(preview: preview)
-                            }
-
-                            Text("Full transcript arrives in the transcript milestone. This view keeps interaction requests read-only.")
-                                .font(.footnote)
-                                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(18)
-                    }
+                    ToasttyTranscriptView(
+                        state: resolvedPresentation,
+                        loadOlder: loadOlder
+                    )
                     composerState(conversation)
                 }
             } else {
@@ -41,6 +43,16 @@ struct ToasttyConversationSheet: View {
             }
         }
         .background(ToasttyDesignTokens.elevatedSurface)
+    }
+
+    private var resolvedPresentation: ToasttyConversationPresentationState {
+        if let presentation { return presentation }
+#if DEBUG
+        if controller.runtimeMode == .fixture {
+            return ToasttyConversationFixture.presentation(for: conversationID)
+        }
+#endif
+        return .loading
     }
 
     private func header(_ conversation: MobileConversation) -> some View {
@@ -76,29 +88,6 @@ struct ToasttyConversationSheet: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .overlay(alignment: .bottom) { Divider().overlay(ToasttyDesignTokens.divider) }
-    }
-
-    private func pendingInteraction(preview: String?) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Label("Interaction waiting", systemImage: "exclamationmark.bubble")
-                .font(.caption.monospaced().weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.amber)
-            Text(preview ?? "Waiting for a response on the Mac")
-                .font(.subheadline)
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
-            Text("Respond on the desktop")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.amberText)
-        }
-        .padding(14)
-        .background(Color(red: 24 / 255, green: 21 / 255, blue: 9 / 255))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(ToasttyDesignTokens.amber.opacity(0.35))
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("toastty-mobile-readonly-interaction")
     }
 
     private func composerState(_ conversation: MobileConversation) -> some View {

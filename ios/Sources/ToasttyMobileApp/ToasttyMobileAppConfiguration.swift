@@ -5,6 +5,11 @@ import UIKit
 
 enum ToasttyMobileFixtureScenario: String, Equatable, Sendable {
     case home
+    case transcriptPerformance = "transcript-performance"
+    case transcriptResyncing = "transcript-resyncing"
+    case transcriptStale = "transcript-stale"
+    case transcriptTruncated = "transcript-truncated"
+    case transcriptPaging = "transcript-paging"
     case unpaired
     case cameraDenied = "camera-denied"
     case scannerUnsupported = "scanner-unsupported"
@@ -44,7 +49,14 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     }
 
     var initialConnectionState: MobileConnectionState {
-        fixtureScenario == .home ? .live : .offline
+        switch fixtureScenario {
+        case .home, .transcriptPerformance, .transcriptResyncing,
+             .transcriptStale, .transcriptTruncated, .transcriptPaging:
+            .live
+        case .unpaired, .cameraDenied, .scannerUnsupported,
+             .pairingFailure, .pairingPrivacy, nil:
+            .offline
+        }
     }
 
     @MainActor
@@ -57,10 +69,21 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 scanner = FixturePairingScanner(authorization: .denied)
             case .scannerUnsupported:
                 scanner = FixturePairingScanner(availability: .unsupported)
-            case .home, .unpaired, .pairingFailure, .pairingPrivacy:
+            case .home, .transcriptPerformance, .transcriptResyncing,
+                 .transcriptStale, .transcriptTruncated, .transcriptPaging,
+                 .unpaired, .pairingFailure, .pairingPrivacy:
                 scanner = FixturePairingScanner()
             }
-            let initialCredential = fixtureScenario == .home ? Self.fixtureCredential : nil
+            let usesPairedFixture: Bool
+            switch fixtureScenario {
+            case .home, .transcriptPerformance, .transcriptResyncing,
+                 .transcriptStale, .transcriptTruncated, .transcriptPaging:
+                usesPairedFixture = true
+            case .unpaired, .cameraDenied, .scannerUnsupported,
+                 .pairingFailure, .pairingPrivacy:
+                usesPairedFixture = false
+            }
+            let initialCredential = usesPairedFixture ? Self.fixtureCredential : nil
             let vault = FixtureAppCredentialVault(initialCredential: initialCredential)
             let controller = AppSessionController(
                 runtimeMode: runtimeMode,
@@ -71,7 +94,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 ),
                 scanner: scanner,
                 deviceName: { "Fixture iPhone" },
-                initialState: fixtureScenario == .home ? .paired(.live) : .unpaired,
+                initialState: usesPairedFixture ? .paired(.live) : .unpaired,
                 initialPairedDevice: initialCredential.map(PairedDevicePresentation.init),
                 initialSnapshot: initialSnapshot,
                 initialConnectionState: initialConnectionState

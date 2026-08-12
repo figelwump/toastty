@@ -118,6 +118,166 @@ final class GatewayClientTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
     }
 
+    func testBackwardEventsEncodeExplicitAnchorAndValidateTailInvariant() async throws {
+        let tailJSON = Self.eventsPageJSON(sequences: [8, 9, 10], latestSequence: 10)
+        let transport = RecordingHTTPTransport(responses: [.json(tailJSON)])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport
+        )
+        let response = try await client.events(RemoteGatewayEventsRequest(
+            conversationID: Self.conversationID,
+            limit: 3,
+            backward: .latest
+        ))
+        guard case .page(let page) = response else {
+            return XCTFail("Expected page")
+        }
+        XCTAssertEqual(page.events.map(\.sequence), [8, 9, 10])
+
+        let requests = await transport.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        let body = try XCTUnwrap(request.httpBody)
+        XCTAssertEqual(
+            try ConversationEventCoding.makeDecoder().decode(RemoteGatewayEventsRequest.self, from: body).backward,
+            .latest
+        )
+    }
+
+    func testBackwardEventsRejectNonTailAndOutOfBoundaryResponses() async throws {
+        let beforeCursor = ConversationEventBackwardCursor(
+            projectionRunID: Self.projectionRunID,
+            projectionGeneration: 7,
+            beforeSequence: 8
+        )
+        for (request, body) in [
+            (
+                RemoteGatewayEventsRequest(
+                    conversationID: Self.conversationID,
+                    limit: 3,
+                    backward: .latest
+                ),
+                Self.eventsPageJSON(sequences: [7, 8, 9], latestSequence: 10)
+            ),
+            (
+                RemoteGatewayEventsRequest(
+                    conversationID: Self.conversationID,
+                    limit: 3,
+                    backward: .before(beforeCursor)
+                ),
+                Self.eventsPageJSON(sequences: [6, 7, 8], latestSequence: 10)
+            ),
+        ] {
+            let transport = RecordingHTTPTransport(responses: [.json(body)])
+            let client = GatewayClient(
+                baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+                transport: transport
+            )
+            do {
+                _ = try await client.events(request)
+                XCTFail("Expected invalid response")
+            } catch let failure as GatewayFailure {
+                XCTAssertEqual(failure, .invalidResponse)
+            }
+        }
+    }
+
+    func testBackwardEventsAcceptAscendingExclusiveBeforePage() async throws {
+        let cursor = ConversationEventBackwardCursor(
+            projectionRunID: Self.projectionRunID,
+            projectionGeneration: 7,
+            beforeSequence: 8
+        )
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Self.eventsPageJSON(sequences: [5, 6, 7], latestSequence: 10)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport
+        )
+
+        let response = try await client.events(RemoteGatewayEventsRequest(
+            conversationID: Self.conversationID,
+            limit: 3,
+            backward: .before(cursor)
+        ))
+
+        guard case .page(let page) = response else {
+            return XCTFail("Expected page")
+        }
+        XCTAssertEqual(page.events.map(\.sequence), [5, 6, 7])
+    }
+
+    func testBackwardEventsRejectEveryResponseInvariantViolation() async throws {
+        let beforeCursor = ConversationEventBackwardCursor(
+            projectionRunID: Self.projectionRunID,
+            projectionGeneration: 7,
+            beforeSequence: 8
+        )
+        let differentConversationID = RemoteConversationID(
+            rawValue: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
+        )
+        let differentRunID = RemoteProjectionRunID(
+            rawValue: UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!
+        )
+        let cases: [(String, Data)] = [
+            ("descending", Self.eventsPageJSON(sequences: [7, 6], latestSequence: 10)),
+            ("duplicate", Self.eventsPageJSON(sequences: [6, 6], latestSequence: 10)),
+            ("over limit", Self.eventsPageJSON(sequences: [4, 5, 6, 7], latestSequence: 10)),
+            ("after latest", Self.eventsPageJSON(sequences: [7, 11], latestSequence: 10)),
+            (
+                "wrong conversation",
+                Self.eventsPageJSON(
+                    sequences: [5, 6, 7],
+                    latestSequence: 10,
+                    conversationID: differentConversationID
+                )
+            ),
+            (
+                "wrong projection run",
+                Self.eventsPageJSON(
+                    sequences: [5, 6, 7],
+                    latestSequence: 10,
+                    projectionRunID: differentRunID
+                )
+            ),
+            (
+                "wrong projection generation",
+                Self.eventsPageJSON(
+                    sequences: [5, 6, 7],
+                    latestSequence: 10,
+                    projectionGeneration: 8
+                )
+            ),
+            (
+                "before retained head",
+                Self.eventsPageJSON(
+                    sequences: [2],
+                    latestSequence: 10,
+                    firstAvailableSequence: 3
+                )
+            ),
+        ]
+
+        for (name, body) in cases {
+            let transport = RecordingHTTPTransport(responses: [.json(body)])
+            let client = GatewayClient(
+                baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+                transport: transport
+            )
+            do {
+                _ = try await client.events(RemoteGatewayEventsRequest(
+                    conversationID: Self.conversationID,
+                    limit: 3,
+                    backward: .before(beforeCursor)
+                ))
+                XCTFail("Expected invalid response for \(name)")
+            } catch let failure as GatewayFailure {
+                XCTAssertEqual(failure, .invalidResponse, "Unexpected failure for \(name)")
+            }
+        }
+    }
+
     func testSendScopeDenied403IsNormalSendResult() async throws {
         let body = Data(#"{"reason":"send_scope_denied","status":"rejected"}"#.utf8)
         let transport = RecordingHTTPTransport(responses: [HTTPTransportResponse(statusCode: 403, body: body)])
@@ -208,6 +368,9 @@ final class GatewayClientTests: XCTestCase {
     private static let conversationID = RemoteConversationID(
         rawValue: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
     )
+    private static let projectionRunID = RemoteProjectionRunID(
+        rawValue: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+    )
     private static let sendRequest = RemoteMessageSendRequest(
         conversationID: conversationID,
         clientRequestID: "request-1",
@@ -225,6 +388,28 @@ final class GatewayClientTests: XCTestCase {
     )
     private static let notFoundEventsJSON = Data(#"{"outcome":"not_found","protocolVersion":"1.0"}"#.utf8)
     private static let duplicateSendJSON = Data(#"{"status":"duplicate"}"#.utf8)
+
+    private static func eventsPageJSON(
+        sequences: [UInt64],
+        latestSequence: UInt64,
+        conversationID: RemoteConversationID? = nil,
+        projectionRunID: RemoteProjectionRunID? = nil,
+        projectionGeneration: UInt64 = 7,
+        firstAvailableSequence: UInt64 = 1
+    ) -> Data {
+        let conversationID = conversationID ?? Self.conversationID
+        let projectionRunID = projectionRunID ?? Self.projectionRunID
+        let events = sequences.map { sequence in
+            """
+            {"conversationID":"\(conversationID.rawValue.uuidString.lowercased())","eventID":"event-\(sequence)","kind":"future_optional_event","payload":{},"provider":"codex","schemaVersion":1,"sequence":\(sequence),"timestamp":"2026-08-08T14:40:00.125Z"}
+            """
+        }.joined(separator: ",")
+        return Data(
+            """
+            {"outcome":"page","page":{"conversationID":"\(conversationID.rawValue.uuidString.lowercased())","events":[\(events)],"firstAvailableSequence":\(firstAvailableSequence),"historyTruncated":false,"latestSequence":\(latestSequence),"projectionGeneration":\(projectionGeneration),"projectionRunID":"\(projectionRunID.rawValue.uuidString.lowercased())"},"protocolVersion":"1.0"}
+            """.utf8
+        )
+    }
 }
 
 private actor RecordingHTTPTransport: HTTPTransport {

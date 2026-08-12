@@ -152,6 +152,26 @@ private extension RemoteProtocolGoldenTests {
                     limit: 200
                 )
             ),
+            try fixture(
+                "events-request-backward-latest.json",
+                RemoteGatewayEventsRequest(
+                    conversationID: conversationID,
+                    limit: 200,
+                    backward: .latest
+                )
+            ),
+            try fixture(
+                "events-request-backward-before.json",
+                RemoteGatewayEventsRequest(
+                    conversationID: conversationID,
+                    limit: 200,
+                    backward: .before(ConversationEventBackwardCursor(
+                        projectionRunID: projectionRunID,
+                        projectionGeneration: 7,
+                        beforeSequence: 13
+                    ))
+                )
+            ),
             try fixture("events-response-page.json", RemoteGatewayEventsResponse.page(eventPage)),
             try fixture("events-response-resnapshot-required.json", RemoteGatewayEventsResponse.resnapshotRequired),
             try fixture("events-response-not-found.json", RemoteGatewayEventsResponse.conversationNotFound),

@@ -127,6 +127,92 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.stopObserving()
     }
 
+    func testSelectionOwnsOneConversationRuntimeAndDismissClosesIt() async throws {
+        let runtime = LiveRuntimeSpy()
+        await runtime.holdConversationOpens()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: snapshot(titles: ["Alpha"]).presentation(),
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        let conversation = try XCTUnwrap(home.snapshot.workspaces.first?.conversations.first)
+
+        home.open(conversation)
+        await runtime.waitForConversationOpenToStart(
+            RemoteConversationID(rawValue: conversation.id)
+        )
+        var conversationOpenCount = await runtime.conversationOpenCount()
+        XCTAssertEqual(conversationOpenCount, 1)
+
+        let duplicateOpen = Task { @MainActor in
+            await subject.openConversation(conversation.id)
+        }
+        await Task.yield()
+        await runtime.releaseConversationOpens()
+        await duplicateOpen.value
+
+        XCTAssertEqual(subject.activeConversationController?.conversationID, conversation.id)
+        conversationOpenCount = await runtime.conversationOpenCount()
+        XCTAssertEqual(conversationOpenCount, 1)
+        var activeConversationIDs = await runtime.activeConversationIDs()
+        XCTAssertEqual(activeConversationIDs, Set([RemoteConversationID(rawValue: conversation.id)]))
+
+        home.dismissConversation()
+        await subject.closeConversation(conversation.id)
+
+        XCTAssertNil(subject.activeConversationController)
+        activeConversationIDs = await runtime.activeConversationIDs()
+        XCTAssertEqual(activeConversationIDs, Set<RemoteConversationID>())
+        let conversationCloseCount = await runtime.conversationCloseCount()
+        XCTAssertEqual(conversationCloseCount, 1)
+        subject.stopObserving()
+    }
+
+    func testNewestDifferentSelectionWinsWhilePreviousOpenIsInFlight() async throws {
+        let runtime = LiveRuntimeSpy()
+        await runtime.holdConversationOpens()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: snapshot(titles: ["Alpha", "Zulu"]).presentation(),
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        let conversations = home.snapshot.workspaces.flatMap(\.conversations)
+        let alpha = try XCTUnwrap(conversations.first { $0.title == "Alpha" })
+        let zulu = try XCTUnwrap(conversations.first { $0.title == "Zulu" })
+        let alphaID = RemoteConversationID(rawValue: alpha.id)
+        let zuluID = RemoteConversationID(rawValue: zulu.id)
+
+        home.open(alpha)
+        await runtime.waitForConversationOpenToStart(alphaID)
+        home.open(zulu)
+        await runtime.waitForConversationOpenToStart(zuluID)
+
+        await runtime.releaseConversationOpens()
+        await subject.openConversation(zulu.id)
+        await runtime.waitForConversationClose(alphaID)
+
+        XCTAssertEqual(home.selectedConversationID, zulu.id)
+        XCTAssertEqual(subject.activeConversationController?.conversationID, zulu.id)
+        let activeConversationIDs = await runtime.activeConversationIDs()
+        XCTAssertEqual(activeConversationIDs, Set([zuluID]))
+        let closedConversationIDs = await runtime.closedConversationIDs()
+        XCTAssertEqual(closedConversationIDs, [alphaID])
+
+        home.dismissConversation()
+        await subject.closeConversation(zulu.id)
+        subject.stopObserving()
+    }
+
     private var runID: RemoteProjectionRunID {
         RemoteProjectionRunID(
             rawValue: UUID(uuidString: "AAAA0000-0000-0000-0000-000000000001")!
@@ -171,6 +257,17 @@ final class LiveSessionsControllerTests: XCTestCase {
 private actor LiveRuntimeSpy: LiveConnectionRuntime {
     private var connectionRequests = 0
     private var suspended = false
+    private var conversationRuntimes: [RemoteConversationID: ConversationRuntime] = [:]
+    private var shouldHoldConversationOpens = false
+    private var conversationOpenContinuations: [CheckedContinuation<Void, Never>] = []
+    private var startedConversationIDs: Set<RemoteConversationID> = []
+    private var conversationOpenStartedContinuations:
+        [RemoteConversationID: [CheckedContinuation<Void, Never>]] = [:]
+    private var conversationCloseContinuations:
+        [RemoteConversationID: [CheckedContinuation<Void, Never>]] = [:]
+    private var conversationOpenRequests = 0
+    private var conversationCloseRequests = 0
+    private var closedConversations: [RemoteConversationID] = []
 
     func currentCoordinatorState() -> ConnectionCoordinator.State {
         ConnectionCoordinator.State()
@@ -195,6 +292,74 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     func suspend() {
         suspended = true
     }
+
+    func openConversation(_ conversationID: RemoteConversationID) async -> ConversationRuntime {
+        conversationOpenRequests += 1
+        startedConversationIDs.insert(conversationID)
+        let startedContinuations = conversationOpenStartedContinuations.removeValue(
+            forKey: conversationID
+        ) ?? []
+        startedContinuations.forEach { $0.resume() }
+        if shouldHoldConversationOpens {
+            await withCheckedContinuation { continuation in
+                conversationOpenContinuations.append(continuation)
+            }
+        }
+        if let runtime = conversationRuntimes[conversationID] {
+            return runtime
+        }
+        let runtime = ConversationRuntime(conversationID: conversationID)
+        conversationRuntimes[conversationID] = runtime
+        return runtime
+    }
+
+    func closeConversation(_ conversationID: RemoteConversationID) async {
+        conversationCloseRequests += 1
+        closedConversations.append(conversationID)
+        let closeContinuations = conversationCloseContinuations.removeValue(
+            forKey: conversationID
+        ) ?? []
+        closeContinuations.forEach { $0.resume() }
+        guard let runtime = conversationRuntimes.removeValue(forKey: conversationID) else {
+            return
+        }
+        _ = await runtime.suspend(connectionGeneration: 1)
+    }
+
+    func loadOlder(_ conversationID: RemoteConversationID) {}
+
+    func activeConversationIDs() -> Set<RemoteConversationID> {
+        Set(conversationRuntimes.keys)
+    }
+
+    func holdConversationOpens() {
+        shouldHoldConversationOpens = true
+    }
+
+    func releaseConversationOpens() {
+        shouldHoldConversationOpens = false
+        let continuations = conversationOpenContinuations
+        conversationOpenContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
+    func waitForConversationOpenToStart(_ conversationID: RemoteConversationID) async {
+        guard startedConversationIDs.contains(conversationID) == false else { return }
+        await withCheckedContinuation { continuation in
+            conversationOpenStartedContinuations[conversationID, default: []].append(continuation)
+        }
+    }
+
+    func waitForConversationClose(_ conversationID: RemoteConversationID) async {
+        guard closedConversations.contains(conversationID) == false else { return }
+        await withCheckedContinuation { continuation in
+            conversationCloseContinuations[conversationID, default: []].append(continuation)
+        }
+    }
+
+    func conversationOpenCount() -> Int { conversationOpenRequests }
+    func conversationCloseCount() -> Int { conversationCloseRequests }
+    func closedConversationIDs() -> [RemoteConversationID] { closedConversations }
 
     func didSuspend() -> Bool { suspended }
     func connectCount() -> Int { connectionRequests }

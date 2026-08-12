@@ -6,10 +6,96 @@ import XCTest
 final class GatewayCompatibilityDecoderTests: XCTestCase {
     private let decoder = GatewayCompatibilityDecoder()
 
+    func testEventPagePreservesWireOrderForInvariantValidation() throws {
+        let data = Data(#"{"outcome":"page","page":{"conversationID":"11111111-1111-1111-1111-111111111111","events":[{"conversationID":"11111111-1111-1111-1111-111111111111","eventID":"two","kind":"future_optional_event","payload":{},"provider":"codex","schemaVersion":1,"sequence":2,"timestamp":"2026-08-08T14:40:00.125Z"},{"conversationID":"11111111-1111-1111-1111-111111111111","eventID":"one","kind":"future_optional_event","payload":{},"provider":"codex","schemaVersion":1,"sequence":1,"timestamp":"2026-08-08T14:40:00.125Z"}],"firstAvailableSequence":1,"historyTruncated":false,"latestSequence":2,"projectionGeneration":7,"projectionRunID":"22222222-2222-2222-2222-222222222222"},"protocolVersion":"1.0"}"#.utf8)
+
+        guard case .page(let page) = try decoder.decodeEventsResponse(data) else {
+            return XCTFail("Expected page")
+        }
+        XCTAssertEqual(page.events.map(\.sequence), [2, 1])
+    }
+
+    func testCanonicalTranscriptFixtureCoversEveryKnownEventKindInStableOrder() throws {
+        let bundle = Bundle(for: Self.self)
+        let fixtureURL = try XCTUnwrap(
+            bundle.url(
+                forResource: "events-response-page",
+                withExtension: "json",
+                subdirectory: "v1"
+            )
+        )
+        let response = try decoder.decodeEventsResponse(Data(contentsOf: fixtureURL))
+        guard case .page(let page) = response else { return XCTFail("Expected canonical event page") }
+
+        XCTAssertEqual(page.events.map(\.sequence), Array(1...37).map(UInt64.init))
+        XCTAssertEqual(
+            Set(page.events.map(\.kind)),
+            Set([
+                "user_message",
+                "assistant_message",
+                "tool_started",
+                "tool_finished",
+                "status_changed",
+                "interaction_presented",
+                "interaction_resolved",
+                "subagent_summary",
+                "session_binding_changed",
+            ])
+        )
+
+        let knownEventsBySequence = Dictionary(uniqueKeysWithValues: page.events.compactMap { event -> (UInt64, ConversationEvent)? in
+            guard case .known(let known) = event else { return nil }
+            return (known.sequence, known)
+        })
+
+        let first = try XCTUnwrap(knownEventsBySequence[1])
+        XCTAssertEqual(first.eventID, "fixture:event:1")
+        guard case .userMessage(let user) = first.payload else {
+            return XCTFail("Sequence 1 must remain a user message")
+        }
+        XCTAssertEqual(user.text, "User message from local")
+        XCTAssertEqual(user.origin, .local)
+        XCTAssertNil(user.clientRequestID)
+
+        guard case .statusChanged(let status) = page.events[11] else {
+            return XCTFail("Sequence 12 must remain a compatible status change")
+        }
+        XCTAssertEqual(status.sequence, 12)
+        XCTAssertEqual(status.state, .starting)
+        XCTAssertEqual(status.inputAvailability, .unavailable(reason: .known(.starting)))
+
+        let interactionEvent = try XCTUnwrap(knownEventsBySequence[23])
+        XCTAssertEqual(interactionEvent.eventID, "fixture:event:23")
+        guard case .interactionPresented(let interaction) = interactionEvent.payload else {
+            return XCTFail("Sequence 23 must remain an interaction card")
+        }
+        XCTAssertEqual(interaction.id.rawValue, "interaction-permission")
+        XCTAssertEqual(interaction.kind, .permission)
+        XCTAssertEqual(interaction.state, .pending)
+
+        let bindingEvent = try XCTUnwrap(knownEventsBySequence[37])
+        XCTAssertEqual(bindingEvent.eventID, "fixture:event:37")
+        guard case .sessionBindingChanged(let binding) = bindingEvent.payload else {
+            return XCTFail("Sequence 37 must remain a binding change")
+        }
+        XCTAssertEqual(binding.reason, .projectionRebuilt)
+    }
+
     func testVersionMismatchFailsAdmission() throws {
         XCTAssertThrowsError(try decoder.decodeHello(CompatibilityFixture.data("version-mismatch"))) { error in
             XCTAssertEqual(error as? GatewayCompatibilityError, .unsupportedProtocolVersion("2.0"))
         }
+    }
+
+    func testHelloIgnoresUnknownAdditiveCapabilities() throws {
+        let data = Data(#"{"protocolVersion":"1.0","minimumSupportedProtocolVersion":"1.0","capabilities":["native_bearer_pairing","future_optional_capability","conversation_backward_paging"]}"#.utf8)
+
+        let hello = try decoder.decodeHello(data)
+
+        XCTAssertEqual(
+            hello.capabilities,
+            [.nativeBearerPairing, .conversationBackwardPaging]
+        )
     }
 
     func testUnknownTopLevelStreamMessageIsIgnored() throws {
