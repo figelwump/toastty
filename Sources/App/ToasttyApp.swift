@@ -898,6 +898,7 @@ struct ToasttyApp: App {
                 legacyTerminalFontSizePoints: legacyTerminalFontSizePoints
             )
             Self.ensureToasttyConfigTemplateExists()
+            Self.ensureAgentHookTemplateExists()
         }
         Self.writeToasttyConfigReference()
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
@@ -2134,6 +2135,21 @@ struct ToasttyApp: App {
                 category: .bootstrap,
                 metadata: [
                     "path": ToasttyConfigStore.configFileURL().path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
+    }
+
+    private static func ensureAgentHookTemplateExists() {
+        do {
+            try AgentHookTemplateFile.ensureTemplateExists()
+        } catch {
+            ToasttyLog.warning(
+                "Failed to ensure agent hook template exists",
+                category: .bootstrap,
+                metadata: [
+                    "path": AgentHookTemplateFile.fileURL().path,
                     "error": error.localizedDescription,
                 ]
             )

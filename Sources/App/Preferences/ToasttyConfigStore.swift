@@ -217,6 +217,8 @@ enum ToasttyConfigStore {
             "# needs-approval, session-error, session-stop). The executable",
             "# receives event JSON on stdin plus TOASTTY_* environment values,",
             "# and must exist, be executable, and start with a valid shebang.",
+            "# Toastty creates a commented starter template with every event",
+            "# stubbed at ~/.toastty/hooks/agent-hook and never overwrites it.",
             "# See docs/agent-hooks.md for the full contract.",
             "# agent-hook = \"~/.toastty/hooks/agent-hook\"",
             "",

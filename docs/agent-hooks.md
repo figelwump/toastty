@@ -22,6 +22,14 @@ breaks session handling; Toastty logs a deduplicated warning and continues.
 `Toastty > Reload Configuration` applies path changes and reports a warning
 when the configured path is currently missing or non-executable.
 
+On launch, Toastty creates a commented starter template at
+`~/.toastty/hooks/agent-hook` (write-once; an existing file is never
+overwritten). It is executable but inert — every event is stubbed with
+commented example actions and the contract summarized inline — so enabling it
+is just uncommenting what you need and setting `agent-hook` as above.
+Runtime-isolated dev instances materialize the template under their runtime
+home instead of the real `~/.toastty`.
+
 ## Events
 
 Event names are stable public strings:
