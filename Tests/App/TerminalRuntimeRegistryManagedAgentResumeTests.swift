@@ -1,3 +1,4 @@
+import RemoteProtocol
 #if TOASTTY_HAS_GHOSTTY_KIT
 import CoreState
 import Foundation

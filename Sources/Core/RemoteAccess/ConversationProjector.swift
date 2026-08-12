@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 /// Per-conversation projection state machine.

@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 /// In-memory, rebuildable projection cache over all conversations, and the

@@ -191,6 +191,7 @@ func applyGhosttyVariantLinkSettings(
 var appDependencies: [TargetDependency] = [
     .target(name: "CodexReconciliation"),
     .target(name: "CoreState"),
+    .target(name: "RemoteProtocol"),
     .target(name: "toastty"),
     .target(name: "toastty-agent-shim"),
     .external(name: "Sparkle"),
@@ -309,6 +310,7 @@ var appTestDependencies: [TargetDependency] = [
     .target(name: "ToasttyApp"),
     .target(name: "CodexReconciliation"),
     .target(name: "CoreState"),
+    .target(name: "RemoteProtocol"),
 ]
 
 if hasGhosttyXCFramework {
@@ -445,13 +447,25 @@ let project = Project(
             sources: ["Sources/CodexReconciliation/**"]
         ),
         .target(
+            name: "RemoteProtocol",
+            destinations: .macOS,
+            product: .staticFramework,
+            bundleId: "com.GiantThings.toastty.remote-protocol",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Sources/RemoteProtocol/**"]
+        ),
+        .target(
             name: "CoreState",
             destinations: .macOS,
             product: .staticFramework,
             bundleId: "com.GiantThings.toastty.core",
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
-            sources: ["Sources/Core/**"]
+            sources: ["Sources/Core/**"],
+            dependencies: [
+                .target(name: "RemoteProtocol"),
+            ]
         ),
         .target(
             name: "ToasttyCLIKit",
@@ -463,6 +477,7 @@ let project = Project(
             sources: ["Sources/CLIKit/**"],
             dependencies: [
                 .target(name: "CoreState"),
+                .target(name: "RemoteProtocol"),
             ]
         ),
         .target(
@@ -491,6 +506,7 @@ let project = Project(
             sources: ["Sources/AgentShim/**"],
             dependencies: [
                 .target(name: "CoreState"),
+                .target(name: "RemoteProtocol"),
             ]
         ),
         .target(
@@ -515,6 +531,7 @@ let project = Project(
             sources: ["Tests/Core/**"],
             dependencies: [
                 .target(name: "CoreState"),
+                .target(name: "RemoteProtocol"),
             ]
         ),
         .target(
@@ -527,6 +544,7 @@ let project = Project(
             sources: ["Tests/CLI/**"],
             dependencies: [
                 .target(name: "ToasttyCLIKit"),
+                .target(name: "RemoteProtocol"),
             ]
         ),
         .target(

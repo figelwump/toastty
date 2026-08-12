@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Darwin
 import CoreState
 import Foundation

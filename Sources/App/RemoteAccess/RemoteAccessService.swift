@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Combine
 import CoreState
 import Foundation

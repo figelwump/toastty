@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 /// A pure, incremental parser from one provider's session-log lines to

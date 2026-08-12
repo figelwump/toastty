@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 public enum SlotSplitDirection: String, Codable, Equatable, Sendable {

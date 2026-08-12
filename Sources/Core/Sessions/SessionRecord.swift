@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 public struct HunkRef: Codable, Equatable, Hashable, Sendable {
