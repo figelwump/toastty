@@ -5,7 +5,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 ## What Toastty writes locally
 
 - `~/.toastty/config`
-  - User-authored Toastty defaults such as `terminal-font-size`, `default-terminal-profile`, `enable-agent-command-shims`, and URL-opening preferences.
+  - User-authored Toastty defaults such as `terminal-font-size`, `default-terminal-profile`, `enable-agent-command-shims`, `agent-hook`, and URL-opening preferences.
 - `~/.toastty/config-reference`
   - Generated commented reference for every supported Toastty config key. Toastty rewrites this file on launch and when you open `Toastty > Open Config Reference…`.
 - `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/bin/` when runtime isolation is enabled and agent command shims are enabled
@@ -19,12 +19,20 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/workspace-layout-profiles.json`
   - Saved workspace and window layout snapshots, including window-local sidebar
     widths, window-local terminal font overrides, window-local local-document
-    text-size overrides, per-browser page zoom overrides, and managed agent
+    text-size overrides, per-browser page zoom overrides, persisted workspace
+    annotation chips (`key`, chip text, and optional `http`/`https` URL per
+    workspace, written by `workspace.set-annotation` callers such as agents and
+    hook scripts), and managed agent
     native-resume metadata for restored Codex, Claude, OpenCode, MiMo Code, and Pi panels. Native-resume
     metadata can include the provider, provider-native session ID, provider
     session file path or Toastty-owned marker path, working directory, capture
     timestamp, and any explicit workspace-scope identifiers needed to restore a
     scoped session after app restart.
+- `~/.toastty/annotation-styles.json`
+  - The global annotation color map: one named or `#RRGGBB` color token per
+    annotation key, shared across workspaces and layout profiles. Contains only
+    keys and color tokens, never chip text or URLs. Runtime-isolated instances
+    keep their own copy inside the runtime home.
 - `~/.toastty/recent-right-panel-items.json`
   - The locally persisted Recently Opened list for right-panel browsers, local
     document paths, and Scratchpad document IDs/titles. The list contains up to
@@ -73,6 +81,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - When runtime isolation is enabled for an isolated dev/test run, either by setting `TOASTTY_RUNTIME_HOME` directly or by setting `TOASTTY_DEV_WORKTREE_ROOT` and letting Toastty derive a runtime home under `artifacts/dev-runs/`:
   - `<runtime-home>/config`
   - `<runtime-home>/config-reference`
+  - `<runtime-home>/annotation-styles.json`
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
@@ -84,6 +93,20 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/logs/toastty.log`
   - `<runtime-home>/instance.json`
   - a dedicated `UserDefaults` suite derived from that runtime-home path
+
+## What the configured agent hook receives
+
+When `agent-hook` is configured, Toastty executes that user-provided script for
+managed-session lifecycle and status events. Each invocation receives, on stdin
+and in `TOASTTY_*` environment values, session and workspace metadata: the
+event name, session ID, agent ID, workspace and panel UUIDs, the session
+working directory, the accepted previous/next status kinds, the launch reason,
+and the current instance's CLI and automation socket paths. Prompts, terminal
+output, file lists, and file contents are not included. The script runs with
+your user account's full permissions and inherits the app environment; only
+configure a script you trust. Toastty logs hook invocations, nonzero exits,
+timeouts, and launch failures to its structured local log. See
+[Agent Hooks](agent-hooks.md).
 
 ## What Toastty reads locally for agent status
 

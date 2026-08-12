@@ -4,6 +4,43 @@ import CoreState
 import SwiftUI
 import XCTest
 
+private final class SidebarLayoutWidthRecorder {
+    var width: CGFloat = 0
+    var height: CGFloat = 0
+}
+
+private struct SidebarProposedWidthRecordingLayout: Layout {
+    let proposedWidth: CGFloat
+    let recorder: SidebarLayoutWidthRecorder
+
+    func sizeThatFits(
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let size = subview.sizeThatFits(
+            ProposedViewSize(width: proposedWidth, height: nil)
+        )
+        recorder.width = size.width
+        recorder.height = size.height
+        return size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: recorder.width, height: bounds.height)
+        )
+    }
+}
+
 @MainActor
 final class SidebarViewTests: XCTestCase {
     private enum SessionPanelPlacement {
@@ -648,6 +685,7 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
@@ -665,6 +703,151 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(
             renderedTextValues(in: hostingView).contains(where: { $0.contains("pane") })
         )
+    }
+
+    func testWorkspaceAnnotationChipsRenderAndRestyleOnColorOnlyChange() throws {
+        var state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.workspacesByID.keys.first)
+        let longAnnotationText = String(repeating: "long-annotation-", count: 5)
+        state.workspacesByID[workspaceID]?.annotations = [
+            "pr": WorkspaceAnnotation(text: longAnnotationText, url: "https://example.com/pr/4512"),
+            "env": WorkspaceAnnotation(text: "staging", url: nil),
+        ]
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let annotationStyleStore = makeTestAnnotationStyleStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: annotationStyleStore,
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let renderedValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(renderedValues.contains(where: { $0.contains(longAnnotationText) }))
+        XCTAssertTrue(renderedValues.contains(where: { $0.contains("staging") }))
+        let tooltipValues = renderedTooltipValues(in: hostingView)
+        XCTAssertTrue(tooltipValues.contains(longAnnotationText))
+        XCTAssertTrue(tooltipValues.contains("staging"))
+
+        // A color-only change publishes through the observed store and swaps
+        // the effective chip colors every rendered chip resolves through.
+        let colorsBefore = ToastyTheme.annotationChipColors(
+            for: annotationStyleStore.effectiveColorToken(forKey: "env")
+        )
+        var didPublish = false
+        let cancellable = annotationStyleStore.objectWillChange.sink { _ in
+            didPublish = true
+        }
+        XCTAssertTrue(try annotationStyleStore.setColor(.hex("#102030"), forKey: "env"))
+        hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(didPublish)
+        let colorsAfter = ToastyTheme.annotationChipColors(
+            for: annotationStyleStore.effectiveColorToken(forKey: "env")
+        )
+        XCTAssertNotEqual(colorsBefore, colorsAfter)
+        XCTAssertTrue(renderedTextValues(in: hostingView).contains(where: { $0.contains("staging") }))
+        _ = cancellable
+    }
+
+    func testWorkspaceAnnotationChipFitsContentAndCapsLongLabels() {
+        let shortWidth = measuredAnnotationChipWidth(text: "LIN-030", isLink: false)
+        let linkedWidth = measuredAnnotationChipWidth(text: "LIN-030", isLink: true)
+        let longWidth = measuredAnnotationChipWidth(
+            text: String(repeating: "very-long-annotation-", count: 12),
+            isLink: false
+        )
+
+        XCTAssertLessThan(shortWidth, 80)
+        XCTAssertGreaterThan(linkedWidth, shortWidth)
+        XCTAssertEqual(longWidth, 160, accuracy: 1)
+    }
+
+    func testWorkspaceAnnotationChipsRespectNarrowSidebarProposals() {
+        let shortWidth = measuredAnnotationChipWidth(
+            text: "LIN-030",
+            isLink: false,
+            proposedWidth: 40
+        )
+        let longWidth = measuredAnnotationChipWidth(
+            text: String(repeating: "very-long-annotation-", count: 12),
+            isLink: false,
+            proposedWidth: 100
+        )
+        let singleRowSize = measuredAnnotationChipsFlowSize(
+            texts: ["Bodega", "LIN-319", "PR-1931", "LIN-030"],
+            proposedWidth: 400
+        )
+        let wrappedSize = measuredAnnotationChipsFlowSize(
+            texts: ["Bodega", "LIN-319", "PR-1931", "LIN-030"],
+            proposedWidth: 140
+        )
+        let cappedLongChipSize = measuredAnnotationChipsFlowSize(
+            texts: [String(repeating: "very-long-annotation-", count: 12)],
+            proposedWidth: 400
+        )
+        let zeroProposalSize = measuredAnnotationChipsFlowSize(
+            texts: ["Bodega", "LIN-319"],
+            proposedWidth: 0
+        )
+
+        XCTAssertEqual(shortWidth, 40, accuracy: 1)
+        XCTAssertEqual(longWidth, 100, accuracy: 1)
+        XCTAssertLessThanOrEqual(wrappedSize.width, 140)
+        XCTAssertGreaterThan(wrappedSize.height, singleRowSize.height)
+        XCTAssertEqual(cappedLongChipSize.width, 160, accuracy: 1)
+        XCTAssertEqual(zeroProposalSize.width, 0, accuracy: 1)
+        XCTAssertEqual(zeroProposalSize.height, 0, accuracy: 1)
+    }
+
+    func testWorkspaceAccessibilityLabelIncludesTextOnlyChipsAndExcludesLinkChips() {
+        var workspace = WorkspaceState.bootstrap(title: "Infra")
+        workspace.annotations = [
+            "env": WorkspaceAnnotation(text: "staging", url: nil),
+            "pr": WorkspaceAnnotation(text: "PR #4512", url: "https://example.com/pr"),
+            "branch": WorkspaceAnnotation(text: "main", url: nil),
+        ]
+
+        let label = SidebarSessionPresentation.workspaceAccessibilityLabel(
+            for: workspace,
+            isSelected: true
+        )
+
+        XCTAssertEqual(label, "Infra, branch: main, env: staging")
+    }
+
+    func testAnnotationChipColorsDeriveReadableForegroundForDarkHex() throws {
+        let namedForegrounds = AnnotationColorToken.NamedColor.allCases.map { named in
+            ToastyTheme.annotationChipColors(for: .named(named)).foreground
+        }
+        XCTAssertEqual(Set(namedForegrounds).count, namedForegrounds.count)
+
+        // A near-black hex must not be used verbatim as chip text on the dark
+        // sidebar; the derived foreground has to be materially lighter.
+        let darkChip = ToastyTheme.annotationChipColors(for: .hex("#101010"))
+        let foreground = try XCTUnwrap(NSColor(darkChip.foreground).usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(foreground.redComponent, 0.3)
+
+        // A bright hex keeps its own hue as the foreground.
+        let brightChip = ToastyTheme.annotationChipColors(for: .hex("#E8A635"))
+        let brightForeground = try XCTUnwrap(NSColor(brightChip.foreground).usingColorSpace(.deviceRGB))
+        XCTAssertEqual(brightForeground.redComponent, Double(0xE8) / 255, accuracy: 0.01)
     }
 
     func testSelectingLowWorkspaceRequestsSidebarScrollToRevealIt() throws {
@@ -692,6 +875,7 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext,
             scrollRequestObserver: { workspaceID, animated in
                 scrollRequests.append((workspaceID, animated))
@@ -749,6 +933,7 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext,
             workspaceViewportHeightObserver: { height in
                 observedViewportHeights.append(height)
@@ -826,6 +1011,7 @@ final class SidebarViewTests: XCTestCase {
                 store: store,
                 terminalRuntimeRegistry: registry,
                 sessionRuntimeStore: sessionRuntimeStore,
+                annotationStyleStore: makeTestAnnotationStyleStore(),
                 terminalRuntimeContext: runtimeContext,
                 workspaceRowFrameObserver: { workspaceRowFramesByID = $0 }
             )
@@ -885,6 +1071,7 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext,
             workspaceRowFrameObserver: { rowFramesByID = $0 }
         )
@@ -1133,6 +1320,7 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
@@ -1170,6 +1358,7 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
@@ -1215,6 +1404,7 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
@@ -1318,6 +1508,65 @@ final class SidebarViewTests: XCTestCase {
             ],
             focusedPanelID: panelID
         )
+    }
+
+    private func measuredAnnotationChipWidth(
+        text: String,
+        isLink: Bool,
+        proposedWidth: CGFloat = 300
+    ) -> CGFloat {
+        let recorder = SidebarLayoutWidthRecorder()
+        let colors = ToastyTheme.AnnotationChipColors(
+            foreground: .white,
+            background: .blue,
+            border: .blue
+        )
+        let hostingView = NSHostingView(
+            rootView: SidebarProposedWidthRecordingLayout(
+                proposedWidth: proposedWidth,
+                recorder: recorder
+            ) {
+                SidebarView.workspaceAnnotationChipLabel(
+                    annotation: WorkspaceAnnotation(text: text),
+                    chipColors: colors,
+                    isLink: isLink
+                )
+            }
+        )
+        _ = hostingView.fittingSize
+        hostingView.layoutSubtreeIfNeeded()
+        return recorder.width
+    }
+
+    private func measuredAnnotationChipsFlowSize(
+        texts: [String],
+        proposedWidth: CGFloat
+    ) -> CGSize {
+        let recorder = SidebarLayoutWidthRecorder()
+        let colors = ToastyTheme.AnnotationChipColors(
+            foreground: .white,
+            background: .blue,
+            border: .blue
+        )
+        let hostingView = NSHostingView(
+            rootView: SidebarProposedWidthRecordingLayout(
+                proposedWidth: proposedWidth,
+                recorder: recorder
+            ) {
+                SidebarWrappingFlowLayout(horizontalSpacing: 4, verticalSpacing: 4) {
+                    ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
+                        SidebarView.workspaceAnnotationChipLabel(
+                            annotation: WorkspaceAnnotation(text: text),
+                            chipColors: colors,
+                            isLink: false
+                        )
+                    }
+                }
+            }
+        )
+        _ = hostingView.fittingSize
+        hostingView.layoutSubtreeIfNeeded()
+        return CGSize(width: recorder.width, height: recorder.height)
     }
 
     private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {

@@ -71,12 +71,34 @@ list includes right-panel tabs belonging to unselected workspace tabs.
 
 Common workflow families:
 
-- Workspaces and tabs: `workspace.create`, `workspace.select`, `workspace.rename`, `workspace.tab.create`, `workspace.tab.select`.
+- Workspaces and tabs: `workspace.create`, `workspace.select`, `workspace.rename`, `workspace.set-annotation`, `workspace.clear-annotation`, `workspace.tab.create`, `workspace.tab.select`.
 - Panels: `panel.create.browser`, `panel.create.local-document`, `panel.close`, `panel.focus-mode.toggle`.
 - Terminal control: `terminal.send-text`, `terminal.visible-text`, `terminal.state`.
 - Agents: `agent.launch`.
 - Scratchpad: `panel.scratchpad.set-content`, `panel.scratchpad.patch-content`, `panel.scratchpad.export`, `panel.scratchpad.state`.
 - Notifications: `toastty notify`.
+
+## Workspace Annotations
+
+The caller chooses the annotation `key`; Toastty does not derive it from the
+displayed `text`. Use a stable semantic identity for the kind of annotation,
+not its current value. The same exact key updates one chip within a workspace
+and shares its color across workspaces. Examples:
+
+- Linear issue: `key=linear`, `text=LIN-030`, and
+  `url=<verified canonical Linear issue URL>` when available.
+- GitHub pull request: `key=github-pr`, `text="PR #1931"`, and
+  `url=<verified GitHub pull URL>` when available.
+- GitHub issue: `key=github-issue`, `text="Issue #482"`, and
+  `url=<verified GitHub issue URL>` when available.
+- Git branch: `key=git-branch`, `text=feat/hooks-chips`; omit `url` unless a
+  canonical branch URL is already known.
+
+Include a URL only when the user supplied it or available context verified it;
+never construct one by guessing from the label. Query `workspace.snapshot`
+when existing annotations may need to be preserved or updated. One exact key
+represents one chip per workspace, so multiple annotations of the same kind
+need distinct stable keys.
 
 ## Scope Semantics
 

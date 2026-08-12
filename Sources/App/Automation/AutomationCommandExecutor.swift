@@ -27,10 +27,12 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         "focusUnreadSessionPanel",
         "hookEventName",
         "id",
+        "color",
         "includeRuntime",
         "index",
         "initialCommands",
         "initialPrompt",
+        "key",
         "kind",
         "name",
         "nativeSessionID",
@@ -64,6 +66,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
+    private let annotationStyleStore: AnnotationStyleStore?
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let codexStatusHooksPreflightProvider: CodexStatusHooksPreflightProvider
     private let codexStatusHooksWarningPresenter: CodexStatusHooksAsyncWarningPresenter
@@ -88,6 +91,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         sessionRuntimeStore: sessionRuntimeStore,
         focusedPanelCommandController: focusedPanelCommandController,
         agentLaunchService: agentLaunchService,
+        annotationStyleStore: annotationStyleStore,
         reloadConfigurationAction: reloadConfigurationAction
     )
 
@@ -98,6 +102,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
+        annotationStyleStore: AnnotationStyleStore? = nil,
         reloadConfigurationAction: (@MainActor () -> Void)?,
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider,
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter,
@@ -109,6 +114,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
+        self.annotationStyleStore = annotationStyleStore
         self.reloadConfigurationAction = reloadConfigurationAction
         self.codexStatusHooksPreflightProvider = codexStatusHooksPreflightProvider
         self.codexStatusHooksWarningPresenter = codexStatusHooksWarningPresenter

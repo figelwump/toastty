@@ -5,6 +5,7 @@ struct ToasttyConfig: Equatable {
     var terminalFontSizePoints: Double?
     var defaultTerminalProfileID: String?
     var enableAgentCommandShims = true
+    var agentHookScriptPath: String?
     var urlRoutingPreferences = URLRoutingPreferences()
     var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
 }
@@ -13,6 +14,7 @@ enum ToasttyConfigStore {
     private static let terminalFontSizeKey = "terminal-font-size"
     private static let defaultTerminalProfileKey = "default-terminal-profile"
     private static let enableAgentCommandShimsKey = "enable-agent-command-shims"
+    private static let agentHookKey = "agent-hook"
     private static let urlOpeningDestinationKey = "url-opening-destination"
     private static let urlOpeningBrowserPlacementKey = "url-opening-browser-placement"
     private static let urlOpeningAlternateBrowserPlacementKey = "url-opening-alternate-browser-placement"
@@ -37,7 +39,7 @@ enum ToasttyConfigStore {
             environment: environment
         )
         if let contents = try? String(contentsOf: primaryURL, encoding: .utf8) {
-            return parse(contents: contents)
+            return parse(contents: contents, homeDirectoryPath: homeDirectoryPath)
         }
 
         guard runtimePaths.isRuntimeHomeEnabled == false else {
@@ -54,7 +56,7 @@ enum ToasttyConfigStore {
             destinationURL: primaryURL,
             fileManager: fileManager
         )
-        return parse(contents: contents)
+        return parse(contents: contents, homeDirectoryPath: homeDirectoryPath)
     }
 
     static func ensureTemplateExists(
@@ -121,7 +123,7 @@ enum ToasttyConfigStore {
             .appending(path: configReferenceFileName, directoryHint: .notDirectory)
     }
 
-    private static func parse(contents: String) -> ToasttyConfig {
+    private static func parse(contents: String, homeDirectoryPath: String) -> ToasttyConfig {
         var config = ToasttyConfig()
 
         for rawLine in contents.split(whereSeparator: \.isNewline) {
@@ -143,6 +145,13 @@ enum ToasttyConfigStore {
             case enableAgentCommandShimsKey:
                 guard let parsed = parseBool(value) else { continue }
                 config.enableAgentCommandShims = parsed
+
+            case agentHookKey:
+                guard let parsed = parseString(value) else { continue }
+                config.agentHookScriptPath = expandedTildePath(
+                    parsed,
+                    homeDirectoryPath: homeDirectoryPath
+                )
 
             case urlOpeningDestinationKey:
                 guard let parsedValue = parseString(value),
@@ -203,6 +212,14 @@ enum ToasttyConfigStore {
             "# those commands in Toastty terminals.",
             "# enable-agent-command-shims = false",
             "",
+            "# agent-hook runs one user-provided executable for managed-session",
+            "# lifecycle and status events (session-start, turn-complete,",
+            "# needs-approval, session-error, session-stop). The executable",
+            "# receives event JSON on stdin plus TOASTTY_* environment values,",
+            "# and must exist, be executable, and start with a valid shebang.",
+            "# See docs/agent-hooks.md for the full contract.",
+            "# agent-hook = \"~/.toastty/hooks/agent-hook\"",
+            "",
             "# url-opening-destination controls where Toastty opens app-owned",
             "# web URLs such as Toastty Help links.",
             "# Supported values: toastty-browser, system-browser.",
@@ -241,6 +258,7 @@ enum ToasttyConfigStore {
         if config.terminalFontSizePoints != nil
             || config.defaultTerminalProfileID != nil
             || config.enableAgentCommandShims == false
+            || config.agentHookScriptPath != nil
             || config.urlRoutingPreferences != URLRoutingPreferences()
             || config.localDocumentRoutingPreferences != LocalDocumentRoutingPreferences() {
             lines.append("")
@@ -256,6 +274,10 @@ enum ToasttyConfigStore {
 
         if config.enableAgentCommandShims == false {
             lines.append("\(enableAgentCommandShimsKey) = false")
+        }
+
+        if let agentHookScriptPath = config.agentHookScriptPath {
+            lines.append("\(agentHookKey) = \(encodeString(agentHookScriptPath))")
         }
 
         if config.urlRoutingPreferences.destination != .toasttyBrowser {
@@ -322,6 +344,21 @@ enum ToasttyConfigStore {
             return "\"\(value)\""
         }
         return encoded
+    }
+
+    /// Expands a leading `~` against the provided home directory so
+    /// runtime-isolated loads stay deterministic. `~user` forms and
+    /// relative paths are preserved as written.
+    private static func expandedTildePath(_ path: String, homeDirectoryPath: String) -> String {
+        if path == "~" {
+            return homeDirectoryPath
+        }
+        guard path.hasPrefix("~/") else {
+            return path
+        }
+        return URL(filePath: homeDirectoryPath)
+            .appending(path: String(path.dropFirst(2)), directoryHint: .notDirectory)
+            .path
     }
 
     private static func parseBool<S: StringProtocol>(_ rawValue: S) -> Bool? {
