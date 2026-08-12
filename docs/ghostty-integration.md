@@ -117,7 +117,8 @@ Current selection behavior:
   - `macos-arm64`
   - `macos-x86_64`
 - Within the selected slice, Toastty resolves the first matching static library
-  from `libghostty.a`, `libghostty-fat.a`, or `ghostty-internal.a`
+  from `libghostty-internal.a`, `libghostty.a`, `libghostty-fat.a`, or
+  `ghostty-internal.a`
 
 When Ghostty is enabled, Toastty adds:
 
