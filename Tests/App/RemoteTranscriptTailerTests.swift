@@ -1,6 +1,6 @@
-import RemoteProtocol
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 @testable import ToasttyApp
 
@@ -228,5 +228,29 @@ struct RemoteTranscriptTailerTests {
 
         await Self.waitUntil { collector.allObservations.count == 2 }
         #expect(collector.allObservations.count == 2)
+    }
+
+    @Test func routineLogMetadataOmitsTranscriptAndFilesystemDetails() {
+        let sensitiveValues = [
+            "person@example.com",
+            "mac.tailnet.ts.net",
+            "/Users/person/Secret Project/rollout.jsonl",
+            "Confidential session title",
+            "prompt contents",
+            "transcript contents",
+        ]
+        let metadataSets = [
+            RemoteTranscriptTailer.readFailureLogMetadata(provider: .codex),
+            RemoteTranscriptTailer.oversizedRecordLogMetadata(provider: .claude, byteCount: 9_000_000),
+        ]
+        let serialized = metadataSets
+            .flatMap { $0.flatMap { [$0.key, $0.value] } }
+            .joined(separator: " ")
+
+        #expect(metadataSets[0] == ["provider": "codex"])
+        #expect(metadataSets[1] == ["provider": "claude", "bytes": "9000000"])
+        for sensitiveValue in sensitiveValues {
+            #expect(serialized.contains(sensitiveValue) == false)
+        }
     }
 }

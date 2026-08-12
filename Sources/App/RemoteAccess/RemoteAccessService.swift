@@ -1,7 +1,8 @@
-import RemoteProtocol
+import AppKit
 import Combine
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// Facade handed to the gateway request handler. The gateway server is
 /// main-actor bound, so every call arrives on the main actor; this bridge
@@ -126,6 +127,9 @@ final class RemoteAccessService: ObservableObject {
     @Published private(set) var startupError: String?
     @Published private(set) var deviceManagementError: String?
     @Published private(set) var currentPairingCode: RemotePairingCode?
+    @Published private(set) var currentNativePairingOffer: RemoteNativePairingOffer?
+    @Published private(set) var currentNativePairingQRCode: NSImage?
+    @Published private(set) var nativePairingError: String?
     @Published private(set) var devices: [RemoteDeviceRecord] = []
     @Published private(set) var connectedClientCount: Int = 0
     /// Active-conversation exceptions to the default-on remote-write policy.
@@ -136,6 +140,9 @@ final class RemoteAccessService: ObservableObject {
         didSet {
             RemoteAccessPreferences.persistTailnetOrigin(tailnetOrigin)
             refreshHandlerConfiguration()
+            if tailnetOrigin != oldValue, currentNativePairingOffer != nil {
+                cancelNativePairingOffer()
+            }
         }
     }
 
@@ -189,9 +196,16 @@ final class RemoteAccessService: ObservableObject {
         self.devices = deviceStore.devices
         facadeBridge.service = self
         sendBridge.service = self
-        handler.onDevicePaired = { [weak self] _ in
+        handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
-            self.currentPairingCode = nil
+            switch device.authKind {
+            case .browser:
+                self.currentPairingCode = nil
+            case .native:
+                self.currentNativePairingOffer = nil
+                self.currentNativePairingQRCode = nil
+                self.nativePairingError = nil
+            }
             self.deviceManagementError = nil
             self.refreshDevices()
         }
@@ -210,6 +224,26 @@ final class RemoteAccessService: ObservableObject {
                 // instead of waiting for the next registry change.
                 self.broadcastSessionList()
             }
+        }
+        server.onListenerReady = { [weak self] port in
+            guard let self, self.isEnabled else { return }
+            self.listeningPort = port
+            self.startupError = nil
+        }
+        server.onListenerFailed = { [weak self] in
+            guard let self else { return }
+            self.server.stop()
+            self.sessionListBroadcastTask?.cancel()
+            self.sessionListBroadcastTask = nil
+            self.isEnabled = false
+            self.listeningPort = nil
+            self.invalidatePairingCode()
+            self.cancelNativePairingOffer()
+            self.startupError = "Could not start the local Remote Access listener. Try again."
+        }
+        server.onDeviceRevoked = { [weak self] _ in
+            self?.deviceManagementError = nil
+            self?.refreshDevices()
         }
 
         sessionRuntimeStore.$sessionRegistry
@@ -247,19 +281,18 @@ final class RemoteAccessService: ObservableObject {
         startupError = nil
         if enabled {
             syncConversations(broadcast: false)
+            listeningPort = nil
             do {
                 try server.start(port: port)
                 isEnabled = true
-                listeningPort = port
                 auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessEnabled))
             } catch {
                 isEnabled = false
                 listeningPort = nil
-                startupError = "Could not listen on 127.0.0.1:\(port): \(error.localizedDescription)"
+                startupError = "Could not start the local Remote Access listener. Try again."
                 ToasttyLog.error(
                     "Remote access gateway failed to start",
-                    category: .automation,
-                    metadata: ["error": "\(error)", "port": "\(port)"]
+                    category: .automation
                 )
             }
         } else {
@@ -269,6 +302,7 @@ final class RemoteAccessService: ObservableObject {
             isEnabled = false
             listeningPort = nil
             invalidatePairingCode()
+            cancelNativePairingOffer()
             auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessDisabled))
         }
     }
@@ -284,6 +318,63 @@ final class RemoteAccessService: ObservableObject {
     func invalidatePairingCode() {
         deviceStore.invalidatePairingCode()
         currentPairingCode = nil
+    }
+
+    func issueNativePairingOffer(at date: Date = Date()) {
+        guard let gatewayURL = publicGatewayURL else {
+            currentNativePairingOffer = nil
+            currentNativePairingQRCode = nil
+            nativePairingError = "Enter the HTTPS Tailscale Serve origin before pairing the native app."
+            return
+        }
+        let offer: RemoteNativePairingOffer
+        let encodedPayload: String
+        do {
+            offer = try deviceStore.issueNativePairingOffer(gatewayURL: gatewayURL, at: date)
+            encodedPayload = try offer.qrPayload.encodedString()
+        } catch {
+            currentNativePairingOffer = nil
+            currentNativePairingQRCode = nil
+            nativePairingError = "The pairing offer could not be created. Check the Tailscale Serve origin."
+            return
+        }
+        guard Data(encodedPayload.utf8).count <= RemoteNativePairingQRPayload.maximumEncodedByteCount else {
+            deviceStore.cancelNativePairingOffer()
+            currentNativePairingOffer = nil
+            currentNativePairingQRCode = nil
+            nativePairingError = "The pairing QR could not be created. Check the Tailscale Serve origin."
+            return
+        }
+        guard let qrCode = RemoteAccessPairingQRCode.image(payload: encodedPayload) else {
+            deviceStore.cancelNativePairingOffer()
+            currentNativePairingOffer = nil
+            currentNativePairingQRCode = nil
+            nativePairingError = "The pairing QR could not be created. Try issuing a new offer."
+            return
+        }
+        currentNativePairingOffer = offer
+        currentNativePairingQRCode = qrCode
+        nativePairingError = nil
+    }
+
+    func cancelNativePairingOffer() {
+        deviceStore.cancelNativePairingOffer()
+        currentNativePairingOffer = nil
+        currentNativePairingQRCode = nil
+        nativePairingError = nil
+    }
+
+    func refreshNativePairingOffer(at date: Date = Date()) {
+        guard let offer = deviceStore.activeNativePairingOffer(at: date),
+              let payload = try? offer.qrPayload.encodedString(),
+              let qrCode = RemoteAccessPairingQRCode.image(payload: payload) else {
+            currentNativePairingOffer = nil
+            currentNativePairingQRCode = nil
+            return
+        }
+        currentNativePairingOffer = offer
+        currentNativePairingQRCode = qrCode
+        nativePairingError = nil
     }
 
     func refreshDevices() {
@@ -315,6 +406,9 @@ final class RemoteAccessService: ObservableObject {
             server.disconnectAllWebSockets()
             auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .allDevicesRevoked))
             currentPairingCode = nil
+            currentNativePairingOffer = nil
+            currentNativePairingQRCode = nil
+            nativePairingError = nil
             deviceManagementError = nil
             refreshDevices()
         } catch {
@@ -620,6 +714,9 @@ final class RemoteAccessService: ObservableObject {
                     cwd: candidate.cwd,
                     state: projector.state,
                     inputAvailability: availability,
+                    pendingInteractionPreview: RemotePendingInteractionPreviewFormatter.make(
+                        from: projectionStore.pendingInteractions(for: candidate.conversationID)
+                    ),
                     projectionGeneration: projector.generation,
                     latestSequence: projector.latestSequence,
                     updatedAt: max(projector.updatedAt, candidate.updatedAt)
@@ -914,12 +1011,11 @@ final class RemoteAccessService: ObservableObject {
         refreshDevices()
     }
 
-    private func reportDeviceManagementFailure(_ message: String, error: Error) {
+    private func reportDeviceManagementFailure(_ message: String, error _: Error) {
         deviceManagementError = "\(message). Try again."
         ToasttyLog.error(
             message,
-            category: .automation,
-            metadata: ["error": "\(error)"]
+            category: .automation
         )
     }
 
@@ -944,6 +1040,38 @@ final class RemoteAccessService: ObservableObject {
             allowedOrigins: origins,
             staticResources: Self.loadWebClientResources()
         ))
+    }
+
+    /// The configured Tailscale Serve origin is the only authority for native
+    /// QR payloads. Never derive it from the loopback listener or an inbound
+    /// Host header, either of which a local process can control.
+    var publicGatewayURL: URL? {
+        Self.publicGatewayURL(from: tailnetOrigin)
+    }
+
+    static func publicGatewayURL(from configuredOrigin: String) -> URL? {
+        let trimmed = configuredOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let candidate = trimmed.contains("://") ? trimmed : "https://" + trimmed
+        guard var components = URLComponents(string: candidate),
+              components.scheme?.lowercased() == "https",
+              let rawHost = components.host,
+              rawHost.isEmpty == false,
+              components.user == nil,
+              components.password == nil,
+              components.port == nil || components.port == 443,
+              components.query == nil,
+              components.fragment == nil,
+              components.path.isEmpty || components.path == "/" else {
+            return nil
+        }
+        let host = rawHost.lowercased()
+        guard host != "ts.net", host.hasSuffix(".ts.net") else { return nil }
+        components.scheme = "https"
+        components.host = host
+        components.port = nil
+        components.path = ""
+        return components.url
     }
 
     static func loadWebClientResources(bundle: Bundle = .main) -> [String: RemoteGatewayStaticResource] {

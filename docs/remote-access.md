@@ -1,8 +1,9 @@
 # Remote Access
 
-Toastty's current remote client is a small web app served by Toastty on your
-Mac. Tailscale Serve provides the private tailnet HTTPS address; Toastty itself
-listens only on `127.0.0.1` and does not expose a LAN or public listener.
+Toastty supports its small web app and the native Toastty Mobile client through
+the same Mac gateway. Tailscale Serve provides the private tailnet HTTPS
+address; Toastty itself listens only on `127.0.0.1` and does not expose a LAN
+or public listener.
 
 ## Set up access
 
@@ -33,6 +34,29 @@ is specific to that browser profile: private browsing, cleared site data, or a
 different browser requires pairing again. Do not put a pairing code or cookie
 in a URL, message, screenshot, or command line.
 
+### Pair the native app
+
+Native pairing is separate from browser pairing; issuing or redeeming one kind
+does not replace the other. Enter the public Tailscale Serve origin first. The
+native QR accepts only a canonical HTTPS MagicDNS hostname ending in `.ts.net`
+(no path, query, user information, or custom port), rather than the loopback
+listener or a value learned from an incoming request.
+
+Choose **Show Native Pairing QR**, then scan it from Toastty Mobile. If scanning
+is unavailable, enter the fallback code shown beside the QR. Both proofs belong
+to the same single-use offer, expire after two minutes, and are invalidated
+together when either succeeds or you cancel/reissue the offer. The QR is a
+non-HTTP payload and contains a short-lived secret, not the long-lived device
+credential. Avoid screenshots or copying the fallback code into messages.
+
+The exchange returns an opaque Bearer credential to the native app once.
+Toastty binds it to the exact `Tailscale-User-Login` identity supplied by
+Tailscale Serve and requires that identity on later native REST requests and
+WebSocket upgrades. A native app can inspect its own device metadata and
+best-effort revoke itself through the gateway. `401` means it must pair again;
+`403` means the credential remains valid but a scope or action is denied, so it
+must retain the credential.
+
 ## Reading and replying
 
 A newly paired device can read supported agent conversations and send replies.
@@ -60,9 +84,10 @@ local gateway.
   through Funnel, a public reverse proxy, port forwarding, or another ingress.
 - Tailscale terminates HTTPS. The hop from Tailscale Serve to Toastty is plain
   HTTP confined to loopback.
-- Toastty stores only a SHA-256 hash of the browser credential, never the
-  credential itself. The browser receives the credential only as an HttpOnly
-  cookie; the web app does not put it in page storage, URLs, or JSON bodies.
+- Toastty stores only a SHA-256 hash of each browser or native credential,
+  never the credential itself. The browser receives its credential only as an
+  HttpOnly cookie; the native app receives its Bearer credential only in the
+  successful pairing response. Neither kind belongs in URLs.
 - The phone receives normalized conversation metadata and events, including
   message text, concise tool activity, state, workspace/panel placement, and
   working directories when present. It does not receive raw provider JSONL or
@@ -74,8 +99,11 @@ local gateway.
   outside the exact allowlist are rejected on every route.
 
 If a phone is lost or a browser profile may be compromised, revoke that device
-from the Mac. Disabling Remote Access closes active subscriptions and stops all
-remote reads. When you no longer need the tailnet URL, remove only the default
+from the Mac. Revocation is persisted before Toastty closes every active stream
+for that device; revoke-all covers browser and native devices. Disabling Remote
+Access closes the listener and all active subscriptions and cancels a native
+offer, but retains paired-device credentials for the next time you enable it.
+When you no longer need the tailnet URL, remove only the default
 HTTPS mapping created above so other Serve configuration remains intact:
 
 ```bash

@@ -6,6 +6,7 @@ BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUNTIME_OWNERSHIP_SELF_TEST="$ROOT_DIR/scripts/automation/runtime-ownership-self-test.sh"
 CLEANUP_ARTIFACTS_SELF_TEST="$ROOT_DIR/scripts/automation/cleanup-artifacts-self-test.sh"
 REMOTE_VALIDATE_CLEANUP_SELF_TEST="$ROOT_DIR/scripts/automation/remote-validate-cleanup-self-test.sh"
+TAILSCALE_SERVE_AUTH_PROBE_SELF_TEST="$ROOT_DIR/scripts/automation/tailscale-serve-auth-probe-self-test.sh"
 CODEX_PLUGIN_SELF_TEST="$ROOT_DIR/scripts/agents/toastty-plugin-self-test.sh"
 CODEX_PLUGIN_VALIDATOR="$ROOT_DIR/scripts/agents/validate-toastty-plugin.py"
 REMOTE_WEB_CLIENT_TEST="$ROOT_DIR/Tests/RemoteWebClient/RemoteWebClientReconnectTests.mjs"
@@ -345,6 +346,10 @@ if ! "$CLEANUP_ARTIFACTS_SELF_TEST"; then
 fi
 
 if ! "$REMOTE_VALIDATE_CLEANUP_SELF_TEST"; then
+  exit 10
+fi
+
+if ! "$TAILSCALE_SERVE_AUTH_PROBE_SELF_TEST"; then
   exit 10
 fi
 

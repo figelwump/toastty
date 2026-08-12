@@ -1,5 +1,67 @@
 import Foundation
 
+/// Small, explicitly bounded reason text for a needs-attention card. Full
+/// provider prompts remain available only in the conversation projection.
+public struct RemotePendingInteractionPreview: Codable, Equatable, Sendable {
+    public static let maximumPromptLength = 240
+
+    public var prompt: String
+
+    public init(prompt: String) {
+        self.prompt = String(
+            prompt.filter { character in
+                character.unicodeScalars.allSatisfy(Self.isAllowedPreviewScalar)
+            }
+                .prefix(Self.maximumPromptLength)
+        )
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let prompt = try container.decode(String.self, forKey: .prompt)
+        guard prompt.count <= Self.maximumPromptLength,
+              prompt.allSatisfy({ character in
+                  character.unicodeScalars.allSatisfy(Self.isAllowedPreviewScalar)
+              }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .prompt,
+                in: container,
+                debugDescription: "Pending-interaction preview exceeds its wire bound"
+            )
+        }
+        self.prompt = prompt
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(prompt, forKey: .prompt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case prompt
+    }
+
+    /// Reject C0/C1 controls plus formatting scalars that can make a short
+    /// preview visually misleading. ZWJ, ZWNJ, and variation selectors remain
+    /// allowed because they are valid parts of user-visible text and emoji.
+    private static func isAllowedPreviewScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x0000...0x001F,
+             0x007F...0x009F,
+             0x00AD,
+             0x200B,
+             0x200E...0x200F,
+             0x202A...0x202E,
+             0x2060,
+             0x2066...0x2069,
+             0xFEFF:
+            false
+        default:
+            true
+        }
+    }
+}
+
 /// Where a conversation lives inside Toastty's organization, for the phone's
 /// workspace/panel navigation. Optional because a conversation can outlive its
 /// panel (for example after a workspace layout change while offline).
@@ -24,6 +86,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     public var cwd: String?
     public var state: RemoteSessionState
     public var inputAvailability: RemoteInputAvailability
+    public var pendingInteractionPreview: RemotePendingInteractionPreview?
     /// Generation of this conversation's sequence space within the current
     /// projection run. Bumped when this one conversation is rebuilt mid-run
     /// (for example after an unreconcilable provider file rewrite) so its
@@ -42,6 +105,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         cwd: String? = nil,
         state: RemoteSessionState,
         inputAvailability: RemoteInputAvailability,
+        pendingInteractionPreview: RemotePendingInteractionPreview? = nil,
         projectionGeneration: UInt64 = 0,
         latestSequence: UInt64,
         updatedAt: Date
@@ -53,6 +117,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         self.cwd = cwd
         self.state = state
         self.inputAvailability = inputAvailability
+        self.pendingInteractionPreview = pendingInteractionPreview
         self.projectionGeneration = projectionGeneration
         self.latestSequence = latestSequence
         self.updatedAt = updatedAt

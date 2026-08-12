@@ -17,16 +17,56 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
     public var headers: [String: String]
     public var body: Data
 
+    /// All values for each header name, preserving repeated fields so callers
+    /// can reject ambiguous security-sensitive input. `headers` remains the
+    /// convenient single-value view for existing callers.
+    private var repeatedHeaderValues: [String: [String]]
+
     public init(method: String, path: String, headers: [String: String], body: Data) {
+        self.init(
+            method: method,
+            path: path,
+            headerFields: headers.map { ($0.key, $0.value) },
+            body: body
+        )
+    }
+
+    /// Field-list initializer used by the parser and security-focused tests.
+    /// Unlike the dictionary initializer, it preserves duplicate fields.
+    public init(
+        method: String,
+        path: String,
+        headerFields: [(String, String)],
+        body: Data
+    ) {
+        var values: [String: [String]] = [:]
+        for (name, value) in headerFields {
+            values[name.lowercased(), default: []].append(value)
+        }
+        self.init(method: method, path: path, headerValues: values, body: body)
+    }
+
+    private init(
+        method: String,
+        path: String,
+        headerValues: [String: [String]],
+        body: Data
+    ) {
         self.method = method
         self.path = path
-        self.headers = headers
+        self.repeatedHeaderValues = headerValues
+        self.headers = headerValues.compactMapValues(\.last)
         self.body = body
     }
 
     /// Case-insensitive header lookup (headers are stored lowercased).
     public func header(_ name: String) -> String? {
         headers[name.lowercased()]
+    }
+
+    /// Returns every separately presented field value for `name`.
+    public func headerValues(_ name: String) -> [String] {
+        repeatedHeaderValues[name.lowercased()] ?? []
     }
 
     public var cookies: [String: String] {
@@ -66,25 +106,51 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
         var lines = headText.components(separatedBy: "\r\n")
         guard lines.isEmpty == false else { return .invalid }
         let requestLine = lines.removeFirst()
-        let requestParts = requestLine.split(separator: " ")
+        let requestParts = requestLine.split(separator: " ", omittingEmptySubsequences: false)
         guard requestParts.count == 3,
-              requestParts[2].hasPrefix("HTTP/1.") else {
+              requestParts.allSatisfy({ $0.isEmpty == false }),
+              isHTTPToken(requestParts[0]),
+              requestParts[2] == "HTTP/1.0" || requestParts[2] == "HTTP/1.1" else {
             return .invalid
         }
         let method = String(requestParts[0])
         let target = String(requestParts[1])
-        let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
+        guard target.first == "/",
+              target.contains("#") == false,
+              target.unicodeScalars.allSatisfy({ $0.value >= 0x21 && $0.value <= 0x7E }) else {
+            return .invalid
+        }
+        let path = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? target
 
-        var headers: [String: String] = [:]
+        var headerValues: [String: [String]] = [:]
         for line in lines where line.isEmpty == false {
-            let parts = line.split(separator: ":", maxSplits: 1)
-            guard parts.count == 2 else { return .invalid }
-            headers[parts[0].trimmingCharacters(in: .whitespaces).lowercased()] =
-                parts[1].trimmingCharacters(in: .whitespaces)
+            // Reject obsolete line folding and whitespace before the colon;
+            // security-sensitive duplicates must remain unambiguous.
+            guard line.first != " ", line.first != "\t",
+                  let colon = line.firstIndex(of: ":") else { return .invalid }
+            let rawName = line[..<colon]
+            guard rawName.isEmpty == false, isHTTPToken(rawName) else { return .invalid }
+            let rawValue = line[line.index(after: colon)...]
+            guard isValidHTTPFieldValue(rawValue) else { return .invalid }
+            let name = rawName.lowercased()
+            headerValues[name, default: []].append(trimHTTPWhitespace(rawValue))
         }
 
         let bodyStart = headEndRange.upperBound
-        let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
+        guard headerValues["host"]?.count ?? 0 <= 1,
+              headerValues["content-length"]?.count ?? 0 <= 1,
+              headerValues["transfer-encoding"] == nil else { return .invalid }
+        let contentLength: Int
+        if let rawContentLength = headerValues["content-length"]?.first {
+            guard rawContentLength.isEmpty == false,
+                  rawContentLength.unicodeScalars.allSatisfy({ (48...57).contains($0.value) }),
+                  let parsedContentLength = Int(rawContentLength) else {
+                return .invalid
+            }
+            contentLength = parsedContentLength
+        } else {
+            contentLength = 0
+        }
         guard contentLength >= 0, contentLength <= maximumBodyBytes else { return .invalid }
         guard buffer.distance(from: bodyStart, to: buffer.endIndex) >= contentLength else {
             return .needMoreData
@@ -92,9 +158,40 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
         let body = Data(buffer[bodyStart..<buffer.index(bodyStart, offsetBy: contentLength)])
         let consumed = buffer.distance(from: buffer.startIndex, to: bodyStart) + contentLength
         return .request(
-            RemoteGatewayHTTPRequest(method: method, path: path, headers: headers, body: body),
+            RemoteGatewayHTTPRequest(method: method, path: path, headerValues: headerValues, body: body),
             consumedBytes: consumed
         )
+    }
+
+    private static func isHTTPToken<S: StringProtocol>(_ value: S) -> Bool {
+        value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 33, 35...39, 42, 43, 45, 46, 48...57, 65...90, 94...122, 124, 126:
+                true
+            default:
+                false
+            }
+        }
+    }
+
+    private static func isValidHTTPFieldValue<S: StringProtocol>(_ value: S) -> Bool {
+        value.unicodeScalars.allSatisfy { scalar in
+            scalar.value == 0x09 || scalar.value >= 0x20 && scalar.value != 0x7F
+        }
+    }
+
+    private static func trimHTTPWhitespace<S: StringProtocol>(_ value: S) -> String {
+        var start = value.startIndex
+        var end = value.endIndex
+        while start < end, value[start] == " " || value[start] == "\t" {
+            start = value.index(after: start)
+        }
+        while start < end {
+            let previous = value.index(before: end)
+            guard value[previous] == " " || value[previous] == "\t" else { break }
+            end = previous
+        }
+        return String(value[start..<end])
     }
 }
 

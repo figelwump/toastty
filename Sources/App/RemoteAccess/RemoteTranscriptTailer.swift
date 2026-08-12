@@ -1,6 +1,6 @@
-import RemoteProtocol
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// Tails one Codex rollout file for the remote-access projection.
 ///
@@ -49,6 +49,7 @@ final class RemoteTranscriptTailer {
         let pollInterval = pollIntervalNanoseconds
         let onEvent = onEvent
         let makeParser = makeParser
+        let provider = provider
 
         task = Task.detached(priority: .utility) {
             var parser = makeParser()
@@ -85,7 +86,7 @@ final class RemoteTranscriptTailer {
                             ToasttyLog.warning(
                                 "Failed to read remote transcript chunk",
                                 category: .automation,
-                                metadata: ["path": fileURL.path, "error": "\(error)"]
+                                metadata: Self.readFailureLogMetadata(provider: provider)
                             )
                             break
                         }
@@ -116,7 +117,10 @@ final class RemoteTranscriptTailer {
                             ToasttyLog.warning(
                                 "Discarding oversized remote transcript record",
                                 category: .automation,
-                                metadata: ["path": fileURL.path, "bytes": "\(remainder.count)"]
+                                metadata: Self.oversizedRecordLogMetadata(
+                                    provider: provider,
+                                    byteCount: remainder.count
+                                )
                             )
                             remainder.removeAll(keepingCapacity: true)
                         }
@@ -145,6 +149,21 @@ final class RemoteTranscriptTailer {
     func stop() {
         task?.cancel()
         task = nil
+    }
+
+    /// Routine tailer logs describe only the parser category and safe size
+    /// facts. Transcript paths and filesystem error descriptions can contain a
+    /// login, hostname, workspace path, or session title, so neither crosses
+    /// this logging boundary.
+    nonisolated static func readFailureLogMetadata(provider: AgentKind) -> [String: String] {
+        ["provider": provider.rawValue]
+    }
+
+    nonisolated static func oversizedRecordLogMetadata(provider: AgentKind, byteCount: Int) -> [String: String] {
+        [
+            "provider": provider.rawValue,
+            "bytes": "\(max(0, byteCount))",
+        ]
     }
 
     private struct FileIdentity: Equatable, Sendable {
