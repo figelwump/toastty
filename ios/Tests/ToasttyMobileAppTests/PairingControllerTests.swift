@@ -191,12 +191,15 @@ final class PairingControllerTests: XCTestCase {
     }
 
     private func waitUntil(
-        attempts: Int = 100,
+        attempts: Int = 300,
         condition: @MainActor () -> Bool
     ) async {
         for _ in 0..<attempts {
             if condition() { return }
-            await Task.yield()
+            // A bare yield can exhaust every attempt before the exchange task
+            // is scheduled when all remote test bundles are running. A short
+            // bounded delay gives the MainActor task a deterministic window.
+            try? await ContinuousClock().sleep(for: .milliseconds(10))
         }
         XCTFail("Condition did not become true")
     }

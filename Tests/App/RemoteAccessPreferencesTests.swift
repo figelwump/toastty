@@ -35,4 +35,24 @@ struct RemoteAccessPreferencesTests {
         #expect(didEnable)
         #expect(policy.isEnabled(for: conversationID))
     }
+
+    @Test func disabledSessionWritePolicyPublishesDedicatedUnavailableReason() {
+        let conversationID = RemoteConversationID()
+        let otherConversationID = RemoteConversationID()
+        let providerAvailability = RemoteInputAvailability.openPrompt(
+            epoch: RemoteInputEpoch(bindingID: UUID(), counter: 7)
+        )
+        var policy = RemoteSessionWritePolicy()
+
+        _ = policy.setEnabled(false, for: conversationID)
+
+        #expect(policy.inputAvailability(
+            providerAvailability: providerAvailability,
+            for: conversationID
+        ) == .unavailable(reason: .sessionWritesDisabled))
+        #expect(policy.inputAvailability(
+            providerAvailability: providerAvailability,
+            for: otherConversationID
+        ) == providerAvailability)
+    }
 }

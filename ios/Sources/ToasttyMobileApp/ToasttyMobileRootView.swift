@@ -1,3 +1,4 @@
+import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 
@@ -6,11 +7,17 @@ struct ToasttyMobileRootView: View {
     @State private var sessionController: AppSessionController
     @State private var showsSettings = false
     @State private var fixtureHasLoadedOlderTranscript = false
+    @State private var composerDraftState = ToasttyComposerDraftState()
+    @State private var fixtureSendItems: [ToasttySendPresentationItem]
+    @State private var fixtureComposerIsReserved = false
     private let forcesPairingPrivacyShield: Bool
     private let fixtureScenario: ToasttyMobileFixtureScenario?
 
     init(configuration: ToasttyMobileAppConfiguration) {
         _sessionController = State(initialValue: configuration.makeSessionController())
+        _fixtureSendItems = State(initialValue: Self.initialFixtureSendItems(
+            for: configuration.fixtureScenario
+        ))
         forcesPairingPrivacyShield = configuration.fixtureScenario == .pairingPrivacy
         fixtureScenario = configuration.fixtureScenario
     }
@@ -36,6 +43,14 @@ struct ToasttyMobileRootView: View {
         }
         .task {
             await sessionController.restoreIfNeeded()
+        }
+        .onChange(of: sessionController.state) { _, newState in
+            if newState.isPaired == false {
+                resetComposerPresentation()
+            }
+        }
+        .onChange(of: sessionController.homeController.snapshot) { _, newSnapshot in
+            pruneComposerState(to: newSnapshot)
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -88,7 +103,12 @@ struct ToasttyMobileRootView: View {
                 conversationID: selection.id,
                 controller: sessionController.homeController,
                 presentation: conversationPresentation(for: selection.id),
+                composer: conversationComposer(for: selection.id),
+                draft: conversationDraft(for: selection.id),
+                isSubmitting: composerDraftState.isSubmitting(selection.id),
                 loadOlder: conversationLoadOlderAction(for: selection.id),
+                submitDraft: conversationSubmitAction(for: selection.id),
+                dismissSendReceipt: conversationReceiptDismissAction(for: selection.id),
                 onDismiss: sessionController.homeController.dismissConversation
             )
             .presentationDetents([.fraction(0.92)])
@@ -163,6 +183,13 @@ struct ToasttyMobileRootView: View {
                 for: conversationID,
                 hasLoadedOlder: fixtureHasLoadedOlderTranscript
             )
+        case .gatedSend, .gatedSendReceipt:
+            return ToasttyConversationFixture.gatedSendPresentation(
+                for: conversationID,
+                sendItems: conversationID == Self.fixtureOpenPromptConversationID
+                    ? fixtureSendItems
+                    : []
+            )
         case .home, .unpaired, .cameraDenied, .scannerUnsupported,
              .pairingFailure, .pairingPrivacy, nil:
             break
@@ -190,6 +217,167 @@ struct ToasttyMobileRootView: View {
             }
         }
         return {}
+    }
+
+    private func conversationComposer(
+        for conversationID: UUID
+    ) -> ToasttyComposerPresentation? {
+        guard let conversation = sessionController.homeController.conversation(id: conversationID),
+              let controller = sessionController.liveController?.activeConversationController,
+              controller.conversationID == conversationID else {
+            return fixtureComposer(for: conversationID)
+        }
+        return ToasttyComposerPresentation.make(
+            agentDisplayName: conversation.agent.displayName.capitalized,
+            authority: controller.presentedComposerAuthority
+        )
+    }
+
+    private func conversationDraft(for conversationID: UUID) -> Binding<String> {
+        Binding(
+            get: { composerDraftState.draft(for: conversationID) },
+            set: {
+                composerDraftState.updateDraft($0, for: conversationID)
+                if let controller = sessionController.liveController?.activeConversationController,
+                   controller.conversationID == conversationID {
+                    controller.draftDidChange()
+                }
+            }
+        )
+    }
+
+    private func conversationSubmitAction(for conversationID: UUID) -> () -> Void {
+        {
+            guard let submission = composerDraftState.beginSubmission(
+                for: conversationID
+            ) else {
+                return
+            }
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+                fixtureSubmit(submission)
+                return
+            }
+            Task { @MainActor in
+                let outcome = await controller.send(submission.text)
+                composerDraftState.finishSubmission(submission, outcome: outcome)
+            }
+        }
+    }
+
+    private func conversationReceiptDismissAction(
+        for conversationID: UUID
+    ) -> (String) -> Void {
+        { clientRequestID in
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+                fixtureDismissReceipt(clientRequestID)
+                return
+            }
+            Task { await controller.dismissSendReceipt(clientRequestID) }
+        }
+    }
+
+    private func fixtureComposer(for conversationID: UUID) -> ToasttyComposerPresentation? {
+#if DEBUG
+        guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
+              conversationID == Self.fixtureOpenPromptConversationID else { return nil }
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "F1000000-0000-0000-0000-000000000001")!,
+            counter: 4
+        )
+        let stamp = ConversationComposerStamp(
+            connectionGeneration: 1,
+            streamSnapshotOrdinal: 1,
+            projectionRunID: RemoteProjectionRunID(
+                rawValue: UUID(uuidString: "F2000000-0000-0000-0000-000000000001")!
+            ),
+            projectionGeneration: 1,
+            latestSequence: 13,
+            inputEpoch: epoch
+        )
+        let availability = CompatibleInputAvailability.openPrompt(epoch: epoch)
+        let authority = fixtureComposerIsReserved
+            ? ConversationComposerAuthority(
+                stamp: stamp,
+                inputAvailability: availability,
+                gateFailure: .sendAlreadyReserved
+            )
+            : ConversationComposerAuthority(
+                stamp: stamp,
+                inputAvailability: availability
+            )
+        return ToasttyComposerPresentation.make(
+            agentDisplayName: "Codex",
+            authority: authority
+        )
+#else
+        nil
+#endif
+    }
+
+    private func fixtureSubmit(_ submission: ToasttyComposerSubmission) {
+#if DEBUG
+        guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
+              submission.conversationID == Self.fixtureOpenPromptConversationID else {
+            composerDraftState.finishSubmission(
+                submission,
+                outcome: .notEnqueued(.conversationNotOpen)
+            )
+            return
+        }
+        let clientRequestID = "fixture-enqueued-\(fixtureSendItems.count + 1)"
+        fixtureSendItems.append(ToasttySendPresentationItem(
+            clientRequestID: clientRequestID,
+            text: submission.text,
+            content: .optimistic(response: .accepted)
+        ))
+        fixtureComposerIsReserved = true
+        composerDraftState.finishSubmission(
+            submission,
+            outcome: .enqueued(clientRequestID: clientRequestID)
+        )
+#else
+        composerDraftState.finishSubmission(
+            submission,
+            outcome: .notEnqueued(.conversationNotOpen)
+        )
+#endif
+    }
+
+    private func fixtureDismissReceipt(_ clientRequestID: String) {
+        fixtureSendItems.removeAll { $0.clientRequestID == clientRequestID }
+    }
+
+    private static func initialFixtureSendItems(
+        for scenario: ToasttyMobileFixtureScenario?
+    ) -> [ToasttySendPresentationItem] {
+        guard scenario == .gatedSendReceipt else { return [] }
+        return [ToasttySendPresentationItem(
+            clientRequestID: "fixture-delivery-unconfirmed",
+            text: "Use build 413 and keep the release as a draft.",
+            content: .receipt(.init(kind: .deliveryUnconfirmed))
+        )]
+    }
+
+    private static let fixtureOpenPromptConversationID = UUID(
+        uuidString: "B1000000-0000-0000-0000-000000000007"
+    )!
+
+    private func resetComposerPresentation() {
+        composerDraftState.reset()
+        fixtureSendItems.removeAll(keepingCapacity: false)
+        fixtureComposerIsReserved = false
+    }
+
+    private func pruneComposerState(to snapshot: MobileHomeSnapshot) {
+        let conversationIDs = Set(
+            snapshot.workspaces.flatMap(\.conversations).map(\.id)
+        )
+        composerDraftState.retainConversations(conversationIDs)
+        if conversationIDs.contains(Self.fixtureOpenPromptConversationID) == false {
+            fixtureSendItems.removeAll(keepingCapacity: false)
+        }
     }
 
     @MainActor

@@ -284,7 +284,7 @@ function xcodebuildArguments(command, context, destination) {
   if (configuration !== "Debug" && configuration !== "Release") {
     fail("TOASTTY_IOS_CONFIGURATION must be Debug or Release");
   }
-  return [
+  const args = [
     "-workspace",
     workspace,
     "-scheme",
@@ -295,8 +295,16 @@ function xcodebuildArguments(command, context, destination) {
     destination,
     "-derivedDataPath",
     context.derivedDataPath,
-    command,
   ];
+  // The scheme contains unit and UI test bundles. Xcode can starve an async
+  // unit-test runner while preparing the UI runner when target parallelism is
+  // enabled, producing nondeterministic handshake timeouts. Tests within each
+  // bundle still exercise their intended concurrency.
+  if (command === "test") {
+    args.push("-parallel-testing-enabled", "NO");
+  }
+  args.push(command);
+  return args;
 }
 
 function dryRunPlan(command, context) {

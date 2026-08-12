@@ -19,6 +19,16 @@ protocol LiveConnectionRuntime: Sendable {
     func openConversation(_ conversationID: RemoteConversationID) async -> ConversationRuntime
     func closeConversation(_ conversationID: RemoteConversationID) async
     func loadOlder(_ conversationID: RemoteConversationID) async
+    func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async
+    func sendMessage(
+        conversationID: RemoteConversationID,
+        text: String,
+        composerStamp: ConversationComposerStamp
+    ) async -> ConversationSendOutcome
+    func dismissSendReceipt(
+        conversationID: RemoteConversationID,
+        clientRequestID: String
+    ) async
 }
 
 struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
@@ -59,6 +69,32 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
 
     func loadOlder(_ conversationID: RemoteConversationID) async {
         await coordinator.loadOlder(conversationID)
+    }
+
+    func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
+        await coordinator.updateDeviceScopes(scopes)
+    }
+
+    func sendMessage(
+        conversationID: RemoteConversationID,
+        text: String,
+        composerStamp: ConversationComposerStamp
+    ) async -> ConversationSendOutcome {
+        await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: text,
+            composerStamp: composerStamp
+        )
+    }
+
+    func dismissSendReceipt(
+        conversationID: RemoteConversationID,
+        clientRequestID: String
+    ) async {
+        await coordinator.dismissSendReceipt(
+            conversationID: conversationID,
+            clientRequestID: clientRequestID
+        )
     }
 }
 
@@ -216,6 +252,19 @@ final class LiveSessionsController {
             runtime: conversationRuntime,
             loadOlder: { [runtime] in
                 await runtime.loadOlder(remoteID)
+            },
+            send: { [runtime] text, stamp in
+                await runtime.sendMessage(
+                    conversationID: remoteID,
+                    text: text,
+                    composerStamp: stamp
+                )
+            },
+            dismissSendReceipt: { [runtime] clientRequestID in
+                await runtime.dismissSendReceipt(
+                    conversationID: remoteID,
+                    clientRequestID: clientRequestID
+                )
             }
         )
         controller.consumeConnectionPhase(coordinatorState.phase)
@@ -239,6 +288,10 @@ final class LiveSessionsController {
             return
         }
         await tearDownActiveConversation(clearDesiredConversation: true)
+    }
+
+    func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
+        await runtime.updateDeviceScopes(scopes)
     }
 
     func stopObserving() {

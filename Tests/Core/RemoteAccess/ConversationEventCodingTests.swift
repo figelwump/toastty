@@ -101,6 +101,7 @@ struct ConversationEventCodingTests {
         let epoch = RemoteInputEpoch(bindingID: Self.bindingID, counter: 4)
         let cases: [(RemoteInputAvailability, String)] = [
             (.unavailable(reason: .unknownProviderState), #""kind":"unavailable""#),
+            (.unavailable(reason: .sessionWritesDisabled), #""reason":"session_writes_disabled""#),
             (.openPrompt(epoch: epoch), #""kind":"open_prompt""#),
             (.pendingInteraction(interactionIDs: [RemotePendingInteraction.ID(rawValue: "codex:call:c1")]), #""kind":"pending_interaction""#),
             (.localDraft(epoch: epoch), #""kind":"local_draft""#),

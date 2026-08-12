@@ -194,28 +194,55 @@ final class ConnectionCoordinatorTests: XCTestCase {
         let runtime = await coordinator.openConversation(conversationID)
 
         await coordinator.connectIfNeeded()
-        try await withTimeout { try await gateway.waitForEventsCallCount(1) }
-        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        do {
+            try await withTimeout { try await gateway.waitForEventsCallCount(1) }
+        } catch {
+            XCTFail("Initial REST request was not installed: \(error)")
+            throw error
+        }
+        do {
+            try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        } catch {
+            XCTFail("Initial stream receive was not installed: \(error)")
+            throw error
+        }
         await subscription.send(.sessionList(snapshot(runID: firstRun, title: "Fresh")))
         await subscription.send(.conversationEvents(
             page(runID: firstRun, events: [event(2)], latestSequence: 2)
         ))
         await firstRESTGate.open()
 
-        var runtimeState = try await conversationState(
-            matching: { $0.phase == .live && $0.cursor?.afterSequence == 2 },
-            runtime
-        )
+        let initialRuntimeState: ConversationRuntime.State
+        do {
+            initialRuntimeState = try await conversationState(
+                matching: { $0.phase == .live && $0.cursor?.afterSequence == 2 },
+                runtime
+            )
+        } catch {
+            XCTFail("Buffered live page did not drain after REST: \(error)")
+            throw error
+        }
+        var runtimeState = initialRuntimeState
         XCTAssertEqual(runtimeState.events.map(\.sequence), [1, 2])
         var eventCursors = await gateway.recordedEventCursors()
         XCTAssertEqual(eventCursors, [nil])
 
         await subscription.send(.resnapshotRequired(conversationID: conversationID))
-        try await withTimeout { try await gateway.waitForEventsCallCount(2) }
-        runtimeState = try await conversationState(
-            matching: { $0.phase == .live && $0.projectionRunID == secondRun },
-            runtime
-        )
+        do {
+            try await withTimeout { try await gateway.waitForEventsCallCount(2) }
+        } catch {
+            XCTFail("Resnapshot REST request was not installed: \(error)")
+            throw error
+        }
+        do {
+            runtimeState = try await conversationState(
+                matching: { $0.phase == .live && $0.projectionRunID == secondRun },
+                runtime
+            )
+        } catch {
+            XCTFail("Resnapshot page did not become live: \(error)")
+            throw error
+        }
         XCTAssertEqual(runtimeState.events.map(\.sequence), [1])
         eventCursors = await gateway.recordedEventCursors()
         XCTAssertEqual(eventCursors, [nil, nil])
@@ -513,6 +540,561 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
+    func testSendUsesFreshStreamAuthorityReservesOnceAndKeepsAcceptedPending() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
+            counter: 4
+        )
+        let sendGate = CancellationAwareGate()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "REST seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [ScriptedCall(result: .success(.accepted(epoch: epoch)), gate: sendGate)]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.read, .send],
+            requestIDFactory: FixedRequestIDFactory(value: "request-one")
+        )
+        let dispatchWaiter = ControlledSendDispatchWaiter()
+        await coordinator.setSendDispatchWaiter(dispatchWaiter)
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Fresh",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        let runtimeState = try await conversationState(
+            matching: { $0.composerAuthority.canSend },
+            runtime
+        )
+        let stamp = try XCTUnwrap(runtimeState.composerAuthority.stamp)
+        let sendConversationID = conversationID
+
+        async let firstOutcome = coordinator.sendMessage(
+            conversationID: sendConversationID,
+            text: "hello",
+            composerStamp: stamp
+        )
+        async let secondOutcome = coordinator.sendMessage(
+            conversationID: sendConversationID,
+            text: "hello again",
+            composerStamp: stamp
+        )
+        let firstResolved = await firstOutcome
+        let secondResolved = await secondOutcome
+        let outcomes = [firstResolved, secondResolved]
+        XCTAssertEqual(outcomes.filter {
+            $0 == .enqueued(clientRequestID: "request-one")
+        }.count, 1)
+        XCTAssertEqual(outcomes.filter {
+            $0 == .notEnqueued(.sendAlreadyReserved)
+        }.count, 1)
+
+        let pending = await runtime.sendReconciliation.currentState()
+        XCTAssertEqual(pending["request-one"]?.deliveryState, .pending(.awaitingResponse))
+        var composerState = await runtime.currentState()
+        XCTAssertEqual(
+            composerState.composerAuthority.gateFailure,
+            .sendAlreadyReserved
+        )
+        await dispatchWaiter.open()
+        try await withTimeout { try await gateway.waitForSendCallCount(1) }
+        let requests = await gateway.recordedSendRequests()
+        XCTAssertEqual(requests.first?.expectedInputEpoch, epoch)
+        XCTAssertEqual(requests.first?.clientRequestID, "request-one")
+
+        await sendGate.open()
+        _ = try await reconciliationState(
+            matching: { $0["request-one"]?.deliveryState == .pending(.accepted) },
+            runtime.sendReconciliation
+        )
+        composerState = await runtime.currentState()
+        XCTAssertEqual(
+            composerState.composerAuthority.gateFailure,
+            .sendAlreadyReserved
+        )
+
+        let nextEpoch = epoch.next()
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Next prompt",
+            inputAvailability: .openPrompt(epoch: nextEpoch),
+            latestSequence: 1
+        )))
+        composerState = try await conversationState(matching: {
+            $0.composerAuthority.canSend
+                && $0.composerAuthority.stamp?.inputEpoch == nextEpoch
+        }, runtime)
+        XCTAssertNil(composerState.composerAuthority.gateFailure)
+        await coordinator.suspend()
+    }
+
+    func testClosingConversationAfterEnqueueDoesNotRevokeDispatchAndReattachesLedger() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "ABABABAB-ABAB-ABAB-ABAB-ABABABABABAB")!,
+            counter: 8
+        )
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "REST seed"))],
+            events: [
+                ScriptedCall(result: .success(.page(
+                    page(runID: run, events: [event(1)], latestSequence: 1)
+                ))),
+                ScriptedCall(result: .success(.page(
+                    page(runID: run, events: [], latestSequence: 1)
+                ))),
+            ],
+            sends: [ScriptedCall(result: .success(.accepted(epoch: epoch)))]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.read, .send],
+            requestIDFactory: FixedRequestIDFactory(value: "close-after-enqueue")
+        )
+        let dispatchWaiter = ControlledSendDispatchWaiter()
+        await coordinator.setSendDispatchWaiter(dispatchWaiter)
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Fresh",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        let ready = try await conversationState(
+            matching: { $0.composerAuthority.canSend },
+            runtime
+        )
+        let stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+
+        let outcome = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "survive sheet close",
+            composerStamp: stamp
+        )
+        XCTAssertEqual(
+            outcome,
+            .enqueued(clientRequestID: "close-after-enqueue")
+        )
+        try await withTimeout { try await dispatchWaiter.waitForWaiterCount(1) }
+
+        await coordinator.closeConversation(conversationID)
+        let closedProjection = await coordinator.conversationProjection(for: conversationID)
+        XCTAssertNil(closedProjection)
+        let retainedLedger = await runtime.sendReconciliation.currentState()
+        XCTAssertEqual(
+            retainedLedger["close-after-enqueue"]?.deliveryState,
+            .pending(.awaitingResponse)
+        )
+        var sendRequests = await gateway.recordedSendRequests()
+        XCTAssertTrue(sendRequests.isEmpty)
+
+        await dispatchWaiter.open()
+        try await withTimeout { try await gateway.waitForSendCallCount(1) }
+        _ = try await reconciliationState(
+            matching: {
+                $0["close-after-enqueue"]?.deliveryState == .pending(.accepted)
+            },
+            runtime.sendReconciliation
+        )
+        sendRequests = await gateway.recordedSendRequests()
+        XCTAssertEqual(sendRequests.count, 1)
+
+        let reattached = await coordinator.openConversation(conversationID)
+        XCTAssertTrue(reattached === runtime)
+        try await withTimeout { try await gateway.waitForEventsCallCount(2) }
+        _ = try await conversationState(matching: { $0.phase == .live }, reattached)
+        let reattachedLedger = await reattached.sendReconciliation.currentState()
+        XCTAssertEqual(
+            reattachedLedger["close-after-enqueue"]?.deliveryState,
+            .pending(.accepted)
+        )
+        sendRequests = await gateway.recordedSendRequests()
+        XCTAssertEqual(sendRequests.count, 1)
+        await coordinator.suspend()
+    }
+
+    func testExactStreamEchoBeforeResponseWinsAndNewSnapshotStalesRenderedStamp() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!,
+            counter: 1
+        )
+        let sendGate = CancellationAwareGate()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "Seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [ScriptedCall(result: .success(.accepted(epoch: epoch)), gate: sendGate)]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.send],
+            requestIDFactory: FixedRequestIDFactory(value: "echo-first")
+        )
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Fresh",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        let ready = try await conversationState(matching: { $0.composerAuthority.canSend }, runtime)
+        let stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+        _ = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "same text",
+            composerStamp: stamp
+        )
+        try await withTimeout { try await gateway.waitForSendCallCount(1) }
+
+        await subscription.send(.conversationEvents(page(
+            runID: run,
+            events: [userEvent(2, clientRequestID: "echo-first")],
+            latestSequence: 2
+        )))
+        _ = try await reconciliationState(
+            matching: { $0["echo-first"]?.deliveryState == .confirmed(sequence: 2) },
+            runtime.sendReconciliation
+        )
+        await sendGate.open()
+
+        let nextEpoch = epoch.next()
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "New epoch",
+            inputAvailability: .openPrompt(epoch: nextEpoch),
+            latestSequence: 2
+        )))
+        _ = try await conversationState(matching: {
+            $0.composerAuthority.stamp?.inputEpoch == nextEpoch
+        }, runtime)
+        let staleOutcome = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "stale",
+            composerStamp: stamp
+        )
+        XCTAssertEqual(
+            staleOutcome,
+            .notEnqueued(.staleComposerAuthority)
+        )
+        await coordinator.suspend()
+    }
+
+    func testSuspendingAfterDispatchMarksUncertainWithoutRetry() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!
+        )
+        let sendGate = CancellationAwareGate()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "Seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [ScriptedCall(result: .success(.accepted(epoch: epoch)), gate: sendGate)]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.send],
+            requestIDFactory: FixedRequestIDFactory(value: "background-send")
+        )
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Fresh",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        let ready = try await conversationState(matching: { $0.composerAuthority.canSend }, runtime)
+        let stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+        _ = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "background",
+            composerStamp: stamp
+        )
+        try await withTimeout { try await gateway.waitForSendCallCount(1) }
+
+        await coordinator.suspend()
+
+        let reconciliation = await runtime.sendReconciliation.currentState()
+        XCTAssertEqual(reconciliation["background-send"]?.deliveryState, .uncertain)
+        let sendRequests = await gateway.recordedSendRequests()
+        XCTAssertEqual(sendRequests.count, 1)
+    }
+
+    func testFreshSnapshotBeforeDispatchPreservesCommittedTextAsOperationFailure() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!
+        )
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "Seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [ScriptedCall(result: .success(.accepted(epoch: epoch)))]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.send],
+            requestIDFactory: FixedRequestIDFactory(value: "predispatch-stale")
+        )
+        let dispatchWaiter = ControlledSendDispatchWaiter()
+        await coordinator.setSendDispatchWaiter(dispatchWaiter)
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Fresh",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        let ready = try await conversationState(matching: { $0.composerAuthority.canSend }, runtime)
+        let stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+        let outcome = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "preserve this text",
+            composerStamp: stamp
+        )
+        XCTAssertEqual(outcome, .enqueued(clientRequestID: "predispatch-stale"))
+
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "New authority",
+            inputAvailability: .openPrompt(epoch: epoch.next()),
+            latestSequence: 1
+        )))
+        let failed = try await reconciliationState(
+            matching: { $0["predispatch-stale"]?.deliveryState == .operationFailed },
+            runtime.sendReconciliation
+        )
+        XCTAssertEqual(failed["predispatch-stale"]?.text, "preserve this text")
+        var sendRequests = await gateway.recordedSendRequests()
+        XCTAssertTrue(sendRequests.isEmpty)
+
+        await dispatchWaiter.open()
+        await Task.yield()
+        sendRequests = await gateway.recordedSendRequests()
+        XCTAssertTrue(sendRequests.isEmpty)
+        await coordinator.suspend()
+    }
+
+    func testCapacityRefusalRollsBackReservationAndRequestIDClaim() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE")!
+        )
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "Seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [ScriptedCall(result: .success(.accepted(epoch: epoch)))]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.send],
+            requestIDFactory: FixedRequestIDFactory(value: "capacity-reuse")
+        )
+        let dispatchWaiter = ControlledSendDispatchWaiter()
+        await coordinator.setSendDispatchWaiter(dispatchWaiter)
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Fresh",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        let ready = try await conversationState(matching: { $0.composerAuthority.canSend }, runtime)
+        let stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+
+        for index in 0..<SendReconciliation.maximumUnresolvedRecords {
+            let admission = await runtime.sendReconciliation.enqueue(
+                clientRequestID: "existing-\(index)",
+                text: "existing"
+            )
+            XCTAssertNotNil(admission)
+        }
+        let refused = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "first attempt",
+            composerStamp: stamp
+        )
+        XCTAssertEqual(refused, .notEnqueued(.tooManyUnresolvedSends))
+        var reconciliation = await runtime.sendReconciliation.currentState()
+        XCTAssertNil(reconciliation["capacity-reuse"])
+
+        await runtime.sendReconciliation.apply(
+            .rejected(reason: .epochMismatch),
+            clientRequestID: "existing-0"
+        )
+        await runtime.sendReconciliation.dismiss(clientRequestID: "existing-0")
+
+        let accepted = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "second attempt",
+            composerStamp: stamp
+        )
+        XCTAssertEqual(accepted, .enqueued(clientRequestID: "capacity-reuse"))
+        reconciliation = await runtime.sendReconciliation.currentState()
+        XCTAssertEqual(reconciliation["capacity-reuse"]?.text, "second attempt")
+        await dispatchWaiter.open()
+        try await withTimeout { try await gateway.waitForSendCallCount(1) }
+        await coordinator.suspend()
+    }
+
+    func testRequestIDCollisionMintsAnotherIDWithoutTouchingExistingLedger() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!
+        )
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "Seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [
+                ScriptedCall(result: .success(.accepted(epoch: epoch))),
+                ScriptedCall(result: .success(.accepted(epoch: epoch.next()))),
+            ]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.send],
+            requestIDFactory: SequencedRequestIDFactory(values: [
+                "collision", "collision", "second-id",
+            ])
+        )
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "First",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        var ready = try await conversationState(matching: { $0.composerAuthority.canSend }, runtime)
+        var stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+        let first = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "first",
+            composerStamp: stamp
+        )
+        XCTAssertEqual(
+            first,
+            .enqueued(clientRequestID: "collision")
+        )
+        _ = try await reconciliationState(
+            matching: { $0["collision"]?.deliveryState == .pending(.accepted) },
+            runtime.sendReconciliation
+        )
+
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Second",
+            inputAvailability: .openPrompt(epoch: epoch.next()),
+            latestSequence: 1
+        )))
+        ready = try await conversationState(matching: {
+            $0.composerAuthority.stamp?.inputEpoch == epoch.next()
+        }, runtime)
+        stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+        let second = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: "second",
+            composerStamp: stamp
+        )
+        XCTAssertEqual(second, .enqueued(clientRequestID: "second-id"))
+        try await withTimeout { try await gateway.waitForSendCallCount(2) }
+
+        let reconciliation = await runtime.sendReconciliation.currentState()
+        XCTAssertEqual(reconciliation["collision"]?.text, "first")
+        XCTAssertEqual(reconciliation["second-id"]?.text, "second")
+        await coordinator.suspend()
+    }
+
     private func coordinatorState(
         matching predicate: @escaping @Sendable (ConnectionCoordinator.State) -> Bool,
         _ coordinator: ConnectionCoordinator
@@ -539,13 +1121,29 @@ final class ConnectionCoordinatorTests: XCTestCase {
         }
     }
 
+    private func reconciliationState(
+        matching predicate: @escaping @Sendable (SendReconciliationState) -> Bool,
+        _ reconciliation: SendReconciliation
+    ) async throws -> SendReconciliationState {
+        try await withTimeout {
+            let states = await reconciliation.states()
+            for await state in states where predicate(state) {
+                return state
+            }
+            throw TestFailure.streamFinished
+        }
+    }
+
     private func withTimeout<Value: Sendable>(
         _ operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
         try await withThrowingTaskGroup(of: Value.self) { group in
             group.addTask { try await operation() }
             group.addTask {
-                try await ContinuousClock().sleep(for: .seconds(3))
+                // Xcode runs the Domain, App, and UI bundles concurrently on
+                // the remote simulator. Keep the failure bounded without
+                // treating three seconds of host contention as a deadlock.
+                try await ContinuousClock().sleep(for: .seconds(10))
                 throw TestFailure.timedOut
             }
             let value = try await group.next()!
@@ -556,7 +1154,9 @@ final class ConnectionCoordinatorTests: XCTestCase {
 
     private func snapshot(
         runID: RemoteProjectionRunID,
-        title: String
+        title: String,
+        inputAvailability: CompatibleInputAvailability = .unavailable(reason: .known(.working)),
+        latestSequence: UInt64 = 2
     ) -> CompatibleSessionListSnapshot {
         CompatibleSessionListSnapshot(
             projectionRunID: runID,
@@ -568,9 +1168,9 @@ final class ConnectionCoordinatorTests: XCTestCase {
                     placement: RemoteConversationPlacement(),
                     cwd: nil,
                     state: .ready,
-                    inputAvailability: .unavailable(reason: .known(.working)),
+                    inputAvailability: inputAvailability,
                     projectionGeneration: 4,
-                    latestSequence: 2,
+                    latestSequence: latestSequence,
                     updatedAt: Date(timeIntervalSince1970: 100)
                 ),
             ],
@@ -608,6 +1208,24 @@ final class ConnectionCoordinatorTests: XCTestCase {
         ))
     }
 
+    private func userEvent(
+        _ sequence: UInt64,
+        clientRequestID: String
+    ) -> CompatibleConversationEvent {
+        .known(ConversationEvent(
+            conversationID: conversationID,
+            sequence: sequence,
+            eventID: "user-event-\(sequence)",
+            timestamp: Date(timeIntervalSince1970: TimeInterval(sequence)),
+            provider: .codex,
+            payload: .userMessage(ConversationUserMessagePayload(
+                text: "same text",
+                origin: .unknown,
+                clientRequestID: clientRequestID
+            ))
+        ))
+    }
+
     private func runID(_ suffix: UInt8) -> RemoteProjectionRunID {
         RemoteProjectionRunID(rawValue: UUID(uuid: (
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, suffix
@@ -636,21 +1254,26 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var helloScripts: [ScriptedCall<RemoteGatewayHelloResponse>]
     private var sessionScripts: [ScriptedCall<CompatibleSessionListSnapshot>]
     private var eventScripts: [ScriptedCall<CompatibleGatewayEventsResponse>]
+    private var sendScripts: [ScriptedCall<RemoteMessageSendResult>]
     private var eventCursors: [ConversationEventCursor?] = []
     private var eventRequests: [RemoteGatewayEventsRequest] = []
     private let eventCalls = CallCounter()
+    private let sendCalls = CallCounter()
     private var helloCalls = 0
+    private var sendRequests: [RemoteMessageSendRequest] = []
 
     init(
         operations: OperationLog,
         hello: [Result<RemoteGatewayHelloResponse, GatewayFailure>],
         sessions: [Result<CompatibleSessionListSnapshot, GatewayFailure>] = [],
-        events: [ScriptedCall<CompatibleGatewayEventsResponse>] = []
+        events: [ScriptedCall<CompatibleGatewayEventsResponse>] = [],
+        sends: [ScriptedCall<RemoteMessageSendResult>] = []
     ) {
         self.operations = operations
         helloScripts = hello.map { ScriptedCall(result: $0) }
         sessionScripts = sessions.map { ScriptedCall(result: $0) }
         eventScripts = events
+        sendScripts = sends
     }
 
     func hello() async throws -> RemoteGatewayHelloResponse {
@@ -693,13 +1316,17 @@ private actor ScriptedGateway: GatewayClientProtocol {
     }
 
     func send(_ request: RemoteMessageSendRequest) async throws -> RemoteMessageSendResult {
-        throw GatewayFailure.invalidResponse
+        sendRequests.append(request)
+        await sendCalls.increment()
+        return try await execute(sendScripts.removeFirst())
     }
 
     func helloCallCount() -> Int { helloCalls }
     func recordedEventCursors() -> [ConversationEventCursor?] { eventCursors }
     func recordedEventRequests() -> [RemoteGatewayEventsRequest] { eventRequests }
     func waitForEventsCallCount(_ count: Int) async throws { try await eventCalls.wait(for: count) }
+    func recordedSendRequests() -> [RemoteMessageSendRequest] { sendRequests }
+    func waitForSendCallCount(_ count: Int) async throws { try await sendCalls.wait(for: count) }
 
     private func execute<Value>(_ script: ScriptedCall<Value>) async throws -> Value {
         if let gate = script.gate {
@@ -821,6 +1448,52 @@ private actor ControlledSleeper: ConnectionSleeping {
 private struct FixedJitter: ConnectionJitterProviding {
     let value: Double
     func sample() async -> Double { value }
+}
+
+private struct FixedRequestIDFactory: SendRequestIDFactory {
+    let value: String
+    func makeRequestID() -> String { value }
+}
+
+private final class SequencedRequestIDFactory: SendRequestIDFactory, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String]
+
+    init(values: [String]) {
+        self.values = values
+    }
+
+    func makeRequestID() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return values.isEmpty ? "fallback-id" : values.removeFirst()
+    }
+}
+
+private actor ControlledSendDispatchWaiter: SendDispatchWaiting {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private let arrivals = CallCounter()
+
+    func waitBeforeDispatch() async {
+        await arrivals.increment()
+        guard isOpen == false else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func waitForWaiterCount(_ count: Int) async throws {
+        try await arrivals.wait(for: count)
+    }
+
+    func open() {
+        guard isOpen == false else { return }
+        isOpen = true
+        let activeWaiters = waiters
+        waiters.removeAll()
+        activeWaiters.forEach { $0.resume() }
+    }
 }
 
 private actor OperationLog {

@@ -23,6 +23,7 @@ protocol AppLiveSessionsControlling: AnyObject {
     func start() async
     func foreground() async
     func background() async
+    func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async
     func stopObserving()
 }
 
@@ -254,6 +255,7 @@ final class AppSessionController {
                 device: response.device,
                 credentialCreatedAt: response.credentialCreatedAt
             )
+            await liveController?.updateDeviceScopes(response.device.scopes)
         } catch let failure as NativeGatewayFailure {
             guard await credentialVault.currentGeneration() == generation else { return }
             switch failure {
@@ -280,7 +282,10 @@ final class AppSessionController {
 
     func sceneBecameActive() {
         pairingController?.sceneBecameActive()
-        Task { await liveController?.foreground() }
+        Task {
+            await liveController?.foreground()
+            await refreshCurrentDevice()
+        }
     }
 
     private func transitionToUnpaired() {
@@ -334,6 +339,7 @@ final class AppSessionController {
         )
         liveController?.stopObserving()
         liveController = controller
+        await controller.updateDeviceScopes(credential.device.scopes)
         await controller.start()
     }
 
@@ -366,7 +372,8 @@ final class AppSessionController {
             eventStream: EventStreamClient(
                 baseURL: credential.gatewayURL,
                 credentialProvider: credentialProvider
-            )
+            ),
+            deviceScopes: credential.device.scopes
         )
         return LiveSessionsController(
             coordinator: coordinator,

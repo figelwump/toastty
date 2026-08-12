@@ -167,6 +167,41 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         XCTAssertFalse(mobile.inputAvailability.allowsReply)
     }
 
+    func testUnavailableReasonRecognizesSessionPolicyAndKeepsFutureReasonsReadOnly() throws {
+        let disabledData = try sessionSnapshotData(
+            inputAvailability: [
+                "kind": "unavailable",
+                "reason": "session_writes_disabled",
+            ],
+            preview: NSNull()
+        )
+        let disabled = try XCTUnwrap(
+            decoder.decodeSessionListResponse(disabledData).conversations.first
+        )
+        XCTAssertEqual(
+            disabled.inputAvailability,
+            .unavailable(reason: .known(.sessionWritesDisabled))
+        )
+        XCTAssertFalse(disabled.inputAvailability.allowsRemoteSend)
+
+        let futureData = try sessionSnapshotData(
+            inputAvailability: [
+                "kind": "unavailable",
+                "reason": "future_policy_lock",
+            ],
+            preview: NSNull()
+        )
+        let future = try XCTUnwrap(
+            decoder.decodeSessionListResponse(futureData).conversations.first
+        )
+        XCTAssertEqual(
+            future.inputAvailability,
+            .unavailable(reason: .unsupported(rawValue: "future_policy_lock"))
+        )
+        XCTAssertFalse(future.inputAvailability.allowsRemoteSend)
+        XCTAssertFalse(future.inputAvailability.presentation().allowsReply)
+    }
+
     func testCanonicalSessionStateAndInputCombinationsRemainIndependent() throws {
         let bundle = Bundle(for: Self.self)
         let fixtureURL = try XCTUnwrap(

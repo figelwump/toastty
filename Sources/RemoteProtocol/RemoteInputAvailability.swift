@@ -41,6 +41,8 @@ public enum RemoteInputUnavailableReason: String, Codable, Equatable, Sendable {
     case error
     case offline
     case surfaceUnavailable = "surface_unavailable"
+    /// The Mac's per-session policy has disabled remote writes.
+    case sessionWritesDisabled = "session_writes_disabled"
     /// The provider adapter cannot prove the root prompt is open and safe.
     /// Unknown always means read-only.
     case unknownProviderState = "unknown_provider_state"

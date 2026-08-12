@@ -118,12 +118,108 @@ struct RemoteSessionWritePolicy: Equatable, Sendable {
         disabledConversationIDs.contains(conversationID) == false
     }
 
+    /// Overlays the host's write policy without weakening provider-derived
+    /// availability. Disabled sessions remain explicitly read-only even if
+    /// their provider has an open prompt.
+    func inputAvailability(
+        providerAvailability: RemoteInputAvailability,
+        for conversationID: RemoteConversationID
+    ) -> RemoteInputAvailability {
+        isEnabled(for: conversationID)
+            ? providerAvailability
+            : .unavailable(reason: .sessionWritesDisabled)
+    }
+
     @discardableResult
     mutating func setEnabled(_ enabled: Bool, for conversationID: RemoteConversationID) -> Bool {
         if enabled {
             return disabledConversationIDs.remove(conversationID) != nil
         }
         return disabledConversationIDs.insert(conversationID).inserted
+    }
+}
+
+/// Process-local enrichment that correlates an accepted remote send with the
+/// next matching provider transcript user message. This must be expired when
+/// a transcript file is replaced: the replacement tailer replays history from
+/// byte zero, and historical same-text input cannot confirm a new send.
+struct RemotePendingSendCorrelator: Sendable {
+    private struct PendingSend: Sendable {
+        var clientRequestID: String
+        var trimmedText: String
+    }
+
+    private var pendingSendsByConversationID: [RemoteConversationID: [PendingSend]] = [:]
+
+    var conversationIDs: Set<RemoteConversationID> {
+        Set(pendingSendsByConversationID.keys)
+    }
+
+    mutating func record(_ request: RemoteMessageSendRequest) {
+        let pendingSend = PendingSend(
+            clientRequestID: request.clientRequestID,
+            trimmedText: request.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        var pendingSends = pendingSendsByConversationID[request.conversationID, default: []]
+        pendingSends.append(pendingSend)
+        // Bound the pending list; a confirmation that never arrives must not
+        // leak memory.
+        if pendingSends.count > 32 {
+            pendingSends.removeFirst()
+        }
+        pendingSendsByConversationID[request.conversationID] = pendingSends
+    }
+
+    mutating func discard(for conversationID: RemoteConversationID) {
+        pendingSendsByConversationID.removeValue(forKey: conversationID)
+    }
+
+    mutating func stamp(
+        _ observations: [ProviderTranscriptObservation],
+        for conversationID: RemoteConversationID
+    ) -> [ProviderTranscriptObservation] {
+        guard pendingSendsByConversationID[conversationID]?.isEmpty == false else {
+            // Keep dictionary membership equivalent to live correlation work.
+            // This also repairs any empty queue left by an older code path.
+            pendingSendsByConversationID.removeValue(forKey: conversationID)
+            return observations
+        }
+        return observations.map { observation in
+            guard case .transcript(.userMessage(let payload)) = observation.payload,
+                  payload.origin == .unknown else {
+                return observation
+            }
+            let trimmed = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Delivery and provider logs are ordered. Only the oldest pending
+            // send can confirm against the next user message; if it does not
+            // match, expire it rather than misattributing a later identical
+            // local message.
+            guard let pending = consumeOldest(for: conversationID) else {
+                return observation
+            }
+            guard pending.trimmedText == trimmed else { return observation }
+            var stampedPayload = payload
+            stampedPayload.origin = .remote
+            stampedPayload.clientRequestID = pending.clientRequestID
+            var stamped = observation
+            stamped.payload = .transcript(.userMessage(stampedPayload))
+            return stamped
+        }
+    }
+
+    private mutating func consumeOldest(for conversationID: RemoteConversationID) -> PendingSend? {
+        guard var pendingSends = pendingSendsByConversationID[conversationID],
+              pendingSends.isEmpty == false else {
+            pendingSendsByConversationID.removeValue(forKey: conversationID)
+            return nil
+        }
+        let oldest = pendingSends.removeFirst()
+        if pendingSends.isEmpty {
+            pendingSendsByConversationID.removeValue(forKey: conversationID)
+        } else {
+            pendingSendsByConversationID[conversationID] = pendingSends
+        }
+        return oldest
     }
 }
 
@@ -178,7 +274,7 @@ final class RemoteAccessService: ObservableObject {
     private var conversationIDByPanelID: [UUID: RemoteConversationID] = [:]
     /// Pending remote sends awaiting their confirming user message in the
     /// projection, oldest first, keyed by conversation.
-    private var pendingSendsByConversationID: [RemoteConversationID: [(clientRequestID: String, trimmedText: String)]] = [:]
+    private var pendingSendCorrelator = RemotePendingSendCorrelator()
 
     init(
         store: AppStore,
@@ -592,7 +688,7 @@ final class RemoteAccessService: ObservableObject {
         let trackedConversationIDs = Set(tailersByConversationID.keys)
             .union(activeSessionIDByConversationID.keys)
             .union(panelIDByConversationID.keys)
-            .union(pendingSendsByConversationID.keys)
+            .union(pendingSendCorrelator.conversationIDs)
             .union(projectionStore.registeredConversationIDs)
         for conversationID in trackedConversationIDs where seenConversationIDs.contains(conversationID) == false {
             removeConversationState(conversationID)
@@ -700,7 +796,7 @@ final class RemoteAccessService: ObservableObject {
         projectionStore.removeConversation(conversationID)
         coordinator.removeConversation(conversationID)
         activeSessionIDByConversationID.removeValue(forKey: conversationID)
-        pendingSendsByConversationID.removeValue(forKey: conversationID)
+        pendingSendCorrelator.discard(for: conversationID)
         if let panelID = panelIDByConversationID.removeValue(forKey: conversationID),
            conversationIDByPanelID[panelID] == conversationID {
             conversationIDByPanelID.removeValue(forKey: panelID)
@@ -718,9 +814,10 @@ final class RemoteAccessService: ObservableObject {
                 // projector's provider transitions with local-draft
                 // invalidation and honors the per-session write opt-in — the
                 // client's compose bar must never open when writes are off.
-                let availability = sessionWritePolicy.isEnabled(for: candidate.conversationID)
-                    ? coordinator.availability(for: candidate.conversationID)
-                    : RemoteInputAvailability.unavailable(reason: .unknownProviderState)
+                let availability = sessionWritePolicy.inputAvailability(
+                    providerAvailability: coordinator.availability(for: candidate.conversationID),
+                    for: candidate.conversationID
+                )
                 return RemoteConversationSummary(
                     conversationID: candidate.conversationID,
                     provider: candidate.provider,
@@ -786,6 +883,10 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func startTailer(for conversationID: RemoteConversationID, provider: AgentKind, path: String) {
+        // Every fresh tailer replays from byte zero. Discard correlation before
+        // constructing it so historical same-text input cannot confirm a send
+        // accepted against the previous file/tailer lifetime.
+        pendingSendCorrelator.discard(for: conversationID)
         let tailer = RemoteTranscriptTailer(
             conversationID: conversationID,
             fileURL: URL(filePath: path),
@@ -816,7 +917,9 @@ final class RemoteAccessService: ObservableObject {
         case .fileReplaced:
             // Unreconcilable rewrite: discard this conversation's sequence
             // space and re-read the file from the start under a fresh
-            // generation.
+            // generation. Discard delivery correlation before any early exit;
+            // `startTailer` defensively repeats this for every replay path.
+            pendingSendCorrelator.discard(for: conversationID)
             guard let tailer = tailersByConversationID[conversationID] else { return }
             let path = tailer.fileURL.path
             let provider = tailer.provider
@@ -944,13 +1047,8 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func recordPendingSend(_ request: RemoteMessageSendRequest, for conversationID: RemoteConversationID) {
-        let trimmed = request.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        pendingSendsByConversationID[conversationID, default: []].append((request.clientRequestID, trimmed))
-        // Bound the pending list; a confirmation that never arrives must not
-        // leak memory.
-        if pendingSendsByConversationID[conversationID]!.count > 32 {
-            pendingSendsByConversationID[conversationID]!.removeFirst()
-        }
+        precondition(request.conversationID == conversationID)
+        pendingSendCorrelator.record(request)
     }
 
     /// Stamps origin=.remote and the clientRequestID onto the confirming user
@@ -961,32 +1059,7 @@ final class RemoteAccessService: ObservableObject {
         _ observations: [ProviderTranscriptObservation],
         for conversationID: RemoteConversationID
     ) -> [ProviderTranscriptObservation] {
-        guard pendingSendsByConversationID[conversationID]?.isEmpty == false else {
-            return observations
-        }
-        return observations.map { observation in
-            guard case .transcript(.userMessage(let payload)) = observation.payload,
-                  payload.origin == .unknown else {
-                return observation
-            }
-            let trimmed = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Delivery and provider logs are ordered. Only the oldest pending
-            // send can confirm against the next user message; if it does not
-            // match, expire it rather than misattributing a later identical
-            // local message.
-            guard let pending = pendingSendsByConversationID[conversationID]?.first else {
-                return observation
-            }
-            pendingSendsByConversationID[conversationID]?.removeFirst()
-            guard pending.trimmedText == trimmed else { return observation }
-            var stamped = observation
-            stamped.payload = .transcript(.userMessage(ConversationUserMessagePayload(
-                text: payload.text,
-                origin: .remote,
-                clientRequestID: pending.clientRequestID
-            )))
-            return stamped
-        }
+        pendingSendCorrelator.stamp(observations, for: conversationID)
     }
 
     // MARK: - Per-session write controls

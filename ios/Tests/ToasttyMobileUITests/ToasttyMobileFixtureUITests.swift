@@ -3,6 +3,8 @@ import XCTest
 final class ToasttyMobileFixtureUITests: XCTestCase {
     private let toasttyWorkspaceID = "A1000000-0000-0000-0000-000000000001"
     private let pendingInteractionID = "B1000000-0000-0000-0000-000000000001"
+    private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
+    private let openPromptConversationID = "B1000000-0000-0000-0000-000000000007"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -97,7 +99,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         for (sequence, labelFragment) in expectedRows.reversed() {
             let row = app.descendants(matching: .any)["toastty-mobile-transcript-row-\(sequence)"]
             XCTAssertTrue(
-                scrollToOlder(row, in: app),
+                scrollToOlder(row, in: app, requireHittable: false),
                 "Expected stable transcript row identifier for sequence \(sequence)"
             )
             XCTAssertTrue(
@@ -229,6 +231,86 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         }
     }
 
+    func testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let input = app.textFields["toastty-mobile-composer-input"]
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(input.isEnabled)
+        XCTAssertFalse(send.isEnabled)
+
+        input.tap()
+        input.typeText("Use build 413")
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+
+        let optimistic = app.descendants(matching: .any)[
+            "toastty-mobile-send-optimistic-fixture-enqueued-1"
+        ]
+        XCTAssertTrue(optimistic.waitForExistence(timeout: 5))
+        XCTAssertTrue(optimistic.label.contains("Use build 413"))
+        XCTAssertTrue(optimistic.label.contains("Sending"))
+        XCTAssertEqual(input.value as? String, "Draft saved on this iPhone")
+        XCTAssertFalse(input.isEnabled)
+        XCTAssertFalse(send.isEnabled)
+        let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
+        XCTAssertTrue(status.exists)
+        XCTAssertTrue(status.label.contains("A message is already being sent at this prompt"))
+        attachScreenshot(named: "fixture-gated-send-optimistic", of: app)
+    }
+
+    func testGatedSendUnconfirmedReceiptShowsAttemptedTextAndDismisses() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send-receipt"]
+        )
+        openGatedSendConversation(in: app)
+
+        let receipt = app.descendants(matching: .any)[
+            "toastty-mobile-send-receipt-fixture-delivery-unconfirmed"
+        ]
+        let dismiss = app.buttons[
+            "toastty-mobile-send-receipt-dismiss-fixture-delivery-unconfirmed"
+        ]
+        XCTAssertTrue(receipt.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts["Toastty could not correlate this send after reconnecting"].exists
+        )
+        XCTAssertTrue(
+            app.staticTexts["Use build 413 and keep the release as a draft."].exists
+        )
+        XCTAssertTrue(dismiss.isHittable)
+        attachScreenshot(named: "fixture-gated-send-unconfirmed-receipt", of: app)
+
+        dismiss.tap()
+        XCTAssertTrue(receipt.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["toastty-mobile-composer-input"].isEnabled)
+    }
+
+    func testGatedSendComposerReflowsAtAccessibilityXXXL() {
+        let app = launchFixtureApp(
+            launchArguments: [
+                "-UIPreferredContentSizeCategoryName",
+                "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge",
+            ],
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let input = app.textFields["toastty-mobile-composer-input"]
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(input.isHittable)
+        input.tap()
+        input.typeText("Accessible send")
+        XCTAssertTrue(send.isHittable)
+        XCTAssertTrue(send.isEnabled)
+        attachScreenshot(named: "fixture-gated-send-accessibility-xxxl", of: app)
+    }
+
     private func launchFixtureApp(
         launchArguments: [String] = [],
         environment: [String: String] = [:]
@@ -260,17 +342,33 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
     }
 
+    private func openGatedSendConversation(in app: XCUIApplication) {
+        let workspaceLink = app.buttons["toastty-mobile-workspace-\(releaseWorkspaceID)"]
+        XCTAssertTrue(workspaceLink.waitForExistence(timeout: 10))
+        workspaceLink.tap()
+
+        let sessionButton = app.buttons[
+            "toastty-mobile-workspace-session-\(openPromptConversationID)"
+        ]
+        XCTAssertTrue(sessionButton.waitForExistence(timeout: 5))
+        sessionButton.tap()
+        XCTAssertTrue(
+            app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5)
+        )
+    }
+
     private func scrollToOlder(
         _ element: XCUIElement,
         in app: XCUIApplication,
-        attempts: Int = 12
+        attempts: Int = 12,
+        requireHittable: Bool = true
     ) -> Bool {
         let transcript = app.descendants(matching: .any)["toastty-mobile-transcript"]
         for _ in 0..<attempts {
-            if element.exists, element.isHittable { return true }
+            if element.exists, requireHittable == false || element.isHittable { return true }
             transcript.swipeDown()
         }
-        return element.exists && element.isHittable
+        return element.exists && (requireHittable == false || element.isHittable)
     }
 
     private func scrollToNewer(

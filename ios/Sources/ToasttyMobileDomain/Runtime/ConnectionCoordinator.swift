@@ -42,7 +42,9 @@ public actor ConnectionCoordinator {
     private let jitter: any ConnectionJitterProviding
     private let retryPolicy: ConnectionRetryPolicy
     private let eventsPageLimit: Int
+    private let requestIDFactory: any SendRequestIDFactory
     private let stateStream: RuntimeStateStream<State>
+    private var sendDispatchWaiter: any SendDispatchWaiting
 
     private var state = State()
     private var connectionTask: Task<Void, Never>?
@@ -51,9 +53,36 @@ public actor ConnectionCoordinator {
     private var attemptFailure: GatewayFailure?
     private var activeCapabilities: Set<RemoteGatewayCapability> = []
     private var conversationRuntimes: [RemoteConversationID: ConversationRuntime] = [:]
+    private var retainedConversationRuntimes: [RemoteConversationID: ConversationRuntime] = [:]
     private var activeConversationIDs: Set<RemoteConversationID> = []
     private var conversationCatchUpTasks: [RemoteConversationID: Task<Void, Never>] = [:]
     private var conversationOlderTasks: [RemoteConversationID: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var deviceScopes: [RemoteDeviceScope]
+    private var sendScopeDeniedByHost = false
+    private var streamSnapshotOrdinal: UInt64 = 0
+    private var authoritativeSessionSnapshot: CompatibleSessionListSnapshot?
+    private var reservations: [ConversationSendReservationKey: String] = [:]
+    private var sendOperations: [String: SendOperation] = [:]
+    private var sendTasks: [String: Task<Void, Never>] = [:]
+    private var activeRequestIDs: Set<String> = []
+    private var recentRequestIDs: Set<String> = []
+    private var issuedRequestIDOrder: [String] = []
+    private var invalidatedComposerOrdinals: [RemoteConversationID: UInt64] = [:]
+
+    private struct SendOperation: Sendable {
+        var request: RemoteMessageSendRequest
+        var reservationKey: ConversationSendReservationKey
+        var runtime: ConversationRuntime
+        var composerStamp: ConversationComposerStamp
+        var callerObservedEnqueue: Bool
+        var authorityInvalidatedBeforeDispatch: Bool
+        var didBeginDispatch: Bool
+    }
+
+    private enum SendClaimResult {
+        case claimed(clientRequestID: String, runtime: ConversationRuntime)
+        case denied(ConversationSendGateFailure)
+    }
 
     private enum ConversationCatchUpStrategy {
         case initial
@@ -62,6 +91,7 @@ public actor ConnectionCoordinator {
     }
 
     private static let maximumUnknownOnlyOlderPages = 8
+    private static let maximumRecentRequestIDs = 1_024
 
     public init(
         gateway: any GatewayClientProtocol,
@@ -70,7 +100,9 @@ public actor ConnectionCoordinator {
         sleeper: any ConnectionSleeping = ContinuousConnectionSleeper(),
         jitter: any ConnectionJitterProviding = SystemConnectionJitter(),
         retryPolicy: ConnectionRetryPolicy = ConnectionRetryPolicy(),
-        eventsPageLimit: Int = 200
+        eventsPageLimit: Int = 200,
+        deviceScopes: [RemoteDeviceScope] = [],
+        requestIDFactory: any SendRequestIDFactory = UUIDSendRequestIDFactory()
     ) {
         self.gateway = gateway
         self.eventStream = eventStream
@@ -79,6 +111,9 @@ public actor ConnectionCoordinator {
         self.jitter = jitter
         self.retryPolicy = retryPolicy
         self.eventsPageLimit = min(max(eventsPageLimit, 1), 200)
+        self.deviceScopes = deviceScopes
+        self.requestIDFactory = requestIDFactory
+        sendDispatchWaiter = ImmediateSendDispatchWaiter()
         stateStream = RuntimeStateStream(State())
     }
 
@@ -92,6 +127,18 @@ public actor ConnectionCoordinator {
 
     public func sessionProjection() -> SessionsRuntime {
         sessionsRuntime
+    }
+
+    /// Replaces the scopes read from the current device endpoint. A prior host
+    /// send-scope denial remains latched only until this explicit refresh.
+    public func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
+        deviceScopes = scopes
+        sendScopeDeniedByHost = false
+        await publishComposerAuthorities()
+    }
+
+    func setSendDispatchWaiter(_ waiter: any SendDispatchWaiting) {
+        sendDispatchWaiter = waiter
     }
 
     /// Starts the coordinator unless it already owns a connection loop.
@@ -112,6 +159,7 @@ public actor ConnectionCoordinator {
 
     /// Cancels all network work while retaining the last readable projection.
     public func suspend() async {
+        await cancelSendsForSuspension()
         let previousTask = connectionTask
         previousTask?.cancel()
         connectionTask = nil
@@ -121,6 +169,7 @@ public actor ConnectionCoordinator {
         // cancellation when their response completes.
         state.connectionGeneration &+= 1
         let suspendedGeneration = state.connectionGeneration
+        authoritativeSessionSnapshot = nil
         // Closing the subscription first releases a receive implementation
         // that does not itself observe parent-task cancellation. No new loop
         // can install resources until the old task has then fully unwound.
@@ -133,6 +182,10 @@ public actor ConnectionCoordinator {
         for runtime in conversationRuntimes.values {
             _ = await runtime.suspend(connectionGeneration: suspendedGeneration)
         }
+        for runtime in retainedConversationRuntimes.values {
+            _ = await runtime.suspend(connectionGeneration: suspendedGeneration)
+        }
+        await publishComposerAuthorities()
         await publish()
     }
 
@@ -150,6 +203,7 @@ public actor ConnectionCoordinator {
         // Make responses from the retired attempt stale immediately, rather
         // than relying on cooperative URLSession cancellation.
         state.connectionGeneration &+= 1
+        authoritativeSessionSnapshot = nil
         await closeAttemptResources()
         await previousTask?.value
         state.consecutiveFailureCount = 0
@@ -162,6 +216,9 @@ public actor ConnectionCoordinator {
         let runtime: ConversationRuntime
         if let existing = conversationRuntimes[conversationID] {
             runtime = existing
+        } else if let retained = retainedConversationRuntimes.removeValue(forKey: conversationID) {
+            runtime = retained
+            conversationRuntimes[conversationID] = runtime
         } else {
             runtime = ConversationRuntime(conversationID: conversationID)
             conversationRuntimes[conversationID] = runtime
@@ -175,6 +232,7 @@ public actor ConnectionCoordinator {
                 strategy: .initial
             )
         }
+        await publishComposerAuthority(for: conversationID, runtime: runtime)
         return runtime
     }
 
@@ -186,12 +244,186 @@ public actor ConnectionCoordinator {
             return
         }
         _ = await runtime.suspend(connectionGeneration: state.connectionGeneration)
+        await runtime.invalidateComposerAuthority(.conversationNotOpen)
+        await pruneFinishedSendState(conversationID: conversationID, runtime: runtime)
+        let compactedRequestIDs = await runtime.sendReconciliation.compactForInactiveRuntime()
+        for requestID in compactedRequestIDs {
+            retireRequestID(requestID)
+        }
+        let reconciliationState = await runtime.sendReconciliation.currentState()
+        let hasReservation = reservations.keys.contains { $0.conversationID == conversationID }
+        let hasOperation = sendOperations.values.contains {
+            $0.request.conversationID == conversationID && $0.runtime === runtime
+        }
+        if reconciliationState.records.isEmpty == false || hasReservation || hasOperation {
+            retainedConversationRuntimes[conversationID] = runtime
+        } else {
+            await runtime.sendReconciliation.finish()
+        }
     }
 
     public func conversationProjection(
         for conversationID: RemoteConversationID
     ) -> ConversationRuntime? {
         conversationRuntimes[conversationID]
+    }
+
+    /// Atomically gates, reserves, and enqueues a send, then schedules its
+    /// network task under coordinator ownership. The caller never owns the
+    /// request lifetime, so dismissing a sheet or cancelling a view task after
+    /// this returns cannot silently cancel delivery.
+    public func sendMessage(
+        conversationID: RemoteConversationID,
+        text: String,
+        composerStamp: ConversationComposerStamp
+    ) async -> ConversationSendOutcome {
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return .notEnqueued(.emptyText)
+        }
+        guard Task.isCancelled == false else { return .notEnqueued(.cancelled) }
+
+        let validatedGate = await validateSendGate(
+            conversationID: conversationID,
+            composerStamp: composerStamp
+        )
+        guard case .allowed(let validatedRuntime) = validatedGate else {
+            guard case .denied(let failure) = validatedGate else {
+                return .notEnqueued(.staleComposerAuthority)
+            }
+            return .notEnqueued(failure)
+        }
+
+        // From this point through claim insertion there is deliberately no
+        // suspension: concurrent taps cannot both observe the epoch as free,
+        // and a generated ID is claimed before any other actor can reuse it.
+        let claim = claimSend(
+            conversationID: conversationID,
+            text: text,
+            composerStamp: composerStamp,
+            validatedRuntime: validatedRuntime
+        )
+        guard case .claimed(let clientRequestID, let runtime) = claim else {
+            guard case .denied(let failure) = claim else {
+                return .notEnqueued(.staleComposerAuthority)
+            }
+            return .notEnqueued(failure)
+        }
+
+        guard let admission = await runtime.sendReconciliation.enqueue(
+            clientRequestID: clientRequestID,
+            text: text,
+            projectionRunID: composerStamp.projectionRunID
+        ) else {
+            rollbackUnadmittedClaim(clientRequestID: clientRequestID)
+            await publishComposerAuthority(for: conversationID, runtime: runtime)
+            return .notEnqueued(.tooManyUnresolvedSends)
+        }
+        for evictedRequestID in admission.evictedConfirmedRequestIDs {
+            retireRequestID(evictedRequestID)
+        }
+
+        let postAdmissionFailure: ConversationSendGateFailure?
+        if Task.isCancelled {
+            postAdmissionFailure = .cancelled
+        } else if let operation = sendOperations[clientRequestID],
+                  operation.runtime === runtime,
+                  operation.authorityInvalidatedBeforeDispatch == false {
+            postAdmissionFailure = currentCoordinatorGateFailure(
+                conversationID: conversationID,
+                composerStamp: composerStamp,
+                expectedRuntime: runtime
+            )
+        } else {
+            postAdmissionFailure = .staleComposerAuthority
+        }
+        if let postAdmissionFailure {
+            rollbackAdmittedClaim(clientRequestID: clientRequestID)
+            _ = await runtime.sendReconciliation.discardBeforeDispatch(
+                clientRequestID: clientRequestID
+            )
+            forgetClaimedRequestID(clientRequestID)
+            await publishComposerAuthority(for: conversationID, runtime: runtime)
+            return .notEnqueued(postAdmissionFailure)
+        }
+
+        guard sendOperations[clientRequestID] != nil else {
+            let reservationKey = ConversationSendReservationKey(
+                conversationID: conversationID,
+                projectionRunID: composerStamp.projectionRunID,
+                inputEpoch: composerStamp.inputEpoch
+            )
+            releaseReservation(reservationKey, clientRequestID: clientRequestID)
+            _ = await runtime.sendReconciliation.discardBeforeDispatch(
+                clientRequestID: clientRequestID
+            )
+            forgetClaimedRequestID(clientRequestID)
+            await publishComposerAuthority(for: conversationID, runtime: runtime)
+            return .notEnqueued(.staleComposerAuthority)
+        }
+
+        // Publish the reservation before committing the enqueue to the caller.
+        // This actor hop leaves callerObservedEnqueue false so an authority
+        // change interleaving here can still roll back the unobserved enqueue.
+        await publishComposerAuthority(for: conversationID, runtime: runtime)
+
+        let postPublicationFailure: ConversationSendGateFailure?
+        if Task.isCancelled {
+            postPublicationFailure = .cancelled
+        } else if let operation = sendOperations[clientRequestID],
+                  operation.runtime === runtime,
+                  operation.authorityInvalidatedBeforeDispatch == false,
+                  reservations[operation.reservationKey] == clientRequestID {
+            postPublicationFailure = currentCoordinatorGateFailure(
+                conversationID: conversationID,
+                composerStamp: composerStamp,
+                expectedRuntime: runtime
+            )
+        } else {
+            postPublicationFailure = .staleComposerAuthority
+        }
+        if let postPublicationFailure {
+            rollbackAdmittedClaim(clientRequestID: clientRequestID)
+            _ = await runtime.sendReconciliation.discardBeforeDispatch(
+                clientRequestID: clientRequestID
+            )
+            forgetClaimedRequestID(clientRequestID)
+            await publishComposerAuthority(for: conversationID, runtime: runtime)
+            return .notEnqueued(postPublicationFailure)
+        }
+
+        guard var operation = sendOperations[clientRequestID],
+              operation.runtime === runtime,
+              reservations[operation.reservationKey] == clientRequestID else {
+            rollbackAdmittedClaim(clientRequestID: clientRequestID)
+            _ = await runtime.sendReconciliation.discardBeforeDispatch(
+                clientRequestID: clientRequestID
+            )
+            forgetClaimedRequestID(clientRequestID)
+            await publishComposerAuthority(for: conversationID, runtime: runtime)
+            return .notEnqueued(.staleComposerAuthority)
+        }
+        operation.callerObservedEnqueue = true
+        sendOperations[clientRequestID] = operation
+
+        sendTasks[clientRequestID] = Task { [weak self] in
+            await self?.runSend(clientRequestID: clientRequestID)
+        }
+        return .enqueued(clientRequestID: clientRequestID)
+    }
+
+    public func dismissSendReceipt(
+        conversationID: RemoteConversationID,
+        clientRequestID: String
+    ) async {
+        guard let runtime = conversationRuntimes[conversationID]
+                ?? retainedConversationRuntimes[conversationID] else { return }
+        // The delivery transition, never receipt dismissal, releases a matching
+        // reservation. Prune while the terminal record is still observable.
+        await pruneFinishedSendState(conversationID: conversationID, runtime: runtime)
+        if await runtime.sendReconciliation.dismiss(clientRequestID: clientRequestID) {
+            retireRequestID(clientRequestID)
+        }
+        await removeInactiveRuntimeIfSafe(conversationID: conversationID, runtime: runtime)
     }
 
     /// Loads one bounded retained-history slice for an open conversation.
@@ -236,6 +468,7 @@ public actor ConnectionCoordinator {
         while !Task.isCancelled, connectionLoopID == loopID {
             state.connectionGeneration &+= 1
             let generation = state.connectionGeneration
+            authoritativeSessionSnapshot = nil
             state.phase = failureCount == 0
                 ? .connecting
                 : .reconnecting(
@@ -245,6 +478,7 @@ public actor ConnectionCoordinator {
                     )
                 )
             state.consecutiveFailureCount = failureCount
+            await publishComposerAuthorities()
             await publish()
 
             _ = await sessionsRuntime.beginConnection(
@@ -280,7 +514,9 @@ public actor ConnectionCoordinator {
                         afterFailureCount: failureCount
                     )
                 )
+                authoritativeSessionSnapshot = nil
                 _ = await sessionsRuntime.markReconnecting(generation: generation)
+                await publishComposerAuthorities()
                 await publish()
 
                 let sample = await jitter.sample()
@@ -368,8 +604,13 @@ public actor ConnectionCoordinator {
             guard await sessionsRuntime.applyStreamSnapshot(snapshot, generation: generation) else {
                 return
             }
+            streamSnapshotOrdinal &+= 1
+            invalidatedComposerOrdinals.removeAll(keepingCapacity: true)
+            authoritativeSessionSnapshot = snapshot
             state.consecutiveFailureCount = 0
             state.phase = .live
+            await reconcileAuthoritativeSnapshot(snapshot)
+            await publishComposerAuthorities()
             await publish()
 
         case .conversationEvents(let page):
@@ -385,6 +626,10 @@ public actor ConnectionCoordinator {
                 directive,
                 conversationID: page.conversationID,
                 generation: generation
+            )
+            await pruneFinishedSendState(
+                conversationID: page.conversationID,
+                runtime: runtime
             )
 
         case .resnapshotRequired(let conversationID):
@@ -510,6 +755,10 @@ public actor ConnectionCoordinator {
                     switch directive {
                     case .none:
                         if await runtime.finishCatchUp(connectionGeneration: generation) {
+                            await pruneFinishedSendState(
+                                conversationID: conversationID,
+                                runtime: runtime
+                            )
                             return
                         }
                         // A live page can arrive after applyREST drains its
@@ -581,6 +830,10 @@ public actor ConnectionCoordinator {
                 switch directive {
                 case .none:
                     _ = await runtime.finishCatchUp(connectionGeneration: generation)
+                    await pruneFinishedSendState(
+                        conversationID: conversationID,
+                        runtime: runtime
+                    )
                 case .fetchREST(let cursor):
                     await runConversationCatchUp(
                         runtime: runtime,
@@ -711,6 +964,593 @@ public actor ConnectionCoordinator {
             && conversationRuntimes[conversationID] === runtime
     }
 
+    private enum SendGateValidation {
+        case allowed(runtime: ConversationRuntime)
+        case denied(ConversationSendGateFailure)
+    }
+
+    private func cancelSendsForSuspension() async {
+        let requestIDs = Array(sendOperations.keys)
+        for requestID in requestIDs {
+            guard let operation = sendOperations[requestID] else { continue }
+            sendTasks[requestID]?.cancel()
+            if operation.didBeginDispatch {
+                await operation.runtime.sendReconciliation.apply(
+                    .uncertain,
+                    clientRequestID: requestID
+                )
+                sendOperations.removeValue(forKey: requestID)
+                sendTasks.removeValue(forKey: requestID)
+            } else if operation.callerObservedEnqueue {
+                await settleCommittedBeforeDispatch(
+                    clientRequestID: requestID,
+                    operation: operation
+                )
+            } else {
+                var invalidated = operation
+                invalidated.authorityInvalidatedBeforeDispatch = true
+                sendOperations[requestID] = invalidated
+                releaseReservation(
+                    operation.reservationKey,
+                    clientRequestID: requestID
+                )
+            }
+        }
+    }
+
+    private func validateSendGate(
+        conversationID: RemoteConversationID,
+        composerStamp: ConversationComposerStamp
+    ) async -> SendGateValidation {
+        if let failure = currentCoordinatorGateFailure(
+            conversationID: conversationID,
+            composerStamp: composerStamp,
+            expectedRuntime: nil
+        ) {
+            return .denied(failure)
+        }
+        guard let runtime = conversationRuntimes[conversationID] else {
+            return .denied(.conversationNotOpen)
+        }
+
+        let runtimeState = await runtime.currentState()
+        if let failure = currentCoordinatorGateFailure(
+            conversationID: conversationID,
+            composerStamp: composerStamp,
+            expectedRuntime: runtime
+        ) {
+            return .denied(failure)
+        }
+        guard runtimeState.phase == .live else {
+            return .denied(.conversationNotLive)
+        }
+        guard runtimeState.connectionGeneration == composerStamp.connectionGeneration,
+              runtimeState.projectionRunID == composerStamp.projectionRunID,
+              runtimeState.projectionGeneration == composerStamp.projectionGeneration,
+              (runtimeState.cursor?.afterSequence ?? 0) >= composerStamp.latestSequence else {
+            return .denied(.transcriptNotCaughtUp)
+        }
+        return .allowed(runtime: runtime)
+    }
+
+    private func currentCoordinatorGateFailure(
+        conversationID: RemoteConversationID,
+        composerStamp: ConversationComposerStamp,
+        expectedRuntime: ConversationRuntime?,
+        allowsRetainedRuntime: Bool = false
+    ) -> ConversationSendGateFailure? {
+        guard state.phase == .live,
+              let snapshot = authoritativeSessionSnapshot else {
+            return .coordinatorNotLive
+        }
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return .deviceSendScopeDenied
+        }
+        let runtime: ConversationRuntime?
+        if activeConversationIDs.contains(conversationID) {
+            runtime = conversationRuntimes[conversationID]
+        } else if allowsRetainedRuntime {
+            runtime = retainedConversationRuntimes[conversationID]
+        } else {
+            runtime = nil
+        }
+        guard let runtime,
+              expectedRuntime.map({ $0 === runtime }) ?? true else {
+            return .conversationNotOpen
+        }
+        guard let summary = snapshot.conversations.first(where: {
+            $0.conversationID == conversationID
+        }) else {
+            return .conversationMissing
+        }
+        guard invalidatedComposerOrdinals[conversationID] != streamSnapshotOrdinal else {
+            return .staleComposerAuthority
+        }
+        guard case .openPrompt(let epoch) = summary.inputAvailability else {
+            return .inputUnavailable
+        }
+        let currentStamp = ConversationComposerStamp(
+            connectionGeneration: state.connectionGeneration,
+            streamSnapshotOrdinal: streamSnapshotOrdinal,
+            projectionRunID: snapshot.projectionRunID,
+            projectionGeneration: summary.projectionGeneration,
+            latestSequence: summary.latestSequence,
+            inputEpoch: epoch
+        )
+        return composerStamp == currentStamp ? nil : .staleComposerAuthority
+    }
+
+    private func claimSend(
+        conversationID: RemoteConversationID,
+        text: String,
+        composerStamp: ConversationComposerStamp,
+        validatedRuntime: ConversationRuntime
+    ) -> SendClaimResult {
+        if let failure = currentCoordinatorGateFailure(
+            conversationID: conversationID,
+            composerStamp: composerStamp,
+            expectedRuntime: validatedRuntime
+        ) {
+            return .denied(failure)
+        }
+        let reservationKey = ConversationSendReservationKey(
+            conversationID: conversationID,
+            projectionRunID: composerStamp.projectionRunID,
+            inputEpoch: composerStamp.inputEpoch
+        )
+        guard reservations[reservationKey] == nil else {
+            return .denied(.sendAlreadyReserved)
+        }
+        guard let clientRequestID = mintRequestID() else {
+            return .denied(.tooManyUnresolvedSends)
+        }
+        let request = RemoteMessageSendRequest(
+            conversationID: conversationID,
+            clientRequestID: clientRequestID,
+            expectedInputEpoch: composerStamp.inputEpoch,
+            text: text
+        )
+        reservations[reservationKey] = clientRequestID
+        sendOperations[clientRequestID] = SendOperation(
+            request: request,
+            reservationKey: reservationKey,
+            runtime: validatedRuntime,
+            composerStamp: composerStamp,
+            callerObservedEnqueue: false,
+            authorityInvalidatedBeforeDispatch: false,
+            didBeginDispatch: false
+        )
+        return .claimed(clientRequestID: clientRequestID, runtime: validatedRuntime)
+    }
+
+    private func mintRequestID() -> String? {
+        for _ in 0..<16 {
+            let requestID = requestIDFactory.makeRequestID()
+            guard requestID.isEmpty == false else { continue }
+            guard activeRequestIDs.contains(requestID) == false,
+                  recentRequestIDs.contains(requestID) == false else { continue }
+            activeRequestIDs.insert(requestID)
+            return requestID
+        }
+        return nil
+    }
+
+    private func rollbackUnadmittedClaim(clientRequestID: String) {
+        guard let operation = sendOperations.removeValue(forKey: clientRequestID),
+              operation.didBeginDispatch == false,
+              operation.callerObservedEnqueue == false else { return }
+        releaseReservation(operation.reservationKey, clientRequestID: clientRequestID)
+        sendTasks.removeValue(forKey: clientRequestID)?.cancel()
+        activeRequestIDs.remove(clientRequestID)
+    }
+
+    private func rollbackAdmittedClaim(clientRequestID: String) {
+        guard let operation = sendOperations.removeValue(forKey: clientRequestID),
+              operation.didBeginDispatch == false,
+              operation.callerObservedEnqueue == false else { return }
+        releaseReservation(operation.reservationKey, clientRequestID: clientRequestID)
+        sendTasks.removeValue(forKey: clientRequestID)?.cancel()
+    }
+
+    private func retireRequestID(_ clientRequestID: String) {
+        guard activeRequestIDs.remove(clientRequestID) != nil else { return }
+        guard recentRequestIDs.insert(clientRequestID).inserted else { return }
+        issuedRequestIDOrder.append(clientRequestID)
+        while issuedRequestIDOrder.count > Self.maximumRecentRequestIDs {
+            recentRequestIDs.remove(issuedRequestIDOrder.removeFirst())
+        }
+    }
+
+    private func forgetClaimedRequestID(_ clientRequestID: String) {
+        activeRequestIDs.remove(clientRequestID)
+    }
+
+    private func runSend(clientRequestID: String) async {
+        await sendDispatchWaiter.waitBeforeDispatch()
+        guard var operation = sendOperations[clientRequestID] else {
+            sendTasks.removeValue(forKey: clientRequestID)
+            return
+        }
+        let gateFailure: ConversationSendGateFailure?
+        if Task.isCancelled {
+            gateFailure = .cancelled
+        } else if operation.authorityInvalidatedBeforeDispatch {
+            gateFailure = .staleComposerAuthority
+        } else if reservations[operation.reservationKey] != clientRequestID {
+            gateFailure = .staleComposerAuthority
+        } else {
+            gateFailure = currentCoordinatorGateFailure(
+                conversationID: operation.request.conversationID,
+                composerStamp: operation.composerStamp,
+                expectedRuntime: operation.runtime,
+                allowsRetainedRuntime: operation.callerObservedEnqueue
+            )
+        }
+        guard gateFailure == nil, operation.callerObservedEnqueue else {
+            await settleCommittedBeforeDispatch(
+                clientRequestID: clientRequestID,
+                operation: operation
+            )
+            return
+        }
+
+        operation.didBeginDispatch = true
+        sendOperations[clientRequestID] = operation
+
+        do {
+            let result = try await gateway.send(operation.request)
+            await finishSendResponse(
+                result,
+                clientRequestID: clientRequestID,
+                operation: operation
+            )
+        } catch {
+            await finishSendFailure(
+                error,
+                clientRequestID: clientRequestID,
+                operation: operation
+            )
+        }
+    }
+
+    private func settleCommittedBeforeDispatch(
+        clientRequestID: String,
+        operation: SendOperation
+    ) async {
+        guard let current = sendOperations[clientRequestID],
+              current.runtime === operation.runtime,
+              current.request == operation.request,
+              current.didBeginDispatch == false,
+              current.callerObservedEnqueue else { return }
+        sendOperations.removeValue(forKey: clientRequestID)
+        sendTasks.removeValue(forKey: clientRequestID)?.cancel()
+        releaseReservation(operation.reservationKey, clientRequestID: clientRequestID)
+        invalidatedComposerOrdinals[operation.request.conversationID] = streamSnapshotOrdinal
+        await operation.runtime.sendReconciliation.markOperationFailed(
+            clientRequestID: clientRequestID
+        )
+        await publishComposerAuthority(
+            for: operation.request.conversationID,
+            runtime: operation.runtime
+        )
+    }
+
+    private func finishSendResponse(
+        _ result: RemoteMessageSendResult,
+        clientRequestID: String,
+        operation: SendOperation
+    ) async {
+        guard let current = sendOperations[clientRequestID],
+              current.runtime === operation.runtime,
+              current.request == operation.request else { return }
+
+        invalidatedComposerOrdinals[operation.request.conversationID] = streamSnapshotOrdinal
+        await publishComposerAuthority(
+            for: operation.request.conversationID,
+            runtime: operation.runtime
+        )
+
+        switch result {
+        case .accepted(let epoch) where epoch != operation.request.expectedInputEpoch:
+            await operation.runtime.sendReconciliation.apply(
+                .uncertain,
+                clientRequestID: clientRequestID
+            )
+        case .accepted, .duplicate, .uncertain:
+            await operation.runtime.sendReconciliation.apply(
+                result,
+                clientRequestID: clientRequestID
+            )
+        case .rejected(let reason):
+            await operation.runtime.sendReconciliation.apply(
+                result,
+                clientRequestID: clientRequestID
+            )
+            releaseReservation(operation.reservationKey, clientRequestID: clientRequestID)
+            if reason == .sendScopeDenied {
+                sendScopeDeniedByHost = true
+                await publishComposerAuthorities()
+            }
+        }
+
+        sendOperations.removeValue(forKey: clientRequestID)
+        sendTasks.removeValue(forKey: clientRequestID)
+        await pruneFinishedSendState(
+            conversationID: operation.request.conversationID,
+            runtime: operation.runtime
+        )
+        await removeInactiveRuntimeIfSafe(
+            conversationID: operation.request.conversationID,
+            runtime: operation.runtime
+        )
+    }
+
+    private func finishSendFailure(
+        _ error: Error,
+        clientRequestID: String,
+        operation: SendOperation
+    ) async {
+        guard let current = sendOperations[clientRequestID],
+              current.runtime === operation.runtime,
+              current.request == operation.request else { return }
+
+        let failure = (error as? GatewayFailure) ?? .network
+        invalidatedComposerOrdinals[operation.request.conversationID] = streamSnapshotOrdinal
+        await publishComposerAuthority(
+            for: operation.request.conversationID,
+            runtime: operation.runtime
+        )
+        switch failure {
+        case .unauthenticated, .authorizationDenied:
+            if await operation.runtime.sendReconciliation.discardNotDelivered(
+                clientRequestID: clientRequestID
+            ) {
+                retireRequestID(clientRequestID)
+            }
+            releaseReservation(operation.reservationKey, clientRequestID: clientRequestID)
+        case .protocolMismatch:
+            await operation.runtime.sendReconciliation.apply(
+                .uncertain,
+                clientRequestID: clientRequestID
+            )
+        case .network, .server:
+            await operation.runtime.sendReconciliation.apply(
+                .uncertain,
+                clientRequestID: clientRequestID
+            )
+        case .rateLimited, .http, .operationCompatibility, .invalidResponse:
+            await operation.runtime.sendReconciliation.markOperationFailed(
+                clientRequestID: clientRequestID
+            )
+            releaseReservation(operation.reservationKey, clientRequestID: clientRequestID)
+            invalidatedComposerOrdinals[operation.request.conversationID] = streamSnapshotOrdinal
+            await publishComposerAuthority(
+                for: operation.request.conversationID,
+                runtime: operation.runtime
+            )
+        }
+
+        sendOperations.removeValue(forKey: clientRequestID)
+        sendTasks.removeValue(forKey: clientRequestID)
+
+        switch failure {
+        case .unauthenticated, .authorizationDenied, .protocolMismatch:
+            await terminateConnectionAfterSendFailure(failure)
+        case .network, .rateLimited, .server, .http,
+             .operationCompatibility, .invalidResponse:
+            break
+        }
+        await removeInactiveRuntimeIfSafe(
+            conversationID: operation.request.conversationID,
+            runtime: operation.runtime
+        )
+    }
+
+    private func releaseReservation(
+        _ key: ConversationSendReservationKey,
+        clientRequestID: String
+    ) {
+        guard reservations[key] == clientRequestID else { return }
+        reservations.removeValue(forKey: key)
+    }
+
+    private func terminateConnectionAfterSendFailure(_ failure: GatewayFailure) async {
+        let previousTask = connectionTask
+        previousTask?.cancel()
+        connectionTask = nil
+        connectionLoopID = nil
+        state.connectionGeneration &+= 1
+        authoritativeSessionSnapshot = nil
+        await closeAttemptResources()
+        await previousTask?.value
+        await applyTerminalFailure(failure, generation: state.connectionGeneration)
+    }
+
+    private func reconcileAuthoritativeSnapshot(
+        _ snapshot: CompatibleSessionListSnapshot
+    ) async {
+        let preDispatchRequestIDs = sendOperations.compactMap { requestID, operation in
+            operation.didBeginDispatch ? nil : requestID
+        }
+        for requestID in preDispatchRequestIDs {
+            guard let operation = sendOperations[requestID] else { continue }
+            if operation.callerObservedEnqueue {
+                await settleCommittedBeforeDispatch(
+                    clientRequestID: requestID,
+                    operation: operation
+                )
+            } else {
+                var invalidated = operation
+                invalidated.authorityInvalidatedBeforeDispatch = true
+                sendOperations[requestID] = invalidated
+                releaseReservation(
+                    operation.reservationKey,
+                    clientRequestID: requestID
+                )
+            }
+        }
+
+        var seenReconciliations: Set<ObjectIdentifier> = []
+        for runtime in Array(conversationRuntimes.values) + Array(retainedConversationRuntimes.values) {
+            let identifier = ObjectIdentifier(runtime.sendReconciliation)
+            guard seenReconciliations.insert(identifier).inserted else { continue }
+            await runtime.sendReconciliation.projectionDidChange(to: snapshot.projectionRunID)
+        }
+
+        let staleReservations = reservations.compactMap { key, requestID -> (ConversationSendReservationKey, String)? in
+            guard let summary = snapshot.conversations.first(where: {
+                $0.conversationID == key.conversationID
+            }), snapshot.projectionRunID == key.projectionRunID,
+                  case .openPrompt(let epoch) = summary.inputAvailability,
+                  epoch == key.inputEpoch else {
+                return (key, requestID)
+            }
+            return nil
+        }
+        for (key, requestID) in staleReservations {
+            releaseReservation(key, clientRequestID: requestID)
+        }
+
+        for (conversationID, runtime) in conversationRuntimes {
+            await pruneFinishedSendState(conversationID: conversationID, runtime: runtime)
+        }
+        for (conversationID, runtime) in retainedConversationRuntimes {
+            await pruneFinishedSendState(conversationID: conversationID, runtime: runtime)
+        }
+        for key in reservations.keys where key.projectionRunID == snapshot.projectionRunID {
+            invalidatedComposerOrdinals[key.conversationID] = streamSnapshotOrdinal
+        }
+    }
+
+    private func publishComposerAuthorities() async {
+        for (conversationID, runtime) in conversationRuntimes {
+            await publishComposerAuthority(for: conversationID, runtime: runtime)
+        }
+        for (conversationID, runtime) in retainedConversationRuntimes {
+            await publishComposerAuthority(for: conversationID, runtime: runtime)
+        }
+    }
+
+    private func publishComposerAuthority(
+        for conversationID: RemoteConversationID,
+        runtime: ConversationRuntime
+    ) async {
+        guard activeConversationIDs.contains(conversationID) else {
+            await runtime.invalidateComposerAuthority(.conversationNotOpen)
+            return
+        }
+        guard state.phase == .live,
+              let snapshot = authoritativeSessionSnapshot else {
+            await runtime.invalidateComposerAuthority(.coordinatorNotLive)
+            return
+        }
+        guard let summary = snapshot.conversations.first(where: {
+            $0.conversationID == conversationID
+        }) else {
+            await runtime.invalidateComposerAuthority(.conversationMissing)
+            return
+        }
+        if case .openPrompt(let epoch) = summary.inputAvailability {
+            let reservationKey = ConversationSendReservationKey(
+                conversationID: conversationID,
+                projectionRunID: snapshot.projectionRunID,
+                inputEpoch: epoch
+            )
+            if reservations[reservationKey] != nil {
+                await runtime.applyComposerSnapshot(CoordinatorComposerSnapshot(
+                    stamp: nil,
+                    inputAvailability: summary.inputAvailability,
+                    hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
+                    coordinatorIsLive: true,
+                    gateFailure: .sendAlreadyReserved
+                ))
+                return
+            }
+        }
+        if invalidatedComposerOrdinals[conversationID] == streamSnapshotOrdinal {
+            await runtime.applyComposerSnapshot(CoordinatorComposerSnapshot(
+                stamp: nil,
+                inputAvailability: summary.inputAvailability,
+                hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
+                coordinatorIsLive: true,
+                gateFailure: .staleComposerAuthority
+            ))
+            return
+        }
+
+        let stamp: ConversationComposerStamp?
+        if case .openPrompt(let epoch) = summary.inputAvailability {
+            stamp = ConversationComposerStamp(
+                connectionGeneration: state.connectionGeneration,
+                streamSnapshotOrdinal: streamSnapshotOrdinal,
+                projectionRunID: snapshot.projectionRunID,
+                projectionGeneration: summary.projectionGeneration,
+                latestSequence: summary.latestSequence,
+                inputEpoch: epoch
+            )
+        } else {
+            stamp = nil
+        }
+        await runtime.applyComposerSnapshot(CoordinatorComposerSnapshot(
+            stamp: stamp,
+            inputAvailability: summary.inputAvailability,
+            hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
+            coordinatorIsLive: true,
+            gateFailure: nil
+        ))
+    }
+
+    private func pruneFinishedSendState(
+        conversationID: RemoteConversationID,
+        runtime: ConversationRuntime
+    ) async {
+        let reconciliation = await runtime.sendReconciliation.currentState()
+        let statesByID = Dictionary(uniqueKeysWithValues: reconciliation.records.map {
+            ($0.clientRequestID, $0.deliveryState)
+        })
+        let releasable = reservations.compactMap { key, requestID -> (ConversationSendReservationKey, String)? in
+            guard key.conversationID == conversationID,
+                  let deliveryState = statesByID[requestID] else { return nil }
+            switch deliveryState {
+            case .confirmed, .rejected, .operationFailed, .deliveryUnconfirmed:
+                return (key, requestID)
+            case .pending, .uncertain:
+                return nil
+            }
+        }
+        for (key, requestID) in releasable {
+            releaseReservation(key, clientRequestID: requestID)
+            if let snapshot = authoritativeSessionSnapshot,
+               snapshot.projectionRunID == key.projectionRunID,
+               let summary = snapshot.conversations.first(where: {
+                   $0.conversationID == conversationID
+               }),
+               case .openPrompt(let epoch) = summary.inputAvailability,
+               epoch == key.inputEpoch {
+                invalidatedComposerOrdinals[conversationID] = streamSnapshotOrdinal
+            }
+        }
+        if releasable.isEmpty == false {
+            await publishComposerAuthority(for: conversationID, runtime: runtime)
+        }
+    }
+
+    private func removeInactiveRuntimeIfSafe(
+        conversationID: RemoteConversationID,
+        runtime: ConversationRuntime
+    ) async {
+        guard activeConversationIDs.contains(conversationID) == false,
+              retainedConversationRuntimes[conversationID] === runtime else { return }
+        let reconciliation = await runtime.sendReconciliation.currentState()
+        let hasReservation = reservations.keys.contains { $0.conversationID == conversationID }
+        let hasOperation = sendOperations.values.contains {
+            $0.request.conversationID == conversationID && $0.runtime === runtime
+        }
+        guard reconciliation.records.isEmpty, !hasReservation, !hasOperation else { return }
+        retainedConversationRuntimes.removeValue(forKey: conversationID)
+        await runtime.sendReconciliation.finish()
+    }
+
     private func failCurrentAttempt(
         _ failure: GatewayFailure,
         generation: UInt64
@@ -730,6 +1570,7 @@ public actor ConnectionCoordinator {
         _ failure: GatewayFailure,
         generation: UInt64
     ) async {
+        authoritativeSessionSnapshot = nil
         state.consecutiveFailureCount = 0
         switch failure {
         case .unauthenticated:
@@ -743,6 +1584,7 @@ public actor ConnectionCoordinator {
             state.phase = .failed(failure)
         }
         _ = await sessionsRuntime.failTerminally(failure, generation: generation)
+        await publishComposerAuthorities()
         await publish()
     }
 

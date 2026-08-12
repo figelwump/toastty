@@ -155,6 +155,292 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertTrue(subject.transcriptPresentation.isLoadingOlder)
     }
 
+    func testEnqueuedSendLatchesReservationUntilFreshCoordinatorAuthority() async {
+        let recorder = SendActionRecorder(outcomes: [
+            .enqueued(clientRequestID: "request-1"),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            send: { text, stamp in
+                await recorder.send(text: text, stamp: stamp)
+            }
+        )
+        let authority = enabledComposerAuthority()
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live,
+            composerAuthority: authority
+        ))
+
+        let outcome = await subject.send("enqueue me")
+        XCTAssertEqual(outcome, .enqueued(clientRequestID: "request-1"))
+        XCTAssertEqual(subject.lastSendGateFailure, .sendAlreadyReserved)
+        let composer = ToasttyComposerPresentation.make(
+            agentDisplayName: "Codex",
+            authority: subject.presentedComposerAuthority
+        )
+        XCTAssertEqual(composer.gate, .disabled(.prompt(.sending)))
+        XCTAssertFalse(composer.gate.allowsInput)
+        XCTAssertFalse(composer.canSubmit(draft: "another message"))
+
+        subject.consumeSendReconciliation(.init(records: [
+            sendRecord("request-1", .pending(.accepted)),
+        ]))
+        XCTAssertEqual(subject.lastSendGateFailure, .sendAlreadyReserved)
+        XCTAssertEqual(subject.transcriptPresentation.sendItems.map(\.id), ["request-1"])
+        XCTAssertEqual(
+            subject.transcriptPresentation.sendItems.first?.content,
+            .optimistic(response: .accepted)
+        )
+
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live,
+            composerAuthority: authority
+        ))
+        XCTAssertEqual(subject.lastSendGateFailure, .sendAlreadyReserved)
+
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live,
+            composerAuthority: enabledComposerAuthority(streamSnapshotOrdinal: 4)
+        ))
+        XCTAssertNil(subject.lastSendGateFailure)
+        XCTAssertNil(subject.presentedComposerAuthority.gateFailure)
+        XCTAssertEqual(subject.transcriptPresentation.sendItems.map(\.id), ["request-1"])
+        let calls = await recorder.calls()
+        XCTAssertEqual(calls.map(\.text), ["enqueue me"])
+        XCTAssertEqual(calls.map(\.stamp), [authority.stamp!])
+    }
+
+    func testMissingStampDoesNotInvokeSendAndPublishesDomainGateFailure() async {
+        let recorder = SendActionRecorder(outcomes: [])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            send: { text, stamp in
+                await recorder.send(text: text, stamp: stamp)
+            }
+        )
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live,
+            composerAuthority: ConversationComposerAuthority(
+                gateFailure: .deviceSendScopeDenied
+            )
+        ))
+
+        let outcome = await subject.send("draft remains outside the controller")
+
+        XCTAssertEqual(outcome, .notEnqueued(.deviceSendScopeDenied))
+        XCTAssertEqual(subject.lastSendGateFailure, .deviceSendScopeDenied)
+        let calls = await recorder.calls()
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+    func testNewerRuntimeStateClearsLocalFailureWhenAuthorityIsUnchanged() async {
+        let recorder = SendActionRecorder(outcomes: [
+            .notEnqueued(.staleComposerAuthority),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            send: { text, stamp in
+                await recorder.send(text: text, stamp: stamp)
+            }
+        )
+        let authority = enabledComposerAuthority()
+        let initialState = state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live,
+            composerAuthority: authority
+        )
+        subject.consume(initialState)
+        _ = await subject.send("stale send")
+        XCTAssertEqual(subject.lastSendGateFailure, .staleComposerAuthority)
+
+        subject.consume(initialState)
+        XCTAssertEqual(
+            subject.lastSendGateFailure,
+            .staleComposerAuthority,
+            "An identical replay is not evidence that the local failure is stale"
+        )
+
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1), event(2)],
+            phase: .live,
+            composerAuthority: authority
+        ))
+
+        XCTAssertNil(subject.lastSendGateFailure)
+        XCTAssertNil(subject.presentedComposerAuthority.gateFailure)
+    }
+
+    func testFailureReturningAfterNewerRuntimeStateDoesNotRelatchStaleFeedback() async {
+        let sendAction = SuspendedSendAction()
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            send: { text, stamp in
+                await sendAction.send(text: text, stamp: stamp)
+            }
+        )
+        let authority = enabledComposerAuthority()
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live,
+            composerAuthority: authority
+        ))
+
+        let sendTask = Task { await subject.send("stale send") }
+        await sendAction.waitUntilStarted()
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1), event(2)],
+            phase: .live,
+            composerAuthority: authority
+        ))
+        await sendAction.finish(.notEnqueued(.staleComposerAuthority))
+
+        let outcome = await sendTask.value
+        XCTAssertEqual(outcome, .notEnqueued(.staleComposerAuthority))
+        XCTAssertNil(subject.lastSendGateFailure)
+    }
+
+    func testEditingClearsOnlyTransientLocalSendFeedback() async {
+        let recorder = SendActionRecorder(outcomes: [
+            .notEnqueued(.cancelled),
+            .notEnqueued(.tooManyUnresolvedSends),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            send: { text, stamp in
+                await recorder.send(text: text, stamp: stamp)
+            }
+        )
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live,
+            composerAuthority: enabledComposerAuthority()
+        ))
+
+        _ = await subject.send("cancel")
+        subject.draftDidChange()
+        XCTAssertNil(subject.lastSendGateFailure)
+
+        _ = await subject.send("capacity")
+        subject.draftDidChange()
+        XCTAssertEqual(subject.lastSendGateFailure, .tooManyUnresolvedSends)
+    }
+
+    func testReconciliationProjectionCoversPendingDuplicateConfirmationAndReceipts() {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live
+        ))
+
+        subject.consumeSendReconciliation(.init(records: [
+            sendRecord("pending", .pending(.awaitingResponse)),
+            sendRecord("duplicate", .pending(.duplicate)),
+            sendRecord("confirmed", .confirmed(sequence: 2)),
+            sendRecord("rejected", .rejected(reason: .epochMismatch)),
+            sendRecord("uncertain", .uncertain),
+            sendRecord("operation-failed", .operationFailed),
+            sendRecord("unconfirmed", .deliveryUnconfirmed),
+        ]))
+
+        XCTAssertEqual(
+            subject.transcriptPresentation.sendItems.map(\.id),
+            ["pending", "duplicate", "rejected", "uncertain", "operation-failed", "unconfirmed"]
+        )
+        XCTAssertEqual(
+            subject.transcriptPresentation.sendItems.map(\.content),
+            [
+                .optimistic(response: .awaitingResponse),
+                .optimistic(response: .duplicate),
+                .receipt(.init(kind: .rejected(.epochMismatch))),
+                .receipt(.init(kind: .uncertain)),
+                .receipt(.init(kind: .operationFailed)),
+                .receipt(.init(kind: .deliveryUnconfirmed)),
+            ]
+        )
+    }
+
+    func testReconciliationChangeClearsCapacityGateFeedback() async {
+        let recorder = SendActionRecorder(outcomes: [
+            .notEnqueued(.tooManyUnresolvedSends),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            send: { text, stamp in
+                await recorder.send(text: text, stamp: stamp)
+            }
+        )
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live,
+            composerAuthority: enabledComposerAuthority()
+        ))
+
+        _ = await subject.send("capacity")
+        XCTAssertEqual(subject.lastSendGateFailure, .tooManyUnresolvedSends)
+        subject.consumeSendReconciliation(.init(records: [
+            sendRecord("finished", .confirmed(sequence: 2)),
+        ]))
+
+        XCTAssertNil(subject.lastSendGateFailure)
+        XCTAssertNil(subject.presentedComposerAuthority.gateFailure)
+    }
+
+    func testDismissReceiptDelegatesOnlyTheSelectedRequestID() async {
+        let recorder = ReceiptDismissRecorder()
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            dismissSendReceipt: { await recorder.dismiss($0) }
+        )
+
+        await subject.dismissSendReceipt("receipt-2")
+
+        let dismissed = await recorder.requestIDs()
+        XCTAssertEqual(dismissed, ["receipt-2"])
+    }
+
+    func testStopCancelsRuntimeAndReconciliationObservers() async {
+        let runtime = CancellableLiveConversationRuntime(
+            initialState: state(runID: runID(1), events: [event(1)], phase: .live)
+        )
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: runtime
+        )
+
+        await subject.start()
+        await runtime.waitUntilBothStreamsObserved()
+        subject.stop()
+        await runtime.waitUntilBothStreamsTerminated()
+
+        let terminations = await runtime.terminationCount()
+        XCTAssertEqual(terminations, 2)
+    }
+
     func testFiveThousandRowControllerClassifiesTwoHundredRowPrependAndAppendWithinSimulatorBudget() {
         let subject = LiveConversationController(
             conversationID: conversationID.rawValue,
@@ -212,7 +498,8 @@ final class LiveConversationControllerTests: XCTestCase {
         oldestObservedSequence: UInt64? = nil,
         firstAvailableSequence: UInt64? = 1,
         isLoadingOlder: Bool = false,
-        phase: ConversationRuntimePhase = .catchingUp
+        phase: ConversationRuntimePhase = .catchingUp,
+        composerAuthority: ConversationComposerAuthority = ConversationComposerAuthority()
     ) -> ConversationRuntime.State {
         ConversationRuntime.State(
             conversationID: conversationID,
@@ -231,6 +518,7 @@ final class LiveConversationControllerTests: XCTestCase {
             historyTruncated: false,
             isLoadingOlder: isLoadingOlder,
             phase: phase,
+            composerAuthority: composerAuthority,
             sendReconciliation: SendReconciliation()
         )
     }
@@ -260,6 +548,38 @@ final class LiveConversationControllerTests: XCTestCase {
             rawValue: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         )
     }
+
+    private func enabledComposerAuthority(
+        streamSnapshotOrdinal: UInt64 = 3
+    ) -> ConversationComposerAuthority {
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+            counter: 9
+        )
+        return ConversationComposerAuthority(
+            stamp: ConversationComposerStamp(
+                connectionGeneration: 4,
+                streamSnapshotOrdinal: streamSnapshotOrdinal,
+                projectionRunID: runID(1),
+                projectionGeneration: 7,
+                latestSequence: 1,
+                inputEpoch: epoch
+            ),
+            inputAvailability: .openPrompt(epoch: epoch)
+        )
+    }
+
+    private func sendRecord(
+        _ requestID: String,
+        _ deliveryState: SendDeliveryState
+    ) -> SendReconciliationRecord {
+        SendReconciliationRecord(
+            clientRequestID: requestID,
+            text: "text for \(requestID)",
+            projectionRunID: runID(1),
+            deliveryState: deliveryState
+        )
+    }
 }
 
 private actor LoadOlderRecorder {
@@ -267,4 +587,129 @@ private actor LoadOlderRecorder {
 
     func record() { value += 1 }
     func count() -> Int { value }
+}
+
+private actor SendActionRecorder {
+    struct Call: Equatable {
+        var text: String
+        var stamp: ConversationComposerStamp
+    }
+
+    private var outcomes: [ConversationSendOutcome]
+    private var recordedCalls: [Call] = []
+
+    init(outcomes: [ConversationSendOutcome]) {
+        self.outcomes = outcomes
+    }
+
+    func send(
+        text: String,
+        stamp: ConversationComposerStamp
+    ) -> ConversationSendOutcome {
+        recordedCalls.append(Call(text: text, stamp: stamp))
+        return outcomes.isEmpty ? .notEnqueued(.conversationNotOpen) : outcomes.removeFirst()
+    }
+
+    func calls() -> [Call] { recordedCalls }
+}
+
+private actor SuspendedSendAction {
+    private var didStart = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var outcomeContinuation: CheckedContinuation<ConversationSendOutcome, Never>?
+
+    func send(
+        text: String,
+        stamp: ConversationComposerStamp
+    ) async -> ConversationSendOutcome {
+        didStart = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        return await withCheckedContinuation { outcomeContinuation = $0 }
+    }
+
+    func waitUntilStarted() async {
+        guard didStart == false else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func finish(_ outcome: ConversationSendOutcome) {
+        outcomeContinuation?.resume(returning: outcome)
+        outcomeContinuation = nil
+    }
+}
+
+private actor ReceiptDismissRecorder {
+    private var values: [String] = []
+
+    func dismiss(_ requestID: String) { values.append(requestID) }
+    func requestIDs() -> [String] { values }
+}
+
+private actor CancellableLiveConversationRuntime: LiveConversationRuntime {
+    private let initialState: ConversationRuntime.State
+    private var streamStarts = 0
+    private var streamTerminations = 0
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var terminationWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(initialState: ConversationRuntime.State) {
+        self.initialState = initialState
+    }
+
+    func currentState() -> ConversationRuntime.State { initialState }
+
+    func states() -> AsyncStream<ConversationRuntime.State> {
+        makeStream()
+    }
+
+    func sendReconciliationStates() -> AsyncStream<SendReconciliationState> {
+        let stream = AsyncStream<SendReconciliationState> { continuation in
+            Task { await self.recordStart() }
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.recordTermination() }
+            }
+        }
+        return stream
+    }
+
+    private func makeStream() -> AsyncStream<ConversationRuntime.State> {
+        AsyncStream { continuation in
+            Task { await self.recordStart() }
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.recordTermination() }
+            }
+        }
+    }
+
+    private func recordStart() {
+        streamStarts += 1
+        if streamStarts == 2 {
+            let waiters = startWaiters
+            startWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    private func recordTermination() {
+        streamTerminations += 1
+        if streamTerminations == 2 {
+            let waiters = terminationWaiters
+            terminationWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilBothStreamsObserved() async {
+        guard streamStarts < 2 else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func waitUntilBothStreamsTerminated() async {
+        guard streamTerminations < 2 else { return }
+        await withCheckedContinuation { terminationWaiters.append($0) }
+    }
+
+    func terminationCount() -> Int { streamTerminations }
 }

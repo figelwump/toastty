@@ -153,6 +153,8 @@ set_default_xcodebuild_args() {
       ToasttyMobileApp
       -configuration
       Debug
+      -parallel-testing-enabled
+      NO
     )
     return
   fi

@@ -10,6 +10,8 @@ enum ToasttyMobileFixtureScenario: String, Equatable, Sendable {
     case transcriptStale = "transcript-stale"
     case transcriptTruncated = "transcript-truncated"
     case transcriptPaging = "transcript-paging"
+    case gatedSend = "gated-send"
+    case gatedSendReceipt = "gated-send-receipt"
     case unpaired
     case cameraDenied = "camera-denied"
     case scannerUnsupported = "scanner-unsupported"
@@ -51,7 +53,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     var initialConnectionState: MobileConnectionState {
         switch fixtureScenario {
         case .home, .transcriptPerformance, .transcriptResyncing,
-             .transcriptStale, .transcriptTruncated, .transcriptPaging:
+             .transcriptStale, .transcriptTruncated, .transcriptPaging,
+             .gatedSend, .gatedSendReceipt:
             .live
         case .unpaired, .cameraDenied, .scannerUnsupported,
              .pairingFailure, .pairingPrivacy, nil:
@@ -71,13 +74,15 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 scanner = FixturePairingScanner(availability: .unsupported)
             case .home, .transcriptPerformance, .transcriptResyncing,
                  .transcriptStale, .transcriptTruncated, .transcriptPaging,
+                 .gatedSend, .gatedSendReceipt,
                  .unpaired, .pairingFailure, .pairingPrivacy:
                 scanner = FixturePairingScanner()
             }
             let usesPairedFixture: Bool
             switch fixtureScenario {
             case .home, .transcriptPerformance, .transcriptResyncing,
-                 .transcriptStale, .transcriptTruncated, .transcriptPaging:
+                 .transcriptStale, .transcriptTruncated, .transcriptPaging,
+                 .gatedSend, .gatedSendReceipt:
                 usesPairedFixture = true
             case .unpaired, .cameraDenied, .scannerUnsupported,
                  .pairingFailure, .pairingPrivacy:

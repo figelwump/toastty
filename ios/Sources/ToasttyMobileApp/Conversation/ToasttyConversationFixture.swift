@@ -159,6 +159,20 @@ enum ToasttyConversationFixture {
         )
     }
 
+    static func gatedSendPresentation(
+        for conversationID: UUID,
+        sendItems: [ToasttySendPresentationItem]
+    ) -> ToasttyConversationPresentationState {
+        let fixture = presentation(for: conversationID)
+        return ToasttyConversationPresentationState(
+            rows: fixture.rows.filter { $0.id.sequence != 14 },
+            sendItems: sendItems,
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+
     static func truncatedPresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {

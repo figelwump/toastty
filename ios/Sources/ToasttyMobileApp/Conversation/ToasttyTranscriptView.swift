@@ -4,6 +4,7 @@ import SwiftUI
 struct ToasttyTranscriptView: View {
     let state: ToasttyConversationPresentationState
     let loadOlder: () -> Void
+    let dismissSendReceipt: (String) -> Void
 
     @State private var expandedMessageIDs: Set<ToasttyTranscriptRowID> = []
     @State private var expandedToolBatchIDs: Set<ToasttyTranscriptRowID> = []
@@ -14,10 +15,12 @@ struct ToasttyTranscriptView: View {
 
     init(
         state: ToasttyConversationPresentationState,
-        loadOlder: @escaping () -> Void = {}
+        loadOlder: @escaping () -> Void = {},
+        dismissSendReceipt: @escaping (String) -> Void = { _ in }
     ) {
         self.state = state
         self.loadOlder = loadOlder
+        self.dismissSendReceipt = dismissSendReceipt
     }
 
     var body: some View {
@@ -39,10 +42,18 @@ struct ToasttyTranscriptView: View {
 
                         ForEach(state.blocks) { block in
                             blockView(block)
-                                .id(block.id)
+                                .id(ToasttyConversationScrollTarget.transcript(block.id))
                         }
 
-                        if state.rows.isEmpty, state.phase != .loading {
+                        ForEach(state.sendItems) { item in
+                            ToasttySendTailItemView(
+                                item: item,
+                                dismiss: { dismissSendReceipt(item.clientRequestID) }
+                            )
+                            .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
+                        }
+
+                        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading {
                             ContentUnavailableView(
                                 "No transcript yet",
                                 systemImage: "text.bubble",
@@ -88,13 +99,16 @@ struct ToasttyTranscriptView: View {
                     }
                 }
                 .onScrollTargetVisibilityChange(
-                    idType: ToasttyTranscriptRowID.self,
+                    idType: ToasttyConversationScrollTarget.self,
                     threshold: 0.12
                 ) { ids in
-                    visibleBlockIDs = ids
+                    visibleBlockIDs = ids.compactMap { id in
+                        guard case .transcript(let rowID) = id else { return nil }
+                        return rowID
+                    }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if isAtLiveEdge == false, let target = state.blocks.last?.id {
+                    if isAtLiveEdge == false, let target = lastScrollTarget {
                         HStack {
                             Spacer(minLength: 0)
                             Button {
@@ -123,19 +137,24 @@ struct ToasttyTranscriptView: View {
                     guard Task.isCancelled == false else { return }
                     switch state.revision {
                     case .initial, .rebuilt:
-                        if let target = state.blocks.last?.id {
+                        if let target = lastScrollTarget {
                             proxy.scrollTo(target, anchor: .bottom)
                         }
                     case .appended:
-                        if followsLiveEdge, let target = state.blocks.last?.id {
+                        if followsLiveEdge, let target = lastScrollTarget {
                             proxy.scrollTo(target, anchor: .bottom)
                         }
                     case .prepended:
                         if let anchor = state.prependAnchorID ?? visibleBlockIDs.first {
-                            proxy.scrollTo(anchor, anchor: .top)
+                            proxy.scrollTo(
+                                ToasttyConversationScrollTarget.transcript(anchor),
+                                anchor: .top
+                            )
                         }
                     case .metadataOnly:
-                        break
+                        if followsLiveEdge, let target = lastScrollTarget {
+                            proxy.scrollTo(target, anchor: .bottom)
+                        }
                     }
                 }
             }
@@ -234,10 +253,18 @@ struct ToasttyTranscriptView: View {
     private var scrollChangeKey: ScrollChangeKey {
         ScrollChangeKey(
             revision: state.revision,
-            count: state.blocks.count,
+            blockCount: state.blocks.count,
+            sendItems: state.sendItems,
             firstID: state.blocks.first?.id,
-            lastID: state.blocks.last?.id
+            lastTarget: lastScrollTarget
         )
+    }
+
+    private var lastScrollTarget: ToasttyConversationScrollTarget? {
+        if let requestID = state.sendItems.last?.clientRequestID {
+            return .send(requestID)
+        }
+        return state.blocks.last.map { .transcript($0.id) }
     }
 
     private func toggle(
@@ -262,11 +289,109 @@ private struct TranscriptScrollMetrics: Equatable {
     }
 }
 
+private enum ToasttyConversationScrollTarget: Hashable {
+    case transcript(ToasttyTranscriptRowID)
+    case send(String)
+}
+
 private struct ScrollChangeKey: Equatable {
     let revision: ToasttyTranscriptRevision
-    let count: Int
+    let blockCount: Int
+    let sendItems: [ToasttySendPresentationItem]
     let firstID: ToasttyTranscriptRowID?
-    let lastID: ToasttyTranscriptRowID?
+    let lastTarget: ToasttyConversationScrollTarget?
+}
+
+private struct ToasttySendTailItemView: View {
+    let item: ToasttySendPresentationItem
+    let dismiss: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        switch item.content {
+        case .optimistic:
+            optimisticBubble
+        case .receipt(let receipt):
+            receiptCard(receipt)
+        }
+    }
+
+    private var optimisticBubble: some View {
+        VStack(alignment: .trailing, spacing: 7) {
+            Text(item.text)
+                .font(.body)
+                .foregroundStyle(Color(red: 240 / 255, green: 232 / 255, blue: 216 / 255))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(ToasttyDesignTokens.amberText)
+                Text("Sending…")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.amberText)
+            }
+        }
+        .padding(12)
+        .background(Color(red: 58 / 255, green: 46 / 255, blue: 20 / 255))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color(red: 85 / 255, green: 67 / 255, blue: 29 / 255))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .frame(maxWidth: 340, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(item.text), Sending")
+        .accessibilityIdentifier("toastty-mobile-send-optimistic-\(item.clientRequestID)")
+    }
+
+    private func receiptCard(
+        _ receipt: ToasttySendReceiptPresentation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(ToasttyDesignTokens.red)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(receipt.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(receipt.detail)
+                        .font(.caption)
+                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 44, height: 44)
+                }
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .accessibilityLabel("Dismiss delivery receipt")
+                .accessibilityIdentifier(
+                    "toastty-mobile-send-receipt-dismiss-\(item.clientRequestID)"
+                )
+            }
+
+            Text(item.text)
+                .font(.caption.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .lineLimit(3)
+                .padding(.leading, 28)
+        }
+        .padding(12)
+        .background(ToasttyDesignTokens.raisedSurface)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(ToasttyDesignTokens.red.opacity(0.5))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("toastty-mobile-send-receipt-\(item.clientRequestID)")
+    }
 }
 
 private struct ToasttyTranscriptRowView: View {

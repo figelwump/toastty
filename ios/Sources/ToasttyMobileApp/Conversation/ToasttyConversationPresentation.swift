@@ -82,6 +82,7 @@ enum ToasttyTranscriptRevision: Equatable, Sendable {
 struct ToasttyConversationPresentationState: Equatable, Sendable {
     let rows: [ToasttyTranscriptRow]
     let blocks: [ToasttyTranscriptBlock]
+    let sendItems: [ToasttySendPresentationItem]
     let phase: ToasttyConversationPresentationPhase
     let revision: ToasttyTranscriptRevision
     let historyTruncated: Bool
@@ -91,6 +92,7 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
 
     init(
         rows: [ToasttyTranscriptRow],
+        sendItems: [ToasttySendPresentationItem] = [],
         phase: ToasttyConversationPresentationPhase,
         revision: ToasttyTranscriptRevision,
         historyTruncated: Bool,
@@ -100,6 +102,7 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
     ) {
         self.rows = rows
         blocks = ToasttyTranscriptBlock.group(rows)
+        self.sendItems = sendItems
         self.phase = phase
         self.revision = revision
         self.historyTruncated = historyTruncated
@@ -124,6 +127,7 @@ enum ToasttyConversationPresentationAdapter {
         phase: ToasttyConversationPresentationPhase,
         revision: ToasttyTranscriptRevision,
         historyTruncated: Bool,
+        sendItems: [ToasttySendPresentationItem] = [],
         hasOlder: Bool = false,
         isLoadingOlder: Bool = false,
         prependAnchorID: ToasttyTranscriptRowID? = nil
@@ -210,6 +214,7 @@ enum ToasttyConversationPresentationAdapter {
 
         return ToasttyConversationPresentationState(
             rows: rows,
+            sendItems: sendItems,
             phase: phase,
             revision: revision,
             historyTruncated: historyTruncated,

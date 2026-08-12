@@ -85,6 +85,33 @@ final class AppSessionControllerTests: XCTestCase {
         )
     }
 
+    func testRestorationInstallsStoredDeviceScopesBeforeStartingLiveRuntime() async throws {
+        let credential = try Self.credential(deviceName: "Scoped iPhone")
+        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        var liveSpy: AppLiveSessionsSpy?
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: vault,
+            pairingClient: FixturePairingClient(behavior: .success),
+            scanner: FixturePairingScanner(),
+            deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home,
+            initialConnectionState: .offline,
+            liveSessionsFactory: { _, _, _, _, _ in
+                let spy = AppLiveSessionsSpy()
+                liveSpy = spy
+                return spy
+            }
+        )
+
+        await controller.restoreIfNeeded()
+
+        let spy = try XCTUnwrap(liveSpy)
+        XCTAssertEqual(spy.scopeUpdates, [[.read, .send]])
+        XCTAssertEqual(spy.startCount, 1)
+        XCTAssertEqual(controller.state, .paired(.reconnecting))
+    }
+
     func testOuterCancelKeepsInFlightPairingControllerAliveUntilCredentialPersists() async throws {
         let gate = SessionPairingResponseGate()
         let vault = FixtureAppCredentialVault()
@@ -182,6 +209,24 @@ private actor AttemptRecorder {
     }
 
     func attempts() -> Int { count }
+}
+
+@MainActor
+private final class AppLiveSessionsSpy: AppLiveSessionsControlling {
+    var projectionRunID: String?
+    var projectionGeneration: UInt64?
+    var activeConversationCursor: UInt64?
+    var activeConversationController: LiveConversationController?
+    private(set) var scopeUpdates: [[RemoteDeviceScope]] = []
+    private(set) var startCount = 0
+
+    func start() async { startCount += 1 }
+    func foreground() async {}
+    func background() async {}
+    func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
+        scopeUpdates.append(scopes)
+    }
+    func stopObserving() {}
 }
 
 private actor ScriptedRestorationVault: AppSessionCredentialVault {

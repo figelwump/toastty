@@ -199,6 +199,10 @@ test("the newest compatible runtime reuses a booted iPhone without creating or b
   assert.equal(commands.filter(({ tool, args }) => tool === "xcrun" && ["boot", "bootstatus"].includes(args[1])).length, 0);
   const xcodebuild = commands.find(({ tool }) => tool === "xcodebuild");
   assert.equal(xcodebuild.args[xcodebuild.args.indexOf("-destination") + 1], "platform=iOS Simulator,id=NEWEST-BOOTED");
+  assert.deepEqual(
+    xcodebuild.args.slice(xcodebuild.args.indexOf("-parallel-testing-enabled"), -1),
+    ["-parallel-testing-enabled", "NO"],
+  );
   assert.equal(xcodebuild.args.at(-1), "test");
 });
 

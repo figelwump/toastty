@@ -23,9 +23,14 @@ enum LiveConversationPhase: Equatable, Sendable {
 protocol LiveConversationRuntime: Sendable {
     func currentState() async -> ConversationRuntime.State
     func states() async -> AsyncStream<ConversationRuntime.State>
+    func sendReconciliationStates() async -> AsyncStream<SendReconciliationState>
 }
 
-extension ConversationRuntime: LiveConversationRuntime {}
+extension ConversationRuntime: LiveConversationRuntime {
+    func sendReconciliationStates() async -> AsyncStream<SendReconciliationState> {
+        await sendReconciliation.states()
+    }
+}
 
 /// A value-only main-actor projection of one domain conversation runtime.
 ///
@@ -51,22 +56,35 @@ final class LiveConversationController {
     private(set) var isLoadingOlder = false
     private(set) var prependAnchorID: ToasttyTranscriptRowID?
     private(set) var transcriptPresentation: ToasttyConversationPresentationState = .loading
+    private(set) var composerAuthority = ConversationComposerAuthority()
+    private(set) var sendReconciliation = SendReconciliationState()
+    private(set) var lastSendGateFailure: ConversationSendGateFailure?
 
     private let runtime: any LiveConversationRuntime
     private let loadOlderAction: @Sendable () async -> Void
+    private let sendAction: @Sendable (String, ConversationComposerStamp) async -> ConversationSendOutcome
+    private let dismissSendReceiptAction: @Sendable (String) async -> Void
     private var stateTask: Task<Void, Never>?
+    private var sendReconciliationTask: Task<Void, Never>?
     private var connectionPhase: ConnectionCoordinatorPhase = .idle
     private var connectionGeneration: UInt64 = 0
+    private var runtimeRevision: UInt64 = 0
     private var hasConsumedState = false
 
     init(
         conversationID: UUID,
         runtime: any LiveConversationRuntime,
-        loadOlder: @escaping @Sendable () async -> Void = {}
+        loadOlder: @escaping @Sendable () async -> Void = {},
+        send: @escaping @Sendable (String, ConversationComposerStamp) async -> ConversationSendOutcome = { _, _ in
+            .notEnqueued(.conversationNotOpen)
+        },
+        dismissSendReceipt: @escaping @Sendable (String) async -> Void = { _ in }
     ) {
         self.conversationID = conversationID
         self.runtime = runtime
         loadOlderAction = loadOlder
+        sendAction = send
+        dismissSendReceiptAction = dismissSendReceipt
     }
 
     func start() async {
@@ -79,11 +97,20 @@ final class LiveConversationController {
                 consume(state)
             }
         }
+        sendReconciliationTask = Task { @MainActor [weak self, runtime] in
+            let states = await runtime.sendReconciliationStates()
+            for await state in states {
+                guard let self, !Task.isCancelled else { return }
+                consumeSendReconciliation(state)
+            }
+        }
     }
 
     func stop() {
         stateTask?.cancel()
         stateTask = nil
+        sendReconciliationTask?.cancel()
+        sendReconciliationTask = nil
     }
 
     func loadOlder() async {
@@ -91,7 +118,39 @@ final class LiveConversationController {
         await loadOlderAction()
     }
 
+    func send(_ text: String) async -> ConversationSendOutcome {
+        guard let stamp = composerAuthority.stamp else {
+            let failure = composerAuthority.gateFailure ?? .staleComposerAuthority
+            lastSendGateFailure = failure
+            return .notEnqueued(failure)
+        }
+        let submittedAtRuntimeRevision = runtimeRevision
+        let outcome = await sendAction(text, stamp)
+        guard runtimeRevision == submittedAtRuntimeRevision else { return outcome }
+        switch outcome {
+        case .enqueued:
+            lastSendGateFailure = .sendAlreadyReserved
+        case .notEnqueued(let failure):
+            lastSendGateFailure = failure
+        }
+        return outcome
+    }
+
+    func dismissSendReceipt(_ clientRequestID: String) async {
+        await dismissSendReceiptAction(clientRequestID)
+    }
+
+    func draftDidChange() {
+        if lastSendGateFailure == .emptyText || lastSendGateFailure == .cancelled {
+            lastSendGateFailure = nil
+        }
+    }
+
     func consumeConnectionPhase(_ phase: ConnectionCoordinatorPhase) {
+        if connectionPhase != phase {
+            runtimeRevision &+= 1
+            lastSendGateFailure = nil
+        }
         connectionPhase = phase
         resolvePhase()
         refreshTranscriptPresentation()
@@ -106,6 +165,24 @@ final class LiveConversationController {
         let previousEvents = events
         let previousRunID = projectionRunID
         let previousProjectionGeneration = projectionGeneration
+        let didChangeRuntime = hasConsumedState && (
+            state.connectionGeneration > connectionGeneration
+                || state.projectionRunID != projectionRunID
+                || state.projectionGeneration != projectionGeneration
+                || state.events != events
+                || state.cursor != cursor
+                || state.latestSequence != latestSequence
+                || state.firstAvailableSequence != firstAvailableSequence
+                || state.historyTruncated != historyTruncated
+                || state.isLoadingOlder != isLoadingOlder
+                || state.phase != runtimePhase
+        )
+        let didChangeComposerAuthority = composerAuthority != state.composerAuthority
+
+        if didChangeRuntime || didChangeComposerAuthority {
+            runtimeRevision &+= 1
+            lastSendGateFailure = nil
+        }
 
         connectionGeneration = state.connectionGeneration
         projectionRunID = state.projectionRunID
@@ -116,6 +193,7 @@ final class LiveConversationController {
         latestSequence = state.latestSequence
         firstAvailableSequence = state.firstAvailableSequence
         historyTruncated = state.historyTruncated
+        composerAuthority = state.composerAuthority
         hasOlder = state.hasOlder
         isLoadingOlder = state.isLoadingOlder
         change = classifyChange(
@@ -140,6 +218,25 @@ final class LiveConversationController {
         hasConsumedState = true
         resolvePhase()
         refreshTranscriptPresentation()
+    }
+
+    func consumeSendReconciliation(_ state: SendReconciliationState) {
+        let stateChanged = sendReconciliation != state
+        sendReconciliation = state
+        if stateChanged && lastSendGateFailure == .tooManyUnresolvedSends {
+            lastSendGateFailure = nil
+        }
+        change = .metadataOnly
+        refreshTranscriptPresentation()
+    }
+
+    var presentedComposerAuthority: ConversationComposerAuthority {
+        guard let lastSendGateFailure else { return composerAuthority }
+        return ConversationComposerAuthority(
+            stamp: composerAuthority.stamp,
+            inputAvailability: composerAuthority.inputAvailability,
+            gateFailure: lastSendGateFailure
+        )
     }
 
     private func classifyChange(
@@ -228,6 +325,7 @@ final class LiveConversationController {
             phase: transcriptPhase,
             revision: transcriptRevision,
             historyTruncated: historyTruncated,
+            sendItems: ToasttySendPresentationAdapter.makeItems(from: sendReconciliation),
             hasOlder: hasOlder,
             isLoadingOlder: isLoadingOlder,
             prependAnchorID: prependAnchorID

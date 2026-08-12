@@ -209,7 +209,7 @@ final class SendReconciliationTests: XCTestCase {
             text: "replacement"
         )
 
-        XCTAssertEqual(duplicate, original)
+        XCTAssertEqual(duplicate?.record, original?.record)
         let state = await reconciliation.currentState()
         XCTAssertEqual(state.records.count, 1)
         XCTAssertEqual(state["same-id"]?.text, "original")
@@ -246,6 +246,68 @@ final class SendReconciliationTests: XCTestCase {
 
         let state = await reconciliation.currentState()
         XCTAssertEqual(state.records.map(\.clientRequestID), ["pending"])
+    }
+
+    func testOperationFailureIsDismissibleAndExactEchoCanStillConfirm() async {
+        let reconciliation = SendReconciliation(initialProjectionRunID: firstRunID)
+        await reconciliation.enqueue(clientRequestID: "future-result", text: "hello")
+
+        await reconciliation.markOperationFailed(clientRequestID: "future-result")
+        var state = await reconciliation.currentState()
+        XCTAssertEqual(state["future-result"]?.deliveryState, .operationFailed)
+        XCTAssertTrue(state["future-result"]?.deliveryState.isDismissible == true)
+
+        await reconciliation.observe([
+            .known(makeUserMessage(sequence: 12, clientRequestID: "future-result")),
+        ])
+        state = await reconciliation.currentState()
+        XCTAssertEqual(state["future-result"]?.deliveryState, .confirmed(sequence: 12))
+    }
+
+    func testEnqueueCapacityBoundsUnresolvedAndTotalRecords() async {
+        let unresolved = SendReconciliation(initialProjectionRunID: firstRunID)
+        for index in 0..<SendReconciliation.maximumUnresolvedRecords {
+            await unresolved.enqueue(clientRequestID: "pending-\(index)", text: "message")
+        }
+        let refusedUnresolved = await unresolved.enqueue(
+            clientRequestID: "one-too-many",
+            text: "message"
+        )
+        XCTAssertNil(refusedUnresolved)
+
+        let retained = SendReconciliation(initialProjectionRunID: firstRunID)
+        for index in 0..<SendReconciliation.maximumRetainedRecords {
+            let requestID = "rejected-\(index)"
+            await retained.enqueue(clientRequestID: requestID, text: "message")
+            await retained.apply(.rejected(reason: .epochMismatch), clientRequestID: requestID)
+        }
+        let refusedRetained = await retained.enqueue(
+            clientRequestID: "one-too-many",
+            text: "message"
+        )
+        XCTAssertNil(refusedRetained)
+        let retainedState = await retained.currentState()
+        XCTAssertEqual(
+            retainedState.records.count,
+            SendReconciliation.maximumRetainedRecords
+        )
+    }
+
+    func testDeliveryUnconfirmedCanStillBePromotedByExactEcho() async {
+        let reconciliation = SendReconciliation(initialProjectionRunID: firstRunID)
+        await reconciliation.enqueue(clientRequestID: "late-echo", text: "hello")
+        await reconciliation.completedResnapshot(
+            projectionRunID: firstRunID,
+            latestSequence: 4,
+            observedThroughSequence: 4
+        )
+
+        await reconciliation.observe([
+            .known(makeUserMessage(sequence: 5, clientRequestID: "late-echo")),
+        ])
+
+        let state = await reconciliation.currentState()
+        XCTAssertEqual(state["late-echo"]?.deliveryState, .confirmed(sequence: 5))
     }
 
     private func makeUserMessage(

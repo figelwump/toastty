@@ -139,6 +139,10 @@ private extension RemoteProtocolGoldenTests {
                 "pending-interaction-preview.json",
                 RemotePendingInteractionPreview(prompt: "Approve the gateway command on the Mac")
             ),
+            try fixture(
+                "input-availability-unavailable-session_writes_disabled.json",
+                RemoteInputAvailability.unavailable(reason: .sessionWritesDisabled)
+            ),
             try fixture("session-list-response.json", RemoteGatewaySessionListResponse(snapshot: sessionSnapshot)),
             try fixture(
                 "events-request.json",

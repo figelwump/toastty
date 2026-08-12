@@ -70,6 +70,7 @@ public actor ConversationRuntime {
         public var historyTruncated: Bool
         public var isLoadingOlder: Bool
         public var phase: ConversationRuntimePhase
+        public var composerAuthority: ConversationComposerAuthority
         public let sendReconciliation: SendReconciliation
 
         public init(
@@ -85,6 +86,7 @@ public actor ConversationRuntime {
             historyTruncated: Bool = false,
             isLoadingOlder: Bool = false,
             phase: ConversationRuntimePhase = .idle,
+            composerAuthority: ConversationComposerAuthority = ConversationComposerAuthority(),
             sendReconciliation: SendReconciliation
         ) {
             self.conversationID = conversationID
@@ -99,6 +101,7 @@ public actor ConversationRuntime {
             self.historyTruncated = historyTruncated
             self.isLoadingOlder = isLoadingOlder
             self.phase = phase
+            self.composerAuthority = composerAuthority
             self.sendReconciliation = sendReconciliation
         }
 
@@ -120,6 +123,7 @@ public actor ConversationRuntime {
     private var bufferedLivePages: [CompatibleConversationEventPage] = []
     private var catchUpIsResnapshot = false
     private var projectionRunBeforeResnapshot: RemoteProjectionRunID?
+    private var coordinatorComposerSnapshot: CoordinatorComposerSnapshot?
 
     public init(
         conversationID: RemoteConversationID,
@@ -140,6 +144,24 @@ public actor ConversationRuntime {
 
     public func states() async -> AsyncStream<State> {
         await stateStream.states()
+    }
+
+    /// Replaces the coordinator-owned composer source. Conversation journal
+    /// status events never call this path and therefore cannot authorize input.
+    func applyComposerSnapshot(_ snapshot: CoordinatorComposerSnapshot) async {
+        coordinatorComposerSnapshot = snapshot
+        recomputeComposerAuthority()
+        await publish()
+    }
+
+    func invalidateComposerAuthority(
+        _ failure: ConversationSendGateFailure = .coordinatorNotLive
+    ) async {
+        coordinatorComposerSnapshot = nil
+        state.composerAuthority = ConversationComposerAuthority(
+            gateFailure: failure
+        )
+        await publish()
     }
 
     /// Opens a REST boundary. Live pages for this conversation are buffered
@@ -756,6 +778,65 @@ public actor ConversationRuntime {
     }
 
     private func publish() async {
+        recomputeComposerAuthority()
         await stateStream.yield(state)
+    }
+
+    private func recomputeComposerAuthority() {
+        guard let source = coordinatorComposerSnapshot else { return }
+        guard source.coordinatorIsLive else {
+            state.composerAuthority = ConversationComposerAuthority(
+                inputAvailability: source.inputAvailability,
+                gateFailure: .coordinatorNotLive
+            )
+            return
+        }
+        guard source.hasDeviceSendScope else {
+            state.composerAuthority = ConversationComposerAuthority(
+                inputAvailability: source.inputAvailability,
+                gateFailure: .deviceSendScopeDenied
+            )
+            return
+        }
+        if let gateFailure = source.gateFailure {
+            state.composerAuthority = ConversationComposerAuthority(
+                inputAvailability: source.inputAvailability,
+                gateFailure: gateFailure
+            )
+            return
+        }
+        guard let stamp = source.stamp,
+              let inputAvailability = source.inputAvailability,
+              case .openPrompt(let epoch) = inputAvailability,
+              epoch == stamp.inputEpoch else {
+            state.composerAuthority = ConversationComposerAuthority(
+                inputAvailability: source.inputAvailability,
+                gateFailure: .inputUnavailable
+            )
+            return
+        }
+        guard state.phase == .live else {
+            state.composerAuthority = ConversationComposerAuthority(
+                stamp: stamp,
+                inputAvailability: inputAvailability,
+                gateFailure: .conversationNotLive
+            )
+            return
+        }
+        guard state.connectionGeneration == stamp.connectionGeneration,
+              state.projectionRunID == stamp.projectionRunID,
+              state.projectionGeneration == stamp.projectionGeneration,
+              observedSequence >= stamp.latestSequence else {
+            state.composerAuthority = ConversationComposerAuthority(
+                stamp: stamp,
+                inputAvailability: inputAvailability,
+                gateFailure: .transcriptNotCaughtUp
+            )
+            return
+        }
+        state.composerAuthority = ConversationComposerAuthority(
+            stamp: stamp,
+            inputAvailability: inputAvailability
+        )
     }
 }

@@ -127,6 +127,77 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.stopObserving()
     }
 
+    func testDeviceScopeRefreshForwardsToDomainRuntime() async {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+
+        await subject.updateDeviceScopes([.read, .approve])
+
+        let scopes = await runtime.latestDeviceScopes()
+        XCTAssertEqual(scopes, [.read, .approve])
+    }
+
+    func testActiveConversationSendAndReceiptDismissUseDomainRuntime() async throws {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: snapshot(titles: ["Alpha"]).presentation(),
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        let conversation = try XCTUnwrap(home.snapshot.workspaces.first?.conversations.first)
+        await subject.openConversation(conversation.id)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "CC000000-0000-0000-0000-000000000001")!,
+            counter: 5
+        )
+        let stamp = ConversationComposerStamp(
+            connectionGeneration: 7,
+            streamSnapshotOrdinal: 2,
+            projectionRunID: runID,
+            projectionGeneration: 12,
+            latestSequence: 4,
+            inputEpoch: epoch
+        )
+        controller.stop()
+        controller.consume(stateForComposer(
+            conversationID: conversation.id,
+            stamp: stamp,
+            epoch: epoch
+        ))
+
+        let outcome = await controller.send("ship it")
+        await controller.dismissSendReceipt("request-1")
+
+        XCTAssertEqual(outcome, .enqueued(clientRequestID: "request-1"))
+        let sends = await runtime.recordedSends()
+        XCTAssertEqual(sends, [.init(
+            conversationID: RemoteConversationID(rawValue: conversation.id),
+            text: "ship it",
+            stamp: stamp
+        )])
+        let dismissals = await runtime.recordedDismissals()
+        XCTAssertEqual(dismissals, [.init(
+            conversationID: RemoteConversationID(rawValue: conversation.id),
+            clientRequestID: "request-1"
+        )])
+        subject.stopObserving()
+    }
+
     func testSelectionOwnsOneConversationRuntimeAndDismissClosesIt() async throws {
         let runtime = LiveRuntimeSpy()
         await runtime.holdConversationOpens()
@@ -252,9 +323,40 @@ final class LiveSessionsControllerTests: XCTestCase {
             generatedAt: Date(timeIntervalSince1970: 101)
         )
     }
+
+    private func stateForComposer(
+        conversationID: UUID,
+        stamp: ConversationComposerStamp,
+        epoch: RemoteInputEpoch
+    ) -> ConversationRuntime.State {
+        ConversationRuntime.State(
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            connectionGeneration: stamp.connectionGeneration,
+            projectionRunID: stamp.projectionRunID,
+            projectionGeneration: stamp.projectionGeneration,
+            latestSequence: stamp.latestSequence,
+            phase: .live,
+            composerAuthority: ConversationComposerAuthority(
+                stamp: stamp,
+                inputAvailability: .openPrompt(epoch: epoch)
+            ),
+            sendReconciliation: SendReconciliation()
+        )
+    }
 }
 
 private actor LiveRuntimeSpy: LiveConnectionRuntime {
+    struct SendCall: Equatable {
+        var conversationID: RemoteConversationID
+        var text: String
+        var stamp: ConversationComposerStamp
+    }
+
+    struct DismissCall: Equatable {
+        var conversationID: RemoteConversationID
+        var clientRequestID: String
+    }
+
     private var connectionRequests = 0
     private var suspended = false
     private var conversationRuntimes: [RemoteConversationID: ConversationRuntime] = [:]
@@ -268,6 +370,9 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     private var conversationOpenRequests = 0
     private var conversationCloseRequests = 0
     private var closedConversations: [RemoteConversationID] = []
+    private var deviceScopes: [RemoteDeviceScope] = []
+    private var sends: [SendCall] = []
+    private var dismissals: [DismissCall] = []
 
     func currentCoordinatorState() -> ConnectionCoordinator.State {
         ConnectionCoordinator.State()
@@ -328,6 +433,33 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
 
     func loadOlder(_ conversationID: RemoteConversationID) {}
 
+    func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) {
+        deviceScopes = scopes
+    }
+
+    func sendMessage(
+        conversationID: RemoteConversationID,
+        text: String,
+        composerStamp: ConversationComposerStamp
+    ) -> ConversationSendOutcome {
+        sends.append(.init(
+            conversationID: conversationID,
+            text: text,
+            stamp: composerStamp
+        ))
+        return .enqueued(clientRequestID: "request-1")
+    }
+
+    func dismissSendReceipt(
+        conversationID: RemoteConversationID,
+        clientRequestID: String
+    ) {
+        dismissals.append(.init(
+            conversationID: conversationID,
+            clientRequestID: clientRequestID
+        ))
+    }
+
     func activeConversationIDs() -> Set<RemoteConversationID> {
         Set(conversationRuntimes.keys)
     }
@@ -363,4 +495,7 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
 
     func didSuspend() -> Bool { suspended }
     func connectCount() -> Int { connectionRequests }
+    func latestDeviceScopes() -> [RemoteDeviceScope] { deviceScopes }
+    func recordedSends() -> [SendCall] { sends }
+    func recordedDismissals() -> [DismissCall] { dismissals }
 }
