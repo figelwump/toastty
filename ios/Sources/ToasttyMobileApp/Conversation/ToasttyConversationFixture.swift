@@ -35,9 +35,9 @@ enum ToasttyConversationFixture {
         var currentInteraction = interaction
         currentInteraction.id = RemotePendingInteraction.ID(rawValue: "fixture-interaction-current")
         let longMessage = Array(
-            repeating: "This deliberately long transcript fixture validates expansion and dynamic layout.",
-            count: 24
-        ).joined(separator: " ")
+            repeating: "This deliberately long transcript fixture validates full rendering and dynamic layout.",
+            count: 23
+        ).joined(separator: " ") + " Full transcript tail remains visible."
 
         return ToasttyConversationPresentationState(
             rows: [

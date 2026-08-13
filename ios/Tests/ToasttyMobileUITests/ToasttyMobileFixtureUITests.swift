@@ -215,14 +215,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let transcript = app.descendants(matching: .any)["toastty-mobile-transcript"]
         XCTAssertTrue(transcript.waitForExistence(timeout: 5))
 
-        let hugeMessage = app.buttons["toastty-mobile-transcript-expand-13"]
-        XCTAssertTrue(hugeMessage.waitForExistence(timeout: 5))
-        XCTAssertEqual(hugeMessage.label, "Show more")
-        hugeMessage.tap()
-        XCTAssertEqual(hugeMessage.label, "Show less")
-        attachScreenshot(named: "fixture-transcript-huge-message-expanded", of: app)
-        hugeMessage.tap()
-        XCTAssertEqual(hugeMessage.label, "Show more")
+        XCTAssertFalse(app.buttons["toastty-mobile-transcript-expand-13"].exists)
 
         let expectedRows: [(UInt64, String)] = [
             (1, "session connected"),
@@ -235,7 +228,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             (10, "session resumed"),
             (11, "Transcript ready"),
             (12, "sent remotely"),
-            (13, "deliberately long transcript fixture"),
+            (13, "Full transcript tail remains visible"),
             (14, "Choose the safe rollout strategy"),
         ]
         for (sequence, labelFragment) in expectedRows.reversed() {
@@ -249,13 +242,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
                 "Sequence \(sequence) should expose its semantic content to accessibility; got \(row.label)"
             )
         }
-
         let toolDisclosure = app.buttons["toastty-mobile-transcript-tool-4"]
         XCTAssertTrue(toolDisclosure.exists)
         XCTAssertTrue(toolDisclosure.label.contains("1 tool call"))
-        // XCTest scrolls a known SwiftUI button into view more reliably as part
-        // of tap synthesis than repeated directional swipes after a large row
-        // has changed height.
         toolDisclosure.tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-transcript-row-4"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-transcript-row-5"].exists)

@@ -11,7 +11,6 @@ struct ToasttyTranscriptView: View {
     let readAcknowledgementEpoch: MobileSessionStatus?
     let onVisibleLiveEdge: () -> Void
 
-    @State private var expandedMessageIDs: Set<ToasttyTranscriptRowID> = []
     @State private var expandedToolBatchIDs: Set<ToasttyTranscriptRowID> = []
     @State private var expandedSubagentIDs: Set<ToasttyTranscriptRowID> = []
     @State private var isAtLiveEdge = true
@@ -256,9 +255,7 @@ struct ToasttyTranscriptView: View {
         case .row(let row):
             ToasttyTranscriptRowView(
                 row: row,
-                messageIsExpanded: expandedMessageIDs.contains(row.id),
                 subagentIsExpanded: expandedSubagentIDs.contains(row.id),
-                toggleMessageExpansion: { toggle(row.id, in: &expandedMessageIDs) },
                 toggleSubagentExpansion: { toggle(row.id, in: &expandedSubagentIDs) }
             )
         case .toolBatch(let rows):
@@ -451,9 +448,7 @@ private struct ToasttySendTailItemView: View {
 
 private struct ToasttyTranscriptRowView: View {
     let row: ToasttyTranscriptRow
-    let messageIsExpanded: Bool
     let subagentIsExpanded: Bool
-    let toggleMessageExpansion: () -> Void
     let toggleSubagentExpansion: () -> Void
 
     @ViewBuilder
@@ -520,27 +515,14 @@ private struct ToasttyTranscriptRowView: View {
 
     @ViewBuilder
     private func message(text: String, isUser: Bool, metadata: String?) -> some View {
-        let isLarge = Self.isLarge(text)
-        let visibleText = isLarge && messageIsExpanded == false
-            ? Self.collapsed(text)
-            : text
-
         let content = VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
             if isUser {
-                Text(visibleText)
+                Text(text)
                     .font(.body)
                     .foregroundStyle(ToasttyDesignTokens.userBubbleText)
                     .textSelection(.enabled)
             } else {
-                ToasttyMarkdownText(text: visibleText)
-            }
-
-            if isLarge {
-                Button(messageIsExpanded ? "Show less" : "Show more", action: toggleMessageExpansion)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.amberText)
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("toastty-mobile-transcript-expand-\(row.id.accessibilitySuffix)")
+                ToasttyMarkdownText(text: text)
             }
 
             if let metadata {
@@ -609,14 +591,6 @@ private struct ToasttyTranscriptRowView: View {
                     .textSelection(.enabled)
             }
         }
-    }
-
-    private static func isLarge(_ text: String) -> Bool {
-        text.count > 1_400 || text.lazy.filter { $0 == "\n" }.prefix(20).count == 20
-    }
-
-    private static func collapsed(_ text: String) -> String {
-        String(text.prefix(1_200)) + "…"
     }
 
     private func subagentPhaseLabel(_ phase: ConversationSubagentPhase) -> String {
