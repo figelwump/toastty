@@ -288,6 +288,8 @@ struct ToasttyConversationSheet: View {
             .localDraft
         case .pendingInteraction:
             .pendingInteraction
+        case .unavailable(let reason) where reason == "working" || reason == "starting":
+            .prompt(.working)
         case .unavailable(let reason) where reason == "offline" || reason == "ended":
             .prompt(.offline)
         case .openPrompt, .unavailable:
