@@ -51,3 +51,12 @@ enum RemoteAccessPairingPresentation {
         return "Expires in \(remaining / 60):\(String(format: "%02d", remaining % 60))"
     }
 }
+
+@MainActor
+enum RemoteAccessPairingClipboard {
+    @discardableResult
+    static func copy(_ code: String, to pasteboard: NSPasteboard = .general) -> Bool {
+        pasteboard.clearContents()
+        return pasteboard.setString(code, forType: .string)
+    }
+}

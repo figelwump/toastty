@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import RemoteProtocol
 import Testing
@@ -73,6 +74,14 @@ struct RemoteAccessPairingPresentationTests {
             expiresAt: now.addingTimeInterval(-1),
             at: now
         ) == "Expires in 0:00")
+    }
+
+    @Test func nativeFallbackCodeCopiesToRequestedPasteboard() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.clearContents() }
+
+        #expect(RemoteAccessPairingClipboard.copy("2345-6789-ABCD", to: pasteboard))
+        #expect(pasteboard.string(forType: .string) == "2345-6789-ABCD")
     }
 
     @Test func remoteAccessSourcesDoNotLogSensitiveSourceValues() throws {

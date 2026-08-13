@@ -13,7 +13,7 @@ final class ToasttyMobilePairingUITests: XCTestCase {
         app.buttons["toastty-mobile-session-begin-pairing"].tap()
         XCTAssertTrue(
             app.staticTexts[
-                "On your Mac, choose Toastty → Remote Access…, then create a native pairing offer."
+                "On your Mac, choose Toastty → Remote Access, then create a native pairing offer."
             ].exists
         )
         app.buttons["toastty-mobile-pairing-manual"].tap()

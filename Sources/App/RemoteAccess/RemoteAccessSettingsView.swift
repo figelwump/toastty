@@ -9,6 +9,7 @@ struct RemoteAccessSettingsView: View {
     @State private var showsAudit = false
     @State private var originDetectionRequestID = 0
     @State private var originDetectionState: TailnetOriginDetectionState = .idle
+    @State private var copiedNativeFallbackCode: String?
     private let tailnetOriginDetector: TailscaleTailnetOriginDetector
 
     init(
@@ -240,9 +241,19 @@ struct RemoteAccessSettingsView: View {
                     Text("Fallback code")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(offer.fallbackCode)
-                        .font(.system(size: 22, weight: .bold, design: .monospaced))
-                        .privacySensitive()
+                    HStack(spacing: 8) {
+                        Text(offer.fallbackCode)
+                            .font(.system(size: 22, weight: .bold, design: .monospaced))
+                            .textSelection(.enabled)
+                            .privacySensitive()
+                        Button(copiedNativeFallbackCode == offer.fallbackCode ? "Copied" : "Copy Code") {
+                            if RemoteAccessPairingClipboard.copy(offer.fallbackCode) {
+                                copiedNativeFallbackCode = offer.fallbackCode
+                            }
+                        }
+                        .accessibilityLabel("Copy fallback code")
+                        .accessibilityIdentifier("toastty-remote-access-copy-fallback-code")
+                    }
                     Text(nativeOfferExpiryLabel(offer, at: date))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
