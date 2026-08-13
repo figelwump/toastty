@@ -21,6 +21,7 @@ LIVE_GATEWAY_CREDENTIAL_VALUE=""
 SETUP_ERROR_EXIT_CODE=78
 DEFAULT_REMOTE_TEST_TIMEOUT_SECONDS=3600
 DEFAULT_XCODEBUILD_ARGS_SENTINEL="__toastty_default_xcodebuild_args__"
+MERGED_XCODEBUILD_ARGS=()
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
 REMOTE_HOST="${TOASTTY_REMOTE_GUI_HOST:-}"
@@ -185,6 +186,140 @@ set_default_xcodebuild_args() {
   )
 }
 
+xcodebuild_arg_count() {
+  local option="$1"
+  shift
+  local count=0
+  local arg
+
+  for arg in "$@"; do
+    if [[ "$arg" == "$option" || "$arg" == "$option="* ]]; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s\n' "$count"
+}
+
+xcodebuild_args_have_option() {
+  local option="$1"
+  shift
+  local arg
+
+  for arg in "$@"; do
+    if [[ "$arg" == "$option" || "$arg" == "$option="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+xcodebuild_arg_value() {
+  local option="$1"
+  shift
+  local args=("$@")
+  local index
+  local arg
+
+  for ((index = 0; index < ${#args[@]}; index += 1)); do
+    arg="${args[$index]}"
+    if [[ "$arg" == "$option" ]]; then
+      if (( index + 1 < ${#args[@]} )); then
+        printf '%s\n' "${args[$((index + 1))]}"
+        return 0
+      fi
+      return 1
+    fi
+    if [[ "$arg" == "$option="* ]]; then
+      printf '%s\n' "${arg#*=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+validate_paired_xcodebuild_args() {
+  local args=("$@")
+  local index
+  local arg
+  local option
+  local value
+  local workspace_count
+  local project_count
+  local option_count
+
+  for ((index = 0; index < ${#args[@]}; index += 1)); do
+    arg="${args[$index]}"
+    case "$arg" in
+      -workspace|-project|-scheme|-configuration|-parallel-testing-enabled|-destination)
+        option="$arg"
+        if (( index + 1 >= ${#args[@]} )); then
+          fail "$option requires a value after --"
+        fi
+        value="${args[$((index + 1))]}"
+        if [[ -z "$value" || "$value" == -* ]]; then
+          fail "$option requires a non-option value after --"
+        fi
+        index=$((index + 1))
+        ;;
+      -workspace=*|-project=*|-scheme=*|-configuration=*|-parallel-testing-enabled=*|-destination=*)
+        option="${arg%%=*}"
+        value="${arg#*=}"
+        [[ -n "$value" ]] || fail "$option requires a non-empty value after --"
+        ;;
+    esac
+  done
+
+  workspace_count="$(xcodebuild_arg_count -workspace "${args[@]}")"
+  project_count="$(xcodebuild_arg_count -project "${args[@]}")"
+  if (( workspace_count + project_count > 1 )); then
+    fail "pass only one -workspace or -project after --"
+  fi
+
+  for option in -scheme -configuration -parallel-testing-enabled; do
+    option_count="$(xcodebuild_arg_count "$option" "${args[@]}")"
+    if (( option_count > 1 )); then
+      fail "pass $option at most once after --"
+    fi
+  done
+}
+
+merge_default_xcodebuild_args() {
+  local custom_args=("$@")
+  MERGED_XCODEBUILD_ARGS=()
+
+  validate_paired_xcodebuild_args "${custom_args[@]}"
+
+  if ! xcodebuild_args_have_option -workspace "${custom_args[@]}" \
+    && ! xcodebuild_args_have_option -project "${custom_args[@]}"; then
+    if [[ "$TEST_PLATFORM" == "ios" ]]; then
+      MERGED_XCODEBUILD_ARGS+=( -workspace ios/ToasttyMobile.xcworkspace )
+    else
+      MERGED_XCODEBUILD_ARGS+=( -workspace toastty.xcworkspace )
+    fi
+  fi
+  if ! xcodebuild_args_have_option -scheme "${custom_args[@]}"; then
+    if [[ "$TEST_PLATFORM" == "ios" ]]; then
+      MERGED_XCODEBUILD_ARGS+=( -scheme ToasttyMobileApp )
+    else
+      MERGED_XCODEBUILD_ARGS+=( -scheme ToasttyApp )
+    fi
+  fi
+  if ! xcodebuild_args_have_option -configuration "${custom_args[@]}"; then
+    MERGED_XCODEBUILD_ARGS+=( -configuration Debug )
+  fi
+  if [[ "$TEST_PLATFORM" == "ios" ]] \
+    && ! xcodebuild_args_have_option -parallel-testing-enabled "${custom_args[@]}"; then
+    MERGED_XCODEBUILD_ARGS+=( -parallel-testing-enabled NO )
+  fi
+  if [[ "$TEST_PLATFORM" == "macos" ]] \
+    && ! xcodebuild_args_have_option -destination "${custom_args[@]}"; then
+    local arch="${ARCH:-$(uname -m)}"
+    MERGED_XCODEBUILD_ARGS+=( -destination "platform=macOS,arch=${arch}" )
+  fi
+
+  MERGED_XCODEBUILD_ARGS+=( "${custom_args[@]}" )
+}
+
 serialize_xcodebuild_args() {
   local payload=""
   local arg
@@ -346,20 +481,23 @@ build_display_command() {
     set_default_xcodebuild_args
     args=("${DEFAULT_XCODEBUILD_ARGS[@]}")
   else
-    args=("$@")
+    merge_default_xcodebuild_args "$@"
+    args=("${MERGED_XCODEBUILD_ARGS[@]}")
   fi
 
   join_shell_words xcodebuild "${args[@]}" test
 }
 
 assert_supported_xcodebuild_args() {
+  validate_paired_xcodebuild_args "$@"
+
   local arg
   for arg in "$@"; do
     case "$arg" in
       test|build|archive|analyze)
         fail "Do not pass xcodebuild actions after --. scripts/remote/test.sh always runs the test action."
         ;;
-      -derivedDataPath|-resultBundlePath)
+      -derivedDataPath|-derivedDataPath=*|-resultBundlePath|-resultBundlePath=*)
         fail "Do not pass $arg after --. scripts/remote/test.sh owns DerivedData and result bundle paths."
         ;;
     esac
@@ -743,11 +881,14 @@ run_remote_mode() {
 
   local xcodebuild_args=()
   if [[ -n "$decoded_args" ]]; then
+    local custom_xcodebuild_args=()
     while IFS= read -r arg; do
-      xcodebuild_args+=("$arg")
+      custom_xcodebuild_args+=("$arg")
     done <<EOF
 $decoded_args
 EOF
+    merge_default_xcodebuild_args "${custom_xcodebuild_args[@]}"
+    xcodebuild_args=("${MERGED_XCODEBUILD_ARGS[@]}")
   else
     set_default_xcodebuild_args
     xcodebuild_args=("${DEFAULT_XCODEBUILD_ARGS[@]}")
@@ -761,6 +902,7 @@ EOF
   local runtime_home="$remote_run_root/runtime-home"
   local result_bundle="$remote_run_root/TestResults.xcresult"
   local xcodebuild_log="$remote_run_root/xcodebuild.log"
+  local destination_probe_log="$remote_run_root/destination-probe.log"
   local timeout_marker="$remote_run_root/xcodebuild.timeout"
   local watchdog_timer_record="$remote_run_root/watchdog-timer.pid"
   local watchdog_reaped_marker="$remote_run_root/watchdog-timer.reaped"
@@ -779,6 +921,7 @@ EOF
 
   mkdir -p "$remote_run_root" "$runtime_home"
   rm -rf "$derived_path" "$result_bundle" "$timeout_marker" "$watchdog_timer_record" "$watchdog_reaped_marker"
+  rm -f "$destination_probe_log"
   : >"$xcodebuild_log"
 
   cleanup_remote_xcodebuild() {
@@ -848,18 +991,36 @@ EOF
         done
         if [[ "$has_destination" == "0" ]]; then
           local simulator_id
-          simulator_id="$(
-            xcodebuild "${xcodebuild_args[@]}" -showdestinations 2>/dev/null |
-              awk '/platform:iOS Simulator/ && /name:iPhone/ && $0 !~ /unavailable/ { line=$0; sub(/^.*id:[[:space:]]*/, "", line); sub(/,[[:space:]].*$/, "", line); print line; exit }' \
-              || true
-          )"
-          if [[ -z "$simulator_id" ]]; then
+          local destination_probe_status=0
+          local scheme_name
+          scheme_name="$(xcodebuild_arg_value -scheme "${xcodebuild_args[@]}" || true)"
+          if xcodebuild "${xcodebuild_args[@]}" -showdestinations >"$destination_probe_log" 2>&1; then
+            :
+          else
+            destination_probe_status=$?
+          fi
+          {
+            printf '[remote-test] xcodebuild destination probe\n'
+            cat "$destination_probe_log"
+          } >>"$xcodebuild_log"
+
+          if [[ "$destination_probe_status" != "0" ]]; then
             exit_code=$SETUP_ERROR_EXIT_CODE
             status="setup_error"
-            failure_summary="No compatible iPhone Simulator destination was reported for ToasttyMobileApp"
+            failure_summary="xcodebuild -showdestinations failed${scheme_name:+ for scheme ${scheme_name}} with status ${destination_probe_status}; see destination-probe.log"
           else
-            xcodebuild_args+=( -destination "platform=iOS Simulator,id=${simulator_id}" )
-            xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
+            simulator_id="$(
+              awk '/platform:iOS Simulator/ && /name:iPhone/ && $0 !~ /unavailable/ { line=$0; sub(/^.*id:[[:space:]]*/, "", line); sub(/,[[:space:]].*$/, "", line); print line; exit }' \
+                "$destination_probe_log"
+            )"
+            if [[ -z "$simulator_id" ]]; then
+              exit_code=$SETUP_ERROR_EXIT_CODE
+              status="setup_error"
+              failure_summary="No compatible iPhone Simulator destination was reported${scheme_name:+ for scheme ${scheme_name}}; see destination-probe.log"
+            else
+              xcodebuild_args+=( -destination "platform=iOS Simulator,id=${simulator_id}" )
+              xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
+            fi
           fi
         fi
       fi
@@ -963,64 +1124,70 @@ EOF
   return "$exit_code"
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --scope)
-      [[ $# -ge 2 ]] || fail "--scope requires a value"
-      VALIDATION_SCOPE="$2"
-      shift 2
-      ;;
-    --platform)
-      [[ $# -ge 2 ]] || fail "--platform requires a value"
-      case "$2" in
-        macos|ios) TEST_PLATFORM="$2" ;;
-        *) fail "--platform must be macos or ios" ;;
-      esac
-      shift 2
-      ;;
-    --ref)
-      [[ $# -ge 2 ]] || fail "--ref requires a value"
-      REF_SPEC="$2"
-      shift 2
-      ;;
-    --run-label)
-      [[ $# -ge 2 ]] || fail "--run-label requires a value"
-      RUN_LABEL="$2"
-      shift 2
-      ;;
-    --keep-remote)
-      KEEP_REMOTE=1
-      shift
-      ;;
-    --live-gateway)
-      LIVE_GATEWAY=1
-      shift
-      ;;
-    --allow-destructive-live-revocation)
-      ALLOW_DESTRUCTIVE_LIVE_REVOCATION=1
-      shift
-      ;;
-    --remote-exec)
-      REMOTE_EXEC=1
-      shift
-      ;;
-    --)
-      shift
-      XCODEBUILD_ARGS=("$@")
-      break
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      fail "Unknown argument: $1"
-      ;;
-  esac
-done
+main() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --scope)
+        [[ $# -ge 2 ]] || fail "--scope requires a value"
+        VALIDATION_SCOPE="$2"
+        shift 2
+        ;;
+      --platform)
+        [[ $# -ge 2 ]] || fail "--platform requires a value"
+        case "$2" in
+          macos|ios) TEST_PLATFORM="$2" ;;
+          *) fail "--platform must be macos or ios" ;;
+        esac
+        shift 2
+        ;;
+      --ref)
+        [[ $# -ge 2 ]] || fail "--ref requires a value"
+        REF_SPEC="$2"
+        shift 2
+        ;;
+      --run-label)
+        [[ $# -ge 2 ]] || fail "--run-label requires a value"
+        RUN_LABEL="$2"
+        shift 2
+        ;;
+      --keep-remote)
+        KEEP_REMOTE=1
+        shift
+        ;;
+      --live-gateway)
+        LIVE_GATEWAY=1
+        shift
+        ;;
+      --allow-destructive-live-revocation)
+        ALLOW_DESTRUCTIVE_LIVE_REVOCATION=1
+        shift
+        ;;
+      --remote-exec)
+        REMOTE_EXEC=1
+        shift
+        ;;
+      --)
+        shift
+        XCODEBUILD_ARGS=("$@")
+        break
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        fail "Unknown argument: $1"
+        ;;
+    esac
+  done
 
-if [[ "$REMOTE_EXEC" == "1" ]]; then
-  run_remote_mode
-else
-  run_local_mode
+  if [[ "$REMOTE_EXEC" == "1" ]]; then
+    run_remote_mode
+  else
+    run_local_mode
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi

@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+WRAPPER="$ROOT_DIR/scripts/remote/test.sh"
+TEST_ROOT="$(mktemp -d /tmp/toastty-remote-test-ios-arguments.XXXXXX)"
+FAKE_BIN="$TEST_ROOT/bin"
+RECORDER="$TEST_ROOT/xcodebuild-arguments.log"
+
+cleanup() {
+  rm -rf "$TEST_ROOT"
+}
+trap cleanup EXIT
+
+fail_test() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+encode_args() {
+  local payload=""
+  local arg
+  for arg in "$@"; do
+    payload+="$arg"$'\n'
+  done
+  printf '%s' "$payload" | base64 | tr -d '\n'
+}
+
+run_remote_fixture() {
+  local run_name="$1"
+  local destination_mode="$2"
+  shift 2
+  local run_root="$TEST_ROOT/$run_name"
+  local encoded_args
+  encoded_args="$(encode_args "$@")"
+
+  mkdir -p "$run_root"
+  : >"$RECORDER"
+  PATH="$FAKE_BIN:$PATH" \
+  FAKE_XCODEBUILD_ARGUMENTS_LOG="$RECORDER" \
+  FAKE_DESTINATION_MODE="$destination_mode" \
+  TOASTTY_REMOTE_TEST_RUN_LABEL="$run_name" \
+  TOASTTY_REMOTE_TEST_REMOTE_RUN_ROOT="$run_root" \
+  TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR="$ROOT_DIR" \
+  TOASTTY_REMOTE_TEST_XCODEBUILD_ARGS_B64="$encoded_args" \
+  TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS=30 \
+  TOASTTY_REMOTE_TEST_PLATFORM=ios \
+    /bin/bash "$WRAPPER" --remote-exec
+}
+
+mkdir -p "$FAKE_BIN"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "node %s\\n" "$*" >>"$FAKE_XCODEBUILD_ARGUMENTS_LOG"' \
+  'exit 0' \
+  >"$FAKE_BIN/node"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'kind=test' \
+  'for arg in "$@"; do' \
+  '  if [[ "$arg" == "-showdestinations" ]]; then kind=probe; fi' \
+  'done' \
+  'printf "%s %s\\n" "$kind" "$*" >>"$FAKE_XCODEBUILD_ARGUMENTS_LOG"' \
+  'if [[ "$kind" == probe ]]; then' \
+  '  if [[ "$FAKE_DESTINATION_MODE" == fail ]]; then' \
+  '    printf "xcodebuild: invalid destination probe fixture\\n" >&2' \
+  '    exit 66' \
+  '  fi' \
+  '  printf "Available destinations for the scheme:\\n"' \
+  '  printf "{ platform:iOS Simulator, arch:arm64, id:SIMULATOR-1, OS:26.3, name:iPhone 17 }\\n"' \
+  'fi' \
+  'exit 0' \
+  >"$FAKE_BIN/xcodebuild"
+chmod +x "$FAKE_BIN/node" "$FAKE_BIN/xcodebuild"
+
+# shellcheck source=../remote/test.sh
+source "$WRAPPER"
+
+TEST_PLATFORM=ios
+focused_display="$(build_display_command -only-testing:ToasttyMobileDomainTests/GatewayCompatibilityDecoderTests)"
+[[ "$focused_display" == *'-workspace ios/ToasttyMobile.xcworkspace'* ]] \
+  || fail_test "focused display command omitted the default iOS workspace"
+[[ "$focused_display" == *'-scheme ToasttyMobileApp'* ]] \
+  || fail_test "focused display command omitted the default iOS scheme"
+[[ "$focused_display" == *'-configuration Debug'* ]] \
+  || fail_test "focused display command omitted the default configuration"
+[[ "$focused_display" == *'-parallel-testing-enabled NO'* ]] \
+  || fail_test "focused display command omitted the default parallel-testing policy"
+
+TEST_PLATFORM=macos
+ARCH=arm64
+focused_macos_display="$(build_display_command -only-testing:ToasttyAppTests/FocusedTests)"
+[[ "$focused_macos_display" == *'-workspace toastty.xcworkspace'* ]] \
+  || fail_test "focused macOS display command omitted the default workspace"
+[[ "$focused_macos_display" == *'-scheme ToasttyApp'* ]] \
+  || fail_test "focused macOS display command omitted the default scheme"
+[[ "$focused_macos_display" == *'-destination platform=macOS\,arch=arm64'* ]] \
+  || fail_test "focused macOS display command omitted the default arm64 destination"
+TEST_PLATFORM=ios
+
+if (validate_paired_xcodebuild_args -scheme) >/dev/null 2>&1; then
+  fail_test "accepted -scheme without a value"
+fi
+if (validate_paired_xcodebuild_args -workspace One.xcworkspace -project Two.xcodeproj) >/dev/null 2>&1; then
+  fail_test "accepted conflicting workspace and project containers"
+fi
+for forbidden_path_option in -derivedDataPath=/tmp/derived -resultBundlePath=/tmp/results.xcresult; do
+  if (assert_supported_xcodebuild_args "$forbidden_path_option") >/dev/null 2>&1; then
+    fail_test "accepted wrapper-owned path option: $forbidden_path_option"
+  fi
+done
+
+run_remote_fixture \
+  focused \
+  success \
+  -only-testing:ToasttyMobileDomainTests/GatewayCompatibilityDecoderTests
+
+focused_probe="$(grep '^probe ' "$RECORDER")"
+focused_test="$(grep '^test ' "$RECORDER")"
+for required in \
+  '-workspace ios/ToasttyMobile.xcworkspace' \
+  '-scheme ToasttyMobileApp' \
+  '-configuration Debug' \
+  '-parallel-testing-enabled NO' \
+  '-only-testing:ToasttyMobileDomainTests/GatewayCompatibilityDecoderTests'; do
+  [[ "$focused_probe" == *"$required"* ]] \
+    || fail_test "focused destination probe omitted: $required"
+  [[ "$focused_test" == *"$required"* ]] \
+    || fail_test "focused test command omitted: $required"
+done
+[[ "$focused_test" == *'-destination platform=iOS Simulator,id=SIMULATOR-1'* ]] \
+  || fail_test "focused test command omitted the resolved simulator"
+
+run_remote_fixture \
+  explicit \
+  success \
+  -project Custom.xcodeproj \
+  -scheme CustomScheme \
+  -configuration Release \
+  -parallel-testing-enabled YES \
+  -destination 'platform=iOS Simulator,id=EXPLICIT-SIMULATOR' \
+  -only-testing:CustomTests
+
+if grep -q '^probe ' "$RECORDER"; then
+  fail_test "an explicit destination still ran the destination probe"
+fi
+explicit_test="$(grep '^test ' "$RECORDER")"
+for required in \
+  '-project Custom.xcodeproj' \
+  '-scheme CustomScheme' \
+  '-configuration Release' \
+  '-parallel-testing-enabled YES' \
+  '-destination platform=iOS Simulator,id=EXPLICIT-SIMULATOR'; do
+  [[ "$explicit_test" == *"$required"* ]] \
+    || fail_test "explicit test command did not preserve: $required"
+done
+[[ "$explicit_test" != *'-workspace '* ]] \
+  || fail_test "explicit project was combined with the default workspace"
+
+if run_remote_fixture probe-failure fail -only-testing:CustomTests; then
+  fail_test "destination probe failure unexpectedly passed"
+else
+  probe_status=$?
+fi
+[[ "$probe_status" == "78" ]] \
+  || fail_test "destination probe failure returned $probe_status instead of setup-error status 78"
+jq -e '.status == "setup_error" and (.failureSummary | contains("status 66"))' \
+  "$TEST_ROOT/probe-failure/result.json" >/dev/null \
+  || fail_test "destination probe failure was not categorized in result.json"
+grep -q 'invalid destination probe fixture' "$TEST_ROOT/probe-failure/destination-probe.log" \
+  || fail_test "destination probe diagnostics were not retained"
+
+printf 'ok: remote iOS test argument self-test passed\n'

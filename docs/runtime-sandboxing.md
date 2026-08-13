@@ -151,6 +151,23 @@ Useful variants:
 ./scripts/automation/cleanup-artifacts.sh --category dev-runs --include-unowned --apply
 ```
 
+The local artifact cleaner intentionally has no SSH side effects. Preview and
+apply cleanup for legacy automation-created simulators on the dedicated remote
+validation Mac separately:
+
+```bash
+sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
+```
+
+That remote policy is limited to shutdown `Plate Remote remote-test-*` and
+`Plate Remote remote-validate-*` devices whose last boot was more than 24 hours
+ago. It retains booted or recent devices, fails closed on ambiguous metadata,
+verifies the configured remote repository/validation-root tuple, and rechecks
+each candidate before deletion. Do not manually shut down a simulator merely
+to make scheduled cleanup delete it; investigate stale booted devices reported
+for manual review first.
+
 For dev runs, the cleanup helper reads `runtime-home/instance.json`, verifies
 directory ownership, and retains a sandbox when its PID is live or cannot be
 checked conclusively. Directories without ownership metadata require the

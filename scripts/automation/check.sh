@@ -7,6 +7,8 @@ RUNTIME_OWNERSHIP_SELF_TEST="$ROOT_DIR/scripts/automation/runtime-ownership-self
 CLEANUP_ARTIFACTS_SELF_TEST="$ROOT_DIR/scripts/automation/cleanup-artifacts-self-test.sh"
 REMOTE_VALIDATE_CLEANUP_SELF_TEST="$ROOT_DIR/scripts/automation/remote-validate-cleanup-self-test.sh"
 REMOTE_TEST_LIVE_GATEWAY_ENV_SELF_TEST="$ROOT_DIR/scripts/automation/remote-test-live-gateway-env-self-test.sh"
+REMOTE_TEST_IOS_ARGUMENTS_SELF_TEST="$ROOT_DIR/scripts/automation/remote-test-ios-arguments-self-test.sh"
+REMOTE_SIMULATOR_CLEANUP_SELF_TEST="$ROOT_DIR/scripts/automation/remote-simulator-cleanup-self-test.sh"
 TAILSCALE_SERVE_AUTH_PROBE_SELF_TEST="$ROOT_DIR/scripts/automation/tailscale-serve-auth-probe-self-test.sh"
 CODEX_PLUGIN_SELF_TEST="$ROOT_DIR/scripts/agents/toastty-plugin-self-test.sh"
 CODEX_PLUGIN_VALIDATOR="$ROOT_DIR/scripts/agents/validate-toastty-plugin.py"
@@ -351,6 +353,14 @@ if ! "$REMOTE_VALIDATE_CLEANUP_SELF_TEST"; then
 fi
 
 if ! "$REMOTE_TEST_LIVE_GATEWAY_ENV_SELF_TEST"; then
+  exit 10
+fi
+
+if ! "$REMOTE_TEST_IOS_ARGUMENTS_SELF_TEST"; then
+  exit 10
+fi
+
+if ! "$REMOTE_SIMULATOR_CLEANUP_SELF_TEST"; then
   exit 10
 fi
 

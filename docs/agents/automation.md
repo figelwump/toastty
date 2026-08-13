@@ -60,7 +60,7 @@ sv exec -- scripts/remote/test.sh \
   --run-label <label>
 ```
 
-`--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, and Debug. When no `-destination` is passed, it asks `xcodebuild -showdestinations` for an iPhone Simulator compatible with that generated scheme and uses its identifier. Custom xcodebuild flags can still follow `--`; do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
+`--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper asks `xcodebuild -showdestinations` for an iPhone Simulator compatible with the merged invocation and uses its identifier. The complete probe output is retained as `destination-probe.log` beside the other remote-test artifacts. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
 The remote timeout watchdog owns a separate timer child and reaps it on success, timeout, or interruption. Cleanup is scoped to the run's recorded PIDs; never use broad `pkill` cleanup for remote tests.
 
@@ -148,10 +148,36 @@ project to run a preview before applying the same policy:
 ./scripts/automation/cleanup-artifacts.sh --apply
 ```
 
+The dedicated remote validation Mac also needs a separate simulator cleanup.
+`scripts/remote/cleanup-simulators.sh` connects through the configured remote
+GUI/test environment and targets only the legacy `Plate Remote remote-test-*`
+and `Plate Remote remote-validate-*` devices created by earlier automation.
+It considers a device eligible only when it is shut down and its last boot is
+more than 24 hours old. Booted devices, recent devices, ambiguous metadata,
+ordinary Xcode simulators, and current `Toastty Mobile *` dispatcher devices
+are never deleted by this policy. Apply mode verifies the configured remote
+repository/validation-root tuple, takes a remote lock, and rechecks every
+candidate immediately before deletion.
+
+Preview and apply that policy through the manifest-scoped environment:
+
+```bash
+sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
+```
+
+Use this scheduled-task prompt so local artifacts and remote simulators retain
+separate failure boundaries:
+
+```text
+In /Users/vishal/GiantThings/repos/toastty, first run ./scripts/automation/cleanup-artifacts.sh --dry-run. If it succeeds, run ./scripts/automation/cleanup-artifacts.sh --apply. Then run sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run. If it succeeds, run sv exec -- ./scripts/remote/cleanup-simulators.sh --apply. Do not edit source, use --include-unowned, or manually shut down/delete booted simulators. Stop immediately if any command fails. Report all four summary lines and all manual-review counts.
+```
+
 The scheduled task must use the main local checkout, not an isolated worktree,
 because artifact directories belong to that checkout. If the machine or Codex
 App is not running, cleanup waits until a later scheduled run; there is no cron
-or LaunchAgent fallback.
+or LaunchAgent fallback. The remote steps also require the three
+`TOASTTY_REMOTE_GUI_*` values from the repository's `.secrets` manifest.
 
 Common smoke env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
 
