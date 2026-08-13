@@ -1582,15 +1582,17 @@ private extension CodexSessionLogWatcher {
             )
 
         case "override_turn_context":
+            // Codex 0.147 serializes unchanged single-optional override fields
+            // as null. Only a concrete value mutates approval context.
             let approvalPolicyField = contextField(
                 from: operation.payload,
                 key: "approval_policy",
-                nullMeansClear: true
+                nullMeansClear: false
             )
             let approvalsReviewerField = contextField(
                 from: operation.payload,
                 key: "approvals_reviewer",
-                nullMeansClear: true
+                nullMeansClear: false
             )
             guard approvalPolicyField.isSpecified || approvalsReviewerField.isSpecified else {
                 return nil

@@ -1003,6 +1003,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
             return
         case .turnContextUpdated:
+            // The launch recorder captures outbound override intent, not the
+            // effective turn context. Hook-tracked sessions get that state
+            // from the canonical rollout watcher below.
+            guard codexStatusTrackingSource != .hooks else {
+                return
+            }
             sessionRuntimeStore.recordCodexOverrideTurnContext(
                 sessionID: sessionID,
                 approvalPolicy: event.approvalPolicyField,
@@ -1011,13 +1017,18 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         case .turnStarted:
             if event.hasRootTurnContext {
+                let useLaunchApprovalContext = codexStatusTrackingSource != .hooks
                 sessionRuntimeStore.recordCodexRootTurnInput(
                     sessionID: sessionID,
                     fingerprint: event.rootInputFingerprint,
                     threadID: event.rootThreadID,
                     turnID: event.rootTurnID,
-                    approvalPolicyField: event.approvalPolicyField,
-                    approvalsReviewerField: event.approvalsReviewerField
+                    approvalPolicyField: useLaunchApprovalContext
+                        ? event.approvalPolicyField
+                        : .unspecified,
+                    approvalsReviewerField: useLaunchApprovalContext
+                        ? event.approvalsReviewerField
+                        : .unspecified
                 )
             }
             _ = sessionRuntimeStore.handleCodexSessionLogRootProgressObservation(
@@ -1274,6 +1285,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
         switch event.kind {
+        case .turnStarted:
+            // Canonical turn_context entries are effective, turn-scoped state.
+            // Keep status/completion ownership with hooks; forward only the
+            // approval fields needed to classify PermissionRequest events.
+            sessionRuntimeStore?.recordCodexCanonicalTurnContext(
+                sessionID: sessionID,
+                turnID: event.rootTurnID,
+                approvalPolicy: event.approvalPolicyField,
+                approvalsReviewer: event.approvalsReviewerField
+            )
         case .backgroundActivityStarted, .backgroundActivityFinished:
             forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
         default:

@@ -6,7 +6,7 @@ import Testing
 
 extension SessionRuntimeStoreTests {
     @Test
-    func codexHookPermissionRequestWithOmittedReviewerIsAmbiguousAndStaysWorking() async {
+    func codexHookPermissionRequestWithOmittedReviewerSurfacesAfterContextTimeout() async {
         let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -66,7 +66,106 @@ extension SessionRuntimeStoreTests {
 
         try? await Task.sleep(nanoseconds: 80_000_000)
 
-        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-unknown-reviewer")?.status?.kind == .working)
+        #expect(
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-unknown-reviewer"
+            )?.status?.kind == .needsApproval
+        )
+
+        store.recordCodexCanonicalTurnContext(
+            sessionID: "sess-codex-unknown-reviewer",
+            turnID: "turn-root",
+            approvalPolicy: .string("on-request"),
+            approvalsReviewer: .string("auto_review")
+        )
+
+        #expect(
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-unknown-reviewer"
+            )?.status?.kind == .working
+        )
+    }
+
+    @Test
+    func codexCanonicalReviewerTransitionsPreserveHumanAndAutoApprovalBehavior() {
+        let store = SessionRuntimeStore()
+        let sessionID = "sess-codex-canonical-reviewer-transitions"
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        func submitPrompt(turnID: String) {
+            _ = store.handleCodexHookEvent(
+                sessionID: sessionID,
+                event: CodexHookEvent(
+                    hookEventName: "UserPromptSubmit",
+                    threadID: "thread-root",
+                    turnID: turnID,
+                    promptFingerprint: CodexInputFingerprint.fingerprint(for: turnID),
+                    status: SessionStatus(kind: .working, summary: "Working", detail: turnID),
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil
+                ),
+                at: startedAt
+            )
+        }
+
+        func recordContext(turnID: String, reviewer: String) {
+            store.recordCodexCanonicalTurnContext(
+                sessionID: sessionID,
+                turnID: turnID,
+                approvalPolicy: .string("on-request"),
+                approvalsReviewer: .string(reviewer)
+            )
+        }
+
+        func requestApproval(turnID: String) -> Bool {
+            store.handleCodexHookEvent(
+                sessionID: sessionID,
+                event: CodexHookEvent(
+                    hookEventName: "PermissionRequest",
+                    threadID: "thread-root",
+                    turnID: turnID,
+                    promptFingerprint: nil,
+                    status: SessionStatus(
+                        kind: .needsApproval,
+                        summary: "Needs approval",
+                        detail: turnID
+                    ),
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil
+                ),
+                at: startedAt
+            )
+        }
+
+        submitPrompt(turnID: "turn-auto-one")
+        recordContext(turnID: "turn-auto-one", reviewer: "auto_review")
+        #expect(requestApproval(turnID: "turn-auto-one") == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
+
+        submitPrompt(turnID: "turn-human")
+        recordContext(turnID: "turn-human", reviewer: "user")
+        #expect(requestApproval(turnID: "turn-human"))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .needsApproval)
+
+        submitPrompt(turnID: "turn-auto-two")
+        recordContext(turnID: "turn-auto-two", reviewer: "guardian_subagent")
+        #expect(requestApproval(turnID: "turn-auto-two") == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
     }
 
     @Test

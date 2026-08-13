@@ -1072,10 +1072,11 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
-    func testCodexSessionLogOverrideContextPersistsAcrossUserTurnsWhenHooksAreAvailable() async throws {
+    func testCodex0147ServiceTierOverrideDoesNotSurfaceAutoReviewedApproval() async throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
         )
+        let rolloutURL = temporaryJSONLURL()
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
                 agent: .codex,
@@ -1089,27 +1090,22 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         defer {
             fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
             try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+            try? fixture.fileManager.removeItem(at: rolloutURL)
         }
 
-        try appendCodexSessionLogLine(
-            """
-            {"ts":"2026-05-28T19:22:32.686Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"cwd":null,"approval_policy":"on-request","approvals_reviewer":"guardian_subagent","permission_profile":{"type":"managed"}}}}
-            """,
-            to: logURL
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: codexResumeRecord(
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: rolloutURL.path
+                )
+            )
+        ))
+        XCTAssertEqual(
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
+            rolloutURL.path
         )
-        try appendCodexSessionLogLine(
-            """
-            {"ts":"2026-05-28T19:24:59.371Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"ok make a plan","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
-            """,
-            to: logURL
-        )
-        try appendCodexSessionLogLine(
-            """
-            {"ts":"2026-05-28T19:56:55.411Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"go ahead","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
-            """,
-            to: logURL
-        )
-        try await Task.sleep(nanoseconds: 500_000_000)
 
         _ = fixture.sessionRuntimeStore.handleCodexHookEvent(
             sessionID: plan.sessionID,
@@ -1120,11 +1116,43 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 promptFingerprint: promptFingerprint,
                 status: SessionStatus(kind: .working, summary: "Working", detail: "go ahead"),
                 nativeSessionID: "thread-root",
-                sessionFilePath: nil,
+                sessionFilePath: rolloutURL.path,
                 cwd: nil
             ),
             at: Date()
         )
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-08-13T21:32:42.856Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"cwd":null,"approval_policy":null,"approvals_reviewer":null,"sandbox_policy":null,"model":null,"effort":null,"summary":null,"service_tier":"default","collaboration_mode":null,"personality":null}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-08-13T21:32:53.181Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"go ahead","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"2026-08-13T21:32:53.215Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":"auto_review"}}
+            """,
+            to: rolloutURL
+        )
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .codexRootTurnSnapshotForTesting(sessionID: plan.sessionID)?
+                .currentApprovalContext?
+                .approvalsReviewer == .string("auto_review")
+        }
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore
+                .codexRootTurnSnapshotForTesting(sessionID: plan.sessionID)?
+                .currentApprovalContext?
+                .approvalsReviewer,
+            .string("auto_review")
+        )
+
         let accepted = fixture.sessionRuntimeStore.handleCodexHookEvent(
             sessionID: plan.sessionID,
             event: CodexHookEvent(
@@ -1142,6 +1170,17 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
 
         XCTAssertFalse(accepted)
+        XCTAssertFalse(
+            fixture.sessionRuntimeStore.hasPendingCodexHookApprovalForTesting(
+                sessionID: plan.sessionID
+            )
+        )
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.codexAutoReviewedPermissionTurnIDsForTesting(
+                sessionID: plan.sessionID
+            ),
+            ["turn-root"]
+        )
         XCTAssertEqual(
             fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
             .working
@@ -1274,7 +1313,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
-    func testCodexSessionLogFallbackPublishesApprovalWhenReviewerIsExplicitlyCleared() async throws {
+    func testCodexSessionLogFallbackPublishesApprovalForCanonicalUserReviewer() async throws {
         let fixture = try makePlannerFixture()
         let threadID = "019e316e-human-review"
         let plan = try fixture.planner.prepareManagedLaunch(
@@ -1299,13 +1338,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
         try appendCodexSessionLogLine(
             """
-            {"ts":"2026-05-28T17:30:32.495Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"approval_policy":"on-request","approvals_reviewer":null}}}
-            """,
-            to: logURL
-        )
-        try appendCodexSessionLogLine(
-            """
-            {"timestamp":"2026-06-02T17:53:00.654Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request"}}
+            {"timestamp":"2026-06-02T17:53:00.654Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":"user"}}
             """,
             to: logURL
         )

@@ -870,23 +870,16 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
-    func testWatcherParsesCurrentCodexOverrideTurnContextNullsAsContextClear() async throws {
+    func testWatcherTreatsCodex0147NullOverrideFieldsAsUnspecified() async throws {
         let events = try await recordEvents(
             from:
                 """
-                {"ts":"2026-05-28T17:30:32.495Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"approval_policy":null,"approvals_reviewer":null}}}
+                {"ts":"2026-08-13T21:32:42.856Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"cwd":null,"approval_policy":null,"approvals_reviewer":null,"sandbox_policy":null,"model":null,"effort":null,"summary":null,"service_tier":"default","collaboration_mode":null,"personality":null}}}
                 """,
-            expectedCount: 1
+            expectedCount: 0
         )
 
-        XCTAssertEqual(events, [
-            CodexSessionLogEvent(
-                kind: .turnContextUpdated,
-                detail: "Codex turn context updated",
-                approvalPolicyField: .null,
-                approvalsReviewerField: .null
-            )
-        ])
+        XCTAssertEqual(events, [])
     }
 
     func testWatcherTreatsNullUserTurnReviewerAsUnspecified() async throws {

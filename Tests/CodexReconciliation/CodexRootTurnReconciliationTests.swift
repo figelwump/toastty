@@ -49,6 +49,117 @@ struct CodexRootTurnReconciliationTests {
     }
 
     @Test
+    func canonicalContextWinsAcrossLaunchAndHookOrdering() {
+        let canonical = context(
+            policy: .string("on-request"),
+            reviewer: .string("auto_review")
+        )
+
+        var canonicalFirst = CodexRootTurnReconciler(authority: .hooks)
+        _ = canonicalFirst.reduce(.canonicalTurnContext(turnID: "turn", context: canonical))
+        _ = canonicalFirst.reduce(rootInput(
+            fingerprint: "fp",
+            thread: "thread",
+            turn: "turn",
+            context: context(policy: .string("on-request"), reviewer: .null)
+        ))
+        _ = canonicalFirst.reduce(hook(
+            .userPromptSubmit,
+            thread: "thread",
+            turn: "turn",
+            fingerprint: "fp"
+        ))
+
+        var hookFirst = CodexRootTurnReconciler(authority: .hooks)
+        _ = hookFirst.reduce(hook(
+            .userPromptSubmit,
+            thread: "thread",
+            turn: "turn",
+            fingerprint: "fp"
+        ))
+        _ = hookFirst.reduce(.canonicalTurnContext(turnID: "turn", context: canonical))
+        _ = hookFirst.reduce(rootInput(
+            fingerprint: "fp",
+            thread: "thread",
+            turn: "turn",
+            context: context(policy: .string("on-request"), reviewer: .null)
+        ))
+        _ = hookFirst.reduce(.launchLogOverrideContext(context(
+            reviewer: .null
+        )))
+
+        #expect(canonicalFirst.snapshot.currentApprovalContext == canonical)
+        #expect(hookFirst.snapshot.currentApprovalContext == canonical)
+        #expect(canonicalFirst.snapshot.isAwaitingSessionLogContext == false)
+        #expect(hookFirst.snapshot.isAwaitingSessionLogContext == false)
+    }
+
+    @Test
+    func partialCanonicalUpdatesMergeWithinTheSameTurn() {
+        var reconciler = CodexRootTurnReconciler(authority: .hooks)
+        _ = reconciler.reduce(hook(
+            .userPromptSubmit,
+            thread: "thread",
+            turn: "turn",
+            fingerprint: "fp"
+        ))
+        _ = reconciler.reduce(.canonicalTurnContext(
+            turnID: "turn",
+            context: context(reviewer: .string("auto_review"))
+        ))
+        _ = reconciler.reduce(.canonicalTurnContext(
+            turnID: "turn",
+            context: context(policy: .string("on-request"))
+        ))
+
+        let expected = context(
+            policy: .string("on-request"),
+            reviewer: .string("auto_review")
+        )
+        #expect(reconciler.snapshot.latestCanonicalApprovalContext == expected)
+        #expect(reconciler.snapshot.currentApprovalContext == expected)
+    }
+
+    @Test
+    func canonicalContextIsTurnScopedAcrossReviewerTransitions() {
+        var reconciler = CodexRootTurnReconciler(authority: .hooks)
+        _ = reconciler.reduce(hook(
+            .userPromptSubmit,
+            thread: "thread",
+            turn: "turn-auto",
+            fingerprint: "auto"
+        ))
+        _ = reconciler.reduce(.canonicalTurnContext(
+            turnID: "turn-auto",
+            context: context(
+                policy: .string("on-request"),
+                reviewer: .string("auto_review")
+            )
+        ))
+
+        _ = reconciler.reduce(hook(
+            .userPromptSubmit,
+            thread: "thread",
+            turn: "turn-human",
+            fingerprint: "human"
+        ))
+        #expect(reconciler.snapshot.currentApprovalContext == nil)
+        #expect(reconciler.snapshot.isAwaitingSessionLogContext)
+
+        let humanContext = context(
+            policy: .string("on-request"),
+            reviewer: .string("user")
+        )
+        _ = reconciler.reduce(.canonicalTurnContext(
+            turnID: "turn-human",
+            context: humanContext
+        ))
+
+        #expect(reconciler.snapshot.currentApprovalContext == humanContext)
+        #expect(reconciler.snapshot.isAwaitingSessionLogContext == false)
+    }
+
+    @Test
     func triStateMergeRetainsClearsAndOverwritesEachField() {
         let fields: [CodexRootTurnContextField] = [
             .unspecified,
@@ -143,6 +254,27 @@ struct CodexRootTurnReconciliationTests {
         ))
         #expect(promoted.snapshot.isAwaitingSessionLogContext == false)
         assertValid(promoted)
+    }
+
+    @Test
+    func matchingLaunchInputWithoutContextKeepsHookWaitingForCanonicalContext() {
+        var reconciler = CodexRootTurnReconciler(authority: .hooks)
+        _ = reconciler.reduce(hook(
+            .userPromptSubmit,
+            thread: "thread",
+            turn: "turn",
+            fingerprint: "fp"
+        ))
+
+        let launch = reconciler.reduce(rootInput(
+            fingerprint: "fp",
+            context: context()
+        ))
+
+        #expect(launch.snapshot.rootTurnID == "turn")
+        #expect(launch.snapshot.rootTurnInputFingerprint == "fp")
+        #expect(launch.snapshot.isAwaitingSessionLogContext)
+        #expect(launch.snapshot.currentApprovalContext == nil)
     }
 
     @Test

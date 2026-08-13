@@ -82,6 +82,10 @@ public enum CodexRootTurnObservation: Equatable, Sendable {
         context: CodexRootTurnApprovalContext
     )
     case launchLogOverrideContext(CodexRootTurnApprovalContext)
+    case canonicalTurnContext(
+        turnID: String,
+        context: CodexRootTurnApprovalContext
+    )
     case hook(
         kind: CodexRootTurnHookKind,
         threadID: String?,
@@ -100,6 +104,8 @@ public struct CodexRootTurnSnapshot: Equatable, Sendable {
     public let pendingApprovalContext: CodexRootTurnApprovalContext?
     public let activeApprovalContext: CodexRootTurnApprovalContext?
     public let currentApprovalContext: CodexRootTurnApprovalContext?
+    public let latestCanonicalTurnID: String?
+    public let latestCanonicalApprovalContext: CodexRootTurnApprovalContext?
 
     public init(
         rootThreadID: String? = nil,
@@ -109,7 +115,9 @@ public struct CodexRootTurnSnapshot: Equatable, Sendable {
         pendingRootInputFingerprint: String? = nil,
         pendingApprovalContext: CodexRootTurnApprovalContext? = nil,
         activeApprovalContext: CodexRootTurnApprovalContext? = nil,
-        currentApprovalContext: CodexRootTurnApprovalContext? = nil
+        currentApprovalContext: CodexRootTurnApprovalContext? = nil,
+        latestCanonicalTurnID: String? = nil,
+        latestCanonicalApprovalContext: CodexRootTurnApprovalContext? = nil
     ) {
         self.rootThreadID = rootThreadID
         self.rootTurnID = rootTurnID
@@ -119,6 +127,8 @@ public struct CodexRootTurnSnapshot: Equatable, Sendable {
         self.pendingApprovalContext = pendingApprovalContext
         self.activeApprovalContext = activeApprovalContext
         self.currentApprovalContext = currentApprovalContext
+        self.latestCanonicalTurnID = latestCanonicalTurnID
+        self.latestCanonicalApprovalContext = latestCanonicalApprovalContext
     }
 
     public static let empty = CodexRootTurnSnapshot()
@@ -134,6 +144,7 @@ public enum CodexRootTurnQualification: Equatable, Sendable {
 public enum CodexRootTurnReductionReason: Equatable, Sendable {
     case launchLogRootInput
     case launchLogOverrideContext
+    case canonicalTurnContext
     case hookAccepted
     case hookOther
     case fallbackNotifyThreadMatched
@@ -183,6 +194,8 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
     private var pendingApprovalContext: CodexRootTurnApprovalContext?
     private var activeApprovalContext: CodexRootTurnApprovalContext?
     private var currentApprovalContext: CodexRootTurnApprovalContext?
+    private var latestCanonicalTurnID: String?
+    private var latestCanonicalApprovalContext: CodexRootTurnApprovalContext?
 
     public init(authority: CodexRootTurnAuthority) {
         self.authority = authority
@@ -197,7 +210,9 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
             pendingRootInputFingerprint: pendingRootInputFingerprint,
             pendingApprovalContext: pendingApprovalContext,
             activeApprovalContext: activeApprovalContext,
-            currentApprovalContext: currentApprovalContext
+            currentApprovalContext: currentApprovalContext,
+            latestCanonicalTurnID: latestCanonicalTurnID,
+            latestCanonicalApprovalContext: latestCanonicalApprovalContext
         )
     }
 
@@ -224,6 +239,10 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
         case .launchLogOverrideContext(let context):
             reduceLaunchLogOverrideContext(context)
             outcome = .proceed(.launchLogOverrideContext)
+
+        case .canonicalTurnContext(let turnID, let context):
+            reduceCanonicalTurnContext(turnID: turnID, context: context)
+            outcome = .proceed(.canonicalTurnContext)
 
         case .hook(let kind, let threadID, let turnID, let promptFingerprint):
             outcome = reduceHook(
@@ -275,6 +294,8 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
                 pendingApprovalContext = nil
                 activeApprovalContext = nil
                 currentApprovalContext = nil
+                latestCanonicalTurnID = nil
+                latestCanonicalApprovalContext = nil
                 shouldResetApprovalHistory = true
             }
         }
@@ -289,14 +310,21 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
             rootTurnInputFingerprint = fingerprint
             isAwaitingSessionLogContext = false
             pendingApprovalContext = nil
-            currentApprovalContext = nextApprovalContext
+            if latestCanonicalTurnID == turnID,
+               let latestCanonicalApprovalContext {
+                currentApprovalContext = latestCanonicalApprovalContext
+            } else {
+                currentApprovalContext = nextApprovalContext
+            }
         } else if fingerprint != nil {
             if fingerprint == rootTurnInputFingerprint,
-               rootTurnID != nil,
-               isAwaitingSessionLogContext {
-                isAwaitingSessionLogContext = false
-                pendingApprovalContext = nil
-                currentApprovalContext = nextApprovalContext
+               rootTurnID != nil {
+                if isAwaitingSessionLogContext,
+                   let nextApprovalContext {
+                    isAwaitingSessionLogContext = false
+                    pendingApprovalContext = nil
+                    currentApprovalContext = nextApprovalContext
+                }
             } else {
                 rootTurnID = nil
                 rootTurnInputFingerprint = nil
@@ -337,13 +365,42 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
         }
 
         if rootTurnID != nil {
-            currentApprovalContext = applyingWithActiveFallback(
-                context,
-                to: currentApprovalContext
-            )
-            isAwaitingSessionLogContext = false
-            pendingApprovalContext = nil
+            // A canonical context is effective state. A later outbound launch
+            // override for the same turn must not downgrade it.
+            if latestCanonicalTurnID != rootTurnID {
+                currentApprovalContext = applyingWithActiveFallback(
+                    context,
+                    to: currentApprovalContext
+                )
+                isAwaitingSessionLogContext = false
+                pendingApprovalContext = nil
+            }
         }
+    }
+
+    private mutating func reduceCanonicalTurnContext(
+        turnID: String,
+        context: CodexRootTurnApprovalContext
+    ) {
+        guard context.hasSpecifiedField else { return }
+
+        let effectiveContext: CodexRootTurnApprovalContext
+        if latestCanonicalTurnID == turnID {
+            effectiveContext = applying(
+                context,
+                to: latestCanonicalApprovalContext,
+                preservingNilWhenUnspecified: false
+            ) ?? context
+        } else {
+            effectiveContext = context
+        }
+        latestCanonicalTurnID = turnID
+        latestCanonicalApprovalContext = effectiveContext
+        guard rootTurnID == turnID else { return }
+
+        currentApprovalContext = effectiveContext
+        isAwaitingSessionLogContext = false
+        pendingApprovalContext = nil
     }
 
     private mutating func reduceHook(
@@ -373,6 +430,8 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
                     pendingApprovalContext = nil
                     activeApprovalContext = nil
                     currentApprovalContext = nil
+                    latestCanonicalTurnID = nil
+                    latestCanonicalApprovalContext = nil
                     shouldResetApprovalHistory = true
                 }
             } else if kind.canLatchRootThread {
@@ -402,7 +461,12 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
 
             rootTurnID = turnID
             rootTurnInputFingerprint = promptFingerprint
-            if matchedPendingContext {
+            if let turnID,
+               latestCanonicalTurnID == turnID,
+               let latestCanonicalApprovalContext {
+                currentApprovalContext = latestCanonicalApprovalContext
+                isAwaitingSessionLogContext = false
+            } else if matchedPendingContext {
                 currentApprovalContext = pendingApprovalContext
             } else if !shouldAwaitSessionLogContext {
                 currentApprovalContext = activeApprovalContext
@@ -410,7 +474,16 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
                 currentApprovalContext = nil
             }
             pendingApprovalContext = nil
-            isAwaitingSessionLogContext = shouldAwaitSessionLogContext
+            if latestCanonicalTurnID != turnID {
+                isAwaitingSessionLogContext = shouldAwaitSessionLogContext
+            }
+        } else if kind == .userPromptSubmit,
+                  let turnID,
+                  latestCanonicalTurnID == turnID,
+                  let latestCanonicalApprovalContext {
+            currentApprovalContext = latestCanonicalApprovalContext
+            isAwaitingSessionLogContext = false
+            pendingApprovalContext = nil
         }
 
         if let promptFingerprint {

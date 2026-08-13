@@ -68,7 +68,7 @@ public enum CodexApprovalReason: Equatable, Sendable {
     case missingApprovalContext
     case unknownApprovalsReviewer
     case missingHumanApprovalPolicy
-    case missingApprovalsReviewer
+    case humanApproval
     case autoReviewApproval
 }
 
@@ -195,17 +195,18 @@ public struct CodexApprovalReconciler: Equatable, Sendable {
         }
 
         let approvalPolicy = normalizedNonEmpty(context.approvalPolicy.stringValue)
-        let approvalsReviewer = normalizedNonEmpty(context.approvalsReviewer.stringValue)
-        guard approvalsReviewer == nil else {
+        switch reviewerDisposition(context.approvalsReviewer) {
+        case .automatic:
             return .suppress(reason: .autoReviewApproval)
-        }
-        guard context.approvalsReviewer.isSpecified else {
+        case .unknown:
             return .deferForContext(reason: .unknownApprovalsReviewer)
+        case .human:
+            break
         }
         guard requiresHumanApproval(approvalPolicy) else {
             return .suppress(reason: .missingHumanApprovalPolicy)
         }
-        return .accept(reason: .missingApprovalsReviewer)
+        return .accept(reason: .humanApproval)
     }
 
     private func accepts(_ source: CodexApprovalSource) -> Bool {
@@ -218,13 +219,11 @@ public struct CodexApprovalReconciler: Equatable, Sendable {
     }
 
     private func hasApplicableReviewer(root: CodexRootTurnSnapshot) -> Bool {
-        if normalizedNonEmpty(root.currentApprovalContext?.approvalsReviewer.stringValue) != nil {
+        if reviewerDisposition(root.currentApprovalContext?.approvalsReviewer) == .automatic {
             return true
         }
         guard root.isAwaitingSessionLogContext else { return false }
-        return normalizedNonEmpty(
-            root.activeApprovalContext?.approvalsReviewer.stringValue
-        ) != nil
+        return reviewerDisposition(root.activeApprovalContext?.approvalsReviewer) == .automatic
     }
 
     private func requiresHumanApproval(_ policy: String?) -> Bool {
@@ -238,6 +237,31 @@ public struct CodexApprovalReconciler: Equatable, Sendable {
         guard let value else { return nil }
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private func reviewerDisposition(
+        _ field: CodexRootTurnContextField?
+    ) -> ReviewerDisposition {
+        guard let field, field.isSpecified else { return .unknown }
+        guard let reviewer = normalizedNonEmpty(field.stringValue)?.lowercased() else {
+            return .human
+        }
+        switch reviewer {
+        case "user":
+            return .human
+        // `reviewer` predates the named Codex enum but remains in persisted
+        // launch fixtures and represents automatic review.
+        case "auto_review", "guardian_subagent", "reviewer":
+            return .automatic
+        default:
+            return .unknown
+        }
+    }
+
+    private enum ReviewerDisposition {
+        case human
+        case automatic
+        case unknown
     }
 }
 
