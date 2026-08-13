@@ -235,7 +235,7 @@ struct ToasttyMobileRootView: View {
     ) -> ToasttyConversationPresentationState? {
 #if DEBUG
         switch fixtureScenario {
-        case .home:
+        case .home, .reconnecting:
             return ToasttyConversationFixture.presentation(for: conversationID)
         case .transcriptPerformance:
             return ToasttyConversationFixture.performancePresentation(for: conversationID)

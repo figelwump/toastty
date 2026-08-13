@@ -67,6 +67,21 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(close.frame.height, 44)
     }
 
+    func testReconnectingNoticeShowsActivity() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting"]
+        )
+
+        let notice = app.descendants(matching: .any)["toastty-mobile-connection-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 10))
+        XCTAssertEqual(
+            notice.label,
+            "Reconnecting. Reconnecting to your Mac. Showing the last available update."
+        )
+        XCTAssertEqual(notice.value as? String, "In progress")
+        attachScreenshot(named: "fixture-reconnecting-progress", of: app)
+    }
+
     func testFixtureWorkspaceReflowsAtAccessibilityTextSize() {
         let app = launchFixtureApp(
             launchArguments: [

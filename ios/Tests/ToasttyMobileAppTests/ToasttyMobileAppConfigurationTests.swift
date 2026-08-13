@@ -48,6 +48,25 @@ final class ToasttyMobileAppConfigurationTests: XCTestCase {
         XCTAssertTrue(configuration.initialSnapshot.workspaces.isEmpty)
     }
 
+    func testReconnectingFixtureUsesStaleSnapshotAndReconnectingConnectionState() {
+        let configuration = ToasttyMobileAppConfiguration(
+            environment: [
+                "TOASTTY_MOBILE_USE_FIXTURE": "1",
+                "TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting",
+            ],
+            infoDictionary: [:]
+        )
+
+#if DEBUG
+        XCTAssertEqual(configuration.fixtureScenario, .reconnecting)
+        XCTAssertEqual(configuration.initialConnectionState, .reconnecting)
+        XCTAssertEqual(configuration.initialSnapshot, ToasttyMobileFixture.home)
+#else
+        XCTAssertNil(configuration.fixtureScenario)
+        XCTAssertEqual(configuration.initialConnectionState, .offline)
+#endif
+    }
+
     func testLiveConfigurationDoesNotExposeFixtureWorkspaceData() throws {
         let gateway = try XCTUnwrap(URL(string: "https://toastty-mac.example.ts.net"))
         let configuration = ToasttyMobileAppConfiguration(

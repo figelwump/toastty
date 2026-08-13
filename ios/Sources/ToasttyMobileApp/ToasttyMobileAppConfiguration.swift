@@ -5,6 +5,7 @@ import UIKit
 
 enum ToasttyMobileFixtureScenario: String, Equatable, Sendable {
     case home
+    case reconnecting
     case transcriptPerformance = "transcript-performance"
     case transcriptResyncing = "transcript-resyncing"
     case transcriptStale = "transcript-stale"
@@ -72,6 +73,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
              .transcriptStale, .transcriptTruncated, .transcriptPaging,
              .gatedSend, .gatedSendReceipt:
             .live
+        case .reconnecting:
+            .reconnecting
         case .unpaired, .cameraDenied, .scannerUnsupported,
              .pairingFailure, .pairingPrivacy, nil:
             .offline
@@ -88,7 +91,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 scanner = FixturePairingScanner(authorization: .denied)
             case .scannerUnsupported:
                 scanner = FixturePairingScanner(availability: .unsupported)
-            case .home, .transcriptPerformance, .transcriptResyncing,
+            case .home, .reconnecting, .transcriptPerformance, .transcriptResyncing,
                  .transcriptStale, .transcriptTruncated, .transcriptPaging,
                  .gatedSend, .gatedSendReceipt,
                  .unpaired, .pairingFailure, .pairingPrivacy:
@@ -96,7 +99,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             }
             let usesPairedFixture: Bool
             switch fixtureScenario {
-            case .home, .transcriptPerformance, .transcriptResyncing,
+            case .home, .reconnecting, .transcriptPerformance, .transcriptResyncing,
                  .transcriptStale, .transcriptTruncated, .transcriptPaging,
                  .gatedSend, .gatedSendReceipt:
                 usesPairedFixture = true
@@ -115,7 +118,9 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 ),
                 scanner: scanner,
                 deviceName: { "Fixture iPhone" },
-                initialState: usesPairedFixture ? .paired(.live) : .unpaired,
+                initialState: usesPairedFixture
+                    ? .paired(fixtureScenario == .reconnecting ? .reconnecting : .live)
+                    : .unpaired,
                 initialPairedDevice: initialCredential.map(PairedDevicePresentation.init),
                 initialSnapshot: initialSnapshot,
                 initialConnectionState: initialConnectionState

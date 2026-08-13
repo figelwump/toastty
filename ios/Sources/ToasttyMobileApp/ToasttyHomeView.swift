@@ -60,9 +60,7 @@ struct ToasttyHomeView: View {
     private var connectionNotice: some View {
         if let message = controller.connectionNoticeMessage {
             HStack(alignment: .top, spacing: 9) {
-                Image(systemName: controller.freshness == .unreachable
-                    ? "wifi.slash"
-                    : "arrow.trianglehead.2.clockwise.rotate.90")
+                connectionNoticeIndicator
                 Text(message)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
@@ -74,7 +72,21 @@ struct ToasttyHomeView: View {
             .toasttyCard()
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
+            .accessibilityValue(controller.freshness == .reconnecting ? "In progress" : "")
             .accessibilityIdentifier("toastty-mobile-connection-notice")
+        }
+    }
+
+    @ViewBuilder
+    private var connectionNoticeIndicator: some View {
+        if controller.freshness == .reconnecting {
+            ProgressView()
+                .controlSize(.small)
+                .tint(ToasttyDesignTokens.amber)
+        } else {
+            Image(systemName: controller.freshness == .unreachable
+                ? "wifi.slash"
+                : "arrow.trianglehead.2.clockwise.rotate.90")
         }
     }
 
