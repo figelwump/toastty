@@ -117,6 +117,7 @@ trap cleanup EXIT
 require_command jq
 require_command npm
 require_command rg
+require_command xmllint
 
 run_tuist() {
   if command -v sv >/dev/null 2>&1; then
@@ -333,6 +334,95 @@ validate_manifest_version_inputs() {
   fi
 }
 
+validate_local_release_environment_forwarding() (
+  local release_scheme="$ROOT_DIR/toastty.xcodeproj/xcshareddata/xcschemes/ToasttyApp-Release.xcscheme"
+  local debug_scheme="$ROOT_DIR/toastty.xcodeproj/xcshareddata/xcschemes/ToasttyApp.xcscheme"
+  local local_release_env_log
+  local local_release_empty_env_log
+  local release_value
+  local release_enabled
+  local release_count
+  local debug_count
+
+  local manifest_validation_terminal_profiles_path="$ROOT_DIR/artifacts/test fixtures/terminal-profiles.toml"
+  local_release_env_log="$(mktemp -t toastty-local-release-env.XXXXXX.log)"
+  local_release_empty_env_log="$(mktemp -t toastty-local-release-empty-env.XXXXXX.log)"
+
+  restore_local_release_workspace() {
+    local exit_status=$?
+    trap - EXIT INT TERM
+    rm -f -- "$local_release_env_log" "$local_release_empty_env_log"
+    if ! "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null 2>&1; then
+      echo "error: failed to restore the bootstrapped workspace after local Release environment validation" >&2
+      exit 1
+    fi
+    exit "$exit_status"
+  }
+
+  trap restore_local_release_workspace EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  if ! TUIST_TOASTTY_TERMINAL_PROFILES_PATH="$manifest_validation_terminal_profiles_path" \
+    tuist generate --no-open >"$local_release_env_log" 2>&1; then
+    cat "$local_release_env_log" >&2
+    exit 1
+  fi
+
+  release_value="$(
+    /usr/bin/xmllint --xpath \
+      'string(//LaunchAction/EnvironmentVariables/EnvironmentVariable[@key="TOASTTY_TERMINAL_PROFILES_PATH"]/@value)' \
+      "$release_scheme"
+  )"
+  release_enabled="$(
+    /usr/bin/xmllint --xpath \
+      'string(//LaunchAction/EnvironmentVariables/EnvironmentVariable[@key="TOASTTY_TERMINAL_PROFILES_PATH"]/@isEnabled)' \
+      "$release_scheme"
+  )"
+  if [[ "$release_value" != "$manifest_validation_terminal_profiles_path" \
+    || "$release_enabled" != "YES" ]]; then
+    echo "expected the generated Release LaunchAction to enable TOASTTY_TERMINAL_PROFILES_PATH" >&2
+    exit 1
+  fi
+
+  debug_count="$(
+    /usr/bin/xmllint --xpath \
+      'count(//LaunchAction/EnvironmentVariables/EnvironmentVariable[@key="TOASTTY_TERMINAL_PROFILES_PATH"])' \
+      "$debug_scheme"
+  )"
+  if [[ "$debug_count" != "0" ]]; then
+    echo "expected the generated Debug scheme to keep terminal profiles runtime-isolated" >&2
+    exit 1
+  fi
+
+  if TUIST_TOASTTY_TERMINAL_PROFILES_PATH="" \
+    tuist generate --no-open >"$local_release_empty_env_log" 2>&1; then
+    echo "expected an empty local Release runtime value to fail generation" >&2
+    exit 1
+  fi
+
+  if ! rg -Fq "TUIST_TOASTTY_TERMINAL_PROFILES_PATH must not be empty" "$local_release_empty_env_log"; then
+    cat "$local_release_empty_env_log" >&2
+    exit 1
+  fi
+
+  if ! env -u TUIST_TOASTTY_TERMINAL_PROFILES_PATH \
+    tuist generate --no-open >"$local_release_env_log" 2>&1; then
+    cat "$local_release_env_log" >&2
+    exit 1
+  fi
+
+  release_count="$(
+    /usr/bin/xmllint --xpath \
+      'count(//LaunchAction/EnvironmentVariables/EnvironmentVariable[@key="TOASTTY_TERMINAL_PROFILES_PATH"])' \
+      "$release_scheme"
+  )"
+  if [[ "$release_count" != "0" ]]; then
+    echo "expected an unset local Release runtime value to be omitted from the generated scheme" >&2
+    exit 1
+  fi
+)
+
 if ! "$RUNTIME_OWNERSHIP_SELF_TEST"; then
   exit 10
 fi
@@ -354,7 +444,8 @@ if ! validate_manifest_version_inputs; then
   exit 10
 fi
 
-if ! "$BOOTSTRAP_WORKTREE_SCRIPT"; then
+if ! validate_local_release_environment_forwarding; then
+  restore_default_workspace
   exit 10
 fi
 
@@ -362,7 +453,7 @@ if ! verify_ghostty_test_contract; then
   exit 10
 fi
 
-if ! run_tuist build; then
+if ! run_tuist build -- "ARCHS=$ARCH" ONLY_ACTIVE_ARCH=YES; then
   exit 10
 fi
 

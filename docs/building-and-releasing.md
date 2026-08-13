@@ -177,6 +177,38 @@ For fresh linked worktrees, run `./scripts/dev/bootstrap-worktree.sh` once to sy
 
 For the full runtime-home model, `instance.json` fields, and cleanup conventions, see [Runtime Sandboxing](runtime-sandboxing.md).
 
+### Use personal runtime configuration with the local Release scheme
+
+The generated `ToasttyApp-Release` Run scheme keeps normal worktree runtime
+isolation, but bootstrap can opt specific non-secret runtime settings into that
+scheme from `sv`. The allowlist lives in `Project.swift`; values outside that
+list are never copied into the app's launch environment.
+
+For example, configure the shared terminal-profile catalog once:
+
+```bash
+sv set TUIST_TOASTTY_TERMINAL_PROFILES_PATH
+```
+
+Enter an absolute path or a `~/`-prefixed path such as
+`~/.toastty/terminal-profiles.toml`. Do not use `$HOME` or another shell
+variable because Xcode expands `$` expressions in generated scheme values.
+Then regenerate and open the workspace:
+
+```bash
+./scripts/dev/bootstrap-worktree.sh
+open toastty.xcworkspace
+```
+
+Select `ToasttyApp-Release` in Xcode and use Build and Run normally. Repeat
+bootstrap after changing the stored value, creating a fresh worktree, or
+regenerating the project. The resolved value is written in plaintext to the
+generated, gitignored Xcode scheme, so this mechanism is only for non-secret
+configuration. Never add tokens, passwords, signing credentials, or other
+secrets to the Release runtime allowlist. The override applies only to Xcode's
+`ToasttyApp-Release` Run action; Debug, Finder, `open`, and direct executable
+launches do not receive it.
+
 ## Build a signed release DMG
 
 The release script expects:

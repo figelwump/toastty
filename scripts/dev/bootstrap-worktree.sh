@@ -13,6 +13,7 @@ Bootstraps the current Toastty worktree for local development:
 - creates symlinks back to the source worktree's Ghostty artifacts
 - keeps worktree-local Dependencies/ entries ignored by Git
 - runs `tuist install` and `tuist generate --no-open`
+- forwards allowlisted non-secret sv values into the generated Release Run scheme
 
 When Ghostty integration is disabled via TUIST_DISABLE_GHOSTTY=1 or
 TOASTTY_DISABLE_GHOSTTY=1, the script still regenerates the workspace and only
