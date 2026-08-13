@@ -17,17 +17,20 @@ public struct CodexStatusHookInstallStatus: Equatable, Sendable {
     public let forwarderScriptURL: URL
     public let state: CodexStatusHookInstallState
     public let setupRequirement: CodexStatusHookSetupRequirement
+    public let supportsStatusForwarding: Bool
 
     public init(
         hooksFileURL: URL,
         forwarderScriptURL: URL,
         state: CodexStatusHookInstallState,
-        setupRequirement: CodexStatusHookSetupRequirement? = nil
+        setupRequirement: CodexStatusHookSetupRequirement? = nil,
+        supportsStatusForwarding: Bool? = nil
     ) {
         self.hooksFileURL = hooksFileURL
         self.forwarderScriptURL = forwarderScriptURL
         self.state = state
         self.setupRequirement = setupRequirement ?? Self.defaultSetupRequirement(for: state)
+        self.supportsStatusForwarding = supportsStatusForwarding ?? (state == .installed)
     }
 
     public var isInstalled: Bool {
@@ -97,6 +100,7 @@ public final class CodexStatusHookInstaller {
     private static let installLock = NSLock()
     private static let toasttyStatusMessage = "Toastty Agent Status"
     private static let hookTimeoutSeconds = 5
+    private static let forwarderProtocolMarker = "# toastty-codex-forwarder-protocol: 1"
     private static let hookEventNames = [
         "SessionStart",
         "UserPromptSubmit",
@@ -136,6 +140,7 @@ public final class CodexStatusHookInstaller {
 
         var state: CodexStatusHookInstallState = .notInstalled
         var setupRequirement: CodexStatusHookSetupRequirement = .userSetup
+        var supportsStatusForwarding = false
         if fileManager.fileExists(atPath: hooksFileURL.path) {
             let object = try readHooksJSONObject(from: hooksFileURL)
             let hasCurrentHooks = Self.hooksAreInstalled(in: object, expectedCommand: expectedCommand)
@@ -145,6 +150,11 @@ public final class CodexStatusHookInstaller {
                 || Self.containsOwnedToasttyHooks(in: object, expectedCommand: expectedCommand)
             let hasCurrentForwarder = Self.forwarderScriptIsCurrent(
                 at: forwarderScriptURL,
+                expectedForwarder: expectedForwarder
+            )
+            let hasCompatibleForwarder = Self.forwarderScriptSupportsStatusForwarding(
+                at: forwarderScriptURL,
+                logFilePath: telemetryFailureLogURL().path,
                 expectedForwarder: expectedForwarder
             )
             let hasUnexpectedOwnedHooks = Self.containsUnexpectedOwnedToasttyHooks(
@@ -161,13 +171,18 @@ public final class CodexStatusHookInstaller {
                 state = .notInstalled
                 setupRequirement = .userSetup
             }
+            supportsStatusForwarding = hasCurrentHooks
+                && !hasLegacyHooks
+                && !hasUnexpectedOwnedHooks
+                && hasCompatibleForwarder
         }
 
         return CodexStatusHookInstallStatus(
             hooksFileURL: hooksFileURL,
             forwarderScriptURL: forwarderScriptURL,
             state: state,
-            setupRequirement: setupRequirement
+            setupRequirement: setupRequirement,
+            supportsStatusForwarding: supportsStatusForwarding
         )
     }
 
@@ -538,6 +553,25 @@ private extension CodexStatusHookInstaller {
         return String(data: data, encoding: .utf8) == expectedForwarder.appending("\n")
     }
 
+    static func forwarderScriptSupportsStatusForwarding(
+        at url: URL,
+        logFilePath: String,
+        expectedForwarder: String
+    ) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let contents = String(data: data, encoding: .utf8) else {
+            return false
+        }
+        if contents == expectedForwarder.appending("\n") {
+            return true
+        }
+        if contents.hasPrefix("#!/bin/sh\n\(forwarderProtocolMarker)\n") {
+            return true
+        }
+        return contents == legacyTempFileForwarderScriptContents(logFilePath: logFilePath)
+            .appending("\n")
+    }
+
     static func hookCommand(forwarderScriptURL: URL) -> String {
         "/bin/sh \(shellQuote(forwarderScriptURL.path))"
     }
@@ -546,6 +580,7 @@ private extension CodexStatusHookInstaller {
         let logDirectoryPath = URL(fileURLWithPath: logFilePath).deletingLastPathComponent().path
         return [
             "#!/bin/sh",
+            forwarderProtocolMarker,
             "if [ -z \"${TOASTTY_SESSION_ID:-}\" ] || [ -z \"${TOASTTY_PANEL_ID:-}\" ] || [ -z \"${TOASTTY_SOCKET_PATH:-}\" ] || [ -z \"${TOASTTY_CLI_PATH:-}\" ]; then",
             "  cat >/dev/null",
             "  exit 0",
@@ -571,6 +606,41 @@ private extension CodexStatusHookInstaller {
             "    printf 'stderr: <empty>\\n'",
             "  fi",
             "} >> \"$log_file\"",
+            "exit 0",
+        ].joined(separator: "\n")
+    }
+
+    static func legacyTempFileForwarderScriptContents(logFilePath: String) -> String {
+        let logDirectoryPath = URL(fileURLWithPath: logFilePath).deletingLastPathComponent().path
+        return [
+            "#!/bin/sh",
+            "if [ -z \"${TOASTTY_SESSION_ID:-}\" ] || [ -z \"${TOASTTY_PANEL_ID:-}\" ] || [ -z \"${TOASTTY_SOCKET_PATH:-}\" ] || [ -z \"${TOASTTY_CLI_PATH:-}\" ]; then",
+            "  cat >/dev/null",
+            "  exit 0",
+            "fi",
+            "log_dir=\(shellQuote(logDirectoryPath))",
+            "log_file=\(shellQuote(logFilePath))",
+            "mkdir -p \"$log_dir\" 2>/dev/null || :",
+            "stderr_file=\"$(mktemp \"$log_dir/codex-hook-stderr.XXXXXX\" 2>/dev/null)\"",
+            "if [ -z \"$stderr_file\" ]; then",
+            "  stderr_file=\"$log_dir/codex-hook.stderr\"",
+            "fi",
+            "rm -f \"$stderr_file\"",
+            "if cat | \"$TOASTTY_CLI_PATH\" --socket-path \"$TOASTTY_SOCKET_PATH\" session ingest-agent-event --source codex-hooks --session \"$TOASTTY_SESSION_ID\" --panel \"$TOASTTY_PANEL_ID\" >/dev/null 2>\"$stderr_file\"; then",
+            "  rm -f \"$stderr_file\"",
+            "  exit 0",
+            "fi",
+            "status=$?",
+            "timestamp=\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\" 2>/dev/null || date)\"",
+            "{",
+            "  printf '[%s] source=codex-hooks exit_code=%s socket_path=%s session_id=%s panel_id=%s\\n' \"$timestamp\" \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
+            "  if [ -s \"$stderr_file\" ]; then",
+            "    sed 's/^/stderr: /' \"$stderr_file\"",
+            "  else",
+            "    printf 'stderr: <empty>\\n'",
+            "  fi",
+            "} >> \"$log_file\"",
+            "rm -f \"$stderr_file\"",
             "exit 0",
         ].joined(separator: "\n")
     }

@@ -1212,6 +1212,57 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
+    /// Records the durable root Codex thread named by a qualified SessionStart
+    /// without treating the hook as authoritative for status or approvals.
+    @discardableResult
+    func observeCodexRootSessionIdentity(
+        sessionID: String,
+        threadID: String,
+        isClear: Bool
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            return false
+        }
+
+        let previousThreadID = codexLegacyPolicySnapshot(sessionID: sessionID).rootThreadID
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .hookSessionIdentity(
+                threadID: threadID,
+                isClear: isClear
+            )
+        )
+        guard reduction.qualification == .proceed else {
+            ToasttyLog.debug(
+                "Ignored Codex root session identity observation",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "panel_id": record.panelID.uuidString,
+                    "native_session_id": threadID,
+                    "reason": codexHookRejectionReason(reduction.reason),
+                ]
+            )
+            return false
+        }
+
+        if previousThreadID != reduction.snapshot.rootThreadID {
+            ToasttyLog.debug(
+                "Observed Codex root session identity",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "panel_id": record.panelID.uuidString,
+                    "native_session_id": threadID,
+                    "source": isClear ? "clear" : "session_start",
+                ]
+            )
+        }
+        return true
+    }
+
     @discardableResult
     func handleCodexHookEvent(
         sessionID: String,

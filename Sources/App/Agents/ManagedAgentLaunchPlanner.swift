@@ -1016,6 +1016,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return
         case .turnStarted:
+            if event.rootInputFingerprint != nil {
+                rearmCodexNativeSessionObservationIfNeeded(sessionID: sessionID)
+            }
             if event.hasRootTurnContext {
                 let useLaunchApprovalContext = codexStatusTrackingSource != .hooks
                 sessionRuntimeStore.recordCodexRootTurnInput(
@@ -1089,6 +1092,41 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return
         }
+    }
+
+    private func rearmCodexNativeSessionObservationIfNeeded(sessionID: String) {
+        guard let store,
+              let sessionRuntimeStore,
+              let activeSession = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID),
+              activeSession.agent == .codex,
+              let cwd = normalizedNonEmpty(activeSession.cwd),
+              case .terminal(let terminalState)? = store.state
+                .workspaceSelection(containingPanelID: activeSession.panelID)?
+                .workspace
+                .panelState(for: activeSession.panelID),
+              terminalState.resumeRecord == nil else {
+            return
+        }
+
+        let observationStart = nowProvider()
+        nativeSessionObserverRegistry.startObservationIfAbsent(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: sessionID,
+                agent: .codex,
+                panelID: activeSession.panelID,
+                cwd: cwd,
+                launchStart: observationStart
+            )
+        )
+        ToasttyLog.debug(
+            "Ensured Codex native session observation after first prompt",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "panel_id": activeSession.panelID.uuidString,
+                "cwd": cwd,
+            ]
+        )
     }
 
     private func forwardCodexBackgroundActivityObservation(
@@ -1396,7 +1434,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     static func defaultCodexStatusTrackingSource() -> CodexStatusTrackingSource {
         do {
             let status = try CodexStatusHookInstaller().installationStatus()
-            guard status.isInstalled else {
+            guard status.supportsStatusForwarding else {
                 return .sessionLogFallback(reason: "hooks_\(status.state.rawValue)")
             }
             return .hooks

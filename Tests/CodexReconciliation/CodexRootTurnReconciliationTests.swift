@@ -407,6 +407,76 @@ struct CodexRootTurnReconciliationTests {
     }
 
     @Test
+    func hookSessionIdentityIsIndependentOfStatusAuthorityAndRejectsChildReplacement() {
+        var reconciler = CodexRootTurnReconciler(authority: .sessionLogFallback)
+
+        let root = reconciler.reduce(.hookSessionIdentity(
+            threadID: "root-thread",
+            isClear: false
+        ))
+        let child = reconciler.reduce(.hookSessionIdentity(
+            threadID: "child-thread",
+            isClear: false
+        ))
+        let status = reconciler.reduce(hook(
+            .sessionStart(isClear: false),
+            thread: "root-thread"
+        ))
+
+        #expect(root.qualification == .proceed)
+        #expect(root.reason == .hookSessionIdentity)
+        #expect(root.snapshot.rootThreadID == "root-thread")
+        #expect(child.qualification == .rejectEvent)
+        #expect(child.reason == .threadMismatch)
+        #expect(child.snapshot.rootThreadID == "root-thread")
+        #expect(status.qualification == .rejectEvent)
+        #expect(status.reason == .incompatibleWithAuthority)
+        #expect(status.snapshot.rootThreadID == "root-thread")
+        assertValid(root)
+        assertValid(child)
+        assertValid(status)
+    }
+
+    @Test
+    func clearHookSessionIdentityReplacesRootAndClearsTurnState() {
+        var reconciler = populatedReconciler(authority: .sessionLogFallback)
+
+        let result = reconciler.reduce(.hookSessionIdentity(
+            threadID: "replacement-thread",
+            isClear: true
+        ))
+
+        #expect(result.qualification == .proceed)
+        #expect(result.reason == .hookSessionIdentity)
+        #expect(result.shouldResetApprovalHistory)
+        #expect(result.snapshot.rootThreadID == "replacement-thread")
+        #expect(result.snapshot.rootTurnID == nil)
+        #expect(result.snapshot.rootTurnInputFingerprint == nil)
+        #expect(result.snapshot.pendingRootInputFingerprint == nil)
+        #expect(result.snapshot.pendingApprovalContext == nil)
+        #expect(result.snapshot.activeApprovalContext == nil)
+        #expect(result.snapshot.currentApprovalContext == nil)
+        assertValid(result)
+    }
+
+    @Test
+    func duplicateClearIdentityDoesNotResetStateAfterAuthoritativeHookHandledIt() {
+        var reconciler = populatedReconciler(authority: .hooks)
+        let before = reconciler.snapshot
+
+        let result = reconciler.reduce(.hookSessionIdentity(
+            threadID: "thread",
+            isClear: true
+        ))
+
+        #expect(result.qualification == .proceed)
+        #expect(result.didMutateRootState == false)
+        #expect(result.shouldResetApprovalHistory == false)
+        #expect(result.snapshot == before)
+        assertValid(result)
+    }
+
+    @Test
     func authorityMatrixAllowsOnlySelectedLifecycleSignal() {
         for authority in allAuthorities {
             var launch = CodexRootTurnReconciler(authority: authority)
@@ -418,6 +488,14 @@ struct CodexRootTurnReconciliationTests {
             #expect(launch.reduce(.launchLogOverrideContext(context(
                 policy: .string("on-request")
             ))).qualification == .proceed)
+
+            var identity = CodexRootTurnReconciler(authority: authority)
+            let identityResult = identity.reduce(.hookSessionIdentity(
+                threadID: "thread",
+                isClear: false
+            ))
+            #expect(identityResult.qualification == .proceed)
+            #expect(identityResult.reason == .hookSessionIdentity)
 
             var hookReconciler = CodexRootTurnReconciler(authority: authority)
             let other = hookReconciler.reduce(hook(.other, thread: "unlatched"))
@@ -675,6 +753,7 @@ struct CodexRootTurnReconciliationTests {
         var fallback = CodexRootTurnReconciler(authority: .sessionLogFallback)
         let fallbackResults = [
             fallback.reduce(rootInput(fingerprint: "fp")),
+            fallback.reduce(.hookSessionIdentity(threadID: "thread", isClear: false)),
             fallback.reduce(hook(.other)),
             fallback.reduce(.fallbackNotifyThreadCandidate(threadID: "thread", inputFingerprint: "fp")),
         ]

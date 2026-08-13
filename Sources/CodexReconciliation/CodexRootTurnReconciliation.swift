@@ -86,6 +86,9 @@ public enum CodexRootTurnObservation: Equatable, Sendable {
         turnID: String,
         context: CodexRootTurnApprovalContext
     )
+    /// Observes durable root-session identity without granting hook events
+    /// authority over status or approval state.
+    case hookSessionIdentity(threadID: String, isClear: Bool)
     case hook(
         kind: CodexRootTurnHookKind,
         threadID: String?,
@@ -145,6 +148,7 @@ public enum CodexRootTurnReductionReason: Equatable, Sendable {
     case launchLogRootInput
     case launchLogOverrideContext
     case canonicalTurnContext
+    case hookSessionIdentity
     case hookAccepted
     case hookOther
     case fallbackNotifyThreadMatched
@@ -243,6 +247,12 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
         case .canonicalTurnContext(let turnID, let context):
             reduceCanonicalTurnContext(turnID: turnID, context: context)
             outcome = .proceed(.canonicalTurnContext)
+
+        case .hookSessionIdentity(let threadID, let isClear):
+            outcome = reduceHookSessionIdentity(
+                threadID: threadID,
+                isClear: isClear
+            )
 
         case .hook(let kind, let threadID, let turnID, let promptFingerprint):
             outcome = reduceHook(
@@ -422,16 +432,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
                     guard isClearSessionStart else {
                         return .reject(.threadMismatch)
                     }
-                    self.rootThreadID = threadID
-                    rootTurnID = nil
-                    rootTurnInputFingerprint = nil
-                    isAwaitingSessionLogContext = false
-                    pendingRootInputFingerprint = nil
-                    pendingApprovalContext = nil
-                    activeApprovalContext = nil
-                    currentApprovalContext = nil
-                    latestCanonicalTurnID = nil
-                    latestCanonicalApprovalContext = nil
+                    replaceRootThread(with: threadID)
                     shouldResetApprovalHistory = true
                 }
             } else if kind.canLatchRootThread {
@@ -494,6 +495,44 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
             kind == .other ? .hookOther : .hookAccepted,
             shouldResetApprovalHistory: shouldResetApprovalHistory
         )
+    }
+
+    private mutating func reduceHookSessionIdentity(
+        threadID: String,
+        isClear: Bool
+    ) -> Outcome {
+        if let rootThreadID {
+            guard threadID != rootThreadID else {
+                return .proceed(.hookSessionIdentity)
+            }
+            guard isClear else {
+                return .reject(.threadMismatch)
+            }
+            replaceRootThread(with: threadID)
+            return .proceed(
+                .hookSessionIdentity,
+                shouldResetApprovalHistory: true
+            )
+        }
+
+        rootThreadID = threadID
+        return .proceed(
+            .hookSessionIdentity,
+            shouldResetApprovalHistory: isClear
+        )
+    }
+
+    private mutating func replaceRootThread(with threadID: String) {
+        rootThreadID = threadID
+        rootTurnID = nil
+        rootTurnInputFingerprint = nil
+        isAwaitingSessionLogContext = false
+        pendingRootInputFingerprint = nil
+        pendingApprovalContext = nil
+        activeApprovalContext = nil
+        currentApprovalContext = nil
+        latestCanonicalTurnID = nil
+        latestCanonicalApprovalContext = nil
     }
 
     private mutating func reduceFallbackNotifyThreadCandidate(

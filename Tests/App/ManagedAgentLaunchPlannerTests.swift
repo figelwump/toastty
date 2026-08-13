@@ -1619,6 +1619,72 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertTrue(observer.cancelledSessionIDs.contains(plan.sessionID))
     }
 
+    func testCodexPromptRearmsExpiredNativeSessionObservationWithoutReplacingActiveObservation() async throws {
+        let observer = StubManagedAgentNativeSessionObserver()
+        let fixture = try makePlannerFixture(nativeSessionObserverRegistry: observer)
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertEqual(observer.observations.count, 1)
+        let launchObservationStart = try XCTUnwrap(observer.observations.first?.launchStart)
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"user_message","message":"First prompt"}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(observer.observations.count, 1)
+
+        observer.expireObservation(sessionID: plan.sessionID)
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-next","msg":{"type":"user_message","message":"Second prompt"}}}
+            """,
+            to: logURL
+        )
+
+        await waitUntil {
+            observer.observations.count == 2
+        }
+        let promptObservation = try XCTUnwrap(observer.observations.last)
+        XCTAssertEqual(promptObservation.managedSessionID, plan.sessionID)
+        XCTAssertEqual(promptObservation.panelID, fixture.panelID)
+        XCTAssertEqual(promptObservation.cwd, "/tmp/repo")
+        XCTAssertNil(promptObservation.expectedNativeSessionID)
+        XCTAssertGreaterThanOrEqual(promptObservation.launchStart, launchObservationStart)
+
+        XCTAssertTrue(fixture.store.send(.updateTerminalPanelResumeRecord(
+            panelID: fixture.panelID,
+            resumeRecord: codexResumeRecord(
+                nativeSessionID: "thread-root",
+                sessionFilePath: "/tmp/codex/root.jsonl"
+            )
+        )))
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-third","msg":{"type":"user_message","message":"Third prompt"}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(observer.observations.count, 2)
+    }
+
     func testCodexSessionConfiguredEventDoesNotStealResumeRecordFromLivePanel() async throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-codex-session-configured-live-owner-\(UUID().uuidString)", isDirectory: true)
@@ -2937,12 +3003,26 @@ private enum ManagedAgentLaunchPlannerTestError: Error {
 private final class StubManagedAgentNativeSessionObserver: ManagedAgentNativeSessionObserving {
     private(set) var observations: [ManagedAgentNativeSessionObservationContext] = []
     private(set) var cancelledSessionIDs: [String] = []
+    private var activeSessionIDs: Set<String> = []
 
     func startObservation(_ observation: ManagedAgentNativeSessionObservationContext) {
         observations.append(observation)
+        activeSessionIDs.insert(observation.managedSessionID)
+    }
+
+    func startObservationIfAbsent(_ observation: ManagedAgentNativeSessionObservationContext) {
+        guard activeSessionIDs.contains(observation.managedSessionID) == false else {
+            return
+        }
+        startObservation(observation)
     }
 
     func cancelObservation(sessionID: String) {
         cancelledSessionIDs.append(sessionID)
+        activeSessionIDs.remove(sessionID)
+    }
+
+    func expireObservation(sessionID: String) {
+        activeSessionIDs.remove(sessionID)
     }
 }

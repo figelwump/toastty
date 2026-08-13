@@ -1119,28 +1119,32 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 rawPanelID: event.panelID
             )
             let hookEvent = try codexHookEvent(from: event.payload)
+            let resumeRecord = codexHookResumeRecord(
+                from: hookEvent,
+                activeSession: activeSession,
+                capturedAt: now
+            )
             let accepted = sessionRuntimeStore.handleCodexHookEvent(
                 sessionID: sessionID,
                 event: hookEvent,
                 at: now
             )
+            let didCaptureResumeRecord: Bool
+            if let resumeRecord {
+                didCaptureResumeRecord = captureCodexHookResumeRecord(
+                    sessionID: sessionID,
+                    activeSession: activeSession,
+                    event: hookEvent,
+                    resumeRecord: resumeRecord
+                )
+            } else {
+                didCaptureResumeRecord = false
+            }
             if accepted {
                 stateVersion += 1
-                if let resumeRecord = codexHookResumeRecord(
-                    from: hookEvent,
-                    activeSession: activeSession,
-                    capturedAt: now
-                ) {
-                    let didMutate = updateManagedAgentResumeRecordFromHook(
-                        sessionID: sessionID,
-                        activeSession: activeSession,
-                        resumeRecord: resumeRecord,
-                        captureSource: "codex_hook_event"
-                    )
-                    if didMutate {
-                        stateVersion += 1
-                    }
-                }
+            }
+            if didCaptureResumeRecord {
+                stateVersion += 1
             }
             return [
                 "eventType": .string(event.eventType),
@@ -2162,6 +2166,35 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
+    private func captureCodexHookResumeRecord(
+        sessionID: String,
+        activeSession: SessionRecord,
+        event: CodexHookEvent,
+        resumeRecord: ManagedAgentResumeRecord
+    ) -> Bool {
+        let captureSource = "codex_hook_event"
+        guard shouldAcceptManagedAgentResumeRecordHookClaim(
+            sessionID: sessionID,
+            activeSession: activeSession,
+            resumeRecord: resumeRecord,
+            captureSource: captureSource
+        ), sessionRuntimeStore.observeCodexRootSessionIdentity(
+            sessionID: sessionID,
+            threadID: resumeRecord.nativeSessionID,
+            isClear: event.source == "clear"
+        ) else {
+            return false
+        }
+
+        return persistManagedAgentResumeRecordFromHook(
+            sessionID: sessionID,
+            activeSession: activeSession,
+            resumeRecord: resumeRecord,
+            captureSource: captureSource
+        )
+    }
+
+    @MainActor
     private func updateManagedAgentResumeRecordFromHook(
         sessionID: String,
         activeSession: SessionRecord,
@@ -2177,12 +2210,38 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             return false
         }
 
+        return persistManagedAgentResumeRecordFromHook(
+            sessionID: sessionID,
+            activeSession: activeSession,
+            resumeRecord: resumeRecord,
+            captureSource: captureSource
+        )
+    }
+
+    @MainActor
+    private func persistManagedAgentResumeRecordFromHook(
+        sessionID: String,
+        activeSession: SessionRecord,
+        resumeRecord: ManagedAgentResumeRecord,
+        captureSource: String
+    ) -> Bool {
+        var scopedResumeRecord = resumeRecord
+        scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        if let currentResumeRecord = managedAgentResumeRecord(panelID: activeSession.panelID),
+           currentResumeRecord.capturedAt >= activeSession.startedAt,
+           currentResumeRecord.agent == scopedResumeRecord.agent,
+           currentResumeRecord.nativeSessionID == scopedResumeRecord.nativeSessionID,
+           standardizedPath(currentResumeRecord.sessionFilePath)
+                == standardizedPath(scopedResumeRecord.sessionFilePath),
+           standardizedPath(currentResumeRecord.cwd) == standardizedPath(scopedResumeRecord.cwd),
+           currentResumeRecord.scopedWorkspaceIDs == scopedResumeRecord.scopedWorkspaceIDs {
+            return false
+        }
+
         // The hook event names this pane's native session directly, so the
         // file-scanning observation is no longer needed after the claim is
         // accepted.
         agentLaunchService.cancelNativeSessionObservation(sessionID: sessionID)
-        var scopedResumeRecord = resumeRecord
-        scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
         let didMutate = store.send(.updateTerminalPanelResumeRecord(
             panelID: activeSession.panelID,
             resumeRecord: scopedResumeRecord
@@ -2203,6 +2262,17 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             ]
         )
         return didMutate
+    }
+
+    @MainActor
+    private func managedAgentResumeRecord(panelID: UUID) -> ManagedAgentResumeRecord? {
+        guard case .terminal(let terminalState)? = store.state
+            .workspaceSelection(containingPanelID: panelID)?
+            .workspace
+            .panelState(for: panelID) else {
+            return nil
+        }
+        return terminalState.resumeRecord
     }
 
     @MainActor
@@ -2272,12 +2342,16 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         activeSession: SessionRecord,
         capturedAt: Date
     ) -> ManagedAgentResumeRecord? {
+        let hookThreadID = normalizedOptionalText(event.threadID)
         guard event.hookEventName == "SessionStart",
               activeSession.agent == .codex,
               let nativeSessionID = normalizedOptionalText(event.nativeSessionID)
-                ?? normalizedOptionalText(event.threadID),
+                ?? hookThreadID,
+              hookThreadID == nil || hookThreadID == nativeSessionID,
               let sessionFilePath = normalizedOptionalText(event.sessionFilePath),
-              let cwd = normalizedOptionalText(event.cwd) else {
+              let cwd = normalizedOptionalText(event.cwd),
+              let activeCWD = normalizedOptionalText(activeSession.cwd),
+              standardizedPath(cwd) == standardizedPath(activeCWD) else {
             return nil
         }
 
@@ -2288,6 +2362,10 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             cwd: cwd,
             capturedAt: capturedAt
         )
+    }
+
+    private func standardizedPath(_ path: String) -> String {
+        (path as NSString).standardizingPath
     }
 
     private func parseArgsPayload(_ payload: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {

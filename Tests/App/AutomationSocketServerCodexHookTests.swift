@@ -208,7 +208,7 @@ struct AutomationSocketServerCodexHookTests: AutomationSocketServerTestSupport {
     }
 
     @Test
-    func codexHookSessionStartUpdatesResumeRecordOnlyWhenAccepted() async throws {
+    func codexHookSessionStartUpdatesResumeRecordForQualifiedRootIdentity() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
             try makeServer(socketPath: socketPath)
@@ -305,6 +305,151 @@ struct AutomationSocketServerCodexHookTests: AutomationSocketServerTestSupport {
         resumeRecord = await terminalPanelResumeRecord(in: server.store, panelID: server.panelID)
         #expect(resumeRecord?.nativeSessionID == "thread-clear")
         #expect(resumeRecord?.sessionFilePath == "/tmp/codex/clear.jsonl")
+    }
+
+    @Test
+    func fallbackSessionStartPersistsResumeIdentityWithoutGrantingHookStatusAuthority() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-codex-hook-fallback-resume"
+        try await MainActor.run {
+            server.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: server.panelID,
+                windowID: try #require(server.store.state.windows.first?.id),
+                workspaceID: server.workspaceID,
+                usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: .sessionLogFallback(reason: "test"),
+                cwd: "/tmp/repo",
+                repoRoot: "/tmp/repo",
+                at: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+
+        func sendSessionStart(
+            source: String,
+            threadID: String,
+            sessionFilePath: String,
+            cwd: String = "/tmp/repo"
+        ) throws -> AutomationResponseEnvelope {
+            try sendEvent(
+                AutomationEventEnvelope(
+                    eventType: "session.codex_hook_event",
+                    sessionID: sessionID,
+                    panelID: server.panelID.uuidString,
+                    requestID: UUID().uuidString,
+                    payload: [
+                        "hookEventName": .string("SessionStart"),
+                        "source": .string(source),
+                        "threadID": .string(threadID),
+                        "nativeSessionID": .string(threadID),
+                        "sessionFilePath": .string(sessionFilePath),
+                        "cwd": .string(cwd),
+                    ]
+                ),
+                socketPath: socketPath
+            )
+        }
+
+        let rootResponse = try sendSessionStart(
+            source: "startup",
+            threadID: "thread-root",
+            sessionFilePath: "/tmp/codex/root.jsonl"
+        )
+        #expect(rootResponse.ok)
+        #expect(rootResponse.result?.string("status") == "ignored")
+        var resumeRecord = await terminalPanelResumeRecord(in: server.store, panelID: server.panelID)
+        #expect(resumeRecord?.nativeSessionID == "thread-root")
+        #expect(resumeRecord?.sessionFilePath == "/tmp/codex/root.jsonl")
+        let rootStateVersion = rootResponse.result?.int("stateVersion")
+
+        let duplicateRootResponse = try sendSessionStart(
+            source: "startup",
+            threadID: "thread-root",
+            sessionFilePath: "/tmp/codex/root.jsonl"
+        )
+        #expect(duplicateRootResponse.result?.string("status") == "ignored")
+        #expect(duplicateRootResponse.result?.int("stateVersion") == rootStateVersion)
+
+        let childResponse = try sendSessionStart(
+            source: "startup",
+            threadID: "thread-child",
+            sessionFilePath: "/tmp/codex/child.jsonl"
+        )
+        #expect(childResponse.result?.string("status") == "ignored")
+        resumeRecord = await terminalPanelResumeRecord(in: server.store, panelID: server.panelID)
+        #expect(resumeRecord?.nativeSessionID == "thread-root")
+
+        let clearResponse = try sendSessionStart(
+            source: "clear",
+            threadID: "thread-clear",
+            sessionFilePath: "/tmp/codex/clear.jsonl"
+        )
+        #expect(clearResponse.result?.string("status") == "ignored")
+        resumeRecord = await terminalPanelResumeRecord(in: server.store, panelID: server.panelID)
+        #expect(resumeRecord?.nativeSessionID == "thread-clear")
+        #expect(resumeRecord?.sessionFilePath == "/tmp/codex/clear.jsonl")
+    }
+
+    @Test
+    func codexHookSessionStartRejectsMismatchedWorkingDirectoryBeforeIdentityClaim() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-codex-hook-cwd-mismatch"
+        try await MainActor.run {
+            server.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: server.panelID,
+                windowID: try #require(server.store.state.windows.first?.id),
+                workspaceID: server.workspaceID,
+                usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: .sessionLogFallback(reason: "test"),
+                cwd: "/tmp/repo",
+                repoRoot: "/tmp/repo",
+                at: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.codex_hook_event",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "hookEventName": .string("SessionStart"),
+                    "source": .string("startup"),
+                    "threadID": .string("wrong-cwd-thread"),
+                    "nativeSessionID": .string("wrong-cwd-thread"),
+                    "sessionFilePath": .string("/tmp/codex/wrong.jsonl"),
+                    "cwd": .string("/tmp/other-repo"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.string("status") == "ignored")
+        let resumeRecord = await terminalPanelResumeRecord(in: server.store, panelID: server.panelID)
+        #expect(resumeRecord == nil)
     }
 
 }

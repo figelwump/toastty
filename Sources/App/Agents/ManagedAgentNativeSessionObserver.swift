@@ -110,7 +110,14 @@ extension ManagedAgentNativeSessionScanning {
 @MainActor
 protocol ManagedAgentNativeSessionObserving: AnyObject {
     func startObservation(_ observation: ManagedAgentNativeSessionObservationContext)
+    func startObservationIfAbsent(_ observation: ManagedAgentNativeSessionObservationContext)
     func cancelObservation(sessionID: String)
+}
+
+extension ManagedAgentNativeSessionObserving {
+    func startObservationIfAbsent(_ observation: ManagedAgentNativeSessionObservationContext) {
+        startObservation(observation)
+    }
 }
 
 struct ManagedAgentNativeSessionObserverTiming {
@@ -341,6 +348,13 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             ]
         )
         scheduleObservationLoopIfNeeded()
+    }
+
+    func startObservationIfAbsent(_ observation: ManagedAgentNativeSessionObservationContext) {
+        guard observationsBySessionID[observation.managedSessionID] == nil else {
+            return
+        }
+        startObservation(observation)
     }
 
     func cancelObservation(sessionID: String) {
