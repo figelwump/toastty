@@ -165,6 +165,133 @@ final class ConnectionCoordinatorTests: XCTestCase {
         XCTAssertEqual(helloCallCount, 1)
     }
 
+    func testLegacyNotFoundCompletesKnownEmptyConversationFromFreshSnapshot() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: [
+                .conversationBackwardPaging,
+            ]))],
+            sessions: [.success(snapshot(runID: run, title: "Seed", latestSequence: 0))],
+            events: [ScriptedCall(result: .success(.conversationNotFound))]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            )
+        )
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await gateway.waitForEventsCallCount(1) }
+        await subscription.send(.sessionList(
+            snapshot(runID: run, title: "Fresh", latestSequence: 0)
+        ))
+        let live = try await conversationState(matching: { $0.phase == .live }, runtime)
+
+        XCTAssertEqual(live.projectionRunID, run)
+        XCTAssertEqual(live.projectionGeneration, 4)
+        XCTAssertEqual(live.cursor?.afterSequence, 0)
+        XCTAssertEqual(live.latestSequence, 0)
+        XCTAssertTrue(live.events.isEmpty)
+
+        await subscription.send(.conversationEvents(
+            page(runID: run, events: [event(1)], latestSequence: 1)
+        ))
+        let advanced = try await conversationState(matching: {
+            $0.phase == .live && $0.cursor?.afterSequence == 1
+        }, runtime)
+        XCTAssertEqual(advanced.events.map(\.sequence), [1])
+        XCTAssertEqual(advanced.latestSequence, 1)
+        await coordinator.suspend()
+    }
+
+    func testLegacyNotFoundRefusesNonemptyAndUnknownSnapshotConversations() async throws {
+        for snapshotKind in ["nonempty", "unknown"] {
+            let operations = OperationLog()
+            let run = runID(snapshotKind == "nonempty" ? 2 : 3)
+            var fresh = snapshot(
+                runID: run,
+                title: "Fresh",
+                latestSequence: snapshotKind == "nonempty" ? 1 : 0
+            )
+            if snapshotKind == "unknown" {
+                fresh.conversations = []
+            }
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+                sessions: [.success(fresh)],
+                events: [ScriptedCall(result: .success(.conversationNotFound))]
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(
+                    operations: operations,
+                    connections: [.success(subscription)]
+                )
+            )
+            let runtime = await coordinator.openConversation(conversationID)
+
+            await coordinator.connectIfNeeded()
+            try await withTimeout { try await gateway.waitForEventsCallCount(1) }
+            await subscription.send(.sessionList(fresh))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            let rejected = await runtime.currentState()
+
+            XCTAssertEqual(
+                rejected.phase,
+                .resnapshotRequired(.explicit),
+                "Unexpected empty fallback for \(snapshotKind) conversation"
+            )
+            await coordinator.suspend()
+        }
+    }
+
+    func testReadAcknowledgementIsSkippedWithoutAdvertisedCapability() async throws {
+        let operations = OperationLog()
+        let run = runID(4)
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "Seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1), event(2)], latestSequence: 2)
+            )))]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            )
+        )
+        _ = await coordinator.openConversation(conversationID)
+        await coordinator.connectIfNeeded()
+        await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh")))
+        _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+
+        let response = try await coordinator.acknowledgeConversationRead(
+            RemoteConversationReadAcknowledgementRequest(
+                conversationID: conversationID,
+                projectionRunID: run,
+                projectionGeneration: 4,
+                observedThroughSequence: 2
+            )
+        )
+
+        XCTAssertNil(response)
+        let acknowledgements = await gateway.recordedReadAcknowledgements()
+        XCTAssertEqual(acknowledgements.count, 0)
+        await coordinator.suspend()
+    }
+
     func testConversationBuffersLivePageBeforeRESTAndResnapshotsFromNilCursor() async throws {
         let operations = OperationLog()
         let firstRESTGate = CancellationAwareGate()
@@ -1422,6 +1549,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private let sendCalls = CallCounter()
     private var helloCalls = 0
     private var sendRequests: [RemoteMessageSendRequest] = []
+    private var readAcknowledgements: [RemoteConversationReadAcknowledgementRequest] = []
 
     init(
         operations: OperationLog,
@@ -1482,11 +1610,21 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return try await execute(sendScripts.removeFirst())
     }
 
+    func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse {
+        readAcknowledgements.append(request)
+        return RemoteConversationReadAcknowledgementResponse(result: .acknowledged)
+    }
+
     func helloCallCount() -> Int { helloCalls }
     func recordedEventCursors() -> [ConversationEventCursor?] { eventCursors }
     func recordedEventRequests() -> [RemoteGatewayEventsRequest] { eventRequests }
     func waitForEventsCallCount(_ count: Int) async throws { try await eventCalls.wait(for: count) }
     func recordedSendRequests() -> [RemoteMessageSendRequest] { sendRequests }
+    func recordedReadAcknowledgements() -> [RemoteConversationReadAcknowledgementRequest] {
+        readAcknowledgements
+    }
     func waitForSendCallCount(_ count: Int) async throws { try await sendCalls.wait(for: count) }
 
     private func execute<Value>(_ script: ScriptedCall<Value>) async throws -> Value {

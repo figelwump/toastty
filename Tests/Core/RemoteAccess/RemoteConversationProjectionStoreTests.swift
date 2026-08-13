@@ -52,6 +52,87 @@ struct RemoteConversationProjectionStoreTests {
         #expect(summary.projectionGeneration == 0)
     }
 
+    @Test func emptyLiveConversationCanEndBeforeTranscriptPathExists() throws {
+        let store = RemoteConversationProjectionStore()
+        let conversationID = RemoteConversationID()
+        store.registerConversation(
+            conversationID,
+            descriptor: .init(provider: .codex, title: "Starting"),
+            bindingID: UUID(),
+            runtimeBound: true,
+            at: Self.startDate
+        )
+
+        guard case .page(let emptyPage) = store.conversationEvents(
+            for: conversationID,
+            after: nil,
+            limit: 20
+        ) else {
+            Issue.record("Expected empty conversation page")
+            return
+        }
+        #expect(emptyPage.events.isEmpty)
+        #expect(emptyPage.latestSequence == 0)
+        #expect(emptyPage.firstAvailableSequence == 1)
+
+        let emitted = store.noteBinding(
+            for: conversationID,
+            reason: .runtimeEnded,
+            bindingID: UUID(),
+            at: Self.startDate.addingTimeInterval(1)
+        )
+        #expect(emitted.first?.sequence == 1)
+        #expect(store.projectorState(for: conversationID)?.isRuntimeBound == false)
+        #expect(store.projectorState(for: conversationID)?.state == .offline)
+    }
+
+    @Test func emptyLiveConversationKeepsProjectionIdentityWhenTranscriptAppears() throws {
+        let runID = RemoteProjectionRunID()
+        let store = RemoteConversationProjectionStore(runID: runID)
+        let conversationID = RemoteConversationID()
+        store.registerConversation(
+            conversationID,
+            descriptor: .init(provider: .codex, title: "Starting"),
+            bindingID: UUID(),
+            runtimeBound: true,
+            at: Self.startDate
+        )
+
+        guard case .page(let emptyPage) = store.conversationEvents(
+            for: conversationID,
+            after: nil,
+            limit: 20
+        ) else {
+            Issue.record("Expected empty conversation page")
+            return
+        }
+        let cursor = ConversationEventCursor(
+            projectionRunID: emptyPage.projectionRunID,
+            projectionGeneration: emptyPage.projectionGeneration,
+            afterSequence: emptyPage.latestSequence
+        )
+
+        let bindingEvents = store.noteBinding(
+            for: conversationID,
+            reason: .runtimeBound,
+            providerSessionFilePath: "/tmp/new-rollout.jsonl",
+            bindingID: UUID(),
+            at: Self.startDate.addingTimeInterval(1)
+        )
+        #expect(bindingEvents.first?.sequence == 1)
+        guard case .page(let continuedPage) = store.conversationEvents(
+            for: conversationID,
+            after: cursor,
+            limit: 20
+        ) else {
+            Issue.record("Expected continuous page")
+            return
+        }
+        #expect(continuedPage.projectionRunID == runID)
+        #expect(continuedPage.projectionGeneration == emptyPage.projectionGeneration)
+        #expect(continuedPage.events.first?.sequence == 1)
+    }
+
     @Test func pagingWalksTheFullEventLog() {
         let store = Self.makeStore()
         Self.ingestBasicSession(into: store)

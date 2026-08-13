@@ -5,6 +5,7 @@ import XCTest
 final class ToasttyMobileFixtureUITests: XCTestCase {
     private let toasttyWorkspaceID = "A1000000-0000-0000-0000-000000000001"
     private let pendingInteractionID = "B1000000-0000-0000-0000-000000000001"
+    private let workingConversationID = "B1000000-0000-0000-0000-000000000002"
     private let firstToasttyConversationID = "B1000000-0000-0000-0000-000000000003"
     private let fourthToasttyConversationID = "B1000000-0000-0000-0000-000000000004"
     private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
@@ -85,6 +86,23 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(firstSession.isHittable)
         firstSession.tap()
         XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+    }
+
+    func testWorkingConversationExposesIndeterminateComposerStatus() {
+        let app = launchFixtureApp()
+        openWorkspace(toasttyWorkspaceID, in: app)
+
+        let session = app.buttons[
+            "toastty-mobile-workspace-session-\(workingConversationID)"
+        ]
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
+        session.tap()
+
+        let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertEqual(status.label, "Agent working. Composer locked.")
+        XCTAssertEqual(status.value as? String, "In progress")
+        attachScreenshot(named: "fixture-conversation-working", of: app)
     }
 
     func testFixtureReadyCardFocusesComposerWithoutTypingOrSending() {

@@ -63,6 +63,21 @@ final class RemoteAccessSendBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's authenticated read acknowledgement into the
+/// main-actor-owned conversation and workspace state.
+final class RemoteAccessReadAcknowledgementBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func acknowledge(
+        _ request: RemoteConversationReadAcknowledgementRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationReadAcknowledgementResult {
+        MainActor.assumeIsolated {
+            service?.acknowledgeConversationRead(request, device: device) ?? .conversationNotFound
+        }
+    }
+}
+
 enum RemoteAccessPreferences {
     static let defaultPort: UInt16 = 42871
     private static let enabledKey = "toastty.remoteAccess.enabled"
@@ -261,6 +276,7 @@ final class RemoteAccessService: ObservableObject {
     private let projectionStore = RemoteConversationProjectionStore()
     private let facadeBridge = RemoteAccessFacadeBridge()
     private let sendBridge = RemoteAccessSendBridge()
+    private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
     private var coordinator = RemoteInputCoordinator()
     private let handler: RemoteGatewayRequestHandler
     private let server: RemoteAccessGatewayServer
@@ -297,12 +313,16 @@ final class RemoteAccessService: ObservableObject {
             configuration: RemoteGatewayConfiguration(allowedOrigins: []),
             sendHandler: { [sendBridge] request, device in
                 sendBridge.send(request, device: device)
+            },
+            readAcknowledgementHandler: { [readAcknowledgementBridge] request, device in
+                readAcknowledgementBridge.acknowledge(request, device: device)
             }
         )
         self.server = RemoteAccessGatewayServer(handler: handler)
         self.devices = deviceStore.devices
         facadeBridge.service = self
         sendBridge.service = self
+        readAcknowledgementBridge.service = self
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
             switch device.authKind {
@@ -569,6 +589,66 @@ final class RemoteAccessService: ObservableObject {
         projectionStore.conversationEvents(for: conversationID, before: cursor, limit: limit)
     }
 
+    /// Clears the same authoritative unread state as desktop focus, but only
+    /// when the phone proves it displayed the current live edge, including an
+    /// authoritative empty transcript.
+    /// All checks and the mutation are main-actor synchronous, preventing a
+    /// new event from arriving between boundary validation and clearing.
+    func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest,
+        device _: RemoteDeviceRecord
+    ) -> RemoteConversationReadAcknowledgementResult {
+        guard let projector = projectionStore.projectorState(for: request.conversationID),
+              let mappedPanelID = panelIDByConversationID[request.conversationID],
+              let candidate = scanConversationCandidates(mintingIDs: false).first(where: {
+                  $0.conversationID == request.conversationID && $0.panelID == mappedPanelID
+              }) else {
+            return .conversationNotFound
+        }
+        guard let workspace = store.state.workspacesByID[candidate.workspaceID],
+              let tabID = workspace.tabID(containingPanelID: mappedPanelID)
+                ?? workspace.rightAuxPanelTabLocation(containingPanelID: mappedPanelID)?.mainTabID else {
+            return .conversationNotFound
+        }
+        let result = Self.readAcknowledgementResult(
+            request: request,
+            currentProjectionRunID: projectionStore.runID,
+            currentProjectionGeneration: projector.generation,
+            currentLatestSequence: projector.latestSequence,
+            isUnread: workspace.tab(id: tabID)?.unreadPanelIDs.contains(mappedPanelID) == true
+        )
+        guard result == .acknowledged else {
+            return result
+        }
+
+        _ = store.send(.markPanelNotificationsRead(
+            workspaceID: candidate.workspaceID,
+            panelID: mappedPanelID
+        ))
+        // The action also drives SessionRuntimeStore's ready -> idle
+        // transition. Publish the resulting list immediately rather than
+        // waiting for the debounced registry observer.
+        broadcastSessionList()
+        return .acknowledged
+    }
+
+    nonisolated static func readAcknowledgementResult(
+        request: RemoteConversationReadAcknowledgementRequest,
+        currentProjectionRunID: RemoteProjectionRunID,
+        currentProjectionGeneration: UInt64,
+        currentLatestSequence: UInt64,
+        isUnread: Bool
+    ) -> RemoteConversationReadAcknowledgementResult {
+        guard request.projectionRunID == currentProjectionRunID,
+              request.projectionGeneration == currentProjectionGeneration else {
+            return .staleBoundary
+        }
+        guard request.observedThroughSequence == currentLatestSequence else {
+            return .staleBoundary
+        }
+        return isUnread ? .acknowledged : .alreadyRead
+    }
+
     // MARK: - Conversation sync
 
     /// One row of the panel scan: a panel that currently represents (or last
@@ -594,8 +674,7 @@ final class RemoteAccessService: ObservableObject {
         var listChanged = false
 
         for candidate in candidates {
-            guard ProviderTranscriptSupport.isSupported(candidate.provider),
-                  let rolloutPath = candidate.transcriptPath else {
+            guard ProviderTranscriptSupport.isSupported(candidate.provider) else {
                 // Providers without a transcript parser stay registry-derived.
                 continue
             }
@@ -622,20 +701,59 @@ final class RemoteAccessService: ObservableObject {
                         cwd: candidate.cwd
                     ),
                     bindingID: UUID(),
-                    runtimeBound: false,
+                    runtimeBound: candidate.activeSessionID != nil,
                     at: Date()
                 )
                 listChanged = true
+            } else {
+                projectionStore.updateDescriptor(
+                    candidate.conversationID,
+                    descriptor: RemoteConversationProjectionStore.ConversationDescriptor(
+                        provider: candidate.provider,
+                        title: candidate.title,
+                        placement: RemoteConversationPlacement(
+                            workspaceID: candidate.workspaceID,
+                            workspaceTitle: candidate.workspaceTitle,
+                            panelID: candidate.panelID
+                        ),
+                        cwd: candidate.cwd
+                    )
+                )
             }
 
             let previousActiveSessionID = activeSessionIDByConversationID[candidate.conversationID]
             if let activeSessionID = candidate.activeSessionID {
                 if previousActiveSessionID != activeSessionID {
-                    // A runtime (newly or re-)bound to this conversation.
+                    if isNewRegistration, candidate.transcriptPath == nil {
+                        // Registration already initialized this empty
+                        // projector as runtime-bound. Track the live surface
+                        // immediately so send/lifecycle decisions do not wait
+                        // for the provider to publish its transcript path.
+                        activeSessionIDByConversationID[candidate.conversationID] = activeSessionID
+                    } else {
+                        let reason: ConversationBindingChangeReason =
+                            previousActiveSessionID == nil && isNewRegistration
+                                ? .runtimeBound
+                                : .runtimeResumed
+                        let emitted = projectionStore.noteBinding(
+                            for: candidate.conversationID,
+                            reason: reason,
+                            providerSessionFilePath: candidate.transcriptPath,
+                            bindingID: UUID(),
+                            at: Date()
+                        )
+                        broadcastEvents(emitted, for: candidate.conversationID)
+                        activeSessionIDByConversationID[candidate.conversationID] = activeSessionID
+                        listChanged = true
+                    }
+                } else if let rolloutPath = candidate.transcriptPath,
+                          let projector = projectionStore.projectorState(for: candidate.conversationID),
+                          projector.providerSessionFilePath != rolloutPath {
+                    // The runtime was already known before its provider file.
+                    // Attach the now-authoritative file binding without
+                    // replacing the projector or its run/generation.
                     let reason: ConversationBindingChangeReason =
-                        (previousActiveSessionID == nil && isNewRegistration == false) || previousActiveSessionID != nil
-                            ? .runtimeResumed
-                            : .runtimeBound
+                        projector.providerSessionFilePath == nil ? .runtimeBound : .runtimeResumed
                     let emitted = projectionStore.noteBinding(
                         for: candidate.conversationID,
                         reason: reason,
@@ -644,7 +762,6 @@ final class RemoteAccessService: ObservableObject {
                         at: Date()
                     )
                     broadcastEvents(emitted, for: candidate.conversationID)
-                    activeSessionIDByConversationID[candidate.conversationID] = activeSessionID
                     listChanged = true
                 }
             } else if previousActiveSessionID != nil {
@@ -657,6 +774,10 @@ final class RemoteAccessService: ObservableObject {
                 broadcastEvents(emitted, for: candidate.conversationID)
                 activeSessionIDByConversationID[candidate.conversationID] = nil
                 listChanged = true
+            }
+
+            if let rolloutPath = candidate.transcriptPath {
+                ensureTailer(for: candidate.conversationID, provider: candidate.provider, path: rolloutPath)
             }
 
             // Maintain the panel↔conversation maps used by send delivery and
@@ -679,7 +800,6 @@ final class RemoteAccessService: ObservableObject {
             // the projection so the session list and send gate agree.
             syncCoordinatorAvailability(for: candidate.conversationID)
 
-            ensureTailer(for: candidate.conversationID, provider: candidate.provider, path: rolloutPath)
         }
 
         // Conversations whose panels disappeared or whose current runtime can

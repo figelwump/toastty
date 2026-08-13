@@ -1,1 +1,1 @@
-{"capabilities":["browser_cookie_pairing","native_bearer_pairing","conversation_backward_paging"],"minimumSupportedProtocolVersion":"1.0","protocolVersion":"1.0"}
+{"capabilities":["browser_cookie_pairing","native_bearer_pairing","conversation_backward_paging","conversation_read_acknowledgement"],"minimumSupportedProtocolVersion":"1.0","protocolVersion":"1.0"}

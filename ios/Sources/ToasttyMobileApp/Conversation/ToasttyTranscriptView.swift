@@ -1,26 +1,38 @@
 import RemoteProtocol
 import SwiftUI
+import ToasttyMobileDomain
 
 struct ToasttyTranscriptView: View {
+    @Environment(\.scenePhase) private var scenePhase
+
     let state: ToasttyConversationPresentationState
     let loadOlder: () -> Void
     let dismissSendReceipt: (String) -> Void
+    let readAcknowledgementEpoch: MobileSessionStatus?
+    let onVisibleLiveEdge: () -> Void
 
     @State private var expandedMessageIDs: Set<ToasttyTranscriptRowID> = []
     @State private var expandedToolBatchIDs: Set<ToasttyTranscriptRowID> = []
     @State private var expandedSubagentIDs: Set<ToasttyTranscriptRowID> = []
     @State private var isAtLiveEdge = true
+    @State private var hasMeasuredScrollGeometry = false
+    @State private var measuredBoundaryID: ToasttyTranscriptRowID?
+    @State private var isVisible = false
     @State private var followsLiveEdge = true
     @State private var visibleBlockIDs: [ToasttyTranscriptRowID] = []
 
     init(
         state: ToasttyConversationPresentationState,
         loadOlder: @escaping () -> Void = {},
-        dismissSendReceipt: @escaping (String) -> Void = { _ in }
+        dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        readAcknowledgementEpoch: MobileSessionStatus? = nil,
+        onVisibleLiveEdge: @escaping () -> Void = {}
     ) {
         self.state = state
         self.loadOlder = loadOlder
         self.dismissSendReceipt = dismissSendReceipt
+        self.readAcknowledgementEpoch = readAcknowledgementEpoch
+        self.onVisibleLiveEdge = onVisibleLiveEdge
     }
 
     var body: some View {
@@ -87,6 +99,8 @@ struct ToasttyTranscriptView: View {
                     )
                 } action: { old, new in
                     let atLiveEdge = new.distanceFromBottom < 72
+                    hasMeasuredScrollGeometry = true
+                    measuredBoundaryID = state.rows.last?.id
                     isAtLiveEdge = atLiveEdge
                     if atLiveEdge {
                         followsLiveEdge = true
@@ -157,8 +171,14 @@ struct ToasttyTranscriptView: View {
                         }
                     }
                 }
+                .onChange(of: liveEdgeVisibilityKey, initial: true) { _, key in
+                    guard key.isEligible else { return }
+                    onVisibleLiveEdge()
+                }
             }
             .background(ToasttyDesignTokens.background)
+            .onAppear { isVisible = true }
+            .onDisappear { isVisible = false }
         }
     }
 
@@ -267,6 +287,19 @@ struct ToasttyTranscriptView: View {
         return state.blocks.last.map { .transcript($0.id) }
     }
 
+    private var liveEdgeVisibilityKey: TranscriptLiveEdgeVisibilityKey {
+        TranscriptLiveEdgeVisibilityKey(
+            phase: state.phase,
+            scenePhase: scenePhase,
+            isVisible: isVisible,
+            isAtLiveEdge: isAtLiveEdge,
+            hasMeasuredScrollGeometry: hasMeasuredScrollGeometry,
+            measuredBoundaryID: measuredBoundaryID,
+            latestBoundaryID: state.rows.last?.id,
+            readAcknowledgementEpoch: readAcknowledgementEpoch
+        )
+    }
+
     private func toggle(
         _ id: ToasttyTranscriptRowID,
         in values: inout Set<ToasttyTranscriptRowID>
@@ -288,6 +321,26 @@ private struct TranscriptScrollMetrics: Equatable {
 
     var distanceFromBottom: CGFloat {
         contentHeight - offsetY - viewportHeight
+    }
+}
+
+struct TranscriptLiveEdgeVisibilityKey: Equatable {
+    let phase: ToasttyConversationPresentationPhase
+    let scenePhase: ScenePhase
+    let isVisible: Bool
+    let isAtLiveEdge: Bool
+    let hasMeasuredScrollGeometry: Bool
+    let measuredBoundaryID: ToasttyTranscriptRowID?
+    let latestBoundaryID: ToasttyTranscriptRowID?
+    let readAcknowledgementEpoch: MobileSessionStatus?
+
+    var isEligible: Bool {
+        phase == .live
+            && scenePhase == .active
+            && isVisible
+            && isAtLiveEdge
+            && hasMeasuredScrollGeometry
+            && (latestBoundaryID == nil || measuredBoundaryID == latestBoundaryID)
     }
 }
 
@@ -465,13 +518,14 @@ private struct ToasttyTranscriptRowView: View {
         "toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)"
     }
 
+    @ViewBuilder
     private func message(text: String, isUser: Bool, metadata: String?) -> some View {
         let isLarge = Self.isLarge(text)
         let visibleText = isLarge && messageIsExpanded == false
             ? Self.collapsed(text)
             : text
 
-        return VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
+        let content = VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
             if isUser {
                 Text(visibleText)
                     .font(.body)
@@ -495,18 +549,24 @@ private struct ToasttyTranscriptRowView: View {
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
             }
         }
-        .padding(isUser ? 12 : 0)
-        .background(isUser ? ToasttyDesignTokens.userBubbleSurface : .clear)
-        .overlay {
-            if isUser {
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(ToasttyDesignTokens.userBubbleBorder)
-            }
+
+        if isUser {
+            content
+                .padding(12)
+                .background(ToasttyDesignTokens.userBubbleSurface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(ToasttyDesignTokens.userBubbleBorder)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .padding(.leading, 48)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityElement(children: .combine)
+        } else {
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .padding(.leading, isUser ? 48 : 0)
-        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-        .accessibilityElement(children: .combine)
     }
 
     private func marker(icon: String, text: String) -> some View {
@@ -586,23 +646,185 @@ private struct ToasttyTranscriptRowView: View {
     }
 }
 
-private struct ToasttyMarkdownText: View {
+struct ToasttyMarkdownText: View {
     let text: String
 
     var body: some View {
-        Group {
-            if let attributed = try? AttributedString(markdown: text) {
-                Text(attributed)
-            } else {
-                Text(text)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Self.blocks(text)) { block in
+                blockView(block)
             }
         }
-        .font(.body)
         .foregroundStyle(ToasttyDesignTokens.primaryText)
         .lineSpacing(3)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
     }
+
+    @ViewBuilder
+    private func blockView(_ block: ToasttyMarkdownBlock) -> some View {
+        switch block.style {
+        case .paragraph:
+            Text(block.content)
+                .font(.body)
+        case .heading(let level):
+            Text(block.content)
+                .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+                .padding(.top, block.id == 0 ? 0 : 2)
+        case .list(let marker, let depth):
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(marker.label)
+                    .font(.body.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .frame(minWidth: 16, alignment: .trailing)
+                Text(block.content)
+                    .font(.body)
+            }
+            .padding(.leading, CGFloat(max(0, depth - 1)) * 16)
+        case .blockQuote:
+            HStack(alignment: .top, spacing: 10) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(ToasttyDesignTokens.border)
+                    .frame(width: 3)
+                Text(block.content)
+                    .font(.body)
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            }
+        case .code(let language):
+            VStack(alignment: .leading, spacing: 6) {
+                if let language, language.isEmpty == false {
+                    Text(language)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                }
+                Text(block.content)
+                    .font(.body.monospaced())
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ToasttyDesignTokens.raisedSurface)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    static func blocks(_ text: String) -> [ToasttyMarkdownBlock] {
+        guard let attributed = try? AttributedString(markdown: text) else {
+            return [ToasttyMarkdownBlock(
+                id: 0,
+                content: AttributedString(text),
+                style: .paragraph
+            )]
+        }
+
+        var blocks: [ToasttyMarkdownBlock] = []
+        var currentPresentationIdentity: Int?
+        var currentContent = AttributedString()
+        var currentStyle = ToasttyMarkdownBlock.Style.paragraph
+
+        func flushCurrentBlock() {
+            guard currentContent.characters.isEmpty == false else { return }
+            blocks.append(ToasttyMarkdownBlock(
+                id: blocks.count,
+                content: currentContent,
+                style: currentStyle
+            ))
+            currentContent = AttributedString()
+        }
+
+        for run in attributed.runs {
+            let intent = run.presentationIntent
+            let identity = intent?.components.first?.identity
+            if identity != currentPresentationIdentity {
+                flushCurrentBlock()
+                currentPresentationIdentity = identity
+                currentStyle = Self.style(for: intent)
+            }
+            currentContent.append(AttributedString(attributed[run.range]))
+        }
+        flushCurrentBlock()
+
+        if blocks.isEmpty, text.isEmpty == false {
+            return [ToasttyMarkdownBlock(
+                id: 0,
+                content: AttributedString(text),
+                style: .paragraph
+            )]
+        }
+        return blocks
+    }
+
+    private static func style(
+        for intent: PresentationIntent?
+    ) -> ToasttyMarkdownBlock.Style {
+        guard let intent else { return .paragraph }
+
+        var headingLevel: Int?
+        var codeLanguage: String?
+        var isCode = false
+        var isBlockQuote = false
+        var listOrdinal: Int?
+        var listMarker: ToasttyMarkdownBlock.ListMarker?
+        var listDepth = 0
+
+        for component in intent.components {
+            switch component.kind {
+            case .header(let level):
+                headingLevel = level
+            case .codeBlock(let language):
+                isCode = true
+                codeLanguage = language
+            case .blockQuote:
+                isBlockQuote = true
+            case .listItem(let ordinal):
+                if listOrdinal == nil { listOrdinal = ordinal }
+            case .orderedList:
+                listDepth += 1
+                if listMarker == nil {
+                    listMarker = .ordered(listOrdinal ?? 1)
+                }
+            case .unorderedList:
+                listDepth += 1
+                if listMarker == nil { listMarker = .bullet }
+            case .paragraph, .thematicBreak, .table, .tableHeaderRow,
+                 .tableRow(_), .tableCell(_):
+                break
+            @unknown default:
+                break
+            }
+        }
+
+        if isCode { return .code(language: codeLanguage) }
+        if let headingLevel { return .heading(level: headingLevel) }
+        if let listMarker { return .list(marker: listMarker, depth: listDepth) }
+        if isBlockQuote { return .blockQuote }
+        return .paragraph
+    }
+}
+
+struct ToasttyMarkdownBlock: Identifiable {
+    enum ListMarker: Equatable {
+        case bullet
+        case ordered(Int)
+
+        var label: String {
+            switch self {
+            case .bullet: "•"
+            case .ordered(let ordinal): "\(ordinal)."
+            }
+        }
+    }
+
+    enum Style: Equatable {
+        case paragraph
+        case heading(level: Int)
+        case list(marker: ListMarker, depth: Int)
+        case blockQuote
+        case code(language: String?)
+    }
+
+    let id: Int
+    let content: AttributedString
+    let style: Style
 }
 
 private struct ToasttyToolBatchView: View {

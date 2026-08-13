@@ -77,6 +77,9 @@ public protocol GatewayClientProtocol: Sendable {
     ) async throws -> CompatibleGatewayEventsResponse
     func events(_ request: RemoteGatewayEventsRequest) async throws -> CompatibleGatewayEventsResponse
     func send(_ request: RemoteMessageSendRequest) async throws -> RemoteMessageSendResult
+    func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse
 }
 
 public extension GatewayClientProtocol {
@@ -89,6 +92,12 @@ public extension GatewayClientProtocol {
             cursor: request.cursor,
             limit: request.limit
         )
+    }
+
+    func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse {
+        throw GatewayFailure.invalidResponse
     }
 }
 
@@ -181,6 +190,29 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
             throw try classifyHTTPError(response)
         }
         return try mapCompatibility { try compatibilityDecoder.decodeSendResult(response.body) }
+    }
+
+    public func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse {
+        let response = try await perform(
+            method: "POST",
+            path: "/api/conversation.read.acknowledge",
+            body: try encode(request),
+            sendsOrigin: true
+        )
+        return try mapCompatibility {
+            let decoded = try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationReadAcknowledgementResponse.self,
+                from: response.body
+            )
+            guard decoded.protocolVersion == RemoteGatewayProtocol.version else {
+                throw GatewayCompatibilityError.unsupportedProtocolVersion(
+                    decoded.protocolVersion
+                )
+            }
+            return decoded
+        }
     }
 
     private static func validateBackwardResponse(

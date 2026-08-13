@@ -64,8 +64,14 @@ final class LiveConversationController {
     private let loadOlderAction: @Sendable () async -> Void
     private let sendAction: @Sendable (String, ConversationComposerStamp) async -> ConversationSendOutcome
     private let dismissSendReceiptAction: @Sendable (String) async -> Void
+    private let acknowledgeReadAction: @Sendable (
+        RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse?
     private var stateTask: Task<Void, Never>?
     private var sendReconciliationTask: Task<Void, Never>?
+    private var readAcknowledgementTask: Task<Void, Never>?
+    private var readAcknowledgementBoundary: ReadBoundary?
+    private var lastAcknowledgedBoundary: ReadBoundary?
     private var connectionPhase: ConnectionCoordinatorPhase = .idle
     private var connectionGeneration: UInt64 = 0
     private var runtimeRevision: UInt64 = 0
@@ -78,13 +84,17 @@ final class LiveConversationController {
         send: @escaping @Sendable (String, ConversationComposerStamp) async -> ConversationSendOutcome = { _, _ in
             .notEnqueued(.conversationNotOpen)
         },
-        dismissSendReceipt: @escaping @Sendable (String) async -> Void = { _ in }
+        dismissSendReceipt: @escaping @Sendable (String) async -> Void = { _ in },
+        acknowledgeRead: @escaping @Sendable (
+            RemoteConversationReadAcknowledgementRequest
+        ) async throws -> RemoteConversationReadAcknowledgementResponse? = { _ in nil }
     ) {
         self.conversationID = conversationID
         self.runtime = runtime
         loadOlderAction = loadOlder
         sendAction = send
         dismissSendReceiptAction = dismissSendReceipt
+        acknowledgeReadAction = acknowledgeRead
     }
 
     func start() async {
@@ -111,6 +121,9 @@ final class LiveConversationController {
         stateTask = nil
         sendReconciliationTask?.cancel()
         sendReconciliationTask = nil
+        readAcknowledgementTask?.cancel()
+        readAcknowledgementTask = nil
+        readAcknowledgementBoundary = nil
     }
 
     func loadOlder() async {
@@ -138,6 +151,42 @@ final class LiveConversationController {
 
     func dismissSendReceipt(_ clientRequestID: String) async {
         await dismissSendReceiptAction(clientRequestID)
+    }
+
+    /// Called by the view after it has established that the selected sheet is
+    /// active and visibly at the live edge. Networking stays here so retries
+    /// cannot outlive the controller or be duplicated by SwiftUI updates.
+    func acknowledgeVisibleTranscript(presentationStatus: MobileSessionStatus) {
+        guard phase == .live,
+              let projectionRunID,
+              let projectionGeneration,
+              let observedThroughSequence = cursor?.afterSequence else {
+            return
+        }
+        let boundary = ReadBoundary(
+            projectionRunID: projectionRunID,
+            projectionGeneration: projectionGeneration,
+            observedThroughSequence: observedThroughSequence,
+            presentationStatus: presentationStatus
+        )
+        guard boundary != lastAcknowledgedBoundary,
+              boundary != readAcknowledgementBoundary else { return }
+
+        readAcknowledgementTask?.cancel()
+        readAcknowledgementBoundary = boundary
+        let request = RemoteConversationReadAcknowledgementRequest(
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            projectionRunID: boundary.projectionRunID,
+            projectionGeneration: boundary.projectionGeneration,
+            observedThroughSequence: boundary.observedThroughSequence
+        )
+        readAcknowledgementTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await runReadAcknowledgement(request, boundary: boundary)
+            if readAcknowledgementBoundary == boundary {
+                readAcknowledgementBoundary = nil
+            }
+        }
     }
 
     func draftDidChange() {
@@ -332,6 +381,43 @@ final class LiveConversationController {
         )
     }
 
+    private func runReadAcknowledgement(
+        _ request: RemoteConversationReadAcknowledgementRequest,
+        boundary: ReadBoundary
+    ) async {
+        // One immediate attempt plus two bounded transient retries. A newer
+        // visible boundary cancels this task and takes precedence.
+        for attempt in 0..<3 {
+            guard Task.isCancelled == false else { return }
+            do {
+                guard let response = try await acknowledgeReadAction(request) else {
+                    return
+                }
+                guard Task.isCancelled == false else { return }
+                switch response.result {
+                case .acknowledged, .alreadyRead:
+                    lastAcknowledgedBoundary = boundary
+                case .staleBoundary, .conversationNotFound:
+                    break
+                }
+                return
+            } catch is CancellationError {
+                return
+            } catch let failure as GatewayFailure where failure.isRetryable {
+                guard attempt < 2 else { return }
+                do {
+                    try await ContinuousClock().sleep(
+                        for: .milliseconds(250 * (attempt + 1))
+                    )
+                } catch {
+                    return
+                }
+            } catch {
+                return
+            }
+        }
+    }
+
     private var transcriptPhase: ToasttyConversationPresentationPhase {
         switch phase {
         case .idle, .loading:
@@ -360,5 +446,11 @@ final class LiveConversationController {
     private struct EventIdentity: Equatable {
         var sequence: UInt64
         var eventID: String
+    }
+    private struct ReadBoundary: Equatable {
+        var projectionRunID: RemoteProjectionRunID
+        var projectionGeneration: UInt64
+        var observedThroughSequence: UInt64
+        var presentationStatus: MobileSessionStatus
     }
 }

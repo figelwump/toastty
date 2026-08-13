@@ -441,6 +441,88 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertEqual(terminations, 2)
     }
 
+    func testVisibleReadAcknowledgementAcceptsEmptyAndRearmsForPresentationChange() async {
+        let recorder = ReadAcknowledgementRecorder(results: [
+            .success(RemoteConversationReadAcknowledgementResponse(result: .acknowledged)),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            acknowledgeRead: { try await recorder.acknowledge($0) }
+        )
+
+        subject.acknowledgeVisibleTranscript(presentationStatus: .working)
+        subject.consume(state(runID: runID(1), events: [], phase: .live))
+        subject.acknowledgeVisibleTranscript(presentationStatus: .working)
+        await recorder.waitForRequestCount(1)
+        subject.acknowledgeVisibleTranscript(presentationStatus: .working)
+        try? await ContinuousClock().sleep(for: .milliseconds(20))
+        var requests = await recorder.requests()
+        XCTAssertEqual(requests.map(\.observedThroughSequence), [0])
+
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        await recorder.waitForRequestCount(2)
+
+        subject.consume(state(runID: runID(1), events: [event(1)], phase: .live))
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        await recorder.waitForRequestCount(3)
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        try? await ContinuousClock().sleep(for: .milliseconds(20))
+
+        requests = await recorder.requests()
+        XCTAssertEqual(requests.map(\.observedThroughSequence), [0, 0, 1])
+        XCTAssertEqual(requests[2].projectionGeneration, 7)
+    }
+
+    func testReadAcknowledgementRetriesTransientFailureButNotPermanentFailure() async {
+        let recorder = ReadAcknowledgementRecorder(results: [
+            .failure(GatewayFailure.network(reason: .offline)),
+            .success(RemoteConversationReadAcknowledgementResponse(result: .alreadyRead)),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            acknowledgeRead: { try await recorder.acknowledge($0) }
+        )
+        subject.consume(state(runID: runID(1), events: [event(1)], phase: .live))
+
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        await recorder.waitForRequestCount(2)
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        try? await ContinuousClock().sleep(for: .milliseconds(20))
+
+        let requests = await recorder.requests()
+        XCTAssertEqual(requests.count, 2)
+    }
+
+    func testNewerVisibleBoundaryCancelsOlderAcknowledgement() async {
+        let recorder = SupersedingReadAcknowledgementRecorder()
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            acknowledgeRead: { try await recorder.acknowledge($0) }
+        )
+        subject.consume(state(runID: runID(1), events: [event(1)], phase: .live))
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        await recorder.waitForRequestCount(1)
+
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1), event(2)],
+            phase: .live
+        ))
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        await recorder.waitForRequestCount(2)
+        await recorder.finish(sequence: 1)
+        await recorder.finish(sequence: 2)
+        try? await ContinuousClock().sleep(for: .milliseconds(20))
+
+        subject.acknowledgeVisibleTranscript(presentationStatus: .ready)
+        try? await ContinuousClock().sleep(for: .milliseconds(20))
+        let requests = await recorder.requests()
+        XCTAssertEqual(requests.map(\.observedThroughSequence), [1, 2])
+    }
+
     func testFiveThousandRowControllerClassifiesTwoHundredRowPrependAndAppendWithinSimulatorBudget() {
         let subject = LiveConversationController(
             conversationID: conversationID.rawValue,
@@ -645,6 +727,61 @@ private actor ReceiptDismissRecorder {
 
     func dismiss(_ requestID: String) { values.append(requestID) }
     func requestIDs() -> [String] { values }
+}
+
+private actor ReadAcknowledgementRecorder {
+    private var results: [Result<RemoteConversationReadAcknowledgementResponse, GatewayFailure>]
+    private var values: [RemoteConversationReadAcknowledgementRequest] = []
+
+    init(results: [Result<RemoteConversationReadAcknowledgementResponse, GatewayFailure>]) {
+        self.results = results
+    }
+
+    func acknowledge(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) throws -> RemoteConversationReadAcknowledgementResponse? {
+        values.append(request)
+        let result = results.isEmpty
+            ? .success(RemoteConversationReadAcknowledgementResponse(result: .alreadyRead))
+            : results.removeFirst()
+        return try result.get()
+    }
+
+    func requests() -> [RemoteConversationReadAcknowledgementRequest] { values }
+
+    func waitForRequestCount(_ count: Int) async {
+        while values.count < count {
+            await Task.yield()
+        }
+    }
+}
+
+private actor SupersedingReadAcknowledgementRecorder {
+    private var values: [RemoteConversationReadAcknowledgementRequest] = []
+    private var continuations: [UInt64: CheckedContinuation<RemoteConversationReadAcknowledgementResponse?, Error>] = [:]
+
+    func acknowledge(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse? {
+        values.append(request)
+        return try await withCheckedThrowingContinuation {
+            continuations[request.observedThroughSequence] = $0
+        }
+    }
+
+    func waitForRequestCount(_ count: Int) async {
+        while values.count < count {
+            await Task.yield()
+        }
+    }
+
+    func finish(sequence: UInt64) {
+        continuations.removeValue(forKey: sequence)?.resume(
+            returning: RemoteConversationReadAcknowledgementResponse(result: .acknowledged)
+        )
+    }
+
+    func requests() -> [RemoteConversationReadAcknowledgementRequest] { values }
 }
 
 private actor CancellableLiveConversationRuntime: LiveConversationRuntime {

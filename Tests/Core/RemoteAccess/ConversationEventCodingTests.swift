@@ -133,6 +133,36 @@ struct ConversationEventCodingTests {
         #expect(whole.at == Date(timeIntervalSince1970: 1_786_000_805))
     }
 
+    @Test func conversationReadAcknowledgementModelsRoundTrip() throws {
+        let encoder = ConversationEventCoding.makeEncoder()
+        let decoder = ConversationEventCoding.makeDecoder()
+        let request = RemoteConversationReadAcknowledgementRequest(
+            conversationID: Self.conversationID,
+            projectionRunID: RemoteProjectionRunID(
+                rawValue: UUID(uuidString: "cccccccc-cccc-cccc-cccc-cccccccccccc")!
+            ),
+            projectionGeneration: 4,
+            observedThroughSequence: 19
+        )
+        #expect(try decoder.decode(
+            RemoteConversationReadAcknowledgementRequest.self,
+            from: encoder.encode(request)
+        ) == request)
+
+        for result in [
+            RemoteConversationReadAcknowledgementResult.acknowledged,
+            .alreadyRead,
+            .staleBoundary,
+            .conversationNotFound,
+        ] {
+            let response = RemoteConversationReadAcknowledgementResponse(result: result)
+            #expect(try decoder.decode(
+                RemoteConversationReadAcknowledgementResponse.self,
+                from: encoder.encode(response)
+            ) == response)
+        }
+    }
+
     @Test func snapshotAndPageModelsRoundTrip() throws {
         let encoder = ConversationEventCoding.makeEncoder()
         let decoder = ConversationEventCoding.makeDecoder()

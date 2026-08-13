@@ -73,6 +73,7 @@ public actor ConnectionCoordinator {
     private var sendScopeDeniedByHost = false
     private var streamSnapshotOrdinal: UInt64 = 0
     private var authoritativeSessionSnapshot: CompatibleSessionListSnapshot?
+    private var pendingLegacyConversationNotFound: Set<RemoteConversationID> = []
     private var reservations: [ConversationSendReservationKey: String] = [:]
     private var sendOperations: [String: SendOperation] = [:]
     private var sendTasks: [String: Task<Void, Never>] = [:]
@@ -275,6 +276,7 @@ public actor ConnectionCoordinator {
 
     public func closeConversation(_ conversationID: RemoteConversationID) async {
         activeConversationIDs.remove(conversationID)
+        pendingLegacyConversationNotFound.remove(conversationID)
         conversationCatchUpTasks.removeValue(forKey: conversationID)?.cancel()
         conversationOlderTasks.removeValue(forKey: conversationID)?.task.cancel()
         guard let runtime = conversationRuntimes.removeValue(forKey: conversationID) else {
@@ -463,6 +465,20 @@ public actor ConnectionCoordinator {
         await removeInactiveRuntimeIfSafe(conversationID: conversationID, runtime: runtime)
     }
 
+    /// Acknowledges a boundary only when the connected host advertises the
+    /// operation. `nil` is a capability/lifecycle refusal, not a transport
+    /// failure, so presentation code must not retry it as an outage.
+    public func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.conversationReadAcknowledgement),
+              activeConversationIDs.contains(request.conversationID) else {
+            return nil
+        }
+        return try await gateway.acknowledgeConversationRead(request)
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.
@@ -506,6 +522,7 @@ public actor ConnectionCoordinator {
             state.connectionGeneration &+= 1
             let generation = state.connectionGeneration
             authoritativeSessionSnapshot = nil
+            pendingLegacyConversationNotFound.removeAll()
             state.phase = failureCount == 0
                 ? .connecting
                 : .reconnecting(
@@ -649,6 +666,7 @@ public actor ConnectionCoordinator {
             state.latestTransportFailure = nil
             state.phase = .live
             await reconcileAuthoritativeSnapshot(snapshot)
+            await resolvePendingLegacyConversationNotFound(generation: generation)
             await publishComposerAuthorities()
             await publish()
 
@@ -827,10 +845,17 @@ public actor ConnectionCoordinator {
                     )
 
                 case .conversationNotFound:
-                    _ = await runtime.requireResnapshot(
-                        .explicit,
-                        connectionGeneration: generation
-                    )
+                    if await completeLegacyEmptyConversationIfKnown(
+                        runtime: runtime,
+                        conversationID: conversationID,
+                        generation: generation
+                    ) == false {
+                        pendingLegacyConversationNotFound.insert(conversationID)
+                        _ = await runtime.requireResnapshot(
+                            .explicit,
+                            connectionGeneration: generation
+                        )
+                    }
                     return
                 }
             }
@@ -907,10 +932,17 @@ public actor ConnectionCoordinator {
                     startedAsResnapshot: true
                 )
             case .conversationNotFound:
-                _ = await runtime.requireResnapshot(
-                    .explicit,
-                    connectionGeneration: generation
-                )
+                if await completeLegacyEmptyConversationIfKnown(
+                    runtime: runtime,
+                    conversationID: conversationID,
+                    generation: generation
+                ) == false {
+                    pendingLegacyConversationNotFound.insert(conversationID)
+                    _ = await runtime.requireResnapshot(
+                        .explicit,
+                        connectionGeneration: generation
+                    )
+                }
             }
         } catch is CancellationError {
             return
@@ -918,6 +950,75 @@ public actor ConnectionCoordinator {
             let failure = (error as? GatewayFailure) ?? .network(reason: .other)
             await failCurrentAttempt(failure, generation: generation)
         }
+    }
+
+    private func resolvePendingLegacyConversationNotFound(
+        generation: UInt64
+    ) async {
+        let conversationIDs = pendingLegacyConversationNotFound
+        pendingLegacyConversationNotFound.removeAll()
+        for conversationID in conversationIDs {
+            guard let runtime = conversationRuntimes[conversationID] else { continue }
+            _ = await completeLegacyEmptyConversationIfKnown(
+                runtime: runtime,
+                conversationID: conversationID,
+                generation: generation
+            )
+        }
+    }
+
+    /// Older hosts returned `not_found` until the first projected event was
+    /// created. The fresh session snapshot is the authority that distinguishes
+    /// that empty conversation from a genuinely missing or nonempty one.
+    private func completeLegacyEmptyConversationIfKnown(
+        runtime: ConversationRuntime,
+        conversationID: RemoteConversationID,
+        generation: UInt64
+    ) async -> Bool {
+        guard generation == state.connectionGeneration,
+              activeConversationIDs.contains(conversationID),
+              conversationRuntimes[conversationID] === runtime,
+              let snapshot = authoritativeSessionSnapshot,
+              let summary = snapshot.conversations.first(where: {
+                  $0.conversationID == conversationID
+              }),
+              summary.latestSequence == 0 else {
+            return false
+        }
+
+        let current = await runtime.currentState()
+        if current.phase != .catchingUp
+            || current.projectionRunID != snapshot.projectionRunID
+            || current.projectionGeneration != summary.projectionGeneration
+            || (current.cursor?.afterSequence ?? 0) > 0
+            || current.latestSequence > 0 {
+            guard await runtime.beginCatchUp(
+                connectionGeneration: generation,
+                resnapshot: true
+            ) else { return false }
+        }
+
+        let page = CompatibleConversationEventPage(
+            conversationID: conversationID,
+            projectionRunID: snapshot.projectionRunID,
+            projectionGeneration: summary.projectionGeneration,
+            events: [],
+            latestSequence: 0,
+            firstAvailableSequence: nil,
+            historyTruncated: false
+        )
+        guard await runtime.applyREST(
+            page,
+            connectionGeneration: generation
+        ) == .none else {
+            return false
+        }
+        guard await runtime.finishCatchUp(connectionGeneration: generation) else {
+            return false
+        }
+        pendingLegacyConversationNotFound.remove(conversationID)
+        await pruneFinishedSendState(conversationID: conversationID, runtime: runtime)
+        return true
     }
 
     private func runLoadOlder(

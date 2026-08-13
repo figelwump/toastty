@@ -241,6 +241,7 @@ struct RemoteGatewayRequestHandlerTests {
         authLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300),
         eventsOutcome: ConversationEventPageOutcome = .conversationNotFound,
         sendHandler: RemoteGatewayRequestHandler.SendHandler? = nil,
+        readAcknowledgementHandler: RemoteGatewayRequestHandler.ReadAcknowledgementHandler? = nil,
         nativeIdentityForTesting: String? = nil
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
         let audit = RemoteAccessAuditLog(fileURL: nil)
@@ -260,6 +261,7 @@ struct RemoteGatewayRequestHandlerTests {
                 ]
             ),
             sendHandler: sendHandler,
+            readAcknowledgementHandler: readAcknowledgementHandler,
             nativeIdentityForTesting: nativeIdentityForTesting,
             pairingRateLimiter: pairingLimiter,
             authRateLimiter: authLimiter
@@ -369,6 +371,7 @@ struct RemoteGatewayRequestHandlerTests {
             .browserCookiePairing,
             .nativeBearerPairing,
             .conversationBackwardPaging,
+            .conversationReadAcknowledgement,
         ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
@@ -1462,6 +1465,154 @@ struct RemoteGatewayRequestHandlerTests {
             }
             #expect(response.status == 400)
             #expect(try Self.error(response).code == "invalid_body")
+        }
+    }
+
+    @Test func readAcknowledgementUsesExistingReadCredentialAndReturnsHostResult() throws {
+        let conversationID = RemoteConversationID(
+            rawValue: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        )
+        let runID = RemoteProjectionRunID(
+            rawValue: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        )
+        let acknowledgement = RemoteConversationReadAcknowledgementRequest(
+            conversationID: conversationID,
+            projectionRunID: runID,
+            projectionGeneration: 3,
+            observedThroughSequence: 42
+        )
+        var received: RemoteConversationReadAcknowledgementRequest?
+        let (handler, store, _) = Self.makeHandler(readAcknowledgementHandler: { request, _ in
+            received = request
+            return .acknowledged
+        })
+        let cookie = Self.pairedDeviceCookie(store)
+        let body = try ConversationEventCoding.makeEncoder().encode(acknowledgement)
+
+        guard case .respond(let response) = handler.handle(
+            Self.request(
+                "POST",
+                "/api/conversation.read.acknowledge",
+                headerFields: [
+                    ("origin", Self.origin),
+                    ("cookie", cookie),
+                ],
+                body: body
+            ),
+            at: Self.now
+        ) else {
+            Issue.record("Expected acknowledgement response")
+            return
+        }
+
+        #expect(response.status == 200)
+        #expect(received == acknowledgement)
+        #expect(try ConversationEventCoding.makeDecoder().decode(
+            RemoteConversationReadAcknowledgementResponse.self,
+            from: response.body
+        ).result == .acknowledged)
+    }
+
+    @Test func readAcknowledgementAuthenticatesBeforeExposingConversationOutcome() throws {
+        let acknowledgement = RemoteConversationReadAcknowledgementRequest(
+            conversationID: RemoteConversationID(),
+            projectionRunID: RemoteProjectionRunID(),
+            projectionGeneration: 0,
+            observedThroughSequence: 1
+        )
+        let body = try ConversationEventCoding.makeEncoder().encode(acknowledgement)
+        var handlerCalled = false
+        let (handler, _, _) = Self.makeHandler(readAcknowledgementHandler: { _, _ in
+            handlerCalled = true
+            return .conversationNotFound
+        })
+
+        guard case .respond(let response) = handler.handle(
+            Self.request(
+                "POST",
+                "/api/conversation.read.acknowledge",
+                headerFields: [("origin", Self.origin)],
+                body: body
+            ),
+            at: Self.now
+        ) else {
+            Issue.record("Expected authentication rejection")
+            return
+        }
+
+        #expect(response.status == 401)
+        #expect(handlerCalled == false)
+    }
+
+    @Test func nativeReadAcknowledgementMayOmitOriginButChecksIdentity() throws {
+        let identity = "owner@example.com"
+        let acknowledgement = RemoteConversationReadAcknowledgementRequest(
+            conversationID: RemoteConversationID(),
+            projectionRunID: RemoteProjectionRunID(),
+            projectionGeneration: 0,
+            observedThroughSequence: 1
+        )
+        let body = try ConversationEventCoding.makeEncoder().encode(acknowledgement)
+        let (handler, store, _) = Self.makeHandler(
+            readAcknowledgementHandler: { _, _ in .alreadyRead },
+            nativeIdentityForTesting: identity
+        )
+        let native = try Self.nativeCredential(handler: handler, store: store, identity: identity)
+
+        guard case .respond(let response) = handler.handle(
+            Self.request(
+                "POST",
+                "/api/conversation.read.acknowledge",
+                headerFields: [
+                    ("authorization", "Bearer \(native.credential)"),
+                    ("tailscale-user-login", identity),
+                ],
+                body: body
+            ),
+            at: Self.now
+        ) else {
+            Issue.record("Expected native acknowledgement response")
+            return
+        }
+        #expect(response.status == 200)
+        #expect(try ConversationEventCoding.makeDecoder().decode(
+            RemoteConversationReadAcknowledgementResponse.self,
+            from: response.body
+        ).result == .alreadyRead)
+    }
+
+    @Test func readAcknowledgementRejectsMalformedAndMismatchedProtocolBodies() throws {
+        let (handler, store, _) = Self.makeHandler(readAcknowledgementHandler: { _, _ in .acknowledged })
+        let cookie = Self.pairedDeviceCookie(store)
+        for (body, expectedStatus, expectedCode) in [
+            (Data(#"{"conversationID":"bad"}"#.utf8), 400, "invalid_body"),
+            (try ConversationEventCoding.makeEncoder().encode(
+                RemoteConversationReadAcknowledgementRequest(
+                    protocolVersion: "9.0",
+                    conversationID: RemoteConversationID(),
+                    projectionRunID: RemoteProjectionRunID(),
+                    projectionGeneration: 0,
+                    observedThroughSequence: 1
+                )
+            ), 409, "protocol_mismatch"),
+        ] {
+            guard case .respond(let response) = handler.handle(
+                Self.request(
+                    "POST",
+                    "/api/conversation.read.acknowledge",
+                    headerFields: [
+                        ("origin", Self.origin),
+                        ("cookie", cookie),
+                    ],
+                    body: body
+                ),
+                at: Self.now
+            ) else {
+                Issue.record("Expected invalid acknowledgement response")
+                continue
+            }
+            #expect(response.status == expectedStatus)
+            #expect(try Self.error(response).code == expectedCode)
         }
     }
 

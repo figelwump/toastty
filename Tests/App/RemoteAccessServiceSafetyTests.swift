@@ -5,6 +5,90 @@ import Testing
 @testable import ToasttyApp
 
 struct RemoteAccessServiceSafetyTests {
+    @Test func readAcknowledgementAcceptsAuthoritativeEmptyAndRejectsStaleBoundaries() {
+        let runID = RemoteProjectionRunID()
+        let empty = RemoteConversationReadAcknowledgementRequest(
+            conversationID: RemoteConversationID(),
+            projectionRunID: runID,
+            projectionGeneration: 2,
+            observedThroughSequence: 0
+        )
+        let matching = RemoteConversationReadAcknowledgementRequest(
+            conversationID: RemoteConversationID(),
+            projectionRunID: runID,
+            projectionGeneration: 2,
+            observedThroughSequence: 8
+        )
+
+        #expect(RemoteAccessService.readAcknowledgementResult(
+            request: empty,
+            currentProjectionRunID: runID,
+            currentProjectionGeneration: 2,
+            currentLatestSequence: 0,
+            isUnread: true
+        ) == .acknowledged)
+        #expect(RemoteAccessService.readAcknowledgementResult(
+            request: matching,
+            currentProjectionRunID: runID,
+            currentProjectionGeneration: 2,
+            currentLatestSequence: 0,
+            isUnread: true
+        ) == .staleBoundary)
+        #expect(RemoteAccessService.readAcknowledgementResult(
+            request: matching,
+            currentProjectionRunID: RemoteProjectionRunID(),
+            currentProjectionGeneration: 2,
+            currentLatestSequence: 8,
+            isUnread: true
+        ) == .staleBoundary)
+        #expect(RemoteAccessService.readAcknowledgementResult(
+            request: matching,
+            currentProjectionRunID: runID,
+            currentProjectionGeneration: 3,
+            currentLatestSequence: 8,
+            isUnread: true
+        ) == .staleBoundary)
+        #expect(RemoteAccessService.readAcknowledgementResult(
+            request: matching,
+            currentProjectionRunID: runID,
+            currentProjectionGeneration: 2,
+            currentLatestSequence: 9,
+            isUnread: true
+        ) == .staleBoundary)
+        #expect(RemoteAccessService.readAcknowledgementResult(
+            request: matching,
+            currentProjectionRunID: runID,
+            currentProjectionGeneration: 2,
+            currentLatestSequence: 7,
+            isUnread: true
+        ) == .staleBoundary)
+    }
+
+    @Test func readAcknowledgementIsIdempotentAfterCurrentBoundaryIsRead() {
+        let runID = RemoteProjectionRunID()
+        let request = RemoteConversationReadAcknowledgementRequest(
+            conversationID: RemoteConversationID(),
+            projectionRunID: runID,
+            projectionGeneration: 2,
+            observedThroughSequence: 8
+        )
+
+        #expect(RemoteAccessService.readAcknowledgementResult(
+            request: request,
+            currentProjectionRunID: runID,
+            currentProjectionGeneration: 2,
+            currentLatestSequence: 8,
+            isUnread: true
+        ) == .acknowledged)
+        #expect(RemoteAccessService.readAcknowledgementResult(
+            request: request,
+            currentProjectionRunID: runID,
+            currentProjectionGeneration: 2,
+            currentLatestSequence: 8,
+            isUnread: false
+        ) == .alreadyRead)
+    }
+
     @Test func desktopSessionStatusMapsExactlyToRemotePresentationStatus() {
         let cases: [(SessionStatusKind, RemoteSessionPresentationStatus)] = [
             (.idle, .idle),

@@ -302,6 +302,39 @@ final class GatewayClientTests: XCTestCase {
         XCTAssertEqual(result, .rejected(reason: .sendScopeDenied))
     }
 
+    func testConversationReadAcknowledgementUsesAuthenticatedPOSTContract() async throws {
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"protocolVersion":"1.0","result":"acknowledged"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+        let request = RemoteConversationReadAcknowledgementRequest(
+            conversationID: Self.conversationID,
+            projectionRunID: Self.projectionRunID,
+            projectionGeneration: 7,
+            observedThroughSequence: 11
+        )
+
+        let response = try await client.acknowledgeConversationRead(request)
+
+        XCTAssertEqual(response.result, .acknowledged)
+        let recordedRequests = await transport.recordedRequests()
+        let recorded = try XCTUnwrap(recordedRequests.first)
+        XCTAssertEqual(recorded.httpMethod, "POST")
+        XCTAssertEqual(recorded.url?.path, "/api/conversation.read.acknowledge")
+        XCTAssertEqual(recorded.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertEqual(
+            try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationReadAcknowledgementRequest.self,
+                from: try XCTUnwrap(recorded.httpBody)
+            ),
+            request
+        )
+    }
+
     func testUnknown403SendRejectionReasonIsOperationScopedCompatibilityFailure() async throws {
         let body = Data(#"{"reason":"future_send_policy","status":"rejected"}"#.utf8)
         let transport = RecordingHTTPTransport(responses: [HTTPTransportResponse(statusCode: 403, body: body)])

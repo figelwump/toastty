@@ -9,6 +9,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case nativePairingExchange
     case sessions
     case conversationEvents
+    case conversationReadAcknowledge
     case messageSend
     case subscribe
     case nativeDevice
@@ -21,6 +22,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .nativePairingExchange: "/v1/native-pairing/exchange"
         case .sessions: "/api/sessions"
         case .conversationEvents: "/api/conversation.events.get"
+        case .conversationReadAcknowledge: "/api/conversation.read.acknowledge"
         case .messageSend: "/api/conversation.message.send"
         case .subscribe: "/api/subscribe"
         case .nativeDevice: "/v1/native-device"
@@ -67,6 +69,7 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .nativePairingExchange: .init(route: .nativePairingExchange, method: "POST", origin: .browserContextForbidden, authentication: .none, scope: .none),
         .sessions: .init(route: .sessions, method: "GET", origin: .optionalAllowed, authentication: .browserOrNative, scope: .read),
         .conversationEvents: .init(route: .conversationEvents, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
+        .conversationReadAcknowledge: .init(route: .conversationReadAcknowledge, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
         .messageSend: .init(route: .messageSend, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .send),
         .subscribe: .init(route: .subscribe, method: "GET", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
         .nativeDevice: .init(route: .nativeDevice, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),

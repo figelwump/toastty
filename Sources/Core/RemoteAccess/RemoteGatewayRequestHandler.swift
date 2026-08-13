@@ -38,6 +38,10 @@ public final class RemoteGatewayRequestHandler {
     }
 
     public typealias SendHandler = (RemoteMessageSendRequest, RemoteDeviceRecord) -> RemoteMessageSendResult
+    public typealias ReadAcknowledgementHandler = (
+        RemoteConversationReadAcknowledgementRequest,
+        RemoteDeviceRecord
+    ) -> RemoteConversationReadAcknowledgementResult
 
     private enum AuthResult {
         case success(RemoteDeviceRecord)
@@ -49,11 +53,13 @@ public final class RemoteGatewayRequestHandler {
     private static let maximumIdentityBytes = 320
     private static let maximumNativeExchangeBodyBytes = 2 * 1024
     private static let maximumNativeRevokeBodyBytes = 256
+    private static let maximumReadAcknowledgementBodyBytes = 1024
 
     private let deviceStore: RemoteDeviceStore
     private let auditLog: RemoteAccessAuditLog
     private let facade: any RemoteSessionFacade
     private let sendHandler: SendHandler?
+    private let readAcknowledgementHandler: ReadAcknowledgementHandler?
     private let nativeIdentityForTesting: String?
     private var configuration: RemoteGatewayConfiguration
     private var pairingRateLimiter: RemoteAccessRateLimiter
@@ -72,6 +78,7 @@ public final class RemoteGatewayRequestHandler {
         facade: any RemoteSessionFacade,
         configuration: RemoteGatewayConfiguration,
         sendHandler: SendHandler? = nil,
+        readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
     ) {
@@ -81,6 +88,7 @@ public final class RemoteGatewayRequestHandler {
             facade: facade,
             configuration: configuration,
             sendHandler: sendHandler,
+            readAcknowledgementHandler: readAcknowledgementHandler,
             // The public production entry point can never inject identity.
             nativeIdentityForTesting: nil,
             pairingRateLimiter: pairingRateLimiter,
@@ -97,6 +105,7 @@ public final class RemoteGatewayRequestHandler {
         facade: any RemoteSessionFacade,
         configuration: RemoteGatewayConfiguration,
         sendHandler: SendHandler? = nil,
+        readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
         nativeIdentityForTesting: String?,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
@@ -106,6 +115,7 @@ public final class RemoteGatewayRequestHandler {
         self.facade = facade
         self.configuration = configuration
         self.sendHandler = sendHandler
+        self.readAcknowledgementHandler = readAcknowledgementHandler
         self.nativeIdentityForTesting = nativeIdentityForTesting
         self.pairingRateLimiter = pairingRateLimiter
         self.authRateLimiter = authRateLimiter
@@ -233,6 +243,8 @@ public final class RemoteGatewayRequestHandler {
             return handleSessionList(at: date)
         case .conversationEvents:
             return handleConversationEvents(request)
+        case .conversationReadAcknowledge:
+            return handleConversationReadAcknowledgement(request, device: authenticated)
         case .messageSend:
             return handleMessageSend(request, device: authenticated, at: date)
         case .subscribe:
@@ -399,6 +411,43 @@ public final class RemoteGatewayRequestHandler {
             return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Invalid events paging request"))
         }
         let body = (try? encoder.encode(response)) ?? Data()
+        return .respond(.json(body: body))
+    }
+
+    private func handleConversationReadAcknowledgement(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord
+    ) -> Outcome {
+        guard request.body.count <= Self.maximumReadAcknowledgementBodyBytes,
+              let acknowledgement = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationReadAcknowledgementRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected conversation read acknowledgement JSON"
+            ))
+        }
+        guard acknowledgement.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        guard let readAcknowledgementHandler else {
+            let body = (try? encoder.encode(RemoteConversationReadAcknowledgementResponse(
+                result: .conversationNotFound
+            ))) ?? Data()
+            return .respond(.json(body: body))
+        }
+        let result = readAcknowledgementHandler(acknowledgement, device)
+        let body = (try? encoder.encode(RemoteConversationReadAcknowledgementResponse(
+            result: result
+        ))) ?? Data()
         return .respond(.json(body: body))
     }
 

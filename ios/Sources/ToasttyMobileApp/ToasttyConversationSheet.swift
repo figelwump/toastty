@@ -16,6 +16,7 @@ struct ToasttyConversationSheet: View {
     let loadOlder: () -> Void
     let submitDraft: () -> Void
     let dismissSendReceipt: (String) -> Void
+    let onVisibleLiveEdge: (MobileSessionStatus) -> Void
     let onDismiss: () -> Void
 
     init(
@@ -29,6 +30,7 @@ struct ToasttyConversationSheet: View {
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in },
         onDismiss: @escaping () -> Void
     ) {
         self.conversationID = conversationID
@@ -41,6 +43,7 @@ struct ToasttyConversationSheet: View {
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
         self.dismissSendReceipt = dismissSendReceipt
+        self.onVisibleLiveEdge = onVisibleLiveEdge
         self.onDismiss = onDismiss
     }
 
@@ -52,7 +55,11 @@ struct ToasttyConversationSheet: View {
                     ToasttyTranscriptView(
                         state: resolvedPresentation,
                         loadOlder: loadOlder,
-                        dismissSendReceipt: dismissSendReceipt
+                        dismissSendReceipt: dismissSendReceipt,
+                        readAcknowledgementEpoch: conversation.state,
+                        onVisibleLiveEdge: {
+                            onVisibleLiveEdge(conversation.state)
+                        }
                     )
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         composerBar(conversation)
@@ -116,7 +123,7 @@ struct ToasttyConversationSheet: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .padding(.top, dynamicTypeSize.isAccessibilitySize ? 32 : 0)
+        .padding(.top, dynamicTypeSize.isAccessibilitySize ? 32 : 12)
         .overlay(alignment: .bottom) { Divider().overlay(ToasttyDesignTokens.divider) }
     }
 
@@ -164,12 +171,13 @@ struct ToasttyConversationSheet: View {
             }
 
             if case .disabled(let reason) = presentation.gate {
-                Label(reason.message, systemImage: reason.systemImage)
+                composerDisabledStatus(reason)
                     .font(.caption.monospaced())
                     .foregroundStyle(composerStatusColor(reason))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Composer locked. \(reason.message)")
+                    .accessibilityLabel(composerStatusAccessibilityLabel(reason))
+                    .accessibilityValue(composerStatusAccessibilityValue(reason))
                     .accessibilityAddTraits(.updatesFrequently)
                     .accessibilityIdentifier("toastty-mobile-composer-status")
             } else if let feedback = presentation.inlineFeedback {
@@ -189,6 +197,22 @@ struct ToasttyConversationSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(ToasttyDesignTokens.elevatedSurface)
         .overlay(alignment: .top) { Divider().overlay(ToasttyDesignTokens.divider) }
+    }
+
+    @ViewBuilder
+    private func composerDisabledStatus(
+        _ reason: ToasttyComposerDisabledReason
+    ) -> some View {
+        if reason == .prompt(.working) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(ToasttyDesignTokens.amber)
+                Text("Agent working…")
+            }
+        } else {
+            Label(reason.message, systemImage: reason.systemImage)
+        }
     }
 
     private func composerField(
@@ -291,5 +315,19 @@ struct ToasttyConversationSheet: View {
     ) -> String {
         guard case .disabled(let reason) = presentation.gate else { return "" }
         return reason.message
+    }
+
+    private func composerStatusAccessibilityLabel(
+        _ reason: ToasttyComposerDisabledReason
+    ) -> String {
+        reason == .prompt(.working)
+            ? "Agent working. Composer locked."
+            : "Composer locked. \(reason.message)"
+    }
+
+    private func composerStatusAccessibilityValue(
+        _ reason: ToasttyComposerDisabledReason
+    ) -> String {
+        reason == .prompt(.working) ? "In progress" : ""
     }
 }

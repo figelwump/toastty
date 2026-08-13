@@ -29,6 +29,9 @@ protocol LiveConnectionRuntime: Sendable {
         conversationID: RemoteConversationID,
         clientRequestID: String
     ) async
+    func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse?
 }
 
 struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
@@ -95,6 +98,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
             conversationID: conversationID,
             clientRequestID: clientRequestID
         )
+    }
+
+    func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) async throws -> RemoteConversationReadAcknowledgementResponse? {
+        try await coordinator.acknowledgeConversationRead(request)
     }
 }
 
@@ -265,6 +274,9 @@ final class LiveSessionsController {
                     conversationID: remoteID,
                     clientRequestID: clientRequestID
                 )
+            },
+            acknowledgeRead: { [runtime] request in
+                try await runtime.acknowledgeConversationRead(request)
             }
         )
         controller.consumeConnectionPhase(coordinatorState.phase)

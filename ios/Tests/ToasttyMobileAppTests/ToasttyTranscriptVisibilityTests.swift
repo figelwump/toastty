@@ -1,0 +1,80 @@
+import Foundation
+import SwiftUI
+import ToasttyMobileDomain
+import XCTest
+@testable import ToasttyMobileApp
+
+final class ToasttyTranscriptVisibilityTests: XCTestCase {
+    func testVisibleLiveEdgeRequiresActiveLiveMeasuredNonemptyBoundary() {
+        let boundary = rowID(sequence: 7)
+
+        XCTAssertTrue(key(boundary: boundary, measuredBoundary: boundary).isEligible)
+        XCTAssertTrue(
+            key(boundary: nil, measuredBoundary: nil).isEligible,
+            "An authoritative empty live transcript is visibly read"
+        )
+        XCTAssertFalse(key(boundary: boundary, measuredBoundary: nil).isEligible)
+        XCTAssertFalse(
+            key(
+                boundary: nil,
+                measuredBoundary: nil,
+                hasMeasuredScrollGeometry: false
+            ).isEligible
+        )
+        XCTAssertFalse(
+            key(boundary: boundary, measuredBoundary: rowID(sequence: 6)).isEligible
+        )
+        XCTAssertFalse(
+            key(boundary: boundary, measuredBoundary: boundary, phase: .resyncing).isEligible
+        )
+        XCTAssertFalse(
+            key(
+                boundary: boundary,
+                measuredBoundary: boundary,
+                scenePhase: .background
+            ).isEligible
+        )
+        XCTAssertFalse(
+            key(boundary: boundary, measuredBoundary: boundary, isVisible: false).isEligible
+        )
+        XCTAssertFalse(
+            key(boundary: boundary, measuredBoundary: boundary, isAtLiveEdge: false).isEligible
+        )
+        XCTAssertNotEqual(
+            key(boundary: boundary, measuredBoundary: boundary, readAcknowledgementEpoch: .working),
+            key(boundary: boundary, measuredBoundary: boundary, readAcknowledgementEpoch: .ready),
+            "A new ready epoch at the same transcript boundary must retrigger acknowledgement"
+        )
+    }
+
+    private func key(
+        boundary: ToasttyTranscriptRowID?,
+        measuredBoundary: ToasttyTranscriptRowID?,
+        phase: ToasttyConversationPresentationPhase = .live,
+        scenePhase: ScenePhase = .active,
+        isVisible: Bool = true,
+        isAtLiveEdge: Bool = true,
+        hasMeasuredScrollGeometry: Bool = true,
+        readAcknowledgementEpoch: MobileSessionStatus? = .ready
+    ) -> TranscriptLiveEdgeVisibilityKey {
+        TranscriptLiveEdgeVisibilityKey(
+            phase: phase,
+            scenePhase: scenePhase,
+            isVisible: isVisible,
+            isAtLiveEdge: isAtLiveEdge,
+            hasMeasuredScrollGeometry: hasMeasuredScrollGeometry,
+            measuredBoundaryID: measuredBoundary,
+            latestBoundaryID: boundary,
+            readAcknowledgementEpoch: readAcknowledgementEpoch
+        )
+    }
+
+    private func rowID(sequence: UInt64) -> ToasttyTranscriptRowID {
+        ToasttyTranscriptRowID(
+            projectionRunID: UUID(uuidString: "D2000000-0000-0000-0000-000000000001")!,
+            projectionGeneration: 1,
+            conversationID: UUID(uuidString: "B1000000-0000-0000-0000-000000000001")!,
+            sequence: sequence
+        )
+    }
+}

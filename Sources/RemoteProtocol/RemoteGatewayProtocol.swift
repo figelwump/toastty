@@ -25,6 +25,9 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// Conversation history can be opened at the retained tail and paged
     /// backward without eagerly downloading the whole retained journal.
     case conversationBackwardPaging = "conversation_backward_paging"
+    /// A client that has actually displayed the current live edge may clear
+    /// the host panel's unread notification state without focusing the Mac.
+    case conversationReadAcknowledgement = "conversation_read_acknowledgement"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -40,6 +43,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .browserCookiePairing,
             .nativeBearerPairing,
             .conversationBackwardPaging,
+            .conversationReadAcknowledgement,
         ]
     ) {
         self.protocolVersion = protocolVersion
@@ -287,6 +291,48 @@ public struct RemoteGatewaySessionListResponse: Codable, Equatable, Sendable {
     public init(snapshot: RemoteSessionListSnapshot) {
         self.protocolVersion = RemoteGatewayProtocol.version
         self.snapshot = snapshot
+    }
+}
+
+/// The exact projection boundary a remote client has displayed. The host
+/// accepts this only when it still covers the conversation's current live
+/// edge, so a delayed acknowledgement cannot clear newly arrived work.
+public struct RemoteConversationReadAcknowledgementRequest: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var conversationID: RemoteConversationID
+    public var projectionRunID: RemoteProjectionRunID
+    public var projectionGeneration: UInt64
+    public var observedThroughSequence: UInt64
+
+    public init(
+        protocolVersion: String = RemoteGatewayProtocol.version,
+        conversationID: RemoteConversationID,
+        projectionRunID: RemoteProjectionRunID,
+        projectionGeneration: UInt64,
+        observedThroughSequence: UInt64
+    ) {
+        self.protocolVersion = protocolVersion
+        self.conversationID = conversationID
+        self.projectionRunID = projectionRunID
+        self.projectionGeneration = projectionGeneration
+        self.observedThroughSequence = observedThroughSequence
+    }
+}
+
+public enum RemoteConversationReadAcknowledgementResult: String, Codable, Equatable, Sendable {
+    case acknowledged
+    case alreadyRead = "already_read"
+    case staleBoundary = "stale_boundary"
+    case conversationNotFound = "conversation_not_found"
+}
+
+public struct RemoteConversationReadAcknowledgementResponse: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var result: RemoteConversationReadAcknowledgementResult
+
+    public init(result: RemoteConversationReadAcknowledgementResult) {
+        self.protocolVersion = RemoteGatewayProtocol.version
+        self.result = result
     }
 }
 

@@ -128,6 +128,7 @@ struct ToasttyMobileRootView: View {
                 loadOlder: conversationLoadOlderAction(for: selection.id),
                 submitDraft: conversationSubmitAction(for: selection.id),
                 dismissSendReceipt: conversationReceiptDismissAction(for: selection.id),
+                onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: selection.id),
                 onDismiss: sessionController.homeController.dismissConversation
             )
             .presentationDragIndicator(.visible)
@@ -342,6 +343,20 @@ struct ToasttyMobileRootView: View {
                 return
             }
             Task { await controller.dismissSendReceipt(clientRequestID) }
+        }
+    }
+
+    private func conversationVisibleLiveEdgeAction(
+        for conversationID: UUID
+    ) -> (MobileSessionStatus) -> Void {
+        { presentationStatus in
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+                return
+            }
+            controller.acknowledgeVisibleTranscript(
+                presentationStatus: presentationStatus
+            )
         }
     }
 

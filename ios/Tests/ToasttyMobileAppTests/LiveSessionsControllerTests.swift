@@ -507,6 +507,12 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
         ))
     }
 
+    func acknowledgeConversationRead(
+        _ request: RemoteConversationReadAcknowledgementRequest
+    ) -> RemoteConversationReadAcknowledgementResponse? {
+        nil
+    }
+
     func activeConversationIDs() -> Set<RemoteConversationID> {
         Set(conversationRuntimes.keys)
     }
