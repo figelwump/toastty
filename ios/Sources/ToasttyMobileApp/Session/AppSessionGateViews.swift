@@ -69,7 +69,6 @@ struct AppSessionGateView: View {
                 EmptyView()
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     private func incompatibleMessage(_ incompatibility: IncompatiblePresentation) -> String {

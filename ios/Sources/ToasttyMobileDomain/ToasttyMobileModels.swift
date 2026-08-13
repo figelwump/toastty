@@ -171,6 +171,13 @@ public struct MobileActivityAge: Equatable, Sendable {
         if hours < 24 { return "\(hours)h" }
         return "\(hours / 24)d"
     }
+
+    /// Comparable recency key; the shared "now" term cancels out when two
+    /// conversations are compared, so no clock read is needed. Smaller means
+    /// more recent activity.
+    var recencyRank: TimeInterval {
+        TimeInterval(secondsAtReceipt) - receivedAtMonotonicTime
+    }
 }
 
 public struct MobileConversation: Identifiable, Equatable, Sendable {
@@ -247,6 +254,30 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public var accessibilitySummary: String {
         "\(title), \(state.accessibilityLabel), \(workspaceTitle), \(age)"
     }
+
+    /// Most recent activity first; conversations without a live activity age
+    /// sort last. Title and id tie-breaks keep the order stable across
+    /// snapshots (and deterministic for fixtures, which carry no live age).
+    static func isMoreRecent(_ lhs: MobileConversation, _ rhs: MobileConversation) -> Bool {
+        switch (lhs.activityAge, rhs.activityAge) {
+        case (let left?, let right?) where left.recencyRank != right.recencyRank:
+            return left.recencyRank < right.recencyRank
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        default:
+            let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+}
+
+public extension [MobileConversation] {
+    func sortedByRecency() -> [MobileConversation] {
+        sorted(by: MobileConversation.isMoreRecent)
+    }
 }
 
 public struct MobileWorkspace: Identifiable, Equatable, Sendable {
@@ -264,10 +295,10 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
 
     public var sortedConversations: [MobileConversation] {
         conversations.sorted {
-            if $0.state.bucket.sortOrder == $1.state.bucket.sortOrder {
-                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            if $0.state.bucket.sortOrder != $1.state.bucket.sortOrder {
+                return $0.state.bucket.sortOrder < $1.state.bucket.sortOrder
             }
-            return $0.state.bucket.sortOrder < $1.state.bucket.sortOrder
+            return MobileConversation.isMoreRecent($0, $1)
         }
     }
 
@@ -304,14 +335,14 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
         workspaces
             .flatMap(\.conversations)
             .filter { $0.state == .ready }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            .sortedByRecency()
     }
 
     public var needsApproval: [MobileConversation] {
         workspaces
             .flatMap(\.conversations)
             .filter { $0.state == .needsApproval }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            .sortedByRecency()
     }
 
 }

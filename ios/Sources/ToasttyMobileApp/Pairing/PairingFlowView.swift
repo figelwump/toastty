@@ -16,7 +16,6 @@ struct PairingFlowView: View {
             }
         }
         .tint(ToasttyDesignTokens.amber)
-        .preferredColorScheme(.dark)
     }
 
     @ViewBuilder

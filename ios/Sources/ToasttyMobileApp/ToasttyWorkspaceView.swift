@@ -29,7 +29,7 @@ struct ToasttyWorkspaceView: View {
     private func workspaceList(_ workspace: MobileWorkspace) -> some View {
         List {
             Section {
-                ForEach(stablySortedConversations(in: workspace)) { conversation in
+                ForEach(workspace.sortedConversations) { conversation in
                     Button { onOpen(conversation) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             ViewThatFits(in: .horizontal) {
@@ -81,17 +81,6 @@ struct ToasttyWorkspaceView: View {
 
     private func onOpen(_ conversation: MobileConversation) {
         controller.open(conversation)
-    }
-
-    private func stablySortedConversations(in workspace: MobileWorkspace) -> [MobileConversation] {
-        workspace.sortedConversations.sorted {
-            if $0.state.bucket.sortOrder != $1.state.bucket.sortOrder {
-                return $0.state.bucket.sortOrder < $1.state.bucket.sortOrder
-            }
-            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
-            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
-            return $0.id.uuidString < $1.id.uuidString
-        }
     }
 
     @ViewBuilder

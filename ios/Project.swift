@@ -169,6 +169,9 @@ var appInfoPlist: [String: Plist.Value] = [
     "NSCameraUsageDescription": .string("Toastty scans a pairing code shown by your Mac."),
     "NSLocalNetworkUsageDescription": .string("Toastty connects to a local development gateway when local mode is enabled."),
     "UILaunchScreen": .dictionary([:]),
+    // The palette in ToasttyDesignTokens is dark-only; forcing dark here keeps
+    // UIKit-managed chrome (alerts, keyboard, sheets) consistent with it.
+    "UIUserInterfaceStyle": .string("Dark"),
     "UISupportedInterfaceOrientations": .array([.string("UIInterfaceOrientationPortrait")]),
 ]
 

@@ -30,7 +30,6 @@ struct ToasttySettingsView: View {
             }
         }
         .tint(ToasttyDesignTokens.amber)
-        .preferredColorScheme(.dark)
         .presentationBackground(ToasttyDesignTokens.background)
         .alert("Unpair this iPhone?", isPresented: $confirmsUnpair) {
             Button("Cancel", role: .cancel) {}
@@ -57,21 +56,6 @@ struct ToasttySettingsView: View {
                 identifier: "reachability"
             )
             settingsRow("Protocol", value: presentation.protocolVersion, identifier: "protocol")
-            settingsRow(
-                "Projection run",
-                value: presentation.projectionRunID ?? "Waiting for snapshot",
-                identifier: "projection-run"
-            )
-            settingsRow(
-                "Latest projection generation",
-                value: presentation.projectionGeneration.map(String.init) ?? "—",
-                identifier: "projection-generation"
-            )
-            settingsRow(
-                "Active cursor",
-                value: presentation.activeConversationCursor.map(String.init) ?? "No conversation open",
-                identifier: "active-cursor"
-            )
         }
     }
 
@@ -114,6 +98,22 @@ struct ToasttySettingsView: View {
 
     private var diagnosticsSection: some View {
         Section("Diagnostics") {
+            settingsRow(
+                "Projection run",
+                value: presentation.projectionRunID ?? "Waiting for snapshot",
+                identifier: "projection-run"
+            )
+            settingsRow(
+                "Latest projection generation",
+                value: presentation.projectionGeneration.map(String.init) ?? "—",
+                identifier: "projection-generation"
+            )
+            settingsRow(
+                "Active cursor",
+                value: presentation.activeConversationCursor.map(String.init) ?? "No conversation open",
+                identifier: "active-cursor"
+            )
+
             Label("Categorical connection diagnostics", systemImage: "hand.raised")
                 .font(.subheadline)
 

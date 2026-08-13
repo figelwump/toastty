@@ -19,22 +19,41 @@ struct ToasttyHomeView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
-                header
-                connectionNotice
                 readySection
                 needsApprovalSection
                 workspaceSection
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 40)
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
         }
         .refreshable {
             await refresh()
         }
         .scrollIndicators(.hidden)
+        // The identifier must precede safeAreaInset: applied after it, it
+        // stamps both the scroll view and the inset header, breaking UI-test
+        // queries with ambiguous matches.
+        .accessibilityIdentifier("toastty-mobile-home")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            // Connection state stays visible while the list scrolls; live
+            // freshness is the core signal of a remote-monitoring client.
+            VStack(spacing: 10) {
+                header
+                connectionNotice
+            }
+            .padding(.horizontal, 14)
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 6)
+            .background(ToasttyDesignTokens.background)
+        }
         .background(ToasttyDesignTokens.background)
         .toolbar(.hidden, for: .navigationBar)
-        .accessibilityIdentifier("toastty-mobile-home")
+        .sensoryFeedback(.warning, trigger: needsApprovalConversations.count) { old, new in
+            new > old
+        }
     }
 
     @ViewBuilder
@@ -113,20 +132,14 @@ struct ToasttyHomeView: View {
         .accessibilityIdentifier("toastty-mobile-settings-button")
     }
 
+    @ViewBuilder
     private var readySection: some View {
-        VStack(spacing: 10) {
-            ToasttySectionTitle(title: "Ready · \(readyConversations.count)")
-                .padding(.top, 6)
-                .accessibilityIdentifier("toastty-mobile-ready-section")
+        if readyConversations.isEmpty == false {
+            VStack(spacing: 10) {
+                ToasttySectionTitle(title: "Ready · \(readyConversations.count)")
+                    .padding(.top, 6)
+                    .accessibilityIdentifier("toastty-mobile-ready-section")
 
-            if readyConversations.isEmpty {
-                Text("no conversations are ready")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 10)
-            } else {
                 ForEach(readyConversations) { conversation in
                     ToasttyActionCard(
                         conversation: conversation,
@@ -139,35 +152,30 @@ struct ToasttyHomeView: View {
     }
 
     private var readyConversations: [MobileConversation] {
-        stablySorted(controller.snapshot.ready)
+        controller.snapshot.ready
     }
 
+    @ViewBuilder
     private var needsApprovalSection: some View {
-        VStack(spacing: 10) {
-            ToasttySectionTitle(title: "Needs approval · \(needsApprovalConversations.count)")
-                .padding(.top, 6)
-                .accessibilityIdentifier("toastty-mobile-needs-approval-section")
+        if needsApprovalConversations.isEmpty == false {
+            VStack(spacing: 10) {
+                ToasttySectionTitle(title: "Needs approval · \(needsApprovalConversations.count)")
+                    .padding(.top, 6)
+                    .accessibilityIdentifier("toastty-mobile-needs-approval-section")
 
-            ForEach(needsApprovalConversations) { conversation in
-                ToasttyActionCard(
-                    conversation: conversation,
-                    accessibilityIdentifier: "toastty-mobile-needs-approval-card-\(conversation.id.uuidString)",
-                    onOpen: controller.open
-                )
+                ForEach(needsApprovalConversations) { conversation in
+                    ToasttyActionCard(
+                        conversation: conversation,
+                        accessibilityIdentifier: "toastty-mobile-needs-approval-card-\(conversation.id.uuidString)",
+                        onOpen: controller.open
+                    )
+                }
             }
         }
     }
 
     private var needsApprovalConversations: [MobileConversation] {
-        stablySorted(controller.snapshot.needsApproval)
-    }
-
-    private func stablySorted(_ conversations: [MobileConversation]) -> [MobileConversation] {
-        conversations.sorted {
-            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
-            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
-            return $0.id.uuidString < $1.id.uuidString
-        }
+        controller.snapshot.needsApproval
     }
 
     private var workspaceSection: some View {
@@ -180,7 +188,7 @@ struct ToasttyHomeView: View {
                 ContentUnavailableView(
                     "No workspaces yet",
                     systemImage: "rectangle.stack",
-                    description: Text("Pair this device with Toastty on your Mac to get started.")
+                    description: Text("Open a workspace in Toastty on your Mac and it will appear here.")
                 )
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
                 .padding(.vertical, 32)
@@ -295,7 +303,9 @@ private struct ToasttyWorkspaceCard: View {
 
             if workspace.conversations.count > 3 {
                 Button {
-                    showsAllConversations.toggle()
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showsAllConversations.toggle()
+                    }
                 } label: {
                     HStack(spacing: 8) {
                         Text(showsAllConversations
@@ -328,20 +338,9 @@ private struct ToasttyWorkspaceCard: View {
 
     private var visibleConversations: [MobileConversation] {
         if showsAllConversations {
-            stablySortedConversations
+            workspace.sortedConversations
         } else {
-            Array(stablySortedConversations.prefix(3))
-        }
-    }
-
-    private var stablySortedConversations: [MobileConversation] {
-        workspace.sortedConversations.sorted {
-            if $0.state.bucket.sortOrder != $1.state.bucket.sortOrder {
-                return $0.state.bucket.sortOrder < $1.state.bucket.sortOrder
-            }
-            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
-            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
-            return $0.id.uuidString < $1.id.uuidString
+            Array(workspace.sortedConversations.prefix(3))
         }
     }
 
@@ -395,7 +394,7 @@ private struct ToasttyConversationMiniRow: View {
                 : ToasttyDesignTokens.primaryText)
             .lineLimit(1)
         if conversation.inputAvailability == .localDraft {
-            Text("✎ desktop draft")
+            Label("desktop draft", systemImage: "pencil")
                 .font(.caption2.monospaced())
                 .foregroundStyle(ToasttyDesignTokens.amberText)
         }

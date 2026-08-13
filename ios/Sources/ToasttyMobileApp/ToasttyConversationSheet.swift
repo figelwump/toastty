@@ -229,7 +229,7 @@ struct ToasttyConversationSheet: View {
                 if isSubmitting {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255))
+                        .tint(ToasttyDesignTokens.inkOnAmber)
                         .frame(width: 44)
                 } else {
                     Image(systemName: "arrow.up")
@@ -239,11 +239,14 @@ struct ToasttyConversationSheet: View {
             .font(.subheadline.weight(.bold))
             .frame(height: 44)
             .background(ToasttyDesignTokens.amber, in: RoundedRectangle(cornerRadius: 11))
-            .foregroundStyle(Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255))
+            .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
         }
         .buttonStyle(.plain)
         .disabled(canSubmit(presentation) == false)
         .opacity(canSubmit(presentation) ? 1 : 0.36)
+        .sensoryFeedback(.impact(weight: .light), trigger: isSubmitting) { old, new in
+            old == false && new
+        }
         .accessibilityLabel(isSubmitting ? "Sending message" : "Send message")
         .accessibilityValue(isSubmitting ? "In progress" : "")
         .accessibilityIdentifier("toastty-mobile-composer-send")

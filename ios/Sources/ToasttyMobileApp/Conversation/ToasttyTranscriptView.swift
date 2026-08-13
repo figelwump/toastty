@@ -121,7 +121,7 @@ struct ToasttyTranscriptView: View {
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 9)
                                     .background(ToasttyDesignTokens.amber, in: Capsule())
-                                    .foregroundStyle(Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255))
+                                    .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
                             }
                             .accessibilityIdentifier("toastty-mobile-transcript-jump-latest")
                         }
@@ -271,10 +271,12 @@ struct ToasttyTranscriptView: View {
         _ id: ToasttyTranscriptRowID,
         in values: inout Set<ToasttyTranscriptRowID>
     ) {
-        if values.contains(id) {
-            values.remove(id)
-        } else {
-            values.insert(id)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if values.contains(id) {
+                values.remove(id)
+            } else {
+                values.insert(id)
+            }
         }
     }
 }
@@ -320,7 +322,7 @@ private struct ToasttySendTailItemView: View {
         VStack(alignment: .trailing, spacing: 7) {
             Text(item.text)
                 .font(.body)
-                .foregroundStyle(Color(red: 240 / 255, green: 232 / 255, blue: 216 / 255))
+                .foregroundStyle(ToasttyDesignTokens.userBubbleText)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 ProgressView()
@@ -332,13 +334,13 @@ private struct ToasttySendTailItemView: View {
             }
         }
         .padding(12)
-        .background(Color(red: 58 / 255, green: 46 / 255, blue: 20 / 255))
+        .background(ToasttyDesignTokens.userBubbleSurface)
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color(red: 85 / 255, green: 67 / 255, blue: 29 / 255))
+                .stroke(ToasttyDesignTokens.userBubbleBorder)
         }
         .clipShape(RoundedRectangle(cornerRadius: 14))
-        .frame(maxWidth: 340, alignment: .trailing)
+        .padding(.leading, 48)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.text), Sending")
@@ -473,7 +475,7 @@ private struct ToasttyTranscriptRowView: View {
             if isUser {
                 Text(visibleText)
                     .font(.body)
-                    .foregroundStyle(Color(red: 240 / 255, green: 232 / 255, blue: 216 / 255))
+                    .foregroundStyle(ToasttyDesignTokens.userBubbleText)
                     .textSelection(.enabled)
             } else {
                 ToasttyMarkdownText(text: visibleText)
@@ -494,15 +496,15 @@ private struct ToasttyTranscriptRowView: View {
             }
         }
         .padding(isUser ? 12 : 0)
-        .background(isUser ? Color(red: 58 / 255, green: 46 / 255, blue: 20 / 255) : .clear)
+        .background(isUser ? ToasttyDesignTokens.userBubbleSurface : .clear)
         .overlay {
             if isUser {
                 RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color(red: 85 / 255, green: 67 / 255, blue: 29 / 255))
+                    .stroke(ToasttyDesignTokens.userBubbleBorder)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 14))
-        .frame(maxWidth: isUser ? 340 : .infinity, alignment: isUser ? .trailing : .leading)
+        .padding(.leading, isUser ? 48 : 0)
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
         .accessibilityElement(children: .combine)
     }
@@ -677,20 +679,17 @@ private struct ToasttyInteractionCard: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if interaction.options.isEmpty == false {
+                // Plain text, deliberately without selection affordances:
+                // options are read-only here and answered on the Mac.
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(interaction.options, id: \.id) { option in
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: "circle")
-                                .font(.caption2)
-                                .padding(.top, 3)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.label)
-                                    .font(.subheadline.weight(.medium))
-                                if let detail = option.detail {
-                                    Text(detail)
-                                        .font(.caption)
-                                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                                }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.label)
+                                .font(.subheadline.weight(.medium))
+                            if let detail = option.detail {
+                                Text(detail)
+                                    .font(.caption)
+                                    .foregroundStyle(ToasttyDesignTokens.mutedText)
                             }
                         }
                         .foregroundStyle(ToasttyDesignTokens.secondaryText)
@@ -706,7 +705,7 @@ private struct ToasttyInteractionCard: View {
             }
         }
         .padding(14)
-        .background(Color(red: 24 / 255, green: 21 / 255, blue: 9 / 255))
+        .background(ToasttyDesignTokens.interactionSurface)
         .overlay {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(accentColor.opacity(0.35))

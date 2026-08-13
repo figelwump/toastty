@@ -84,6 +84,7 @@ struct ToasttyMobileRootView: View {
             }
         }
         .onOpenURL(perform: handleDeepLink)
+        .preferredColorScheme(.dark)
     }
 
     private var sessionGate: some View {
@@ -129,7 +130,7 @@ struct ToasttyMobileRootView: View {
                 dismissSendReceipt: conversationReceiptDismissAction(for: selection.id),
                 onDismiss: sessionController.homeController.dismissConversation
             )
-            .presentationDragIndicator(.hidden)
+            .presentationDragIndicator(.visible)
             .presentationBackground(ToasttyDesignTokens.elevatedSurface)
         }
         .sheet(isPresented: $showsSettings) {
@@ -147,11 +148,19 @@ struct ToasttyMobileRootView: View {
                 await sessionController.refreshCurrentDevice()
             }
         }
-        .alert("Conversation unavailable", isPresented: removedSelectionIsPresented) {
-            Button("OK", action: sessionController.homeController.dismissRemovalMessage)
-        } message: {
-            Text(sessionController.homeController.removedSelectionMessage ?? "This conversation is no longer available on your Mac.")
+        .overlay(alignment: .top) {
+            if let message = sessionController.homeController.removedSelectionMessage {
+                RemovedConversationBanner(
+                    message: message,
+                    dismiss: sessionController.homeController.dismissRemovalMessage
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
+        .animation(
+            .easeInOut(duration: 0.25),
+            value: sessionController.homeController.removedSelectionMessage
+        )
     }
 
     private func handleDeepLink(_ url: URL) {
@@ -204,17 +213,6 @@ struct ToasttyMobileRootView: View {
         Binding(
             get: { sessionController.homeController.selectedConversationPresentation },
             set: { sessionController.homeController.selectedConversationPresentation = $0 }
-        )
-    }
-
-    private var removedSelectionIsPresented: Binding<Bool> {
-        Binding(
-            get: { sessionController.homeController.removedSelectionMessage != nil },
-            set: { isPresented in
-                if !isPresented {
-                    sessionController.homeController.dismissRemovalMessage()
-                }
-            }
         )
     }
 
@@ -476,6 +474,49 @@ struct ToasttyMobileRootView: View {
     private func unpair() async {
         await sessionController.unpairCurrentDevice()
         showsSettings = false
+    }
+}
+
+private struct RemovedConversationBanner: View {
+    let message: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "bubble.left.and.exclamationmark.bubble.right")
+                .foregroundStyle(ToasttyDesignTokens.amberText)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 12)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .accessibilityLabel("Dismiss notice")
+        }
+        .padding(.leading, 14)
+        .background(ToasttyDesignTokens.elevatedSurface)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(ToasttyDesignTokens.border, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 14)
+        .frame(maxWidth: 560)
+        .task {
+            try? await Task.sleep(for: .seconds(6))
+            guard Task.isCancelled == false else { return }
+            dismiss()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(message)
+        .accessibilityIdentifier("toastty-mobile-removed-conversation-banner")
     }
 }
 
