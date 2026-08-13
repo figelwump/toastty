@@ -67,6 +67,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func manageToasttySkills(originWindowID: UUID) -> Bool
     func canSetUpAgentStatusHooks(originWindowID: UUID) -> Bool
     func setUpAgentStatusHooks(originWindowID: UUID) -> Bool
+    func canOpenRemoteAccess(originWindowID: UUID) -> Bool
+    func openRemoteAccess(originWindowID: UUID) -> Bool
     func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool
     func copyDiagnosticsSnippet(originWindowID: UUID) -> Bool
     func canReloadConfiguration() -> Bool
@@ -98,6 +100,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let openManageConfigAction: @MainActor (UUID) -> Bool
     private let openTerminalProfilesConfigurationAction: @MainActor (UUID) -> Bool
     private let openAgentProfilesConfigurationAction: @MainActor (UUID) -> Bool
+    private let openRemoteAccessAction: @MainActor (UUID) -> Void
     private let presentDiagnosticsSnippetAction: @MainActor () -> Void
 
     init(
@@ -117,6 +120,12 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         openManageConfigAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
         openTerminalProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
         openAgentProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        openRemoteAccessAction: @escaping @MainActor (UUID) -> Void = { originWindowID in
+            NotificationCenter.default.post(
+                name: .toasttyOpenRemoteAccess,
+                object: originWindowID
+            )
+        },
         presentDiagnosticsSnippetAction: @escaping @MainActor () -> Void = { DiagnosticsSnippetPresenter.present() },
         processWatchCommandController: ProcessWatchCommandController? = nil
     ) {
@@ -141,6 +150,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         self.openManageConfigAction = openManageConfigAction
         self.openTerminalProfilesConfigurationAction = openTerminalProfilesConfigurationAction
         self.openAgentProfilesConfigurationAction = openAgentProfilesConfigurationAction
+        self.openRemoteAccessAction = openRemoteAccessAction
         self.presentDiagnosticsSnippetAction = presentDiagnosticsSnippetAction
     }
 
@@ -566,6 +576,18 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return true
     }
 
+    func canOpenRemoteAccess(originWindowID: UUID) -> Bool {
+        store?.window(id: originWindowID) != nil
+    }
+
+    func openRemoteAccess(originWindowID: UUID) -> Bool {
+        guard canOpenRemoteAccess(originWindowID: originWindowID) else {
+            return false
+        }
+        openRemoteAccessAction(originWindowID)
+        return true
+    }
+
     func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
         store?.window(id: originWindowID) != nil
     }
@@ -727,6 +749,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return manageToasttySkills(originWindowID: originWindowID)
         case .setUpAgentStatusHooks:
             return setUpAgentStatusHooks(originWindowID: originWindowID)
+        case .openRemoteAccess:
+            return openRemoteAccess(originWindowID: originWindowID)
         case .copyDiagnosticsSnippet:
             return copyDiagnosticsSnippet(originWindowID: originWindowID)
         case .reloadConfiguration:

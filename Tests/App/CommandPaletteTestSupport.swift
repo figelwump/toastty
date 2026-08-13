@@ -38,6 +38,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canManageAgentsValue = true
     var canManageToasttySkillsValue = true
     var canSetUpAgentStatusHooksValue = true
+    var canOpenRemoteAccessValue = true
     var canCopyDiagnosticsSnippetValue = true
     var canReloadValue = true
 
@@ -70,6 +71,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var manageAgentsResult = true
     var manageToasttySkillsResult = true
     var setUpAgentStatusHooksResult = true
+    var openRemoteAccessResult = true
     var copyDiagnosticsSnippetResult = true
     var reloadConfigurationResult = true
 
@@ -108,6 +110,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var managedAgentsWindowIDs: [UUID] = []
     var managedToasttySkillsWindowIDs: [UUID] = []
     var setUpAgentStatusHooksWindowIDs: [UUID] = []
+    var openedRemoteAccessWindowIDs: [UUID] = []
     var copiedDiagnosticsSnippetWindowIDs: [UUID] = []
     var reloadConfigurationCount = 0
 
@@ -475,6 +478,16 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return setUpAgentStatusHooksResult
     }
 
+    func canOpenRemoteAccess(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canOpenRemoteAccessValue
+    }
+
+    func openRemoteAccess(originWindowID: UUID) -> Bool {
+        openedRemoteAccessWindowIDs.append(originWindowID)
+        return openRemoteAccessResult
+    }
+
     func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return canCopyDiagnosticsSnippetValue
@@ -601,6 +614,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return manageToasttySkills(originWindowID: originWindowID)
             case .setUpAgentStatusHooks:
                 return setUpAgentStatusHooks(originWindowID: originWindowID)
+            case .openRemoteAccess:
+                return openRemoteAccess(originWindowID: originWindowID)
             case .copyDiagnosticsSnippet:
                 return copyDiagnosticsSnippet(originWindowID: originWindowID)
             case .reloadConfiguration:

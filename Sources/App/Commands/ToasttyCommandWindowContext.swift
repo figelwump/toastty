@@ -26,6 +26,7 @@ enum GettingStartedPanelRequest: Equatable {
 extension Notification.Name {
     static let toasttyShowAgentGetStartedFlow = Notification.Name("ToasttyShowAgentGetStartedFlow")
     static let toasttyShowSkillsManagement = Notification.Name("ToasttyShowSkillsManagement")
+    static let toasttyOpenRemoteAccess = Notification.Name("ToasttyOpenRemoteAccess")
     static let toasttyManagedAgentSkillsProvisioned = Notification.Name(
         "dev.toastty.managed-agent-skills-provisioned"
     )

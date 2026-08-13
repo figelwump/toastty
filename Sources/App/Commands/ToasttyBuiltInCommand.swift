@@ -48,6 +48,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case manageAgents
     case manageToasttySkills
     case setUpAgentStatusHooks
+    case openRemoteAccess
     case copyDiagnosticsSnippet
     case reloadConfiguration
 
@@ -149,6 +150,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "agent.toastty-skills.manage"
         case .setUpAgentStatusHooks:
             return "agent.status-hooks.setup"
+        case .openRemoteAccess:
+            return "app.remote-access.open"
         case .copyDiagnosticsSnippet:
             return "diagnostics.snippet.copy"
         case .reloadConfiguration:
@@ -246,6 +249,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Manage Toastty Skills"
         case .setUpAgentStatusHooks:
             return "Set Up Agent Status Hooks"
+        case .openRemoteAccess:
+            return "Open Remote Access"
         case .copyDiagnosticsSnippet:
             return "Copy Diagnostics Collection Snippet"
         case .reloadConfiguration:
@@ -340,6 +345,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .manageAgents, .manageToasttySkills:
             return nil
         case .setUpAgentStatusHooks:
+            return nil
+        case .openRemoteAccess:
             return nil
         case .copyDiagnosticsSnippet, .reloadConfiguration:
             return nil
@@ -443,6 +450,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["manage", "toastty", "codex", "claude", "skills", "plugin", "repair", "uninstall"]
         case .setUpAgentStatusHooks:
             return ["agent", "status", "hooks", "setup", "codex", "claude", "telemetry"]
+        case .openRemoteAccess:
+            return ["remote", "access", "open", "pair", "pairing", "mobile", "iphone", "tailscale"]
         case .copyDiagnosticsSnippet:
             return ["diagnostics", "diagnostic", "logs", "collect", "support", "developer", "copy", "snippet"]
         case .reloadConfiguration:

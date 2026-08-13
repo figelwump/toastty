@@ -25,6 +25,7 @@ struct AppWindowView: View {
     @State private var codexSkillsUnavailableNotice: ManagedCodexSkillsUnavailableNotice?
     @State private var lastCodexSkillsUnavailableReasonCode: String?
     @State private var appIsActive = true
+    @Environment(\.openWindow) private var openWindow
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
     static let sidebarDividerWidth: CGFloat = 1
@@ -236,6 +237,10 @@ struct AppWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: .toasttyShowSkillsManagement)) { notification in
             guard notification.object as? UUID == windowID else { return }
             showsSkillsManagementSheet = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyOpenRemoteAccess)) { notification in
+            guard notification.object as? UUID == windowID else { return }
+            openWindow(id: RemoteAccessWindowSceneID.value)
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsProvisioned)) { notification in
             if let notice = notification.object as? ManagedAgentSkillsProvisionedNotice,
