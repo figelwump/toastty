@@ -1169,7 +1169,7 @@ final class RemoteAccessService: ObservableObject {
         Self.publicGatewayURL(from: tailnetOrigin)
     }
 
-    static func publicGatewayURL(from configuredOrigin: String) -> URL? {
+    nonisolated static func publicGatewayURL(from configuredOrigin: String) -> URL? {
         let trimmed = configuredOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         let candidate = trimmed.contains("://") ? trimmed : "https://" + trimmed

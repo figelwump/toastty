@@ -1431,7 +1431,6 @@ struct ToasttyApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
-            RemoteAccessCommands()
             ToasttyCommandMenus(
                 store: store,
                 agentCatalogStore: agentCatalogStore,

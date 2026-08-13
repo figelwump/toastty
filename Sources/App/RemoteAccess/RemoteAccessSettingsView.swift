@@ -7,6 +7,17 @@ import SwiftUI
 struct RemoteAccessSettingsView: View {
     @ObservedObject var service: RemoteAccessService
     @State private var showsAudit = false
+    @State private var originDetectionRequestID = 0
+    @State private var originDetectionState: TailnetOriginDetectionState = .idle
+    private let tailnetOriginDetector: TailscaleTailnetOriginDetector
+
+    init(
+        service: RemoteAccessService,
+        tailnetOriginDetector: TailscaleTailnetOriginDetector = TailscaleTailnetOriginDetector()
+    ) {
+        _service = ObservedObject(wrappedValue: service)
+        self.tailnetOriginDetector = tailnetOriginDetector
+    }
 
     var body: some View {
         ScrollView {
@@ -27,6 +38,14 @@ struct RemoteAccessSettingsView: View {
         .onAppear {
             service.refreshDevices()
             service.refreshNativePairingOffer()
+        }
+        .task(id: originDetectionRequestID) {
+            await detectTailnetOrigin(allowsReplacingExistingOrigin: originDetectionRequestID > 0)
+        }
+        .onChange(of: service.tailnetOrigin) {
+            if case .failed = originDetectionState {
+                originDetectionState = .idle
+            }
         }
     }
 
@@ -56,13 +75,68 @@ struct RemoteAccessSettingsView: View {
             }
 
             LabeledContent("Tailnet origin") {
-                TextField("https://your-mac.tailnet.ts.net", text: $service.tailnetOrigin)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 280)
+                HStack(spacing: 8) {
+                    TextField("https://your-mac.tailnet.ts.net", text: $service.tailnetOrigin)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 280)
+
+                    Button {
+                        originDetectionRequestID += 1
+                    } label: {
+                        if originDetectionState == .detecting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text("Detect")
+                        }
+                    }
+                    .disabled(originDetectionState == .detecting)
+                    .accessibilityLabel("Detect Tailnet origin")
+                    .accessibilityIdentifier("toastty-remote-access-detect-origin")
+                }
             }
-            Text("Serve the gateway over Tailscale with `tailscale serve` and enter the resulting HTTPS origin here. Only allowlisted origins may pair or subscribe.")
+            if case .failed(let message) = originDetectionState {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text("Toastty detects this Mac’s Tailnet origin when possible. Tailscale Serve must still proxy the local gateway; only that exact origin may pair or subscribe.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    @MainActor
+    private func detectTailnetOrigin(allowsReplacingExistingOrigin: Bool) async {
+        let originAtStart = service.tailnetOrigin
+        guard allowsReplacingExistingOrigin
+                || originAtStart.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        guard originDetectionState != .detecting else { return }
+
+        originDetectionState = .detecting
+        do {
+            let detectedOrigin = try await tailnetOriginDetector.detectOrigin()
+            try Task.checkCancellation()
+            guard TailnetOriginDetectionPolicy.shouldApply(
+                originAtStart: originAtStart,
+                currentOrigin: service.tailnetOrigin,
+                allowsReplacingExistingOrigin: allowsReplacingExistingOrigin
+            ) else {
+                originDetectionState = .idle
+                return
+            }
+            service.tailnetOrigin = detectedOrigin
+            originDetectionState = .idle
+        } catch is CancellationError {
+            originDetectionState = .idle
+        } catch let error as TailscaleTailnetOriginDetectionError {
+            originDetectionState = .failed(error.recoveryMessage)
+        } catch {
+            originDetectionState = .failed(
+                TailscaleTailnetOriginDetectionError.unavailable.recoveryMessage
+            )
         }
     }
 
@@ -310,4 +384,10 @@ struct RemoteAccessSettingsView: View {
         }
         return label
     }
+}
+
+private enum TailnetOriginDetectionState: Equatable {
+    case idle
+    case detecting
+    case failed(String)
 }

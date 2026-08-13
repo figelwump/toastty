@@ -142,6 +142,7 @@ struct ToasttyCommandMenus: Commands {
     let openLocalDocumentFileInTab: @MainActor (UUID?) -> Void
     let openLocalDocumentFileInSplit: @MainActor (UUID?) -> Void
 
+    @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.toasttyCommandWindowID) private var focusedWindowID
 
     private var preferredCommandWindowID: UUID? {
@@ -398,6 +399,12 @@ struct ToasttyCommandMenus: Commands {
 
             Button("Copy Diagnostics Collection Snippet…") {
                 DiagnosticsSnippetPresenter.present()
+            }
+
+            Divider()
+
+            Button("Remote Access…") {
+                openWindow(id: RemoteAccessWindowSceneID.value)
             }
 
             Button("Get Started with Toastty…") {
