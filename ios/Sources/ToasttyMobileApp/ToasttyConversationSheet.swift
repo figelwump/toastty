@@ -203,14 +203,22 @@ struct ToasttyConversationSheet: View {
     private func composerDisabledStatus(
         _ reason: ToasttyComposerDisabledReason
     ) -> some View {
-        if reason == .prompt(.working) {
+        switch reason {
+        case .prompt(.starting):
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(ToasttyDesignTokens.amber)
+                Text("Session starting…")
+            }
+        case .prompt(.working):
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
                     .tint(ToasttyDesignTokens.amber)
                 Text("Agent working…")
             }
-        } else {
+        default:
             Label(reason.message, systemImage: reason.systemImage)
         }
     }
@@ -283,21 +291,9 @@ struct ToasttyConversationSheet: View {
     private func lockedComposerFallback(
         _ conversation: MobileConversation
     ) -> ToasttyComposerPresentation {
-        let reason: ToasttyComposerDisabledReason = switch conversation.inputAvailability {
-        case .localDraft:
-            .localDraft
-        case .pendingInteraction:
-            .pendingInteraction
-        case .unavailable(let reason) where reason == "working" || reason == "starting":
-            .prompt(.working)
-        case .unavailable(let reason) where reason == "offline" || reason == "ended":
-            .prompt(.offline)
-        case .openPrompt, .unavailable:
-            .connection(.catchingUp)
-        }
-        return ToasttyComposerPresentation(
+        ToasttyComposerPresentation.makeLockedFallback(
             agentDisplayName: conversation.agent.displayName.capitalized,
-            gate: .disabled(reason)
+            inputAvailability: conversation.inputAvailability
         )
     }
 
@@ -322,14 +318,22 @@ struct ToasttyConversationSheet: View {
     private func composerStatusAccessibilityLabel(
         _ reason: ToasttyComposerDisabledReason
     ) -> String {
-        reason == .prompt(.working)
-            ? "Agent working. Composer locked."
-            : "Composer locked. \(reason.message)"
+        switch reason {
+        case .prompt(.starting):
+            "Session starting. Composer locked."
+        case .prompt(.working):
+            "Agent working. Composer locked."
+        default:
+            "Composer locked. \(reason.message)"
+        }
     }
 
     private func composerStatusAccessibilityValue(
         _ reason: ToasttyComposerDisabledReason
     ) -> String {
-        reason == .prompt(.working) ? "In progress" : ""
+        switch reason {
+        case .prompt(.starting), .prompt(.working): "In progress"
+        default: ""
+        }
     }
 }

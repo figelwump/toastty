@@ -73,7 +73,7 @@ final class ToasttyComposerPresentationTests: XCTestCase {
             (.localDraft(epoch: epoch), .localDraft),
             (.pendingInteraction(interactionIDs: []), .pendingInteraction),
             (.unavailable(reason: .known(.sessionWritesDisabled)), .sessionWrites),
-            (.unavailable(reason: .known(.starting)), .prompt(.working)),
+            (.unavailable(reason: .known(.starting)), .prompt(.starting)),
             (.unavailable(reason: .known(.working)), .prompt(.working)),
             (.unavailable(reason: .known(.offline)), .prompt(.offline)),
             (.unavailable(reason: .known(.ended)), .prompt(.offline)),
@@ -95,6 +95,22 @@ final class ToasttyComposerPresentationTests: XCTestCase {
                 "Unexpected presentation for \(availability)"
             )
         }
+    }
+
+    func testLockedFallbackKeepsStartingDistinctFromWorking() {
+        let starting = ToasttyComposerPresentation.makeLockedFallback(
+            agentDisplayName: "Codex",
+            inputAvailability: .unavailable(reason: "starting")
+        )
+        let working = ToasttyComposerPresentation.makeLockedFallback(
+            agentDisplayName: "Codex",
+            inputAvailability: .unavailable(reason: "working")
+        )
+
+        XCTAssertEqual(starting.gate, .disabled(.prompt(.starting)))
+        XCTAssertEqual(working.gate, .disabled(.prompt(.working)))
+        XCTAssertTrue(starting.gateMessage.contains("starting"))
+        XCTAssertTrue(working.gateMessage.contains("working"))
     }
 
     func testDraftValidationRejectsWhitespaceButDoesNotInventATextLimit() {

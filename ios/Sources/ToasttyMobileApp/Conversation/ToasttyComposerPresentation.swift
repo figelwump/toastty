@@ -9,6 +9,7 @@ enum ToasttyComposerDisabledReason: Equatable, Sendable {
     }
 
     enum Prompt: Equatable, Sendable {
+        case starting
         case working
         case offline
         case closed
@@ -37,6 +38,8 @@ enum ToasttyComposerDisabledReason: Equatable, Sendable {
             "Reconnecting to your Mac — your draft is saved"
         case .connection(.catchingUp):
             "Catching up with your Mac — your draft is saved"
+        case .prompt(.starting):
+            "The session is starting — input opens when the agent is ready"
         case .prompt(.working):
             "The agent is working — input opens at the next prompt"
         case .prompt(.offline):
@@ -60,6 +63,8 @@ enum ToasttyComposerDisabledReason: Equatable, Sendable {
             "rectangle.and.hand.point.up.left"
         case .connection:
             "wifi.exclamationmark"
+        case .prompt(.starting):
+            "hourglass"
         case .prompt(.working):
             "ellipsis"
         case .prompt(.offline):
@@ -105,6 +110,30 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
             agentDisplayName: agentDisplayName,
             gate: gate(for: authority),
             inlineFeedback: feedback(for: authority.gateFailure)
+        )
+    }
+
+    static func makeLockedFallback(
+        agentDisplayName: String,
+        inputAvailability: MobileInputAvailability
+    ) -> ToasttyComposerPresentation {
+        let reason: ToasttyComposerDisabledReason = switch inputAvailability {
+        case .localDraft:
+            .localDraft
+        case .pendingInteraction:
+            .pendingInteraction
+        case .unavailable(let reason) where reason == "starting":
+            .prompt(.starting)
+        case .unavailable(let reason) where reason == "working":
+            .prompt(.working)
+        case .unavailable(let reason) where reason == "offline" || reason == "ended":
+            .prompt(.offline)
+        case .openPrompt, .unavailable:
+            .connection(.catchingUp)
+        }
+        return ToasttyComposerPresentation(
+            agentDisplayName: agentDisplayName,
+            gate: .disabled(reason)
         )
     }
 
@@ -171,7 +200,9 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
             switch reason {
             case .known(.sessionWritesDisabled):
                 .disabled(.sessionWrites)
-            case .known(.working), .known(.starting):
+            case .known(.starting):
+                .disabled(.prompt(.starting))
+            case .known(.working):
                 .disabled(.prompt(.working))
             case .known(.offline), .known(.ended):
                 .disabled(.prompt(.offline))
