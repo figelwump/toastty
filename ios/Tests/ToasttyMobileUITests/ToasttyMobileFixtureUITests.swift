@@ -281,10 +281,20 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
         XCTAssertTrue(oldestRow.exists, "Showing the jump affordance must not move a slow reader")
         jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 5))
 
         let newestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-14"]
         XCTAssertTrue(newestRow.waitForExistence(timeout: 5))
         XCTAssertTrue(newestRow.isHittable)
+        let liveEdgeY = newestRow.frame.minY
+        let transcript = app.descendants(matching: .any)["toastty-mobile-transcript"]
+        transcript.swipeUp()
+        XCTAssertEqual(
+            newestRow.frame.minY,
+            liveEdgeY,
+            accuracy: 4,
+            "The live-edge target should leave no remaining downward scroll travel"
+        )
         attachScreenshot(named: "fixture-transcript-jumped-to-latest", of: app)
     }
 

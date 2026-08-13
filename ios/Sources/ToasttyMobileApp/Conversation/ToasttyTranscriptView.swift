@@ -74,10 +74,17 @@ struct ToasttyTranscriptView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 44)
                         }
+
+                        // The preceding 12-point stack spacing plus this target's
+                        // height preserve the original 14-point bottom inset while
+                        // making that inset part of the live-edge scroll target.
+                        Color.clear
+                            .frame(height: 2)
+                            .id(ToasttyConversationScrollTarget.liveEdge)
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
+                    .padding(.top, 14)
                 }
                 .background(ToasttyDesignTokens.background)
                 .accessibilityIdentifier("toastty-mobile-transcript")
@@ -278,10 +285,10 @@ struct ToasttyTranscriptView: View {
     }
 
     private var lastScrollTarget: ToasttyConversationScrollTarget? {
-        if let requestID = state.sendItems.last?.clientRequestID {
-            return .send(requestID)
+        guard state.blocks.isEmpty == false || state.sendItems.isEmpty == false else {
+            return nil
         }
-        return state.blocks.last.map { .transcript($0.id) }
+        return .liveEdge
     }
 
     private var liveEdgeVisibilityKey: TranscriptLiveEdgeVisibilityKey {
@@ -344,6 +351,7 @@ struct TranscriptLiveEdgeVisibilityKey: Equatable {
 private enum ToasttyConversationScrollTarget: Hashable {
     case transcript(ToasttyTranscriptRowID)
     case send(String)
+    case liveEdge
 }
 
 private struct ScrollChangeKey: Equatable {
