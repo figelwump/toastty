@@ -153,7 +153,10 @@ public final class RemoteConversationProjectionStore {
             runtimeBound: previous.isRuntimeBound,
             eventRetentionLimit: previous.eventRetentionLimit,
             fingerprintRetentionLimit: previous.fingerprintRetentionLimit,
-            at: date
+            // A projection rebuild is not a new runtime binding. Preserve the
+            // original authority boundary so replayed events from this live
+            // binding can reconstruct its current state.
+            at: previous.providerAuthorityEstablishedAt ?? date
         )
         replacement.noteBinding(reason: .projectionRebuilt, bindingID: bindingID, at: date)
         projectorsByID[conversationID] = replacement

@@ -323,7 +323,9 @@ struct RemoteConversationProjectionStoreTests {
         store.forceResnapshot(
             for: Self.conversationID,
             bindingID: Self.bindingID,
-            at: Self.startDate.addingTimeInterval(500)
+            // Rebuilding well after the retained observations must preserve
+            // the live binding's original authority boundary.
+            at: Self.startDate.addingTimeInterval(10_000)
         )
         #expect(store.conversationEvents(for: Self.conversationID, after: cursor, limit: 5) == .resnapshotRequired)
 
@@ -336,8 +338,10 @@ struct RemoteConversationProjectionStoreTests {
         #expect(freshPage.projectionGeneration == 1)
         #expect(freshPage.events.contains { $0.kind == .userMessage })
 
-        let summary = store.sessionList(at: Self.startDate.addingTimeInterval(600)).conversations[0]
+        let summary = store.sessionList(at: Self.startDate.addingTimeInterval(10_100)).conversations[0]
         #expect(summary.projectionGeneration == 1)
+        #expect(summary.state == .awaitingInput)
+        #expect(summary.inputAvailability.allowsRemoteSend)
     }
 
     @Test func conversationIdentitySurvivesResume() {
@@ -390,6 +394,52 @@ struct RemoteConversationProjectionStoreTests {
         #expect(snapshot?.pendingInteractions.count == 1)
         #expect(snapshot?.summary.state == .awaitingInput)
         #expect(snapshot?.summary.inputAvailability.allowsRemoteSend == false)
+    }
+
+    @Test func resnapshotDoesNotRestoreInteractionSupersededByResume() {
+        let store = Self.makeStore()
+        let observations = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.approvalSession).observations
+        var prefix: [ProviderTranscriptObservation] = []
+        for observation in observations {
+            prefix.append(observation)
+            if case .interactionPresented = observation.payload { break }
+        }
+        store.ingest(prefix, for: Self.conversationID)
+        #expect(store.conversationSnapshot(
+            for: Self.conversationID,
+            at: Self.startDate
+        )?.pendingInteractions.count == 1)
+
+        let resumedAt = observations
+            .map(\.timestamp)
+            .max()
+            .map { $0.addingTimeInterval(1) } ?? Self.startDate.addingTimeInterval(1)
+        store.noteBinding(
+            for: Self.conversationID,
+            reason: .runtimeResumed,
+            providerSessionID: CodexRolloutFixtures.sessionID,
+            bindingID: UUID(),
+            at: resumedAt
+        )
+        #expect(store.conversationSnapshot(
+            for: Self.conversationID,
+            at: resumedAt
+        )?.pendingInteractions.isEmpty == true)
+
+        store.forceResnapshot(
+            for: Self.conversationID,
+            bindingID: Self.bindingID,
+            at: resumedAt.addingTimeInterval(1)
+        )
+        store.ingest(observations, for: Self.conversationID)
+
+        let rebuilt = store.conversationSnapshot(
+            for: Self.conversationID,
+            at: resumedAt.addingTimeInterval(2)
+        )
+        #expect(rebuilt?.pendingInteractions.isEmpty == true)
+        #expect(rebuilt?.summary.state == .starting)
+        #expect(rebuilt?.summary.inputAvailability == .unavailable(reason: .starting))
     }
 
     @Test func removingConversationDeletesItsCache() {

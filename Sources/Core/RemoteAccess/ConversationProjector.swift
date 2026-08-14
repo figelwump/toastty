@@ -28,6 +28,11 @@ public struct ConversationProjector: Sendable {
     /// provider log for an offline conversation must never publish an open
     /// prompt no runtime can honor.
     public private(set) var isRuntimeBound: Bool
+    /// Provider observations older than the current runtime binding remain
+    /// transcript history, but cannot authorize input for this runtime. This
+    /// prevents a completed turn replayed during managed-session restore from
+    /// opening a prompt before the resumed provider has emitted live evidence.
+    private(set) var providerAuthorityEstablishedAt: Date?
 
     private var currentEpoch: RemoteInputEpoch
     private var seenFingerprints: Set<String>
@@ -56,6 +61,7 @@ public struct ConversationProjector: Sendable {
         self.generation = generation
         self.events = []
         self.isRuntimeBound = runtimeBound
+        self.providerAuthorityEstablishedAt = runtimeBound ? date : nil
         self.state = runtimeBound ? .starting : .offline
         self.inputAvailability = .unavailable(reason: runtimeBound ? .starting : .offline)
         self.pendingInteractions = []
@@ -82,16 +88,17 @@ public struct ConversationProjector: Sendable {
         trimSeenFingerprintsIfNeeded()
 
         var emitted: [ConversationEvent] = []
+        let authorizesCurrentRuntime = observationAuthorizesCurrentRuntime(observation)
         switch observation.payload {
         case .transcript(let payload):
             guard payload.kind.isProviderDerived else { return [] }
             emitted.append(appendProviderEvent(payload, from: observation))
-            if case .userMessage = payload {
+            if authorizesCurrentRuntime, case .userMessage = payload {
                 // A user message means the prompt was consumed; treat it as an
                 // authoritative prompt-closed signal even before task_started.
                 transition(to: .working, availability: .unavailable(reason: .working), at: observation.timestamp, emitting: &emitted)
             }
-            if case .toolFinished(let finished) = payload {
+            if authorizesCurrentRuntime, case .toolFinished(let finished) = payload {
                 resolveInteractions(matchingCallID: finished.callID, at: observation.timestamp, emitting: &emitted)
             }
 
@@ -106,30 +113,36 @@ public struct ConversationProjector: Sendable {
                 inputEpoch: currentEpoch,
                 presentedAt: observation.timestamp
             )
-            pendingInteractions.append(interaction)
             emitted.append(appendProviderEvent(.interactionPresented(interaction), from: observation))
-            transition(
-                to: .awaitingInput,
-                availability: .pendingInteraction(interactionIDs: pendingInteractions.map(\.id)),
-                at: observation.timestamp,
-                emitting: &emitted
-            )
+            if authorizesCurrentRuntime {
+                pendingInteractions.append(interaction)
+                transition(
+                    to: .awaitingInput,
+                    availability: .pendingInteraction(interactionIDs: pendingInteractions.map(\.id)),
+                    at: observation.timestamp,
+                    emitting: &emitted
+                )
+            }
 
         case .turnStarted:
-            supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
-            transition(to: .working, availability: .unavailable(reason: .working), at: observation.timestamp, emitting: &emitted)
+            if authorizesCurrentRuntime {
+                supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
+                transition(to: .working, availability: .unavailable(reason: .working), at: observation.timestamp, emitting: &emitted)
+            }
 
         case .turnEnded(_, let reason):
-            supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
-            switch reason {
-            case .completed:
-                currentEpoch = currentEpoch.next()
-                transition(to: .awaitingInput, availability: .openPrompt(epoch: currentEpoch), at: observation.timestamp, emitting: &emitted)
-            case .aborted:
-                // Conservative: an aborted turn usually returns to the
-                // composer, but that is inferred, not authoritative. Unknown
-                // means read-only until the next provider transition.
-                transition(to: .interrupted, availability: .unavailable(reason: .interrupted), at: observation.timestamp, emitting: &emitted)
+            if authorizesCurrentRuntime {
+                supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
+                switch reason {
+                case .completed:
+                    currentEpoch = currentEpoch.next()
+                    transition(to: .awaitingInput, availability: .openPrompt(epoch: currentEpoch), at: observation.timestamp, emitting: &emitted)
+                case .aborted:
+                    // Conservative: an aborted turn usually returns to the
+                    // composer, but that is inferred, not authoritative. Unknown
+                    // means read-only until the next provider transition.
+                    transition(to: .interrupted, availability: .unavailable(reason: .interrupted), at: observation.timestamp, emitting: &emitted)
+                }
             }
 
         case .providerSessionObserved(let sessionID):
@@ -178,9 +191,12 @@ public struct ConversationProjector: Sendable {
         switch reason {
         case .runtimeBound, .runtimeResumed:
             isRuntimeBound = true
+            providerAuthorityEstablishedAt = date
+            supersedePendingInteractions(at: date, emitting: &emitted)
             transition(to: .starting, availability: .unavailable(reason: .unknownProviderState), at: date, emitting: &emitted)
         case .runtimeEnded:
             isRuntimeBound = false
+            providerAuthorityEstablishedAt = nil
             supersedePendingInteractions(at: date, emitting: &emitted)
             transition(to: .offline, availability: .unavailable(reason: .offline), at: date, emitting: &emitted)
         case .projectionRebuilt:
@@ -192,6 +208,11 @@ public struct ConversationProjector: Sendable {
     }
 
     // MARK: - Internals
+
+    private func observationAuthorizesCurrentRuntime(_ observation: ProviderTranscriptObservation) -> Bool {
+        guard isRuntimeBound, let providerAuthorityEstablishedAt else { return false }
+        return observation.timestamp >= providerAuthorityEstablishedAt
+    }
 
     private mutating func appendProviderEvent(
         _ payload: ConversationEventPayload,

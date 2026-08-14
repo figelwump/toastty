@@ -8,6 +8,7 @@ struct ConversationProjectorTests {
     static let bindingID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     static let resumedBindingID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
     static let epochDate = Date(timeIntervalSince1970: 1_786_000_000)
+    static let restoredBindingDate = Date(timeIntervalSince1970: 1_786_098_000)
 
     static func makeProjector() -> ConversationProjector {
         ConversationProjector(
@@ -113,6 +114,52 @@ struct ConversationProjectorTests {
         // Two completed turns => two prompt-open transitions.
         #expect(epoch.counter == 2)
         #expect(projector.inputAvailability.allowsRemoteSend)
+    }
+
+    @Test func historicalCompletedTurnCannotAuthorizeFreshRuntimeBinding() {
+        var projector = ConversationProjector(
+            conversationID: Self.conversationID,
+            provider: .codex,
+            bindingID: Self.resumedBindingID,
+            at: Self.restoredBindingDate
+        )
+
+        for observation in Self.observations(CodexRolloutFixtures.basicSession) {
+            projector.ingest(observation)
+        }
+
+        #expect(projector.events.contains { $0.kind == .assistantMessage })
+        #expect(projector.state == .starting)
+        #expect(projector.inputAvailability == .unavailable(reason: .starting))
+
+        var coordinator = RemoteInputCoordinator()
+        coordinator.setProviderAvailability(projector.inputAvailability, for: Self.conversationID)
+        coordinator.noteLocalInput(for: Self.conversationID)
+        #expect(coordinator.availability(for: Self.conversationID) == .unavailable(reason: .starting))
+        #expect(coordinator.evaluate(
+            RemoteMessageSendRequest(
+                conversationID: Self.conversationID,
+                clientRequestID: "restore-window-send",
+                expectedInputEpoch: RemoteInputEpoch(bindingID: Self.resumedBindingID),
+                text: "do not deliver"
+            ),
+            context: RemoteInputCoordinator.DeliveryContext(
+                deviceHasSendScope: true,
+                sessionWritesEnabled: true,
+                isBoundToLiveSurface: true,
+                isSurfaceReadyForInput: true
+            )
+        ) == .reject(.promptNotOpen))
+
+        for observation in Self.observations(CodexRolloutFixtures.resumeContinuation) {
+            projector.ingest(observation)
+        }
+        #expect(projector.state == .awaitingInput)
+        guard case .openPrompt(let epoch) = projector.inputAvailability else {
+            Issue.record("Expected a current-runtime prompt after the resumed turn")
+            return
+        }
+        #expect(epoch.bindingID == Self.resumedBindingID)
     }
 
     @Test func abortedTurnLeavesInputUnavailable() {
@@ -230,6 +277,29 @@ struct ConversationProjectorTests {
         #expect(freshEpoch != staleEpoch)
         // Even an equal counter can never match across bindings.
         #expect(RemoteInputEpoch(bindingID: Self.bindingID, counter: freshEpoch.counter) != freshEpoch)
+    }
+
+    @Test func runtimeResumeSupersedesPendingInteractionFromPreviousBinding() {
+        var projector = Self.makeProjector()
+        for observation in Self.observations(CodexRolloutFixtures.approvalSession) {
+            projector.ingest(observation)
+            if case .interactionPresented = observation.payload { break }
+        }
+        #expect(projector.pendingInteractions.count == 1)
+
+        projector.noteBinding(
+            reason: .runtimeResumed,
+            bindingID: Self.resumedBindingID,
+            at: Self.restoredBindingDate.addingTimeInterval(7_200)
+        )
+
+        #expect(projector.pendingInteractions.isEmpty)
+        #expect(projector.state == .starting)
+        #expect(projector.inputAvailability == .unavailable(reason: .unknownProviderState))
+        #expect(projector.events.contains { event in
+            guard case .interactionResolved(let payload) = event.payload else { return false }
+            return payload.resolution == .superseded
+        })
     }
 
     @Test func runtimeEndedGoesOfflineAndSupersedesPending() {

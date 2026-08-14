@@ -662,6 +662,7 @@ final class RemoteAccessService: ObservableObject {
         var panelID: UUID
         var cwd: String?
         var activeSessionID: String?
+        var runtimeBindingStartedAt: Date?
         var registryState: RemoteSessionState
         var presentationStatus: RemoteSessionPresentationStatus?
         var statusDetail: String?
@@ -703,7 +704,7 @@ final class RemoteAccessService: ObservableObject {
                     ),
                     bindingID: UUID(),
                     runtimeBound: candidate.activeSessionID != nil,
-                    at: Date()
+                    at: candidate.runtimeBindingStartedAt ?? Date()
                 )
                 listChanged = true
             } else {
@@ -741,7 +742,7 @@ final class RemoteAccessService: ObservableObject {
                             reason: reason,
                             providerSessionFilePath: candidate.transcriptPath,
                             bindingID: UUID(),
-                            at: Date()
+                            at: candidate.runtimeBindingStartedAt ?? Date()
                         )
                         broadcastEvents(emitted, for: candidate.conversationID)
                         activeSessionIDByConversationID[candidate.conversationID] = activeSessionID
@@ -760,7 +761,7 @@ final class RemoteAccessService: ObservableObject {
                         reason: reason,
                         providerSessionFilePath: rolloutPath,
                         bindingID: UUID(),
-                        at: Date()
+                        at: candidate.runtimeBindingStartedAt ?? Date()
                     )
                     broadcastEvents(emitted, for: candidate.conversationID)
                     listChanged = true
@@ -834,7 +835,45 @@ final class RemoteAccessService: ObservableObject {
     /// this is safe to call on every sync.
     private func syncCoordinatorAvailability(for conversationID: RemoteConversationID) {
         guard let projector = projectionStore.projectorState(for: conversationID) else { return }
+        let previous = coordinator.availability(for: conversationID)
         coordinator.setProviderAvailability(projector.inputAvailability, for: conversationID)
+        logCoordinatorAvailabilityTransition(
+            for: conversationID,
+            source: "provider_projection",
+            previous: previous
+        )
+    }
+
+    private func logCoordinatorAvailabilityTransition(
+        for conversationID: RemoteConversationID,
+        source: String,
+        previous: RemoteInputAvailability
+    ) {
+        let current = coordinator.availability(for: conversationID)
+        guard current != previous else { return }
+        ToasttyLog.debug(
+            "Remote input availability changed",
+            category: .automation,
+            metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "source": source,
+                "previous": Self.availabilityLogLabel(previous),
+                "current": Self.availabilityLogLabel(current),
+            ]
+        )
+    }
+
+    private static func availabilityLogLabel(_ availability: RemoteInputAvailability) -> String {
+        switch availability {
+        case .unavailable(let reason):
+            "unavailable:\(reason.rawValue)"
+        case .openPrompt(let epoch):
+            "open_prompt:\(epoch.bindingID.uuidString):\(epoch.counter)"
+        case .pendingInteraction(let interactionIDs):
+            "pending_interaction:\(interactionIDs.count)"
+        case .localDraft(let epoch):
+            "local_draft:\(epoch.bindingID.uuidString):\(epoch.counter)"
+        }
     }
 
     private func scanConversationCandidates(mintingIDs: Bool) -> [ConversationCandidate] {
@@ -900,6 +939,7 @@ final class RemoteAccessService: ObservableObject {
                     panelID: panelID,
                     cwd: activeRecord?.cwd ?? terminalState.resumeRecord?.cwd,
                     activeSessionID: hasLiveAgent ? activeSessionID : nil,
+                    runtimeBindingStartedAt: hasLiveAgent ? activeRecord?.startedAt : nil,
                     registryState: activeRecord.flatMap { record in
                         record.status.map { Self.remoteState(for: $0.kind) }
                     } ?? (hasLiveAgent ? .starting : .offline),
@@ -1168,12 +1208,24 @@ final class RemoteAccessService: ObservableObject {
             case .unavailable:
                 return .rejected(reason: .surfaceUnavailable)
             case .uncertain:
+                let previous = coordinator.availability(for: conversationID)
                 coordinator.markUncertain(request)
+                logCoordinatorAvailabilityTransition(
+                    for: conversationID,
+                    source: "remote_delivery_uncertain",
+                    previous: previous
+                )
                 recordPendingSend(request, for: conversationID)
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
+                let previous = coordinator.availability(for: conversationID)
                 coordinator.markDelivered(request)
+                logCoordinatorAvailabilityTransition(
+                    for: conversationID,
+                    source: "remote_delivery",
+                    previous: previous
+                )
                 recordPendingSend(request, for: conversationID)
                 broadcastSessionList()
                 return .accepted(epoch: epoch)
@@ -1187,9 +1239,14 @@ final class RemoteAccessService: ObservableObject {
     /// and JSON encoding never run inside the terminal input call stack.
     func noteLocalInput(panelID: UUID) {
         guard let conversationID = conversationIDByPanelID[panelID] else { return }
-        let wasOpen = coordinator.availability(for: conversationID).allowsRemoteSend
+        let previous = coordinator.availability(for: conversationID)
         coordinator.noteLocalInput(for: conversationID)
-        if wasOpen {
+        logCoordinatorAvailabilityTransition(
+            for: conversationID,
+            source: "local_terminal_input",
+            previous: previous
+        )
+        if previous.allowsRemoteSend {
             scheduleSessionListBroadcast()
         }
     }
