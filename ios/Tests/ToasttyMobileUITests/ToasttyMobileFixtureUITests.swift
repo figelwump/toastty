@@ -107,6 +107,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     func testWorkingConversationExposesIndeterminateComposerStatus() {
         let app = launchFixtureApp()
         openWorkspace(toasttyWorkspaceID, in: app)
+        attachScreenshot(named: "fixture-workspace-shared-cards", of: app)
 
         let session = app.buttons[
             "toastty-mobile-workspace-session-\(workingConversationID)"

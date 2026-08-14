@@ -206,6 +206,26 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         return compactAge == "now" ? compactAge : "\(compactAge) ago"
     }
 
+    /// Mirrors the desktop sidebar's semantic path abbreviation instead of
+    /// relying on width-dependent middle truncation.
+    public var abbreviatedCWD: String? {
+        guard let cwd else { return nil }
+        let withoutTrailingSlashes = cwd.reversed().drop(while: { $0 == "/" }).reversed()
+        let trailingSlashTrimmed = withoutTrailingSlashes.isEmpty
+            ? "/"
+            : String(withoutTrailingSlashes)
+        if !trailingSlashTrimmed.contains("/") {
+            return trailingSlashTrimmed
+        }
+        let normalizedPath = (trailingSlashTrimmed as NSString).standardizingPath
+        let path = normalizedPath as NSString
+        let lastComponent = path.lastPathComponent
+        if !lastComponent.isEmpty, lastComponent != "/", path.pathComponents.count > 1 {
+            return ".../\(lastComponent)"
+        }
+        return path.abbreviatingWithTildeInPath
+    }
+
     public init(
         id: UUID,
         workspaceID: UUID,

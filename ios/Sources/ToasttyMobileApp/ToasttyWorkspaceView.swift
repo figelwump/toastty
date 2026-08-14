@@ -27,91 +27,36 @@ struct ToasttyWorkspaceView: View {
     }
 
     private func workspaceList(_ workspace: MobileWorkspace) -> some View {
-        List {
-            Section {
-                ForEach(workspace.sortedConversations) { conversation in
-                    Button { onOpen(conversation) } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ViewThatFits(in: .horizontal) {
-                                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    metadata(for: conversation)
-                                    title(for: conversation)
-                                    Spacer(minLength: 4)
-                                    age(for: conversation)
-                                }
-
-                                VStack(alignment: .leading, spacing: 6) {
-                                    ViewThatFits(in: .horizontal) {
-                                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                            metadata(for: conversation)
-                                            Spacer(minLength: 8)
-                                            age(for: conversation)
-                                        }
-
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            metadata(for: conversation)
-                                            age(for: conversation)
-                                        }
-                                    }
-                                    title(for: conversation)
-                                }
-                            }
-                            Text(conversation.lastActivity)
-                                .font(.subheadline)
-                                .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                        }
-                        .padding(.vertical, 5)
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(ToasttyDesignTokens.background)
-                    .accessibilityLabel(conversation.accessibilitySummary)
-                    .accessibilityIdentifier("toastty-mobile-workspace-session-\(conversation.id.uuidString)")
-                }
-            } header: {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
                 Text(sessionCountLabel(workspace.conversations.count))
                     .font(.caption2.monospaced())
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    .textCase(nil)
+                    .padding(.horizontal, 6)
                     .accessibilityIdentifier("toastty-mobile-workspace-context")
+
+                ForEach(workspace.sortedConversations) { conversation in
+                    ToasttySessionCard(
+                        conversation: conversation,
+                        showsWorkspace: false,
+                        accessibilityIdentifier:
+                            "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
+                        onOpen: onOpen
+                    )
+                }
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 40)
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
         }
-        .scrollContentBackground(.hidden)
+        .scrollIndicators(.hidden)
         .background(ToasttyDesignTokens.background)
     }
 
     private func onOpen(_ conversation: MobileConversation) {
         controller.open(conversation)
-    }
-
-    @ViewBuilder
-    private func metadata(for conversation: MobileConversation) -> some View {
-        ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
-        Text(conversation.agent.displayName)
-            .font(.caption.monospaced().weight(.bold))
-            .foregroundStyle(ToasttyDesignTokens.secondaryText)
-        if let cwd = conversation.cwd {
-            Text("·")
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-            Text(cwd)
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-    }
-
-    private func title(for conversation: MobileConversation) -> some View {
-        Text(conversation.title)
-            .font(.headline)
-            .foregroundStyle(ToasttyDesignTokens.primaryText)
-    }
-
-    private func age(for conversation: MobileConversation) -> some View {
-        TimelineView(.periodic(from: .now, by: 60)) { _ in
-            Text(conversation.displayAge)
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-        }
     }
 
     private func sessionCountLabel(_ count: Int) -> String {

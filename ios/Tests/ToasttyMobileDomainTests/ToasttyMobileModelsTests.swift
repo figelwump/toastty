@@ -33,6 +33,23 @@ final class ToasttyMobileModelsTests: XCTestCase {
         XCTAssertEqual(conversation(cwd: "  /repos/toastty  ").cwd, "/repos/toastty")
     }
 
+    func testConversationAbbreviatesCWDLikeDesktopSidebar() {
+        XCTAssertNil(conversation(cwd: nil).abbreviatedCWD)
+        XCTAssertEqual(
+            conversation(cwd: "/Users/vishal/GiantThings/repos/emptyos").abbreviatedCWD,
+            ".../emptyos"
+        )
+        XCTAssertEqual(conversation(cwd: "~/GiantThings/repos/toastty/").abbreviatedCWD, ".../toastty")
+        XCTAssertEqual(conversation(cwd: "/").abbreviatedCWD, "/")
+        XCTAssertEqual(conversation(cwd: "/emptyos").abbreviatedCWD, ".../emptyos")
+        XCTAssertEqual(conversation(cwd: "emptyos").abbreviatedCWD, "emptyos")
+        XCTAssertEqual(conversation(cwd: "~").abbreviatedCWD, "~")
+        XCTAssertEqual(conversation(cwd: "~/").abbreviatedCWD, "~")
+        XCTAssertEqual(conversation(cwd: "~agent").abbreviatedCWD, "~agent")
+        XCTAssertEqual(conversation(cwd: ".").abbreviatedCWD, ".")
+        XCTAssertEqual(conversation(cwd: "..").abbreviatedCWD, "..")
+    }
+
     func testDisplayAgeSpellsOutElapsedContextButKeepsNow() {
         XCTAssertEqual(conversation(age: "now").displayAge, "now")
         XCTAssertEqual(conversation(age: "18m").displayAge, "18m ago")

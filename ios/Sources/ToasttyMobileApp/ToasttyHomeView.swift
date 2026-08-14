@@ -295,7 +295,7 @@ struct ToasttyHomeView: View {
     }
 }
 
-private struct ToasttySessionCard: View {
+struct ToasttySessionCard: View {
     let conversation: MobileConversation
     let showsWorkspace: Bool
     let accessibilityIdentifier: String
@@ -417,7 +417,7 @@ private struct ToasttySessionCard: View {
     }
 
     private var metadataLabel: String {
-        [conversation.agent.displayName, conversation.cwd, conversation.displayAge]
+        [conversation.agent.displayName, conversation.abbreviatedCWD, conversation.displayAge]
             .compactMap { value in
                 guard let value, !value.isEmpty else { return nil }
                 return value
