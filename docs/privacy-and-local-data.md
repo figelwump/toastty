@@ -153,8 +153,9 @@ that local listener; Toastty does not configure Tailscale, publish a LAN
 listener, or enable Tailscale Funnel. The configured browser origin is an exact
 allowlist, and a presented non-matching Origin is rejected on every route.
 
-A paired browser can receive normalized agent conversation content, status,
-workspace/panel placement, and working-directory metadata. New pairings have
+A paired browser or native client can receive normalized agent conversation
+content, status, a bounded desktop status-detail excerpt, workspace/panel
+placement, and working-directory metadata. New pairings have
 read and send scope by default; device send scope can be disabled or the device
 can be revoked from the Mac. Remote Access activity is not sent to a Toastty
 cloud service. Network transport and tailnet access remain subject to the
@@ -168,8 +169,8 @@ the owner-only device file; the raw login, offer proofs, credential values, and
 public gateway hostname are excluded from routine remote-access logs and audit
 entries. The transcript tailer likewise does not put provider transcript paths
 or filesystem error descriptions into its routine logs. Optional pending
-interaction previews travel only in bounded gateway snapshots and are not
-copied to audit entries, logs, or diagnostics.
+interaction previews and status-detail excerpts travel only in bounded gateway
+snapshots and are not copied to audit entries, logs, or diagnostics.
 
 ## Diagnostics upload
 

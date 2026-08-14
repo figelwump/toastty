@@ -68,7 +68,7 @@ struct ToasttyWorkspaceView: View {
                     .accessibilityIdentifier("toastty-mobile-workspace-session-\(conversation.id.uuidString)")
                 }
             } header: {
-                Text("\(workspace.conversations.count) sessions · \(workspace.path)")
+                Text(sessionCountLabel(workspace.conversations.count))
                     .font(.caption2.monospaced())
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                     .textCase(nil)
@@ -88,7 +88,16 @@ struct ToasttyWorkspaceView: View {
         ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
         Text(conversation.agent.displayName)
             .font(.caption.monospaced().weight(.bold))
-            .foregroundStyle(ToasttyDesignTokens.color(for: conversation.agent))
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+        if let cwd = conversation.cwd {
+            Text("·")
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+            Text(cwd)
+                .font(.caption2.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
     }
 
     private func title(for conversation: MobileConversation) -> some View {
@@ -99,9 +108,13 @@ struct ToasttyWorkspaceView: View {
 
     private func age(for conversation: MobileConversation) -> some View {
         TimelineView(.periodic(from: .now, by: 60)) { _ in
-            Text(conversation.age)
+            Text(conversation.displayAge)
                 .font(.caption2.monospaced())
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
         }
+    }
+
+    private func sessionCountLabel(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "session" : "sessions")"
     }
 }

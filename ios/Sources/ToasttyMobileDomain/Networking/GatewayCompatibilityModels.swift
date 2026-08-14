@@ -63,6 +63,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
     public var title: String
     public var placement: RemoteConversationPlacement
     public var cwd: String?
+    public var statusDetail: String?
     public var state: MobileSessionDisplayState
     public var presentationStatus: CompatibleSessionPresentationStatus?
     public var inputAvailability: CompatibleInputAvailability
@@ -77,6 +78,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         title: String,
         placement: RemoteConversationPlacement,
         cwd: String?,
+        statusDetail: String? = nil,
         state: MobileSessionDisplayState,
         presentationStatus: CompatibleSessionPresentationStatus? = nil,
         inputAvailability: CompatibleInputAvailability,
@@ -89,7 +91,12 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         self.provider = provider
         self.title = title
         self.placement = placement
-        self.cwd = cwd
+        if let cwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty {
+            self.cwd = cwd
+        } else {
+            self.cwd = nil
+        }
+        self.statusDetail = RemoteConversationSummary.normalizedStatusDetail(statusDetail)
         self.state = state
         self.presentationStatus = presentationStatus
         self.inputAvailability = inputAvailability
@@ -122,7 +129,6 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
         let mobileConversations = conversations.map { summary in
             let workspaceID = summary.placement.workspaceID ?? Self.ungroupedWorkspaceID
             let workspaceTitle = summary.placement.workspaceTitle ?? "Ungrouped"
-            let path = summary.cwd.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown path"
             let availability = summary.inputAvailability.presentation(
                 pendingInteractionPreview: summary.pendingInteractionPreview
             )
@@ -135,7 +141,7 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 id: summary.conversationID.rawValue,
                 workspaceID: workspaceID,
                 workspaceTitle: workspaceTitle,
-                workspacePath: path,
+                cwd: summary.cwd,
                 agent: summary.provider,
                 title: summary.title,
                 state: status,
@@ -148,9 +154,11 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                     ),
                     receivedAtMonotonicTime: receivedAtMonotonicTime
                 ),
-                lastActivity: status.bucket == .idle
-                    ? "Conversation readable"
-                    : availability.inputReason
+                lastActivity: Self.lastActivity(
+                    statusDetail: summary.statusDetail,
+                    availability: availability,
+                    status: status
+                )
             )
         }
         let grouped = Dictionary(grouping: mobileConversations, by: \.workspaceID)
@@ -159,7 +167,6 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
             return MobileWorkspace(
                 id: first.workspaceID,
                 title: first.workspaceTitle,
-                path: first.workspacePath,
                 conversations: conversations.sorted {
                     let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
                     if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
@@ -172,6 +179,29 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
             return $0.id.uuidString < $1.id.uuidString
         }
         return MobileHomeSnapshot(hostName: hostName, workspaces: workspaces)
+    }
+
+    private static func lastActivity(
+        statusDetail: String?,
+        availability: MobileInputAvailability,
+        status: MobileSessionStatus
+    ) -> String {
+        if let statusDetail { return statusDetail }
+        if case .pendingInteraction(let preview?) = availability,
+           let preview = nonemptyTrimmed(preview) {
+            return preview
+        }
+        return status.bucket == .idle
+            ? "Conversation readable"
+            : availability.inputReason
+    }
+
+    private static func nonemptyTrimmed(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     private static let ungroupedWorkspaceID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!

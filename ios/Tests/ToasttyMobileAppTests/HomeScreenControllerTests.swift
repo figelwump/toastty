@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class HomeScreenControllerTests: XCTestCase {
     func testOpenAndDismissOwnConversationPresentationState() throws {
-        let conversation = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
+        let conversation = try XCTUnwrap(fixtureConversation(in: .ready))
         let controller = HomeScreenController(
             runtimeMode: .fixture,
             snapshot: ToasttyMobileFixture.home,
@@ -22,9 +22,7 @@ final class HomeScreenControllerTests: XCTestCase {
 
     func testUserOpenRequestsFocusForOpenPromptWithoutReopeningConversation() throws {
         let conversation = try XCTUnwrap(
-            ToasttyMobileFixture.home.ready.first {
-                $0.inputAvailability.allowsReply
-            }
+            fixtureConversation(in: .ready) { $0.inputAvailability.allowsReply }
         )
         let controller = HomeScreenController(
             runtimeMode: .fixture,
@@ -56,9 +54,7 @@ final class HomeScreenControllerTests: XCTestCase {
 
     func testUserOpenDoesNotRequestFocusWithoutOpenPrompt() throws {
         let conversation = try XCTUnwrap(
-            ToasttyMobileFixture.home.ready.first {
-                $0.inputAvailability.allowsReply == false
-            }
+            fixtureConversation(in: .ready) { $0.inputAvailability.allowsReply == false }
         )
         let controller = HomeScreenController(
             runtimeMode: .fixture,
@@ -75,7 +71,7 @@ final class HomeScreenControllerTests: XCTestCase {
     }
 
     func testStableIdentifierRouteOpensOnlyConversationInCurrentSnapshot() throws {
-        let conversation = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
+        let conversation = try XCTUnwrap(fixtureConversation(in: .ready))
         let controller = HomeScreenController(
             runtimeMode: .fixture,
             snapshot: ToasttyMobileFixture.home,
@@ -96,7 +92,7 @@ final class HomeScreenControllerTests: XCTestCase {
 
     func testStableIdentifierRouteOpensLockedConversationWithoutFocus() throws {
         let conversation = try XCTUnwrap(
-            ToasttyMobileFixture.home.needsApproval.first {
+            fixtureConversation(in: .needsApproval) {
                 $0.inputAvailability.allowsReply == false
             }
         )
@@ -162,7 +158,7 @@ final class HomeScreenControllerTests: XCTestCase {
     }
 
     func testSelectedConversationResolvesLatestSnapshotValueByStableIdentifier() throws {
-        let original = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
+        let original = try XCTUnwrap(fixtureConversation(in: .ready))
         let controller = HomeScreenController(
             runtimeMode: .fixture,
             snapshot: ToasttyMobileFixture.home,
@@ -174,7 +170,7 @@ final class HomeScreenControllerTests: XCTestCase {
             id: original.id,
             workspaceID: original.workspaceID,
             workspaceTitle: original.workspaceTitle,
-            workspacePath: original.workspacePath,
+            cwd: original.cwd,
             agent: original.agent,
             title: "Updated live title",
             state: MobileSessionStatus.working,
@@ -185,7 +181,6 @@ final class HomeScreenControllerTests: XCTestCase {
         let workspace = MobileWorkspace(
             id: original.workspaceID,
             title: original.workspaceTitle,
-            path: original.workspacePath,
             conversations: [updated]
         )
 
@@ -201,7 +196,7 @@ final class HomeScreenControllerTests: XCTestCase {
     }
 
     func testRemovingSelectedConversationDismissesAndExplains() throws {
-        let original = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
+        let original = try XCTUnwrap(fixtureConversation(in: .ready))
         let controller = HomeScreenController(
             runtimeMode: .fixture,
             snapshot: ToasttyMobileFixture.home,
@@ -224,5 +219,14 @@ final class HomeScreenControllerTests: XCTestCase {
 
         controller.dismissRemovalMessage()
         XCTAssertNil(controller.removedSelectionMessage)
+    }
+
+    private func fixtureConversation(
+        in bucket: MobileSessionBucket,
+        where predicate: (MobileConversation) -> Bool = { _ in true }
+    ) -> MobileConversation? {
+        ToasttyMobileFixture.home.activitySessions.first {
+            $0.state.bucket == bucket && predicate($0)
+        }
     }
 }

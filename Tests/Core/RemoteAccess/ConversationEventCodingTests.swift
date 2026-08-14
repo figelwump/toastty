@@ -175,6 +175,7 @@ struct ConversationEventCodingTests {
             cwd: "/tmp/demo",
             state: .awaitingInput,
             presentationStatus: .needsApproval,
+            statusDetail: "Approve the proposed command",
             inputAvailability: .openPrompt(epoch: RemoteInputEpoch(bindingID: Self.bindingID, counter: 1)),
             projectionGeneration: 2,
             latestSequence: 41,
@@ -183,15 +184,22 @@ struct ConversationEventCodingTests {
         let encodedSummary = try encoder.encode(summary)
         let encodedSummaryJSON = try #require(String(data: encodedSummary, encoding: .utf8))
         #expect(encodedSummaryJSON.contains(#""presentationStatus":"needs_approval""#))
+        #expect(encodedSummaryJSON.contains(#""statusDetail":"Approve the proposed command""#))
         #expect(try decoder.decode(RemoteConversationSummary.self, from: encodedSummary) == summary)
 
         var legacySummary = summary
         legacySummary.presentationStatus = nil
+        legacySummary.statusDetail = nil
         let legacySummaryJSON = try #require(String(
             data: try encoder.encode(legacySummary),
             encoding: .utf8
         ))
         #expect(legacySummaryJSON.contains("presentationStatus") == false)
+        #expect(legacySummaryJSON.contains("statusDetail") == false)
+        #expect(try decoder.decode(
+            RemoteConversationSummary.self,
+            from: try encoder.encode(legacySummary)
+        ).statusDetail == nil)
 
         let snapshot = RemoteSessionListSnapshot(
             projectionRunID: RemoteProjectionRunID(),

@@ -112,4 +112,55 @@ struct RemoteProtocolBoundaryTests {
         )
         #expect(decoded.prompt == "\(family) \(profession)")
     }
+
+    @Test func statusDetailIsOptionalSafeAndGraphemeBounded() throws {
+        let family = "👨‍👩‍👧‍👦"
+        let longDetail = String(
+            repeating: family,
+            count: RemoteConversationSummary.maximumStatusDetailLength + 1
+        )
+        var summary = Self.makeSummary(statusDetail: "  safe\u{0000}text\u{202E} \(longDetail)  ")
+
+        let expected = String(
+            "safetext \(longDetail)".prefix(RemoteConversationSummary.maximumStatusDetailLength)
+        )
+        #expect(summary.statusDetail == expected)
+        #expect(summary.statusDetail?.count == RemoteConversationSummary.maximumStatusDetailLength)
+        #expect(RemoteConversationSummary.normalizedStatusDetail(summary.statusDetail) == expected)
+
+        summary.statusDetail = " \n\t "
+        #expect(summary.statusDetail == nil)
+        let encoded = try ConversationEventCoding.makeEncoder().encode(summary)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(object["statusDetail"] == nil)
+    }
+
+    @Test func statusDetailDecoderFiltersUnsafeWireText() throws {
+        let encoder = ConversationEventCoding.makeEncoder()
+        let decoder = ConversationEventCoding.makeDecoder()
+        let baseline = Self.makeSummary(statusDetail: "placeholder")
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoder.encode(baseline)) as? [String: Any]
+        )
+        object["statusDetail"] = "  before\u{0000}middle\u{202E}after  "
+
+        let decoded = try decoder.decode(
+            RemoteConversationSummary.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(decoded.statusDetail == "beforemiddleafter")
+    }
+
+    private static func makeSummary(statusDetail: String?) -> RemoteConversationSummary {
+        RemoteConversationSummary(
+            conversationID: RemoteConversationID(),
+            provider: .codex,
+            title: "Boundary",
+            state: .working,
+            statusDetail: statusDetail,
+            inputAvailability: .unavailable(reason: .working),
+            latestSequence: 0,
+            updatedAt: Date(timeIntervalSince1970: 1_786_000_000)
+        )
+    }
 }

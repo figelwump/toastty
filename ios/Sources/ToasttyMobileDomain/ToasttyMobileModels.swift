@@ -103,18 +103,18 @@ public extension RemoteSessionPresentationStatus {
 }
 
 public enum MobileSessionBucket: String, CaseIterable, Equatable, Sendable {
-    case ready
-    case working
-    case needsApproval = "needs approval"
     case error
+    case ready
+    case needsApproval = "needs approval"
+    case working
     case idle
 
     public var sortOrder: Int {
         switch self {
-        case .ready: 0
-        case .working: 1
+        case .error: 0
+        case .ready: 1
         case .needsApproval: 2
-        case .error: 3
+        case .working: 3
         case .idle: 4
         }
     }
@@ -158,11 +158,14 @@ public struct MobileActivityAge: Equatable, Sendable {
 
     public init(secondsAtReceipt: Int, receivedAtMonotonicTime: TimeInterval) {
         self.secondsAtReceipt = max(0, secondsAtReceipt)
-        self.receivedAtMonotonicTime = receivedAtMonotonicTime
+        self.receivedAtMonotonicTime = receivedAtMonotonicTime.isFinite
+            ? max(0, receivedAtMonotonicTime)
+            : 0
     }
 
     public func label(atMonotonicTime now: TimeInterval) -> String {
-        let elapsed = max(0, Int(now - receivedAtMonotonicTime))
+        let finiteNow = now.isFinite ? now : receivedAtMonotonicTime
+        let elapsed = max(0, Int(finiteNow - receivedAtMonotonicTime))
         let seconds = secondsAtReceipt + elapsed
         if seconds < 60 { return "now" }
         let minutes = seconds / 60
@@ -184,7 +187,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let workspaceID: UUID
     public let workspaceTitle: String
-    public let workspacePath: String
+    public let cwd: String?
     public let agent: AgentKind
     public let title: String
     public let state: MobileSessionStatus
@@ -197,11 +200,17 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         activityAge?.label(atMonotonicTime: ProcessInfo.processInfo.systemUptime) ?? fixedAge
     }
 
+    public var displayAge: String {
+        let compactAge = age.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !compactAge.isEmpty else { return "" }
+        return compactAge == "now" ? compactAge : "\(compactAge) ago"
+    }
+
     public init(
         id: UUID,
         workspaceID: UUID,
         workspaceTitle: String,
-        workspacePath: String,
+        cwd: String?,
         agent: AgentKind,
         title: String,
         state: MobileSessionStatus,
@@ -213,7 +222,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         self.id = id
         self.workspaceID = workspaceID
         self.workspaceTitle = workspaceTitle
-        self.workspacePath = workspacePath
+        self.cwd = Self.nonemptyTrimmed(cwd)
         self.agent = agent
         self.title = title
         self.state = state
@@ -227,7 +236,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         id: UUID,
         workspaceID: UUID,
         workspaceTitle: String,
-        workspacePath: String,
+        cwd: String?,
         agent: AgentKind,
         title: String,
         state: RemoteSessionState,
@@ -240,7 +249,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             id: id,
             workspaceID: workspaceID,
             workspaceTitle: workspaceTitle,
-            workspacePath: workspacePath,
+            cwd: cwd,
             agent: agent,
             title: title,
             state: .known(state.presentationStatusFallback),
@@ -252,13 +261,53 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     }
 
     public var accessibilitySummary: String {
-        "\(title), \(state.accessibilityLabel), \(workspaceTitle), \(age)"
+        let facts: [String?] = [
+            title,
+            state.accessibilityLabel,
+            lastActivity,
+            workspaceTitle,
+            agent.displayName,
+            cwd,
+            displayAge,
+        ]
+        return facts
+            .compactMap(Self.nonemptyTrimmed)
+            .joined(separator: ", ")
+    }
+
+    private static func nonemptyTrimmed(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     /// Most recent activity first; conversations without a live activity age
     /// sort last. Title and id tie-breaks keep the order stable across
     /// snapshots (and deterministic for fixtures, which carry no live age).
     static func isMoreRecent(_ lhs: MobileConversation, _ rhs: MobileConversation) -> Bool {
+        if let comparison = compareRecency(lhs, rhs) { return comparison }
+        if let titleOrder = deterministicStringOrder(lhs.title, rhs.title) { return titleOrder }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    static func isOrderedBeforeInActivity(
+        _ lhs: MobileConversation,
+        _ rhs: MobileConversation
+    ) -> Bool {
+        if lhs.state.activitySortOrder != rhs.state.activitySortOrder {
+            return lhs.state.activitySortOrder < rhs.state.activitySortOrder
+        }
+        return isMoreRecent(lhs, rhs)
+    }
+
+    /// `nil` means equal/unknown recency and lets the caller apply its own
+    /// deterministic tie-breaks.
+    static func compareRecency(
+        _ lhs: MobileConversation,
+        _ rhs: MobileConversation
+    ) -> Bool? {
         switch (lhs.activityAge, rhs.activityAge) {
         case (let left?, let right?) where left.recencyRank != right.recencyRank:
             return left.recencyRank < right.recencyRank
@@ -267,84 +316,93 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         case (.none, .some):
             return false
         default:
-            let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
-            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
-            return lhs.id.uuidString < rhs.id.uuidString
+            return nil
         }
     }
 }
 
-public extension [MobileConversation] {
-    func sortedByRecency() -> [MobileConversation] {
-        sorted(by: MobileConversation.isMoreRecent)
+private extension MobileSessionStatus {
+    var activitySortOrder: Int {
+        switch self {
+        case .known(let status): status.bucket.sortOrder
+        case .unsupported: MobileSessionBucket.idle.sortOrder + 1
+        }
     }
+}
+
+/// Stable across user locales so snapshots do not visibly reshuffle when all
+/// authoritative ordering facts tie.
+private func deterministicStringOrder(_ lhs: String, _ rhs: String) -> Bool? {
+    let locale = Locale(identifier: "en_US_POSIX")
+    let leftFolded = lhs.folding(options: [.caseInsensitive], locale: locale)
+    let rightFolded = rhs.folding(options: [.caseInsensitive], locale: locale)
+    if leftFolded != rightFolded { return leftFolded < rightFolded }
+    if lhs != rhs { return lhs < rhs }
+    return nil
 }
 
 public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let title: String
-    public let path: String
     public let conversations: [MobileConversation]
 
-    public init(id: UUID, title: String, path: String, conversations: [MobileConversation]) {
+    public init(id: UUID, title: String, conversations: [MobileConversation]) {
         self.id = id
         self.title = title
-        self.path = path
         self.conversations = conversations
     }
 
     public var sortedConversations: [MobileConversation] {
-        conversations.sorted {
-            if $0.state.bucket.sortOrder != $1.state.bucket.sortOrder {
-                return $0.state.bucket.sortOrder < $1.state.bucket.sortOrder
-            }
-            return MobileConversation.isMoreRecent($0, $1)
-        }
+        conversations.sorted(by: MobileConversation.isOrderedBeforeInActivity)
     }
 
-    public var readyCount: Int {
-        conversations.count { $0.state == .ready }
-    }
-
-    public var needsApprovalCount: Int {
-        conversations.count { $0.state == .needsApproval }
-    }
-
-    public var workingCount: Int {
-        conversations.count { $0.state.bucket == .working }
-    }
-
-    public var rollupLabel: String {
-        if readyCount > 0 { return "\(readyCount) ready" }
-        if needsApprovalCount > 0 { return "\(needsApprovalCount) need approval" }
-        if workingCount > 0 { return "\(workingCount) working" }
-        return "quiet"
-    }
 }
 
 public struct MobileHomeSnapshot: Equatable, Sendable {
     public let hostName: String
     public let workspaces: [MobileWorkspace]
+    public let activitySessions: [MobileConversation]
+    public let rankedWorkspaces: [MobileWorkspace]
 
     public init(hostName: String, workspaces: [MobileWorkspace]) {
         self.hostName = hostName
         self.workspaces = workspaces
-    }
-
-    public var ready: [MobileConversation] {
-        workspaces
+        activitySessions = workspaces
             .flatMap(\.conversations)
-            .filter { $0.state == .ready }
-            .sortedByRecency()
+            .sorted(by: MobileConversation.isOrderedBeforeInActivity)
+        rankedWorkspaces = workspaces
+            .map { workspace in
+                MobileWorkspace(
+                    id: workspace.id,
+                    title: workspace.title,
+                    conversations: workspace.sortedConversations
+                )
+            }
+            .sorted(by: Self.isWorkspaceOrderedBefore)
     }
 
-    public var needsApproval: [MobileConversation] {
-        workspaces
-            .flatMap(\.conversations)
-            .filter { $0.state == .needsApproval }
-            .sortedByRecency()
+    private static func isWorkspaceOrderedBefore(
+        _ lhs: MobileWorkspace,
+        _ rhs: MobileWorkspace
+    ) -> Bool {
+        switch (lhs.conversations.first, rhs.conversations.first) {
+        case (let left?, let right?):
+            if left.state.activitySortOrder != right.state.activitySortOrder {
+                return left.state.activitySortOrder < right.state.activitySortOrder
+            }
+            if let recencyOrder = MobileConversation.compareRecency(left, right) {
+                return recencyOrder
+            }
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            break
+        }
+        if let titleOrder = deterministicStringOrder(lhs.title, rhs.title) { return titleOrder }
+        return lhs.id.uuidString < rhs.id.uuidString
     }
-
 }
 
 public enum MobileConnectionState: String, Equatable, Sendable {

@@ -42,7 +42,7 @@ struct RemoteProtocolGoldenTests {
         }
     }
 
-    @Test func optionalPresentationStatusIsAdditiveToBaselineGoldenSnapshot() throws {
+    @Test func optionalPresentationFieldsAreAdditiveToBaselineGoldenSnapshot() throws {
         let encoder = ConversationEventCoding.makeEncoder()
         let baseline = Self.makeSessionSnapshot()
         let baselineData = try encoder.encode(RemoteGatewaySessionListResponse(snapshot: baseline))
@@ -57,6 +57,8 @@ struct RemoteProtocolGoldenTests {
         enriched.conversations[2].presentationStatus = .ready
         enriched.conversations[3].presentationStatus = .error
         enriched.conversations[4].presentationStatus = .idle
+        enriched.conversations[0].statusDetail = "Indexing the workspace"
+        enriched.conversations[1].statusDetail = "Approve the proposed command"
         let object = try #require(
             JSONSerialization.jsonObject(with: try encoder.encode(
                 RemoteGatewaySessionListResponse(snapshot: enriched)
@@ -68,6 +70,9 @@ struct RemoteProtocolGoldenTests {
             "working", "needs_approval", "ready", "error", "idle",
         ])
         #expect(conversations.dropFirst(5).allSatisfy { $0["presentationStatus"] == nil })
+        #expect(conversations[0]["statusDetail"] as? String == "Indexing the workspace")
+        #expect(conversations[1]["statusDetail"] as? String == "Approve the proposed command")
+        #expect(conversations.dropFirst(2).allSatisfy { $0["statusDetail"] == nil })
     }
 }
 

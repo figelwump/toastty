@@ -185,6 +185,151 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         XCTAssertFalse(mobile.inputAvailability.allowsReply)
     }
 
+    func testSessionSnapshotNormalizesAbsentNullAndBlankCWDToNil() throws {
+        let absent = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "ended"],
+                preview: NSNull()
+            )
+        )
+        XCTAssertNil(try XCTUnwrap(absent.conversations.first).cwd)
+        XCTAssertNil(
+            try XCTUnwrap(absent.presentation().workspaces.first?.conversations.first).cwd
+        )
+        let ungrouped = try XCTUnwrap(absent.presentation().workspaces.first)
+        XCTAssertEqual(ungrouped.id.uuidString, "00000000-0000-0000-0000-000000000000")
+        XCTAssertEqual(ungrouped.title, "Ungrouped")
+
+        for cwd: Any in [NSNull(), "", "  \n\t  "] {
+            let snapshot = try decoder.decodeSessionListResponse(
+                sessionSnapshotData(
+                    inputAvailability: ["kind": "unavailable", "reason": "ended"],
+                    preview: NSNull(),
+                    cwd: cwd
+                )
+            )
+
+            XCTAssertNil(try XCTUnwrap(snapshot.conversations.first).cwd)
+            XCTAssertNil(
+                try XCTUnwrap(snapshot.presentation().workspaces.first?.conversations.first).cwd
+            )
+        }
+
+        let present = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "ended"],
+                preview: NSNull(),
+                cwd: "  /repos/toastty  "
+            )
+        )
+        XCTAssertEqual(try XCTUnwrap(present.conversations.first).cwd, "/repos/toastty")
+        XCTAssertEqual(
+            try XCTUnwrap(present.presentation().workspaces.first?.conversations.first).cwd,
+            "/repos/toastty"
+        )
+    }
+
+    func testStatusDetailIsOptionalLossyAndNormalizesBlankCopy() throws {
+        let absent = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull()
+            )
+        )
+        XCTAssertNil(try XCTUnwrap(absent.conversations.first).statusDetail)
+
+        for statusDetail: Any in [NSNull(), "", " \n\t ", 42, ["future": true]] {
+            let snapshot = try decoder.decodeSessionListResponse(
+                sessionSnapshotData(
+                    inputAvailability: ["kind": "unavailable", "reason": "working"],
+                    preview: NSNull(),
+                    statusDetail: statusDetail
+                )
+            )
+            XCTAssertNil(try XCTUnwrap(snapshot.conversations.first).statusDetail)
+        }
+
+        let present = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull(),
+                statusDetail: "  Running focused tests  "
+            )
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(present.conversations.first).statusDetail,
+            "Running focused tests"
+        )
+
+        let unsafe = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull(),
+                statusDetail: String(repeating: "x", count: 241) + "\u{202E}"
+            )
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(try XCTUnwrap(unsafe.conversations.first).statusDetail).count,
+            RemoteConversationSummary.maximumStatusDetailLength
+        )
+    }
+
+    func testPresentationBodyPrefersStatusDetailThenPendingPreviewThenLegacyCopy() throws {
+        let preview = try JSONSerialization.jsonObject(
+            with: fixtureData(named: "pending-interaction-preview")
+        ) as! [String: Any]
+        let input: [String: Any] = [
+            "kind": "pending_interaction",
+            "interactionIDs": ["approval-1"],
+        ]
+
+        let detailed = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: input,
+                preview: preview,
+                statusDetail: "Desktop status detail"
+            )
+        )
+        XCTAssertEqual(
+            detailed.presentation().activitySessions.first?.lastActivity,
+            "Desktop status detail"
+        )
+
+        let pendingFallback = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(inputAvailability: input, preview: preview)
+        )
+        XCTAssertEqual(
+            pendingFallback.presentation().activitySessions.first?.lastActivity,
+            "Approve the gateway command on the Mac"
+        )
+
+        let legacy = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull()
+            )
+        )
+        XCTAssertEqual(
+            legacy.presentation().activitySessions.first?.lastActivity,
+            "Input is not available from this device"
+        )
+    }
+
+    func testPresentationKeepsPerConversationHeterogeneousCWD() throws {
+        let data = Data(
+            #"{"protocolVersion":"1.0","snapshot":{"conversations":[{"conversationID":"11111111-1111-1111-1111-111111111111","cwd":"/repos/toastty-ios","inputAvailability":{"kind":"unavailable","reason":"ended"},"latestSequence":1,"placement":{"workspaceID":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","workspaceTitle":"toastty"},"projectionGeneration":1,"provider":"codex","state":"ended","title":"iOS","updatedAt":"2026-08-08T14:40:00.125Z"},{"conversationID":"22222222-2222-2222-2222-222222222222","cwd":"/repos/toastty-macos","inputAvailability":{"kind":"unavailable","reason":"ended"},"latestSequence":1,"placement":{"workspaceID":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","workspaceTitle":"toastty"},"projectionGeneration":1,"provider":"claude","state":"ended","title":"macOS","updatedAt":"2026-08-08T14:40:00.125Z"}],"generatedAt":"2026-08-08T14:41:00.125Z","projectionRunID":"33333333-3333-3333-3333-333333333333"}}"#.utf8
+        )
+
+        let snapshot = try decoder.decodeSessionListResponse(data)
+        let workspace = try XCTUnwrap(snapshot.presentation().workspaces.first)
+
+        XCTAssertEqual(workspace.conversations.count, 2)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: workspace.conversations.map { ($0.title, $0.cwd) }),
+            ["iOS": "/repos/toastty-ios", "macOS": "/repos/toastty-macos"]
+        )
+    }
+
     func testPresentationStatusDecodesKnownMissingAndUnknownValuesIndependentlyOfInput() throws {
         let knownData = try sessionSnapshotData(
             inputAvailability: ["kind": "unavailable", "reason": "working"],
@@ -418,7 +563,9 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
     private func sessionSnapshotData(
         inputAvailability: [String: Any],
         preview: Any,
-        presentationStatus: String? = nil
+        presentationStatus: String? = nil,
+        cwd: Any? = nil,
+        statusDetail: Any? = nil
     ) throws -> Data {
         var conversation: [String: Any] = [
             "conversationID": "11111111-1111-1111-1111-111111111111",
@@ -434,6 +581,12 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         ]
         if let presentationStatus {
             conversation["presentationStatus"] = presentationStatus
+        }
+        if let cwd {
+            conversation["cwd"] = cwd
+        }
+        if let statusDetail {
+            conversation["statusDetail"] = statusDetail
         }
         return try JSONSerialization.data(withJSONObject: [
             "protocolVersion": "1.0",

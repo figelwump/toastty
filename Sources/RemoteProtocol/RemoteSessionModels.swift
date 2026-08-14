@@ -1,5 +1,39 @@
 import Foundation
 
+/// Shared wire hygiene for short user-visible preview strings. The wire
+/// models remain responsible for their own length and optionality semantics;
+/// this helper only centralizes grapheme-safe bounding and scalar filtering.
+private enum RemoteWirePreviewText {
+    static func sanitized(_ value: String, maximumGraphemeCount: Int) -> String {
+        String(
+            value.filter { character in
+                character.unicodeScalars.allSatisfy(isAllowedScalar)
+            }
+                .prefix(maximumGraphemeCount)
+        )
+    }
+
+    /// Reject C0/C1 controls plus formatting scalars that can make a short
+    /// preview visually misleading. ZWJ, ZWNJ, and variation selectors remain
+    /// allowed because they are valid parts of user-visible text and emoji.
+    private static func isAllowedScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x0000...0x001F,
+             0x007F...0x009F,
+             0x00AD,
+             0x200B,
+             0x200E...0x200F,
+             0x202A...0x202E,
+             0x2060,
+             0x2066...0x2069,
+             0xFEFF:
+            false
+        default:
+            true
+        }
+    }
+}
+
 /// Small, explicitly bounded reason text for a needs-attention card. Full
 /// provider prompts remain available only in the conversation projection.
 public struct RemotePendingInteractionPreview: Codable, Equatable, Sendable {
@@ -8,21 +42,19 @@ public struct RemotePendingInteractionPreview: Codable, Equatable, Sendable {
     public var prompt: String
 
     public init(prompt: String) {
-        self.prompt = String(
-            prompt.filter { character in
-                character.unicodeScalars.allSatisfy(Self.isAllowedPreviewScalar)
-            }
-                .prefix(Self.maximumPromptLength)
+        self.prompt = RemoteWirePreviewText.sanitized(
+            prompt,
+            maximumGraphemeCount: Self.maximumPromptLength
         )
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let prompt = try container.decode(String.self, forKey: .prompt)
-        guard prompt.count <= Self.maximumPromptLength,
-              prompt.allSatisfy({ character in
-                  character.unicodeScalars.allSatisfy(Self.isAllowedPreviewScalar)
-              }) else {
+        guard prompt == RemoteWirePreviewText.sanitized(
+            prompt,
+            maximumGraphemeCount: Self.maximumPromptLength
+        ) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .prompt,
                 in: container,
@@ -39,26 +71,6 @@ public struct RemotePendingInteractionPreview: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case prompt
-    }
-
-    /// Reject C0/C1 controls plus formatting scalars that can make a short
-    /// preview visually misleading. ZWJ, ZWNJ, and variation selectors remain
-    /// allowed because they are valid parts of user-visible text and emoji.
-    private static func isAllowedPreviewScalar(_ scalar: Unicode.Scalar) -> Bool {
-        switch scalar.value {
-        case 0x0000...0x001F,
-             0x007F...0x009F,
-             0x00AD,
-             0x200B,
-             0x200E...0x200F,
-             0x202A...0x202E,
-             0x2060,
-             0x2066...0x2069,
-             0xFEFF:
-            false
-        default:
-            true
-        }
     }
 }
 
@@ -91,6 +103,8 @@ public enum RemoteSessionPresentationStatus: String, Codable, Equatable, Hashabl
 
 /// One conversation row in the session list.
 public struct RemoteConversationSummary: Codable, Equatable, Sendable {
+    public static let maximumStatusDetailLength = 240
+
     public var conversationID: RemoteConversationID
     public var provider: AgentKind
     public var title: String
@@ -102,6 +116,14 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     /// their existing wire representation and clients can fall back to the
     /// provider lifecycle.
     public var presentationStatus: RemoteSessionPresentationStatus?
+    /// The same user-visible status detail shown by Toastty's desktop session
+    /// row, bounded for list snapshots. Optional for compatibility with older
+    /// hosts and for statuses without meaningful detail.
+    private var storedStatusDetail: String?
+    public var statusDetail: String? {
+        get { storedStatusDetail }
+        set { storedStatusDetail = Self.normalizedStatusDetail(newValue) }
+    }
     public var inputAvailability: RemoteInputAvailability
     public var pendingInteractionPreview: RemotePendingInteractionPreview?
     /// Generation of this conversation's sequence space within the current
@@ -122,6 +144,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         cwd: String? = nil,
         state: RemoteSessionState,
         presentationStatus: RemoteSessionPresentationStatus? = nil,
+        statusDetail: String? = nil,
         inputAvailability: RemoteInputAvailability,
         pendingInteractionPreview: RemotePendingInteractionPreview? = nil,
         projectionGeneration: UInt64 = 0,
@@ -135,11 +158,82 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         self.cwd = cwd
         self.state = state
         self.presentationStatus = presentationStatus
+        self.storedStatusDetail = Self.normalizedStatusDetail(statusDetail)
         self.inputAvailability = inputAvailability
         self.pendingInteractionPreview = pendingInteractionPreview
         self.projectionGeneration = projectionGeneration
         self.latestSequence = latestSequence
         self.updatedAt = updatedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            conversationID: try container.decode(RemoteConversationID.self, forKey: .conversationID),
+            provider: try container.decode(AgentKind.self, forKey: .provider),
+            title: try container.decode(String.self, forKey: .title),
+            placement: try container.decode(RemoteConversationPlacement.self, forKey: .placement),
+            cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
+            state: try container.decode(RemoteSessionState.self, forKey: .state),
+            presentationStatus: try container.decodeIfPresent(
+                RemoteSessionPresentationStatus.self,
+                forKey: .presentationStatus
+            ),
+            statusDetail: try container.decodeIfPresent(String.self, forKey: .statusDetail),
+            inputAvailability: try container.decode(RemoteInputAvailability.self, forKey: .inputAvailability),
+            pendingInteractionPreview: try container.decodeIfPresent(
+                RemotePendingInteractionPreview.self,
+                forKey: .pendingInteractionPreview
+            ),
+            projectionGeneration: try container.decode(UInt64.self, forKey: .projectionGeneration),
+            latestSequence: try container.decode(UInt64.self, forKey: .latestSequence),
+            updatedAt: try container.decode(Date.self, forKey: .updatedAt)
+        )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(conversationID, forKey: .conversationID)
+        try container.encode(provider, forKey: .provider)
+        try container.encode(title, forKey: .title)
+        try container.encode(placement, forKey: .placement)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try container.encode(state, forKey: .state)
+        try container.encodeIfPresent(presentationStatus, forKey: .presentationStatus)
+        try container.encodeIfPresent(statusDetail, forKey: .statusDetail)
+        try container.encode(inputAvailability, forKey: .inputAvailability)
+        try container.encodeIfPresent(pendingInteractionPreview, forKey: .pendingInteractionPreview)
+        try container.encode(projectionGeneration, forKey: .projectionGeneration)
+        try container.encode(latestSequence, forKey: .latestSequence)
+        try container.encode(updatedAt, forKey: .updatedAt)
+    }
+
+    /// Normalizes status detail at the host/client boundary while keeping its
+    /// JSON representation an ordinary optional string.
+    public static func normalizedStatusDetail(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sanitized = RemoteWirePreviewText.sanitized(
+            trimmed,
+            maximumGraphemeCount: maximumStatusDetailLength
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        return sanitized.isEmpty ? nil : sanitized
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationID
+        case provider
+        case title
+        case placement
+        case cwd
+        case state
+        case presentationStatus
+        case statusDetail
+        case inputAvailability
+        case pendingInteractionPreview
+        case projectionGeneration
+        case latestSequence
+        case updatedAt
     }
 }
 

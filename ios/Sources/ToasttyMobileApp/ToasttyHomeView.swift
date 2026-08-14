@@ -1,29 +1,51 @@
 import SwiftUI
 import ToasttyMobileDomain
 
+enum ToasttyHomeListMode: String, CaseIterable {
+    case activity
+    case workspaces
+
+    var title: String {
+        switch self {
+        case .activity: "Activity"
+        case .workspaces: "Workspaces"
+        }
+    }
+}
+
 struct ToasttyHomeView: View {
+    static let listModePreferenceKey = "toastty-mobile-home-list-mode"
+
     let controller: HomeScreenController
     let refresh: () async -> Void
     let onSettings: () -> Void
 
+    @AppStorage private var storedListMode: String
+
     init(
         controller: HomeScreenController,
         refresh: @escaping () async -> Void = {},
-        onSettings: @escaping () -> Void = {}
+        onSettings: @escaping () -> Void = {},
+        defaults: UserDefaults = .standard
     ) {
         self.controller = controller
         self.refresh = refresh
         self.onSettings = onSettings
+        _storedListMode = AppStorage(
+            wrappedValue: ToasttyHomeListMode.activity.rawValue,
+            Self.listModePreferenceKey,
+            store: defaults
+        )
     }
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
-                readySection
-                needsApprovalSection
-                workspaceSection
+                homeContent
             }
+            .id(selectedListMode)
             .padding(.horizontal, 14)
+            .padding(.top, 8)
             .padding(.bottom, 40)
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
@@ -37,23 +59,151 @@ struct ToasttyHomeView: View {
         // queries with ambiguous matches.
         .accessibilityIdentifier("toastty-mobile-home")
         .safeAreaInset(edge: .top, spacing: 0) {
-            // Connection state stays visible while the list scrolls; live
-            // freshness is the core signal of a remote-monitoring client.
+            // Connection state and the active list mode stay visible while
+            // sessions scroll underneath them.
             VStack(spacing: 10) {
                 header
                 connectionNotice
+                listModePicker
             }
             .padding(.horizontal, 14)
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
-            .padding(.bottom, 6)
+            .padding(.bottom, 8)
             .background(ToasttyDesignTokens.background)
         }
         .background(ToasttyDesignTokens.background)
         .toolbar(.hidden, for: .navigationBar)
-        .sensoryFeedback(.warning, trigger: needsApprovalConversations.count) { old, new in
+        .sensoryFeedback(.warning, trigger: needsApprovalCount) { old, new in
             new > old
         }
+        .onAppear {
+            if ToasttyHomeListMode(rawValue: storedListMode) == nil {
+                storedListMode = ToasttyHomeListMode.activity.rawValue
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var homeContent: some View {
+        switch selectedListMode {
+        case .activity:
+            activityContent
+        case .workspaces:
+            workspaceContent
+        }
+    }
+
+    private var selectedListMode: ToasttyHomeListMode {
+        ToasttyHomeListMode(rawValue: storedListMode) ?? .activity
+    }
+
+    private var listModeSelection: Binding<ToasttyHomeListMode> {
+        Binding(
+            get: { selectedListMode },
+            set: { storedListMode = $0.rawValue }
+        )
+    }
+
+    private var listModePicker: some View {
+        Picker("Session organization", selection: listModeSelection) {
+            ForEach(ToasttyHomeListMode.allCases, id: \.self) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("toastty-mobile-home-mode")
+    }
+
+    @ViewBuilder
+    private var activityContent: some View {
+        if controller.snapshot.activitySessions.isEmpty {
+            emptyState
+        } else {
+            ForEach(controller.snapshot.activitySessions) { conversation in
+                ToasttySessionCard(
+                    conversation: conversation,
+                    showsWorkspace: true,
+                    accessibilityIdentifier:
+                        "toastty-mobile-activity-card-\(conversation.id.uuidString)",
+                    onOpen: controller.open
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceContent: some View {
+        if controller.snapshot.rankedWorkspaces.isEmpty {
+            emptyState
+        } else {
+            ForEach(controller.snapshot.rankedWorkspaces) { workspace in
+                Section {
+                    ForEach(workspace.conversations) { conversation in
+                        ToasttySessionCard(
+                            conversation: conversation,
+                            showsWorkspace: false,
+                            accessibilityIdentifier:
+                                "toastty-mobile-grouped-card-\(conversation.id.uuidString)",
+                            onOpen: controller.open
+                        )
+                    }
+                } header: {
+                    workspaceHeader(workspace)
+                }
+            }
+        }
+    }
+
+    private func workspaceHeader(_ workspace: MobileWorkspace) -> some View {
+        NavigationLink(value: workspace.id) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(workspace.title)
+                        .font(.headline)
+                        .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        .lineLimit(1)
+                    Text(sessionCountLabel(workspace.conversations.count))
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 6)
+            .padding(.top, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            "\(workspace.title), \(sessionCountLabel(workspace.conversations.count))"
+        )
+        .accessibilityHint("Opens the workspace")
+        .accessibilityIdentifier("toastty-mobile-workspace-\(workspace.id.uuidString)")
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView(
+            "No sessions yet",
+            systemImage: "rectangle.stack",
+            description: Text("Open a session in Toastty on your Mac and it will appear here.")
+        )
+        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+        .padding(.vertical, 32)
+    }
+
+    private var needsApprovalCount: Int {
+        controller.snapshot.activitySessions.lazy.filter {
+            $0.state.bucket == .needsApproval
+        }.count
+    }
+
+    private func sessionCountLabel(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "session" : "sessions")"
     }
 
     @ViewBuilder
@@ -109,7 +259,7 @@ struct ToasttyHomeView: View {
         }
         .padding(.horizontal, 6)
         .padding(.top, 18)
-        .padding(.bottom, 10)
+        .padding(.bottom, 4)
     }
 
     private var brand: some View {
@@ -143,78 +293,11 @@ struct ToasttyHomeView: View {
         .accessibilityLabel("Settings")
         .accessibilityIdentifier("toastty-mobile-settings-button")
     }
-
-    @ViewBuilder
-    private var readySection: some View {
-        if readyConversations.isEmpty == false {
-            VStack(spacing: 10) {
-                ToasttySectionTitle(title: "Ready · \(readyConversations.count)")
-                    .padding(.top, 6)
-                    .accessibilityIdentifier("toastty-mobile-ready-section")
-
-                ForEach(readyConversations) { conversation in
-                    ToasttyActionCard(
-                        conversation: conversation,
-                        accessibilityIdentifier: "toastty-mobile-ready-card-\(conversation.id.uuidString)",
-                        onOpen: controller.open
-                    )
-                }
-            }
-        }
-    }
-
-    private var readyConversations: [MobileConversation] {
-        controller.snapshot.ready
-    }
-
-    @ViewBuilder
-    private var needsApprovalSection: some View {
-        if needsApprovalConversations.isEmpty == false {
-            VStack(spacing: 10) {
-                ToasttySectionTitle(title: "Needs approval · \(needsApprovalConversations.count)")
-                    .padding(.top, 6)
-                    .accessibilityIdentifier("toastty-mobile-needs-approval-section")
-
-                ForEach(needsApprovalConversations) { conversation in
-                    ToasttyActionCard(
-                        conversation: conversation,
-                        accessibilityIdentifier: "toastty-mobile-needs-approval-card-\(conversation.id.uuidString)",
-                        onOpen: controller.open
-                    )
-                }
-            }
-        }
-    }
-
-    private var needsApprovalConversations: [MobileConversation] {
-        controller.snapshot.needsApproval
-    }
-
-    private var workspaceSection: some View {
-        VStack(spacing: 10) {
-            ToasttySectionTitle(title: "Workspaces")
-                .padding(.top, 12)
-                .accessibilityIdentifier("toastty-mobile-workspaces-section")
-
-            if controller.snapshot.workspaces.isEmpty {
-                ContentUnavailableView(
-                    "No workspaces yet",
-                    systemImage: "rectangle.stack",
-                    description: Text("Open a workspace in Toastty on your Mac and it will appear here.")
-                )
-                .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                .padding(.vertical, 32)
-            } else {
-                ForEach(controller.snapshot.workspaces) { workspace in
-                    ToasttyWorkspaceCard(workspace: workspace, onOpen: controller.open)
-                }
-            }
-        }
-    }
 }
 
-private struct ToasttyActionCard: View {
+private struct ToasttySessionCard: View {
     let conversation: MobileConversation
+    let showsWorkspace: Bool
     let accessibilityIdentifier: String
     let onOpen: (MobileConversation) -> Void
 
@@ -222,199 +305,141 @@ private struct ToasttyActionCard: View {
         Button {
             onOpen(conversation)
         } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 7) { metadata }
-                    VStack(alignment: .leading, spacing: 4) { metadata }
+            VStack(alignment: .leading, spacing: isIdle ? 6 : 8) {
+                if isIdle {
+                    idleContent
+                } else {
+                    statusHeader
+                    activityBody
                 }
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-
-                Text(conversation.title)
-                    .font(.headline)
-                    .foregroundStyle(ToasttyDesignTokens.primaryText)
-
-                Text(conversation.inputAvailability.inputReason)
-                    .font(.subheadline)
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                metadata
             }
+            .padding(.horizontal, 13)
+            .padding(.vertical, isIdle ? 10 : 13)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .toasttyCard()
-            .overlay(alignment: .leading) {
-                Capsule()
-                    .fill(ToasttyDesignTokens.color(for: conversation.state.bucket))
-                    .frame(width: 3)
-                    .padding(.vertical, 1)
+            .background(cardBackground)
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(cardBorder, lineWidth: 1)
             }
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-            "\(conversation.accessibilitySummary), \(conversation.inputAvailability.inputReason)"
-        )
+        .accessibilityLabel(conversation.accessibilitySummary)
         .accessibilityHint("Opens the conversation")
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 
+    private var isIdle: Bool {
+        conversation.state.bucket == .idle
+    }
+
+    private var idleContent: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(conversation.lastActivity)
+                .font(.subheadline)
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            activityDestination
+        }
+    }
+
+    private var statusHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            statusLabel
+            Spacer(minLength: 8)
+            activityDestination
+        }
+    }
+
     @ViewBuilder
-    private var metadata: some View {
-        ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
-        Text(conversation.workspaceTitle)
-        Text("·")
-        Text(conversation.agent.displayName)
-            .fontWeight(.bold)
-            .foregroundStyle(ToasttyDesignTokens.color(for: conversation.agent))
-        TimelineView(.periodic(from: .now, by: 60)) { _ in
-            Text("· \(conversation.age)")
-        }
-    }
-
-}
-
-private struct ToasttyWorkspaceCard: View {
-    let workspace: MobileWorkspace
-    let onOpen: (MobileConversation) -> Void
-    @State private var showsAllConversations = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            NavigationLink(value: workspace.id) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline) {
-                        workspaceIdentity
-                        Spacer(minLength: 8)
-                        rollupPill
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        workspaceIdentity
-                        rollupPill
-                    }
-                }
-                .contentShape(Rectangle())
+    private var statusLabel: some View {
+        if conversation.state.bucket == .working {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(ToasttyDesignTokens.color(for: .working))
+                    .accessibilityHidden(true)
+                Text(MobileSessionBucket.working.rawValue)
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("toastty-mobile-workspace-\(workspace.id.uuidString)")
-
-            Divider()
-                .overlay(ToasttyDesignTokens.divider)
-                .padding(.top, 10)
-
-            ForEach(visibleConversations) { conversation in
-                Button { onOpen(conversation) } label: {
-                    ToasttyConversationMiniRow(conversation: conversation)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(conversation.accessibilitySummary)
-                .accessibilityIdentifier("toastty-mobile-session-\(conversation.id.uuidString)")
-
-                if conversation.id != visibleConversations.last?.id {
-                    Divider().overlay(ToasttyDesignTokens.divider)
-                }
-            }
-
-            if workspace.conversations.count > 3 {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showsAllConversations.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(showsAllConversations
-                            ? "Show less"
-                            : "+\(workspace.conversations.count - 3) more…")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                        Spacer(minLength: 8)
-                        Image(systemName: showsAllConversations ? "chevron.up" : "chevron.down")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .padding(.vertical, 9)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(showsAllConversations
-                    ? "Show fewer sessions in \(workspace.title)"
-                    : "Show all sessions in \(workspace.title)")
-                .accessibilityValue(showsAllConversations ? "Expanded" : "Collapsed")
-                .accessibilityHint("Expands or collapses this workspace card")
-                .accessibilityIdentifier(
-                    "toastty-mobile-workspace-more-toggle-\(workspace.id.uuidString)"
-                )
-            }
-        }
-        .toasttyCard()
-    }
-
-    private var visibleConversations: [MobileConversation] {
-        if showsAllConversations {
-            workspace.sortedConversations
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.color(for: .working))
         } else {
-            Array(workspace.sortedConversations.prefix(3))
+            ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
         }
     }
 
-    private var workspaceIdentity: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(workspace.title)
-                .font(.headline)
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
-            Text(workspace.path)
+    private var activityDestination: some View {
+        HStack(spacing: 8) {
+            if showsWorkspace {
+                Text(conversation.workspaceTitle)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 160, alignment: .trailing)
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var activityBody: some View {
+        Text(conversation.lastActivity)
+            .font(bodyFont)
+            .foregroundStyle(bodyForegroundStyle)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var bodyFont: Font {
+        conversation.state.bucket == .working ? .subheadline.italic() : .subheadline
+    }
+
+    private var bodyForegroundStyle: Color {
+        conversation.state.bucket == .working
+            ? ToasttyDesignTokens.secondaryText
+            : ToasttyDesignTokens.primaryText
+    }
+
+    private var metadata: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { _ in
+            Text(metadataLabel)
                 .font(.caption2.monospaced())
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
                 .lineLimit(1)
+                .truncationMode(.middle)
         }
     }
 
-    private var rollupPill: some View {
-        Text(workspace.rollupLabel)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(rollupColor)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(rollupColor.opacity(0.14), in: Capsule())
+    private var metadataLabel: String {
+        [conversation.agent.displayName, conversation.cwd, conversation.displayAge]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: " · ")
     }
 
-    private var rollupColor: Color {
-        if workspace.readyCount > 0 { return ToasttyDesignTokens.color(for: .ready) }
-        if workspace.needsApprovalCount > 0 { return ToasttyDesignTokens.color(for: .needsApproval) }
-        if workspace.workingCount > 0 { return ToasttyDesignTokens.color(for: .working) }
-        return ToasttyDesignTokens.mutedText
-    }
-}
-
-private struct ToasttyConversationMiniRow: View {
-    let conversation: MobileConversation
-
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { rowContents }
-            VStack(alignment: .leading, spacing: 5) { rowContents }
+    private var cardBackground: Color {
+        switch conversation.state.bucket {
+        case .error, .ready, .needsApproval:
+            ToasttyDesignTokens.color(for: conversation.state.bucket).opacity(0.13)
+        case .working, .idle:
+            ToasttyDesignTokens.raisedSurface
         }
-        .padding(.vertical, 8)
     }
 
-    @ViewBuilder
-    private var rowContents: some View {
-        ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
-        Text(conversation.title)
-            .font(.subheadline)
-            .foregroundStyle(conversation.state.bucket == .idle
-                ? ToasttyDesignTokens.mutedText
-                : ToasttyDesignTokens.primaryText)
-            .lineLimit(1)
-        if conversation.inputAvailability == .localDraft {
-            Label("desktop draft", systemImage: "pencil")
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.amberText)
-        }
-        Spacer(minLength: 2)
-        TimelineView(.periodic(from: .now, by: 60)) { _ in
-            Text(conversation.age)
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
+    private var cardBorder: Color {
+        switch conversation.state.bucket {
+        case .error, .ready, .needsApproval:
+            ToasttyDesignTokens.color(for: conversation.state.bucket).opacity(0.38)
+        case .working, .idle:
+            ToasttyDesignTokens.border
         }
     }
 }

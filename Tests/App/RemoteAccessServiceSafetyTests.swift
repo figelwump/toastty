@@ -103,6 +103,27 @@ struct RemoteAccessServiceSafetyTests {
         }
     }
 
+    @Test func desktopSessionDetailProjectsThroughSharedWireNormalization() {
+        #expect(RemoteAccessService.remoteStatusDetail(from: nil) == nil)
+        #expect(RemoteAccessService.remoteStatusDetail(from: " \n ") == nil)
+        #expect(RemoteAccessService.remoteStatusDetail(
+            from: "  Indexing\u{0000} workspace\u{202E}  "
+        ) == "Indexing workspace")
+
+        let grapheme = "👩🏽‍💻"
+        let projected = RemoteAccessService.remoteStatusDetail(
+            from: String(
+                repeating: grapheme,
+                count: RemoteConversationSummary.maximumStatusDetailLength + 1
+            )
+        )
+        #expect(projected?.count == RemoteConversationSummary.maximumStatusDetailLength)
+        #expect(projected == String(
+            repeating: grapheme,
+            count: RemoteConversationSummary.maximumStatusDetailLength
+        ))
+    }
+
     @Test func transcriptReplacementExpiresPendingSendBeforeIdenticalHistoryReplay() throws {
         let conversationID = RemoteConversationID()
         let unaffectedConversationID = RemoteConversationID()

@@ -664,6 +664,7 @@ final class RemoteAccessService: ObservableObject {
         var activeSessionID: String?
         var registryState: RemoteSessionState
         var presentationStatus: RemoteSessionPresentationStatus?
+        var statusDetail: String?
         var updatedAt: Date
         var transcriptPath: String?
     }
@@ -905,6 +906,7 @@ final class RemoteAccessService: ObservableObject {
                     presentationStatus: panelStatus.map {
                         Self.remotePresentationStatus(for: $0.status.kind)
                     },
+                    statusDetail: Self.remoteStatusDetail(from: panelStatus?.status.detail),
                     updatedAt: activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? Date(),
                     transcriptPath: transcriptPath
                 ))
@@ -959,6 +961,7 @@ final class RemoteAccessService: ObservableObject {
                     cwd: candidate.cwd,
                     state: projector.state,
                     presentationStatus: candidate.presentationStatus,
+                    statusDetail: candidate.statusDetail,
                     inputAvailability: availability,
                     pendingInteractionPreview: RemotePendingInteractionPreviewFormatter.make(
                         from: projectionStore.pendingInteractions(for: candidate.conversationID)
@@ -980,6 +983,7 @@ final class RemoteAccessService: ObservableObject {
                 cwd: candidate.cwd,
                 state: candidate.registryState,
                 presentationStatus: candidate.presentationStatus,
+                statusDetail: candidate.statusDetail,
                 inputAvailability: .unavailable(reason: .unknownProviderState),
                 latestSequence: 0,
                 updatedAt: candidate.updatedAt
@@ -1015,6 +1019,13 @@ final class RemoteAccessService: ObservableObject {
         case .error:
             return .error
         }
+    }
+
+    /// Reads the exact desktop detail source and passes it through the shared
+    /// wire normalization used by every summary producer.
+    nonisolated static func remoteStatusDetail(from detail: String?) -> String? {
+        let trimmed = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return RemoteConversationSummary.normalizedStatusDetail(trimmed)
     }
 
     // MARK: - Transcript tailers

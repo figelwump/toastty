@@ -56,6 +56,7 @@ struct RemoteAccessGatewayServerTests {
                     placement: RemoteConversationPlacement(workspaceID: UUID(), workspaceTitle: "Workspace 1", panelID: UUID()),
                     cwd: "/tmp/demo",
                     state: .working,
+                    statusDetail: "Indexing the workspace",
                     inputAvailability: .unavailable(reason: .unknownProviderState),
                     latestSequence: 0,
                     updatedAt: Date(timeIntervalSince1970: 1_786_300_000)
@@ -232,6 +233,7 @@ struct RemoteAccessGatewayServerTests {
         #expect((sessionResponse as? HTTPURLResponse)?.statusCode == 200)
         let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteGatewaySessionListResponse.self, from: sessionData)
         #expect(decoded.snapshot.conversations.first?.title == "Demo session")
+        #expect(decoded.snapshot.conversations.first?.statusDetail == "Indexing the workspace")
     }
 
     @Test func webSocketSubscribeReceivesBroadcasts() async throws {
@@ -268,6 +270,7 @@ struct RemoteAccessGatewayServerTests {
             return
         }
         #expect(snapshot.conversations.first?.title == "Demo session")
+        #expect(snapshot.conversations.first?.statusDetail == "Indexing the workspace")
     }
 
     /// Loopback transport coverage only. Local processes are inside the host
@@ -337,6 +340,7 @@ struct RemoteAccessGatewayServerTests {
             pairing.offer.qrPayload.gatewayURL.host ?? "toastty-test.tailnet.ts.net",
             "/tmp/demo",
             "Demo session",
+            "Indexing the workspace",
             "prompt contents",
             "transcript contents",
         ]

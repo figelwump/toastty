@@ -3,7 +3,7 @@
 **Branch name:** `feat/mobile-remote-access-ios`, stacked on `feat/mobile-remote-access`
 **Short name:** `mobile-ios`
 **Created:** 2026-08-07
-**Last revised:** 2026-08-12
+**Last revised:** 2026-08-14
 **Status:** Approved — implementation in progress
 **Depends on:** the revised mobile design doc (`toastty-mobile-design.md`, 2026-08-06). Its host Foundation → v0 → v0.5/v0.75 → v1 sequence is now implemented on `feat/mobile-remote-access` (gateway, pairing/auth, projection, Codex + Claude parsers, epoch-gated send, same-origin web client — ~10.2k lines with transport/race/security tests and smoke/QA evidence under `artifacts/remote-tests/` and `artifacts/remote-gui/`). The native entry gate below is therefore a short residual checklist, not a waiting game. Native code still does not become a second authority for the protocol: the host contract as implemented is the source of truth.
 
@@ -21,7 +21,7 @@ The transport is WebSocket (host-decided and implemented; ADR recording is an en
 4. **Swift 6, strict concurrency, iOS 18 minimum.** Same as EmptyOS (Plate ships on 17, so 18 is a choice, not a necessity); no reason to diverge.
 5. **Explicit fixture / local / live runtime modes from day one.** `TOASTTY_MOBILE_USE_FIXTURE=1` yields a fully offline deterministic app for previews, UI tests, and screenshots in Debug builds only. The primary `ToasttyMobileApp` scheme never sets it; the clearly named `ToasttyMobileApp-Fixture` scheme does. Missing configuration is an unconfigured pairing state, never an implicit fixture fallback. The baseline known-case fixtures are captured from the unmodified host at the native entry gate, before protocol extraction; Phase 1 proves the extraction preserves them and adds client-authored forward-compatibility fixtures. Live integration tests are `XCTSkip`-gated on env vars; credentials are injected only at test runtime and are never persisted into generated schemes or logs.
 6. **The phone renders only the Toastty-owned projection.** No provider JSONL parsing, no terminal frames, exactly per the design doc. The client is provider-agnostic; Claude-vs-Codex differences never reach the UI layer.
-7. **Input availability drives the composer; display status never does.** An additive optional summary field carries the same exact presentation status as the desktop. Older hosts without the field fall back conservatively from lifecycle state; unknown future values remain visible as unsupported data but receive no misleading state label or color.
+7. **Input availability drives the composer; display status never does.** Additive optional summary fields carry the same exact presentation status and bounded status detail as the desktop. Older hosts without either field fall back conservatively from lifecycle state and input availability; unknown future values remain visible as unsupported data but receive no misleading state label or color.
 8. **Approvals are read-only cards** with a "respond on the desktop" affordance until a provider semantic channel exists (design-doc policy).
 9. **Design language:** the merged prototype's dark Toastty look — near-black surfaces, mono accents for paths/metadata, and the desktop's status palette (ready green, working brown, needs approval amber, error red; idle is visually quiet), in a hand-written Swift token file (no CSS-token generator unless the v0 web client and native end up sharing tokens).
 10. **Accessibility identifiers on stable interactive elements** (`toastty-mobile-*`), following the EmptyOS convention. Dynamic Type is not capped app-wide; constrained metadata components may apply a documented local layout fallback.
@@ -44,7 +44,7 @@ The implementation review retained the product scope while narrowing the highest
 
     ToasttyMobileApp (SwiftUI)
       RootView → SessionGate → Shell
-        HomeScreen        (ready/approval queues + workspace cards)
+        HomeScreen        (Activity triage + grouped Workspaces modes)
         WorkspaceScreen   (session rows)
         ConversationSheet (transcript + composer)     ← Plate-style full-height sheet
         SettingsScreen    (connection, device, diagnostics)
@@ -99,17 +99,17 @@ Tailscale and Toastty provide separate layers. Tailscale Serve supplies tailnet 
 
 ### Status model → UI presentation
 
-`RemoteConversationSummary.presentationStatus` carries the same five-state presentation value the desktop computes for a panel. It is intentionally separate from the provider lifecycle and four input-availability variants:
+`RemoteConversationSummary.presentationStatus` carries the same five-state presentation value the desktop computes for a panel. Its additive optional `statusDetail` carries a separately bounded, sanitized excerpt of the desktop row's real detail; the shared Home card uses that excerpt before a pending-interaction preview or legacy availability fallback. Presentation remains intentionally separate from the provider lifecycle and four input-availability variants:
 
 | Presentation status | Dot | Notes |
 | --- | --- | --- |
-| **ready** | green | appears in the Ready queue; input availability independently decides whether the phone can reply |
-| **working** | brown | active desktop work |
-| **needs approval** | amber | appears in the Needs Approval queue; approval remains read-only on the phone |
-| **error** | red | shows the desktop error state |
-| idle | none | conversation remains readable, but the UI does not call idle out as a state |
+| **ready** | green | ranked after errors; input availability independently decides whether the phone can reply |
+| **working** | brown | active desktop work, shown with a spinner and italic detail |
+| **needs approval** | amber | ranked after ready; approval remains read-only on the phone |
+| **error** | red | highest-urgency Activity bucket |
+| idle | none | compact, visually quiet card with no status header |
 
-The field is additive and optional. A client connected to an older host conservatively maps `starting`/`working` to working, `awaitingInput`/`ready` to ready, `interrupted`/`error` to error, and `ended`/`offline` to idle. An unknown future presentation value receives no label or color rather than being guessed. The host contract defines valid lifecycle/input combinations rather than a Cartesian 8 × 4 state machine. The client handles an unexpected combination safely by rendering both facts and disabling input unless availability is a recognized `openPrompt(epoch)` and device/session authorization also allows send. Note: Claude conversations currently never publish `openPrompt` (`unavailable(unknown_provider_state)` — no authoritative prompt-open signal in the transcript; hook-based enablement is a proposed later host slice), so a permanently read-only live conversation is a first-class case, not an edge case.
+Both presentation fields are additive and optional. A client connected to an older host conservatively maps `starting`/`working` to working, `awaitingInput`/`ready` to ready, `interrupted`/`error` to error, and `ended`/`offline` to idle; without `statusDetail`, the card falls back to a pending request or existing availability copy. An unknown future presentation value receives no label or color rather than being guessed. Activity is flat and ordered error → ready → needs approval → working → idle with recency inside a bucket. Workspaces uses the same card and within-group order, while groups are ranked by their most urgent member. The host contract defines valid lifecycle/input combinations rather than a Cartesian 8 × 4 state machine. The client handles an unexpected combination safely by rendering both facts and disabling input unless availability is a recognized `openPrompt(epoch)` and device/session authorization also allows send. Note: Claude conversations currently never publish `openPrompt` (`unavailable(unknown_provider_state)` — no authoritative prompt-open signal in the transcript; hook-based enablement is a proposed later host slice), so a permanently read-only live conversation is a first-class case, not an edge case.
 
 ### Composer gating (input availability → compose bar)
 
@@ -204,7 +204,7 @@ Exit: macOS known-case encoders/decoders remain strict and fixture-identical; iO
 
 **Phase 2 — Native pairing + read-only app over Tailscale.**
 Needs the stable host gateway plus this plan's explicitly owned native-auth host slice.
-Implement host: native pairing-offer creation, QR/fallback-code presentation, separate `/v1/native-pairing/exchange` granting read+send, hashed device-credential store, additive optional `tailscaleLogin` migration for legacy browser records, Tailscale-login comparison, centralized cookie-vs-Bearer authentication across every data route and WebSocket upgrade, scope updates, active-stream revocation, device audit, native-auth tests, and the optional pending-interaction preview field on `RemoteConversationSummary`. The hello/version exchange is already an entry-gate dependency. Implement client: in-app QR scanner + manual fallback, confirmation, Keychain credential, Home (queue + workspace cards), Workspace screen, connection lifecycle/failure classification UX, Settings, and fixture UI tests.
+Implement host: native pairing-offer creation, QR/fallback-code presentation, separate `/v1/native-pairing/exchange` granting read+send, hashed device-credential store, additive optional `tailscaleLogin` migration for legacy browser records, Tailscale-login comparison, centralized cookie-vs-Bearer authentication across every data route and WebSocket upgrade, scope updates, active-stream revocation, device audit, native-auth tests, and optional pending-interaction/status-detail preview fields on `RemoteConversationSummary`. The hello/version exchange is already an entry-gate dependency. Implement client: in-app QR scanner + manual fallback, confirmation, Keychain credential, Home with default persisted Activity triage plus grouped Workspaces mode, Workspace screen, connection lifecycle/failure classification UX, Settings, and fixture UI tests.
 Exit: a legacy browser device-store fixture upgrades and restarts without losing credentials; real phone over Tailscale Serve pairs through QR and manual fallback; reconnects cleanly; distinguishes Tailscale unavailable/wrong-tailnet DNS, Mac asleep or gateway down, TLS/hostname, auth/login-binding, and version failures; navigates real workspace/session organization; and proves the full cookie/Bearer/Origin matrix, `401` re-pair, `403` keep-credential, scope changes, revoke, revoke-all, and kill-switch behavior. Revocation closes an already-open stream. Capture the screenshot/evidence set.
 
 **Phase 3 — Transcript chat.**
@@ -226,13 +226,13 @@ Exit: TestFlight build on your phone, used against your real desktop over Tailsc
 - **Unit (Protocol/Domain):** both build graphs consume the entry-gate known-case fixtures and assert the extracted host encoding remains identical. Native-only compatibility fixtures inject an unknown top-level stream type, an unknown event between two known events, unknown state/input variants, and unknown result/error codes to verify the explicit ignore/read-only/fail-operation policies. Also test run/generation cursor invalidation, session seed → subscribe → fresh-full-snapshot ordering, conversation subscribe → buffered REST-page handoff, rejection of older connection-generation work, sequence gaps/duplicates/retention overflow, resnapshot, bounded state delivery, and strict-ID reconciliation including `duplicate` and terminal `deliveryUnconfirmed`. Stream and clock behavior use scripted fakes with handshake-based determinism (EmptyOS lesson).
 - **Unit (App):** one controller test file per screen with fake capability protocols (EmptyOS convention).
 - **Auth/security:** QR and manual success, expired/consumed/malformed offer, brute-force limits, browser/native endpoint separation, legacy device-store decoding, Keychain absent/corrupt/locked, missing/mismatched Tailscale login, 401 vs 403, scope changes, concurrent requests, mid-stream revoke, revoke-all, kill switch, and diagnostics/log redaction. Exercise the centralized route matrix for cookie only, cookie with absent/bad Origin, Bearer only, mixed Bearer+cookie, revoked Bearer, and every REST/WebSocket route. Verify the gateway remains loopback-only behind Serve and document that local processes are inside the host trust boundary.
-- **UI tests:** fixture mode — launch, QR and manual pairing against a stub, expected state/input combinations including a permanently read-only Claude conversation, queue → sheet → composer locks, distinct-build deep-link routing, full accessibility Dynamic Type categories, and VoiceOver labels.
+- **UI tests:** fixture mode — launch, QR and manual pairing against a stub, expected state/input combinations including a permanently read-only Claude conversation, Activity/Workspaces ordering and persistence, session card → sheet → composer locks, distinct-build deep-link routing, accessibility Dynamic Type coverage, and VoiceOver labels.
 - **Live integration:** `XCTSkip`-gated on `TOASTTY_MOBILE_LIVE_GATEWAY_URL` plus a runtime-injected paired credential. The secret is supplied through the repo's manifest-scoped secret workflow, never written into the Tuist scheme. Exercise hello/version handling, snapshot+subscribe handoff, paging, reconnect, login binding, open-socket revocation, stale-refresh rejection, and auth revocation against a real host.
 - **Script tests:** PATH-stubbed toolchain tests for `toastty-ios.mjs` and `native-device.sh` if a JS test runner is introduced; otherwise a minimal bash harness for `--dry-run` output assertions (decide in Phase 0 by effort; both EmptyOS and Plate run their script tests in CI — the pattern is proven either way).
 - **Gate integration:** extend `.agents/skills/toastty-verify/SKILL.md` with an `ios/` surface tier built on Plate's `scripts/remote/` pattern: baseline = `toastty-ios.mjs test` (+ `tuist generate` freshness), remote = disposable-worktree simulator tests on the remote Mac with artifact copy-back, user-surface = simulator screenshot pass or live phone check; handoff reports state simulator vs device vs fixture.
 - **CI/build:** the GitHub workflow and local verify skill serve different roles. CI continuously runs both graphs (including Swift tests — the EmptyOS gap) for shared protocol changes; toastty-verify selects proportional local/remote/user-surface checks for a concrete change. Avoid configuring a path-filtered job as a required check unless it reports a neutral result on out-of-scope PRs.
 - **Performance:** keep the 5k domain and device budgets above as repeatable tests with reference hardware/tool versions; add huge-message expansion and scroll-position restoration cases.
-- **Cross-target contract:** entry-gate host encoders generate the checked-in baseline fixtures. The extracted macOS graph must reproduce them; iOS decodes them through its compatibility layer. Client-authored forward-compat fixtures are intentionally not decoded by the strict host models and ensure an older phone ignores optional growth or fails closed at the narrow affected operation rather than dropping unrelated state.
+- **Cross-target contract:** entry-gate host encoders generate the checked-in baseline fixtures. The extracted macOS graph must reproduce them; iOS decodes them through its compatibility layer. Additive presentation status/detail fields are omitted when absent so the frozen baseline remains byte-identical. Client-authored forward-compat fixtures ensure an older phone ignores optional growth or fails closed at the narrow affected operation rather than dropping unrelated state.
 
 ## Edge cases
 
@@ -242,7 +242,7 @@ Covered by the host as implemented (client renders them): `resnapshotRequired` (
 
 - The gateway, projection, parsers, and input coordinator already exist on `feat/mobile-remote-access`; this plan does not re-own them. Mac surfaces this plan modifies: root `Project.swift` gains the `RemoteProtocol` target and the extraction moves ~wire-subset files out of `Sources/Core/RemoteAccess/` (import churn across Core/App/tests); the `AgentKind` value type splits from host resolver behavior; the device-summary mapping stays host-side; `Sources/App/RemoteAccess/` gains native pairing offers, centralized cookie/Bearer auth, additive legacy-safe device storage, scope updates, audit, active-stream revocation, and the optional summary preview field; the minimal hello lands at the entry gate; Remote Access preferences gains the QR/fallback-code UI; the first CI workflow covers both graphs; `toastty-verify`, AGENTS.md, CLAUDE.md, and build/release docs gain the iOS tier.
 - Add `docs/cleanup.md`-style entries when Phase 5 lands: decide v0 web client lifetime; remove any fixture data that duplicates the compatibility baseline.
-- The Scratchpad prototypes (three concepts + merged) are design references only. The merged prototype must be copied to a durable repo path before implementation; its copy strings then move into the app as the single source for composer-gate copy.
+- The Scratchpad prototypes are design references only. The merged navigation prototype lives at `docs/design/toastty-mobile-merged.html`; the accepted home-card and Activity/Workspaces refinement lives at `docs/design/toastty-mobile-home-affordances.html`. App copy and behavior, not an ephemeral Scratchpad document, are the shipped source of truth.
 
 ## Over-engineering self-review
 
@@ -276,9 +276,9 @@ Cut from earlier drafts: early native implementation before web evidence; a clie
   - [x] 1.6 Root Project.swift target/dependencies/tests + dual-graph green
   - [x] 1.7 5k domain performance budget and evidence
 - [ ] Phase 2 — Native pairing + read-only app over Tailscale
-  - [x] 2.1 Host: native pairing offer (read+send grant), QR/fallback UI, exchange, additive legacy-safe Tailscale-login storage, centralized cookie/Bearer auth matrix, scope/revoke/audit, optional pending-interaction preview
+  - [x] 2.1 Host: native pairing offer (read+send grant), QR/fallback UI, exchange, additive legacy-safe Tailscale-login storage, centralized cookie/Bearer auth matrix, scope/revoke/audit, optional pending-interaction and status-detail previews
   - [x] 2.2 Client in-app QR scan + manual fallback + confirmation + Keychain
-  - [x] 2.3 Home: desktop-aligned ready/approval queues + workspace cards + classified connection lifecycle
+  - [x] 2.3 Home: desktop-aligned Activity triage + grouped Workspaces modes + classified connection lifecycle
   - [x] 2.4 Workspace and Settings screens + unpair
   - [ ] 2.5 Legacy store migration + auth/security/UI tests + real-phone read-only validation
 - [ ] Phase 3 — Transcript chat
@@ -300,7 +300,7 @@ Cut from earlier drafts: early native implementation before web evidence; a clie
 ## Relevant files
 
 - Design doc: `toastty-mobile-design.md` (session scratchpad; revised 2026-08-06 — note its "new devices start read-only / per-session writes opt-in" posture predates the host's default-on change in `2e8e16db`)
-- Merged UI prototype: `docs/design/toastty-mobile-merged.html` (durable design reference copied from the former ephemeral Scratchpad HTML before Phase 0 implementation)
+- UI prototypes: `docs/design/toastty-mobile-merged.html` (navigation and conversation shell) and `docs/design/toastty-mobile-home-affordances.html` (accepted home ordering and shared session-card refinement)
 - Host contract (implemented, on `feat/mobile-remote-access`): `Sources/Core/RemoteAccess/` (wire types to extract), `Sources/App/RemoteAccess/` (gateway/service/settings — gains the native pairing slice + QR UI), `Sources/App/Resources/RemoteWebClient/app.js` (reference client), `Sources/Core/Sessions/AgentKind.swift`, root `Project.swift`, and the new `.github/workflows/` iOS/mac contract gate
 - Decision artifacts: `artifacts/reviews/mobile-ios-branch-strategy.txt` (stacked-branch proposal), `artifacts/reviews/mobile-roadmap-decision.txt` (next host slice; pending live-phone E2E)
 - EmptyOS reference roots: `/Users/vishal/GiantThings/repos/emptyos/ios/` (app + scripts), `docs/plans/native-ios-client-parity.md` (plan format; 1k-line architecture record), `docs/deferred.md`

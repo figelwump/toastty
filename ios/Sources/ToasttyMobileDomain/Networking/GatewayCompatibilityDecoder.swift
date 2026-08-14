@@ -129,6 +129,7 @@ public struct GatewayCompatibilityDecoder: Sendable {
             title: try object.requiredString("title"),
             placement: placement,
             cwd: try object.optionalString("cwd"),
+            statusDetail: object.lossyString("statusDetail"),
             state: decodeDisplayState(try object.requiredString("state")),
             presentationStatus: decodePresentationStatus(
                 try object.optionalString("presentationStatus")
@@ -376,6 +377,13 @@ private struct JSONObject {
     func lossyObject(_ key: String) -> JSONObject? {
         guard let object = storage[key] as? [String: Any] else { return nil }
         return JSONObject(object)
+    }
+
+    /// Optional additive display copy should never make the authoritative
+    /// session facts unusable when an older or future host omits it or changes
+    /// its representation.
+    func lossyString(_ key: String) -> String? {
+        storage[key] as? String
     }
 
     func requiredArray(_ key: String) throws -> [JSONObject] {

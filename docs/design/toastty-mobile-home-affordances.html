@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home Screen Affordances</title>
+<style>
+  :root {
+    --page: #f6f5f2;
+    --ink: #1b1a18;
+    --ink-soft: #5f5b54;
+    --rule: #dcd8d0;
+    --accent: #a4620a;
+
+    --bg: #101214;
+    --raised: #181b1e;
+    --elevated: #1b1f22;
+    --border: #23272b;
+    --divider: #1f2327;
+    --primary-text: #e8e6e1;
+    --secondary-text: #b8b4ac;
+    --muted-text: #928d85;
+
+    --ready: #5ba08a;
+    --ready-bg: rgba(91,160,138,0.13);
+    --ready-border: rgba(91,160,138,0.34);
+    --approval: #e8a635;
+    --approval-bg: rgba(232,166,53,0.14);
+    --approval-border: rgba(232,166,53,0.34);
+    --error: #e55c5c;
+    --error-bg: rgba(229,92,92,0.13);
+    --error-border: rgba(229,92,92,0.32);
+    --spinner: #f5a623;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0; padding: 40px 32px 60px;
+    background: var(--page); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 6px; }
+  .lede { margin: 0 0 34px; color: var(--ink-soft); max-width: 68ch; }
+
+  .columns { display: flex; flex-wrap: wrap; gap: 44px 56px; align-items: flex-start; }
+  .col { flex: 1 1 300px; min-width: 300px; max-width: 380px; }
+
+  .col-label {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-soft); padding-bottom: 8px;
+    border-bottom: 1px solid var(--rule); margin-bottom: 18px;
+  }
+  .col-label b { color: var(--accent); font-weight: 600; }
+
+  /* ---- device surface ---- */
+  .screen {
+    background: var(--bg); border-radius: 18px; padding: 14px; position: relative;
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+
+  .seg {
+    display: flex; gap: 2px; padding: 2px; margin-bottom: 12px;
+    background: var(--raised); border: 1px solid var(--border); border-radius: 9px;
+  }
+  .seg span {
+    flex: 1; text-align: center; padding: 6px 0; border-radius: 7px;
+    font: 600 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.06em; color: var(--muted-text);
+  }
+  .seg span.on { background: var(--elevated); color: var(--primary-text); box-shadow: inset 0 0 0 1px var(--border); }
+
+  /* right padding matches the card's 12px inset + 1px border so the
+     header chevron sits on the same vertical line as every card chevron */
+  .group-head { display: flex; align-items: baseline; gap: 8px; padding: 6px 13px 8px; }
+  .group-title { font-size: 14px; font-weight: 600; color: var(--primary-text); letter-spacing: -0.01em; }
+  .group-count { font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted-text); }
+  .group-head .chev { align-self: center; }
+
+  /* ---- session cards ---- */
+  .card {
+    background: var(--raised); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 12px;
+  }
+  .card + .card { margin-top: 8px; }
+  .card.ready { background: var(--ready-bg); border-color: var(--ready-border); }
+  .card.approval { background: var(--approval-bg); border-color: var(--approval-border); }
+  .card.error { background: var(--error-bg); border-color: var(--error-border); }
+  .card.pressed { background: var(--elevated); }
+
+  .c-head { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.ready { background: var(--ready); }
+  .dot.approval { background: var(--approval); }
+  .dot.error { background: var(--error); }
+
+  .badge { font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; flex: none; }
+  .badge.ready { color: var(--ready); }
+  .badge.approval { color: var(--approval); }
+  .badge.error { color: var(--error); }
+  .badge.working { color: var(--spinner); }
+
+  /* workspace name now owns the top-right slot */
+  .wsname {
+    font: 600 11px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    color: var(--secondary-text); flex: 0 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .c-body {
+    font-size: 13px; line-height: 1.4; color: var(--primary-text);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .c-body.italic { font-style: italic; color: var(--secondary-text); }
+  .c-body.quiet { color: var(--secondary-text); }
+
+  .c-meta {
+    margin-top: 3px;
+    font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted-text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .c-meta .ag { color: var(--secondary-text); font-weight: 600; }
+
+  .card.quiet-card .c-line { display: flex; align-items: flex-start; gap: 8px; }
+
+  .chev { color: var(--muted-text); font-size: 11px; line-height: 1; flex: none; }
+  .grow { flex: 1; min-width: 0; }
+
+  .spin { width: 10px; height: 10px; animation: rot 0.9s linear infinite; display: block; flex: none; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  .ghost-note { font-size: 11px; color: var(--ink-soft); margin-top: 12px; font-style: italic; }
+  .ghost-note code { font-size: 11px; }
+
+  .mark {
+    position: absolute; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 3px var(--page);
+  }
+
+  .legend { margin-top: 40px; border-top: 1px solid var(--rule); padding-top: 24px;
+    display: flex; flex-wrap: wrap; gap: 28px 48px; }
+  .legend-col { flex: 1 1 380px; min-width: 300px; }
+  .legend h2 {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-soft); font-weight: 600; margin: 0 0 14px;
+  }
+  ol.items { margin: 0; padding: 0; list-style: none; counter-reset: n; }
+  ol.items li { position: relative; padding-left: 30px; margin-bottom: 13px; counter-increment: n; }
+  ol.items li::before {
+    content: counter(n); position: absolute; left: 0; top: 1px;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  ul.minor { margin: 0; padding: 0; list-style: none; }
+  ul.minor li { padding-left: 16px; position: relative; margin-bottom: 11px; }
+  ul.minor li::before {
+    content: ""; position: absolute; left: 0; top: 9px;
+    width: 5px; height: 5px; border-radius: 50%; background: var(--rule);
+    box-shadow: inset 0 0 0 1px var(--ink-soft);
+  }
+  .items b, ul.minor b { font-weight: 600; }
+  .items span, ul.minor span { color: var(--ink-soft); }
+  code { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-soft); }
+
+  .order {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin: 4px 0 18px; font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .order i { font-style: normal; color: var(--ink-soft); }
+  .order b { font-weight: 600; padding: 5px 9px; border-radius: 999px; background: #efece5; border: 1px solid var(--rule); }
+  .order b.e { color: #b23b3b; }
+  .order b.r { color: #3d7d68; }
+  .order b.a { color: #9a6d12; }
+  .order b.w { color: #9a6d12; }
+  .order b.i { color: var(--ink-soft); }
+
+  .finding {
+    margin-top: 14px; padding: 14px 16px; border-left: 3px solid var(--accent);
+    background: #efece5; font-size: 14px; color: var(--ink-soft);
+  }
+  .finding b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Two sorts, one card</h1>
+  <p class="lede">The card mirrors the desktop sidebar row: no invented title, the most recent message as the body, path and age beneath. The workspace name now owns the top-right slot; the agent moves down to the metadata line.</p>
+
+  <div class="order">
+    <i>Activity order:</i>
+    <b class="e">error</b><i>→</i><b class="r">ready</b><i>→</i><b class="a">approval</b><i>→</i><b class="w">working</b><i>→</i><b class="i">idle, most recent first</b>
+  </div>
+
+  <div class="columns">
+
+    <!-- ACTIVITY -->
+    <div class="col">
+      <div class="col-label"><b>Activity</b> — default</div>
+      <div class="screen">
+        <div class="mark" style="top:8px; right:-15px;">1</div>
+        <div class="mark" style="top:56px; right:-15px;">2</div>
+        <div class="mark" style="top:112px; left:-15px;">3</div>
+        <div class="mark" style="top:300px; left:-15px;">4</div>
+
+        <div class="seg"><span class="on">ACTIVITY</span><span>WORKSPACES</span></div>
+
+        <div class="card error">
+          <div class="c-head">
+            <span class="dot error"></span>
+            <span class="badge error">error</span>
+            <span class="grow"></span>
+            <span class="wsname">ghostty</span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-body">Build failed: GhosttyKit.xcframework missing from Dependencies/</div>
+          <div class="c-meta"><span class="ag">claude</span> · ~/repos/ghostty · 26m ago</div>
+        </div>
+
+        <div class="card ready">
+          <div class="c-head">
+            <span class="dot ready"></span>
+            <span class="badge ready">ready</span>
+            <span class="grow"></span>
+            <span class="wsname">toastty</span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-body">Transcript states are fixed and the composer clears after send. Want me to run the remote suite before committing?</div>
+          <div class="c-meta"><span class="ag">claude</span> · ~/repos/toastty · 2m ago</div>
+        </div>
+
+        <div class="card approval">
+          <div class="c-head">
+            <span class="dot approval"></span>
+            <span class="badge approval">approval</span>
+            <span class="grow"></span>
+            <span class="wsname">toastty-mobile</span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-body">Allow codex to run scripts/remote/test.sh --platform ios --scope working-tree?</div>
+          <div class="c-meta"><span class="ag">codex</span> · ~/repos/toastty-mobile · 3m ago</div>
+        </div>
+
+        <div class="card">
+          <div class="c-head">
+            <svg class="spin" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.3" fill="none" stroke="#f5a623"
+                      stroke-width="2.8" stroke-linecap="round"
+                      stroke-dasharray="29.3 10.3"></circle>
+            </svg>
+            <span class="badge working">working</span>
+            <span class="grow"></span>
+            <span class="wsname">toastty-mobile</span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-body italic">Reviewing the iOS diff</div>
+          <div class="c-meta"><span class="ag">codex</span> · ~/repos/toastty-mobile · 4m ago</div>
+        </div>
+
+        <div class="card quiet-card">
+          <div class="c-line">
+            <span class="c-body quiet grow">Fixed mobile composer status</span>
+            <span class="wsname">emptyos</span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-meta"><span class="ag">claude</span> · ~/repos/emptyos · 12m ago</div>
+        </div>
+      </div>
+      <div class="ghost-note">Workspace name reads as the card's owner in the top-right; agent identity drops to the meta line beside path and age.</div>
+    </div>
+
+    <!-- WORKSPACES -->
+    <div class="col">
+      <div class="col-label">Workspaces</div>
+      <div class="screen">
+        <div class="mark" style="top:56px; left:-15px;">5</div>
+
+        <div class="seg"><span>ACTIVITY</span><span class="on">WORKSPACES</span></div>
+
+        <div class="group-head">
+          <span class="group-title">toastty</span>
+          <span class="group-count">2 sessions</span>
+          <span class="grow"></span>
+          <span class="chev">›</span>
+        </div>
+
+        <div class="card ready">
+          <div class="c-head">
+            <span class="dot ready"></span>
+            <span class="badge ready">ready</span>
+            <span class="grow"></span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-body">Transcript states are fixed and the composer clears after send. Want me to run the remote suite before committing?</div>
+          <div class="c-meta"><span class="ag">claude</span> · ~/repos/toastty · 2m ago</div>
+        </div>
+
+        <div class="card quiet-card">
+          <div class="c-line">
+            <span class="c-body quiet grow">Fixed mobile composer status</span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-meta"><span class="ag">claude</span> · ~/repos/toastty · 1h ago</div>
+        </div>
+
+        <div class="group-head" style="margin-top:12px">
+          <span class="group-title">toastty-mobile</span>
+          <span class="group-count">2 sessions</span>
+          <span class="grow"></span>
+          <span class="chev">›</span>
+        </div>
+
+        <div class="card approval">
+          <div class="c-head">
+            <span class="dot approval"></span>
+            <span class="badge approval">approval</span>
+            <span class="grow"></span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-body">Allow codex to run scripts/remote/test.sh --platform ios --scope working-tree?</div>
+          <div class="c-meta"><span class="ag">codex</span> · ~/repos/toastty-mobile · 3m ago</div>
+        </div>
+
+        <div class="card">
+          <div class="c-head">
+            <svg class="spin" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.3" fill="none" stroke="#f5a623"
+                      stroke-width="2.8" stroke-linecap="round"
+                      stroke-dasharray="29.3 10.3"></circle>
+            </svg>
+            <span class="badge working">working</span>
+            <span class="grow"></span>
+            <span class="chev">›</span>
+          </div>
+          <div class="c-body italic">Reviewing the iOS diff</div>
+          <div class="c-meta"><span class="ag">codex</span> · ~/repos/toastty-mobile · 4m ago</div>
+        </div>
+      </div>
+      <div class="ghost-note">Grouped, the top-right slot empties — the group header already names the workspace.</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-col">
+      <h2>Changes this round</h2>
+      <ol class="items">
+        <li><b>Workspace takes the top-right slot.</b> <span>Where the agent name sat. It reads at body size in <code>secondaryText</code>, truncating at 46% of the card so a long workspace name can't crowd the badge.</span></li>
+        <li><b>Agent drops to the meta line.</b> <span><code>claude · ~/repos/toastty · 2m ago</code> — still present, still colorless, just no longer competing with status for the eye.</span></li>
+        <li><b>Sort toggle.</b> <span>Two segments under the connection line. Activity is the default; the choice persists in <code>@AppStorage</code>.</span></li>
+        <li><b>No title, message as body.</b> <span>Mirrors <code>SidebarView</code>: status leads, the latest message or approval request is the body clamped to two lines, then the metadata.</span></li>
+        <li><b>Working keeps its word,</b> <span>and approval has no special quote treatment — the request is simply the body.</span></li>
+      </ol>
+    </div>
+    <div class="legend-col">
+      <h2>How the two views differ</h2>
+      <ul class="minor">
+        <li><b>Activity</b> <span>flattens every workspace into one ranked list, and each card names its workspace top-right. Solves the "urgent item scrolled out of sight" problem without a pinned section.</span></li>
+        <li><b>Workspaces</b> <span>keeps group headers, empties the top-right slot, and sorts groups by their most urgent member.</span></li>
+        <li><b>One card component</b> <span>serves both, with a <code>showsWorkspace</code> flag and a compact idle variant.</span></li>
+        <li><b>Sections stay deleted.</b> <span>The activity sort is the triage surface now, so nothing renders twice in either mode.</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="finding">
+    <b>Two calls I made inside your ordering:</b> working sits between approval and idle — it is informational, not actionable, but it is live, so burying it under idle felt wrong. And within every bucket, most recent first. Say if you'd rather working sort last.
+  </div>
+
+  <div class="finding">
+    <b>Where the desktop model needs checking:</b> the sidebar's body text is <code>status.detail</code> — the live message stream. The mobile snapshot currently only carries <code>lastActivity</code>, which for non-idle sessions is the <em>input reason</em> ("Ready for your reply"), not the message. Making the card read like the sidebar means sending a real message excerpt over the wire, so this one is a protocol change, not just a view change.
+  </div>
+
+</div>
+</body>
+</html>
