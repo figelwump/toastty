@@ -272,6 +272,8 @@ struct ToasttyMobileRootView: View {
                 for: conversationID,
                 hasLoadedOlder: fixtureHasLoadedOlderTranscript
             )
+        case .toolActivity:
+            return ToasttyConversationFixture.toolActivityPresentation(for: conversationID)
         case .gatedSend, .gatedSendReceipt:
             return ToasttyConversationFixture.gatedSendPresentation(
                 for: conversationID,

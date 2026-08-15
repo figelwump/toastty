@@ -11,6 +11,7 @@ enum ToasttyMobileFixtureScenario: String, Equatable, Sendable {
     case transcriptStale = "transcript-stale"
     case transcriptTruncated = "transcript-truncated"
     case transcriptPaging = "transcript-paging"
+    case toolActivity = "tool-activity"
     case gatedSend = "gated-send"
     case gatedSendReceipt = "gated-send-receipt"
     case unpaired
@@ -71,7 +72,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
         switch fixtureScenario {
         case .home, .transcriptPerformance, .transcriptResyncing,
              .transcriptStale, .transcriptTruncated, .transcriptPaging,
-             .gatedSend, .gatedSendReceipt:
+             .toolActivity, .gatedSend, .gatedSendReceipt:
             .live
         case .reconnecting:
             .reconnecting
@@ -93,7 +94,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 scanner = FixturePairingScanner(availability: .unsupported)
             case .home, .reconnecting, .transcriptPerformance, .transcriptResyncing,
                  .transcriptStale, .transcriptTruncated, .transcriptPaging,
-                 .gatedSend, .gatedSendReceipt,
+                 .toolActivity, .gatedSend, .gatedSendReceipt,
                  .unpaired, .pairingFailure, .pairingPrivacy:
                 scanner = FixturePairingScanner()
             }
@@ -101,7 +102,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             switch fixtureScenario {
             case .home, .reconnecting, .transcriptPerformance, .transcriptResyncing,
                  .transcriptStale, .transcriptTruncated, .transcriptPaging,
-                 .gatedSend, .gatedSendReceipt:
+                 .toolActivity, .gatedSend, .gatedSendReceipt:
                 usesPairedFixture = true
             case .unpaired, .cameraDenied, .scannerUnsupported,
                  .pairingFailure, .pairingPrivacy:

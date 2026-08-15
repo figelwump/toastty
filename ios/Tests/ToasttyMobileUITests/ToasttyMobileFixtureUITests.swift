@@ -282,11 +282,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             )
         }
         let toolDisclosure = app.buttons["toastty-mobile-transcript-tool-4"]
-        XCTAssertTrue(toolDisclosure.exists)
+        XCTAssertTrue(scrollToNewer(toolDisclosure, in: app))
         XCTAssertTrue(toolDisclosure.label.contains("1 tool call"))
-        toolDisclosure.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-transcript-row-4"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-transcript-row-5"].exists)
 
         let interaction = app.descendants(matching: .any)["toastty-mobile-readonly-interaction"]
         XCTAssertTrue(scrollToNewer(interaction, in: app))
@@ -294,6 +291,34 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Canary"].exists)
         XCTAssertFalse(app.buttons["All workspaces"].exists)
         attachScreenshot(named: "fixture-transcript-event-kinds", of: app)
+    }
+
+    func testFixtureToolCardPresentsDetailsInSheet() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "tool-activity"]
+        )
+        openFixtureConversation(in: app)
+        let toolDisclosure = app.buttons["toastty-mobile-transcript-tool-4"]
+        XCTAssertTrue(toolDisclosure.waitForExistence(timeout: 5))
+        XCTAssertTrue(toolDisclosure.isHittable)
+        XCTAssertTrue(toolDisclosure.label.contains("1 tool call"))
+
+        toolDisclosure.tap()
+
+        let dismissToolSheet = app.buttons["toastty-mobile-tool-activity-done"]
+        XCTAssertTrue(dismissToolSheet.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.sheets.firstMatch.exists)
+        let toolStarted = app.descendants(matching: .any)["toastty-mobile-transcript-row-4"]
+        let toolFinished = app.descendants(matching: .any)["toastty-mobile-transcript-row-5"]
+        XCTAssertTrue(toolStarted.waitForExistence(timeout: 5))
+        XCTAssertTrue(toolStarted.label.contains("Read · running"))
+        XCTAssertTrue(toolFinished.waitForExistence(timeout: 5))
+        XCTAssertTrue(toolFinished.label.contains("Read · succeeded"))
+        attachScreenshot(named: "fixture-tool-activity-sheet", of: app)
+        XCTAssertTrue(dismissToolSheet.isHittable)
+        dismissToolSheet.tap()
+        XCTAssertTrue(dismissToolSheet.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(toolDisclosure.waitForExistence(timeout: 5))
     }
 
     func testSlowReaderKeepsPositionAndCanJumpBackToLiveTail() {

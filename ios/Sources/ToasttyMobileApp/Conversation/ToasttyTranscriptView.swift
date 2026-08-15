@@ -11,7 +11,7 @@ struct ToasttyTranscriptView: View {
     let readAcknowledgementEpoch: MobileSessionStatus?
     let onVisibleLiveEdge: () -> Void
 
-    @State private var expandedToolBatchIDs: Set<ToasttyTranscriptRowID> = []
+    @State private var selectedToolBatch: ToasttyToolBatchSelection?
     @State private var expandedSubagentIDs: Set<ToasttyTranscriptRowID> = []
     @State private var isAtLiveEdge = true
     @State private var hasMeasuredScrollGeometry = false
@@ -185,6 +185,9 @@ struct ToasttyTranscriptView: View {
             .background(ToasttyDesignTokens.background)
             .onAppear { isVisible = true }
             .onDisappear { isVisible = false }
+            .sheet(item: $selectedToolBatch) { selection in
+                ToasttyToolActivitySheet(rows: toolRows(for: selection.id))
+            }
         }
     }
 
@@ -266,12 +269,23 @@ struct ToasttyTranscriptView: View {
                 toggleSubagentExpansion: { toggle(row.id, in: &expandedSubagentIDs) }
             )
         case .toolBatch(let rows):
-            ToasttyToolBatchView(
+            ToasttyToolBatchCard(
+                blockID: block.id,
                 rows: rows,
-                isExpanded: expandedToolBatchIDs.contains(block.id),
-                toggleExpansion: { toggle(block.id, in: &expandedToolBatchIDs) }
+                showDetails: {
+                    selectedToolBatch = ToasttyToolBatchSelection(id: block.id)
+                }
             )
         }
+    }
+
+    private func toolRows(for id: ToasttyTranscriptRowID) -> [ToasttyTranscriptRow] {
+        guard let block = state.blocks.first(where: { $0.id == id }),
+              case .toolBatch(let rows) = block.content
+        else {
+            return []
+        }
+        return rows
     }
 
     private var scrollChangeKey: ScrollChangeKey {
@@ -809,56 +823,6 @@ struct ToasttyMarkdownBlock: Identifiable {
     let style: Style
 }
 
-private struct ToasttyToolBatchView: View {
-    let rows: [ToasttyTranscriptRow]
-    let isExpanded: Bool
-    let toggleExpansion: () -> Void
-
-    private var callCount: Int {
-        Set(rows.compactMap(\.toolCallID)).count
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Button(action: toggleExpansion) {
-                HStack(spacing: 7) {
-                    Text(isExpanded ? "▾" : "▸")
-                    Text(callCount == 1 ? "1 tool call" : "\(callCount) tool calls")
-                    Spacer(minLength: 4)
-                }
-                .font(.caption.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("toastty-mobile-transcript-tool-\(rows[0].id.accessibilitySuffix)")
-
-            if isExpanded {
-                ForEach(rows) { row in
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Image(systemName: row.toolIcon)
-                            .foregroundStyle(row.toolColor)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(row.toolSummary)
-                                .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                            if let detail = row.toolDetail, detail.isEmpty == false {
-                                Text(detail)
-                                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                                    .lineLimit(6)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                    }
-                    .font(.caption2.monospaced())
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)")
-                }
-            }
-        }
-    }
-}
-
 private struct ToasttyInteractionCard: View {
     let interaction: RemotePendingInteraction
 
@@ -945,46 +909,6 @@ private struct ToasttyInteractionCard: View {
         case .pending: ToasttyDesignTokens.amberText
         case .resolved: ToasttyDesignTokens.green
         case .superseded: ToasttyDesignTokens.mutedText
-        }
-    }
-}
-
-private extension ToasttyTranscriptRow {
-    var toolCallID: String? {
-        switch content {
-        case .toolStarted(let callID, _, _), .toolFinished(let callID, _, _, _): callID
-        default: nil
-        }
-    }
-
-    var toolSummary: String {
-        switch content {
-        case .toolStarted(_, let name, _): "\(name) · running"
-        case .toolFinished(_, let name, let outcome, _): "\(name) · \(outcome.rawValue)"
-        default: "Tool activity"
-        }
-    }
-
-    var toolDetail: String? {
-        switch content {
-        case .toolStarted(_, _, let detail), .toolFinished(_, _, _, let detail): detail
-        default: nil
-        }
-    }
-
-    var toolIcon: String {
-        switch content {
-        case .toolStarted: "play.circle"
-        case .toolFinished(_, _, let outcome, _): outcome == .failed ? "xmark.circle" : "checkmark.circle"
-        default: "wrench"
-        }
-    }
-
-    var toolColor: Color {
-        switch content {
-        case .toolFinished(_, _, .failed, _): ToasttyDesignTokens.red
-        case .toolFinished(_, _, .succeeded, _): ToasttyDesignTokens.green
-        default: ToasttyDesignTokens.mutedText
         }
     }
 }

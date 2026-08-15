@@ -173,6 +173,18 @@ enum ToasttyConversationFixture {
         )
     }
 
+    static func toolActivityPresentation(
+        for conversationID: UUID
+    ) -> ToasttyConversationPresentationState {
+        let fixture = presentation(for: conversationID)
+        return ToasttyConversationPresentationState(
+            rows: fixture.rows.filter { [4, 5].contains($0.id.sequence) },
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+
     static func truncatedPresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {
