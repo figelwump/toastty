@@ -359,21 +359,10 @@ struct ToasttySessionCard: View {
     }
 
     private var activityDestination: some View {
-        HStack(spacing: 8) {
-            if showsWorkspace {
-                Text(conversation.workspaceTitle)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 160, alignment: .trailing)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .accessibilityHidden(true)
-        }
+        Image(systemName: "chevron.right")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(ToasttyDesignTokens.mutedText)
+            .accessibilityHidden(true)
     }
 
     private var activityBody: some View {
@@ -396,16 +385,39 @@ struct ToasttySessionCard: View {
 
     private var metadata: some View {
         TimelineView(.periodic(from: .now, by: 60)) { _ in
-            Text(metadataLabel)
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                if let workspaceLabel {
+                    Text(workspaceLabel)
+                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if !trailingMetadataLabel.isEmpty {
+                        Text("·")
+                            .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    }
+                }
+                if !trailingMetadataLabel.isEmpty {
+                    // Wins the width fight so a long workspace name squeezes
+                    // before cwd/agent/age disappear.
+                    Text(trailingMetadataLabel)
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
+                }
+            }
+            .font(.caption2.monospaced())
         }
     }
 
-    private var metadataLabel: String {
-        [conversation.agent.displayName, conversation.abbreviatedCWD, conversation.displayAge]
+    private var workspaceLabel: String? {
+        guard showsWorkspace else { return nil }
+        let title = conversation.workspaceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? nil : title
+    }
+
+    private var trailingMetadataLabel: String {
+        [conversation.abbreviatedCWD, conversation.agent.displayName, conversation.displayAge]
             .compactMap { value in
                 guard let value, !value.isEmpty else { return nil }
                 return value
