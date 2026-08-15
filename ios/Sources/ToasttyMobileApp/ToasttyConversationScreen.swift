@@ -1,7 +1,7 @@
 import SwiftUI
 import ToasttyMobileDomain
 
-struct ToasttyConversationSheet: View {
+struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @FocusState private var isComposerFocused: Bool
     @State private var hasHandledComposerFocusRequest = false
@@ -17,7 +17,6 @@ struct ToasttyConversationSheet: View {
     let submitDraft: () -> Void
     let dismissSendReceipt: (String) -> Void
     let onVisibleLiveEdge: (MobileSessionStatus) -> Void
-    let onDismiss: () -> Void
 
     init(
         conversationID: UUID,
@@ -30,8 +29,7 @@ struct ToasttyConversationSheet: View {
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
-        onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in },
-        onDismiss: @escaping () -> Void
+        onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in }
     ) {
         self.conversationID = conversationID
         self.requestsComposerFocus = requestsComposerFocus
@@ -44,7 +42,6 @@ struct ToasttyConversationSheet: View {
         self.submitDraft = submitDraft
         self.dismissSendReceipt = dismissSendReceipt
         self.onVisibleLiveEdge = onVisibleLiveEdge
-        self.onDismiss = onDismiss
     }
 
     var body: some View {
@@ -75,9 +72,15 @@ struct ToasttyConversationSheet: View {
             }
         }
         .background(ToasttyDesignTokens.elevatedSurface)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)
         .task(id: composerFocusIsReady) {
             guard composerFocusIsReady, !hasHandledComposerFocusRequest else { return }
-            try? await Task.sleep(for: .milliseconds(150))
+            // A focus request during the push transition is dropped by
+            // SwiftUI, so wait out the navigation animation first.
+            try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
             hasHandledComposerFocusRequest = true
             isComposerFocused = true
@@ -99,65 +102,33 @@ struct ToasttyConversationSheet: View {
     }
 
     private func header(_ conversation: MobileConversation) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .top) {
-                Text(conversation.title)
-                    .font(.headline)
-                    .foregroundStyle(ToasttyDesignTokens.primaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityIdentifier("toastty-mobile-conversation-title")
-                Spacer(minLength: 12)
-                closeButton
-            }
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 6) {
-                    conversationMetadata(conversation)
-                }
-                compactConversationMetadata(conversation)
-            }
-            .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.mutedText)
+        // Mirrors the home session card hierarchy: status badge on top,
+        // prominent title, then a single muted metadata line.
+        VStack(alignment: .leading, spacing: 6) {
+            ToasttySessionStatusLabel(bucket: conversation.state.bucket)
+            Text(conversation.title)
+                .font(.headline)
+                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("toastty-mobile-conversation-title")
+            Text(headerMetadata(conversation))
+                .font(.caption2.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .padding(.top, dynamicTypeSize.isAccessibilitySize ? 32 : 12)
         .overlay(alignment: .bottom) { Divider().overlay(ToasttyDesignTokens.divider) }
     }
 
-    private var closeButton: some View {
-        Button(action: onDismiss) {
-            Image(systemName: "xmark")
-                .font(.caption.weight(.bold))
-                .frame(width: 48, height: 48)
-                .background(ToasttyDesignTokens.border, in: Circle())
-        }
-        .buttonStyle(.plain)
-        .frame(minWidth: 48, minHeight: 48)
-        .fixedSize(horizontal: true, vertical: true)
-        .contentShape(Rectangle())
-        .foregroundStyle(ToasttyDesignTokens.secondaryText)
-        .accessibilityLabel("Close conversation")
-        .accessibilityIdentifier("toastty-mobile-conversation-close")
-    }
-
-    @ViewBuilder
-    private func conversationMetadata(_ conversation: MobileConversation) -> some View {
-        Text(conversation.workspaceTitle)
-        Text("·")
-        Text(conversation.agent.displayName)
-        Text("·")
-        ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
-    }
-
-    private func compactConversationMetadata(_ conversation: MobileConversation) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("\(conversation.workspaceTitle) · \(conversation.agent.displayName)")
-                .fixedSize(horizontal: false, vertical: true)
-            ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
-        }
+    private func headerMetadata(_ conversation: MobileConversation) -> String {
+        [conversation.workspaceTitle, conversation.agent.displayName]
+            .filter { $0.isEmpty == false }
+            .joined(separator: " · ")
     }
 
     private func composerBar(_ conversation: MobileConversation) -> some View {

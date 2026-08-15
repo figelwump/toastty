@@ -47,7 +47,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertLessThan(
             conversationTitle.frame.minY,
             app.frame.height * 0.2,
-            "The default large conversation sheet should place its header near the top of the screen"
+            "The pushed conversation screen should place its header near the top of the screen"
         )
         XCTAssertFalse(app.keyboards.firstMatch.waitForExistence(timeout: 1))
 
@@ -61,11 +61,18 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Approve"].exists)
         XCTAssertFalse(app.buttons["Deny"].exists)
         XCTAssertFalse(app.staticTexts["Reply shortcut preview — sending arrives in the gated-send milestone"].exists)
-        attachScreenshot(named: "fixture-conversation-sheet", of: app)
+        attachScreenshot(named: "fixture-conversation-screen", of: app)
 
-        let close = app.buttons["toastty-mobile-conversation-close"]
-        XCTAssertGreaterThanOrEqual(close.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(close.frame.height, 44)
+        // Popping via the navigation back button must clear the selection so
+        // tapping the same card reopens the conversation.
+        let back = app.navigationBars.firstMatch.buttons.firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        XCTAssertTrue(home.waitForExistence(timeout: 5))
+        XCTAssertTrue(conversationTitle.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(scrollHomeTo(approvalCard, in: app))
+        approvalCard.tap()
+        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
     }
 
     func testReconnectingNoticeShowsActivity() {
@@ -120,6 +127,14 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertEqual(status.label, "Agent working. Composer locked.")
         XCTAssertEqual(status.value as? String, "In progress")
         attachScreenshot(named: "fixture-conversation-working", of: app)
+
+        // A conversation pushed from a workspace pops back to that workspace,
+        // not home.
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["toastty"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists
+        )
     }
 
     func testFixtureReadyCardFocusesComposerWithoutTypingOrSending() {
@@ -487,11 +502,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(input.isHittable)
         input.typeText("Accessible send")
         let title = app.staticTexts["toastty-mobile-conversation-title"]
-        let close = app.buttons["toastty-mobile-conversation-close"]
+        let back = app.navigationBars.firstMatch.buttons.firstMatch
         attachScreenshot(named: "fixture-gated-send-accessibility-xxxl", of: app)
         XCTAssertEqual(title.label, "Changelog + tag")
         XCTAssertTrue(title.isHittable)
-        XCTAssertTrue(close.isHittable)
+        XCTAssertTrue(back.isHittable)
         let keyboardObstructionTop = topOfKeyboardObstruction(keyboard)
         XCTAssertLessThanOrEqual(
             input.frame.maxY,

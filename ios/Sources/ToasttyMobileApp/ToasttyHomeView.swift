@@ -156,7 +156,7 @@ struct ToasttyHomeView: View {
     }
 
     private func workspaceHeader(_ workspace: MobileWorkspace) -> some View {
-        NavigationLink(value: workspace.id) {
+        NavigationLink(value: ToasttyMobileRoute.workspace(workspace.id)) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(workspace.title)
@@ -354,21 +354,8 @@ struct ToasttySessionCard: View {
         }
     }
 
-    @ViewBuilder
     private var statusLabel: some View {
-        if conversation.state.bucket == .working {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(ToasttyDesignTokens.color(for: .working))
-                    .accessibilityHidden(true)
-                Text(MobileSessionBucket.working.rawValue)
-            }
-            .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.color(for: .working))
-        } else {
-            ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
-        }
+        ToasttySessionStatusLabel(bucket: conversation.state.bucket)
     }
 
     private var activityDestination: some View {

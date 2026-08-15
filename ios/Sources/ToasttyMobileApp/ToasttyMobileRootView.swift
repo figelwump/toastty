@@ -5,7 +5,7 @@ import ToasttyMobileDomain
 struct ToasttyMobileRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var sessionController: AppSessionController
-    @State private var navigationPath: [UUID] = []
+    @State private var navigationPath: [ToasttyMobileRoute] = []
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
     @State private var showsSettings = false
     @State private var fixtureHasLoadedOlderTranscript = false
@@ -104,11 +104,16 @@ struct ToasttyMobileRootView: View {
                 refresh: sessionController.refreshLiveSessions,
                 onSettings: { showsSettings = true }
             )
-                .navigationDestination(for: UUID.self) { workspaceID in
-                    ToasttyWorkspaceView(
-                        workspaceID: workspaceID,
-                        controller: sessionController.homeController
-                    )
+                .navigationDestination(for: ToasttyMobileRoute.self) { route in
+                    switch route {
+                    case .workspace(let workspaceID):
+                        ToasttyWorkspaceView(
+                            workspaceID: workspaceID,
+                            controller: sessionController.homeController
+                        )
+                    case .conversation(let conversationID):
+                        conversationScreen(for: conversationID)
+                    }
                 }
         }
         .tint(ToasttyDesignTokens.amber)
@@ -116,23 +121,22 @@ struct ToasttyMobileRootView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             PairedConnectionBanner(presentation: presentation)
         }
-        .sheet(item: selectedConversationPresentation) { selection in
-            ToasttyConversationSheet(
-                conversationID: selection.id,
-                requestsComposerFocus: selection.requestsComposerFocus,
-                controller: sessionController.homeController,
-                presentation: conversationPresentation(for: selection.id),
-                composer: conversationComposer(for: selection.id),
-                draft: conversationDraft(for: selection.id),
-                isSubmitting: composerDraftState.isSubmitting(selection.id),
-                loadOlder: conversationLoadOlderAction(for: selection.id),
-                submitDraft: conversationSubmitAction(for: selection.id),
-                dismissSendReceipt: conversationReceiptDismissAction(for: selection.id),
-                onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: selection.id),
-                onDismiss: sessionController.homeController.dismissConversation
-            )
-            .presentationDragIndicator(.visible)
-            .presentationBackground(ToasttyDesignTokens.elevatedSurface)
+        .onAppear {
+            // The stack can be (re)inserted while a selection already exists,
+            // e.g. after a keychain-lock cycle; onChange alone would miss it.
+            syncNavigationPath(with: sessionController.homeController.selectedConversationPresentation)
+        }
+        .onChange(of: sessionController.homeController.selectedConversationPresentation) { _, selection in
+            syncNavigationPath(with: selection)
+        }
+        .onChange(of: navigationPath) { _, newPath in
+            // A back swipe or back button pops the conversation route without
+            // going through the controller; mirror the pop into selection so
+            // the live conversation runtime closes.
+            if newPath.containsConversation == false,
+               sessionController.homeController.selectedConversationPresentation != nil {
+                sessionController.homeController.dismissConversation()
+            }
         }
         .sheet(isPresented: $showsSettings) {
             if let settingsPresentation {
@@ -199,7 +203,7 @@ struct ToasttyMobileRootView: View {
             }
             pendingDeepLinkDestination = nil
             sessionController.homeController.dismissConversation()
-            navigationPath = [workspaceID]
+            navigationPath = [.workspace(workspaceID)]
             showsSettings = false
         }
     }
@@ -210,10 +214,28 @@ struct ToasttyMobileRootView: View {
         }
     }
 
-    private var selectedConversationPresentation: Binding<SelectedConversationPresentation?> {
-        Binding(
-            get: { sessionController.homeController.selectedConversationPresentation },
-            set: { sessionController.homeController.selectedConversationPresentation = $0 }
+    private func syncNavigationPath(with selection: SelectedConversationPresentation?) {
+        let updated = navigationPath.synchronized(with: selection)
+        if updated != navigationPath {
+            navigationPath = updated
+        }
+    }
+
+    private func conversationScreen(for conversationID: UUID) -> some View {
+        let selection = sessionController.homeController.selectedConversationPresentation
+        return ToasttyConversationScreen(
+            conversationID: conversationID,
+            requestsComposerFocus: selection?.id == conversationID
+                && selection?.requestsComposerFocus == true,
+            controller: sessionController.homeController,
+            presentation: conversationPresentation(for: conversationID),
+            composer: conversationComposer(for: conversationID),
+            draft: conversationDraft(for: conversationID),
+            isSubmitting: composerDraftState.isSubmitting(conversationID),
+            loadOlder: conversationLoadOlderAction(for: conversationID),
+            submitDraft: conversationSubmitAction(for: conversationID),
+            dismissSendReceipt: conversationReceiptDismissAction(for: conversationID),
+            onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID)
         )
     }
 

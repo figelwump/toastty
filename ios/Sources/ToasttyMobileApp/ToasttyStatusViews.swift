@@ -56,6 +56,29 @@ struct ToasttyStatusLabel: View {
     }
 }
 
+/// Session-row status treatment: the working bucket swaps the dot for a
+/// mini spinner so in-flight sessions read as live everywhere they appear.
+struct ToasttySessionStatusLabel: View {
+    let bucket: MobileSessionBucket
+
+    @ViewBuilder
+    var body: some View {
+        if bucket == .working {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(ToasttyDesignTokens.color(for: .working))
+                    .accessibilityHidden(true)
+                Text(MobileSessionBucket.working.rawValue)
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.color(for: .working))
+        } else {
+            ToasttyStatusLabel(bucket: bucket, compact: true)
+        }
+    }
+}
+
 struct ToasttySectionTitle: View {
     let title: String
 
