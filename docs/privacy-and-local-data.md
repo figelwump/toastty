@@ -60,6 +60,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
+- `~/.toastty/hooks/agent-hook`
+  - An executable but inert, fully commented starter template that Toastty creates once and never overwrites. Toastty invokes it only when the user points the `agent-hook` config key at this path or another trusted executable.
 - `~/.toastty/skills/` (created only through `Toastty > Manage Toastty Skills…` or by the user)
   - User-authored skill packages (`<name>/SKILL.md` plus supporting files). Toastty scans this directory read-only. Anything you (or an agent acting on your request) put here becomes agent-visible instructions in managed Codex, Claude Code, OpenCode, MiMo Code, and Pi sessions, and is copied into the snapshot and cache locations below.
 - `~/.toastty/agent-plugins/codex/`
@@ -81,7 +83,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - Global and repository-local skill directories
   - Toastty does not inspect, move, remove, or back up entries under `~/.codex/skills`, `~/.claude/skills`, `~/.agents/skills`, a repository's `.agents/skills`, pi's `.pi/skills` or `$PI_CODING_AGENT_DIR/skills` (default `~/.pi/agent/skills`), or opencode/mimocode's project or home `.opencode/skills`, `.claude/skills`, `.agents/skills`, or `.mimocode/skills`. The skills sheet only provides manual guidance if separately installed copies cause duplicate entries or, for opencode/mimocode, unpredictable per-launch collisions.
 - `~/.codex/hooks.json` (updated by `Toastty > Set Up Agent Status Hooks…`)
-  - Toastty adds or updates only its own Codex hook entries while preserving unrelated hooks. Skills provisioning, repair, upgrade, and uninstall do not modify this file.
+  - Toastty adds or updates only its own Codex hook entries while preserving unrelated hooks. Skills provisioning, repair, upgrades, and manual removal do not modify this file.
 - Temporary launch artifact directories under the system temporary directory for managed agent sessions.
   - OpenCode and MiMo Code launches include a Toastty-owned per-session plugin file plus `telemetry-failures.log` when the plugin cannot deliver status events back to Toastty. The failure log records event type, session context, exit status, and CLI stderr, not full provider event payload JSON. These artifacts are removed when the managed session stops.
 - `~/.toastty/history/pane-journals/`
@@ -94,6 +96,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/config`
   - `<runtime-home>/config-reference`
   - `<runtime-home>/annotation-styles.json`
+  - `<runtime-home>/hooks/agent-hook`
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
