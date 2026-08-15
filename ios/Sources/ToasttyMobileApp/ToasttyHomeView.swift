@@ -367,6 +367,7 @@ struct ToasttySessionCard: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: 160, alignment: .trailing)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.semibold))
