@@ -47,20 +47,17 @@ struct ToasttyConversationScreen: View {
     var body: some View {
         Group {
             if let conversation = controller.conversation(id: conversationID) {
-                VStack(spacing: 0) {
-                    header(conversation)
-                    ToasttyTranscriptView(
-                        state: resolvedPresentation,
-                        loadOlder: loadOlder,
-                        dismissSendReceipt: dismissSendReceipt,
-                        readAcknowledgementEpoch: conversation.state,
-                        onVisibleLiveEdge: {
-                            onVisibleLiveEdge(conversation.state)
-                        }
-                    )
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        composerBar(conversation)
+                ToasttyTranscriptView(
+                    state: resolvedPresentation,
+                    loadOlder: loadOlder,
+                    dismissSendReceipt: dismissSendReceipt,
+                    readAcknowledgementEpoch: conversation.state,
+                    onVisibleLiveEdge: {
+                        onVisibleLiveEdge(conversation.state)
                     }
+                )
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    composerBar(conversation)
                 }
             } else {
                 ContentUnavailableView(
@@ -72,10 +69,16 @@ struct ToasttyConversationScreen: View {
             }
         }
         .background(ToasttyDesignTokens.elevatedSurface)
-        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                if let conversation = controller.conversation(id: conversationID) {
+                    navigationBarHeader(conversation)
+                }
+            }
+        }
         .task(id: composerFocusIsReady) {
             guard composerFocusIsReady, !hasHandledComposerFocusRequest else { return }
             // A focus request during the push transition is dropped by
@@ -101,28 +104,33 @@ struct ToasttyConversationScreen: View {
         return .loading
     }
 
-    private func header(_ conversation: MobileConversation) -> some View {
-        // Mirrors the home session card hierarchy: status badge on top,
-        // prominent title, then a single muted metadata line.
-        VStack(alignment: .leading, spacing: 6) {
-            ToasttySessionStatusLabel(bucket: conversation.state.bucket)
+    private func navigationBarHeader(_ conversation: MobileConversation) -> some View {
+        VStack(spacing: 2) {
             Text(conversation.title)
-                .font(.headline)
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(ToasttyDesignTokens.primaryText)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("toastty-mobile-conversation-title")
-            Text(headerMetadata(conversation))
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("toastty-mobile-conversation-title")
+            HStack(spacing: 5) {
+                ToasttySessionStatusLabel(bucket: conversation.state.bucket)
+                let metadata = headerMetadata(conversation)
+                if metadata.isEmpty == false {
+                    Text("·")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    Text(metadata)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .overlay(alignment: .bottom) { Divider().overlay(ToasttyDesignTokens.divider) }
+        // The inline navigation bar cannot grow with accessibility type
+        // sizes, so cap the header scale to keep both lines legible.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     private func headerMetadata(_ conversation: MobileConversation) -> String {
