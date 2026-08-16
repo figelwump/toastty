@@ -32,11 +32,6 @@ struct ToasttyToolBatchCard: View {
                 }
 
                 Spacer(minLength: 4)
-
-                Image(systemName: "chevron.up")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
