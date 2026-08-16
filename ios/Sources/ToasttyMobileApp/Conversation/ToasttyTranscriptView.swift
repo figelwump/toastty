@@ -18,6 +18,7 @@ struct ToasttyTranscriptView: View {
     @State private var measuredBoundaryID: ToasttyTranscriptRowID?
     @State private var isVisible = false
     @State private var followsLiveEdge = true
+    @State private var isJumpingToLiveEdge = false
     @State private var visibleBlockIDs: [ToasttyTranscriptRowID] = []
 
     init(
@@ -98,25 +99,35 @@ struct ToasttyTranscriptView: View {
                     }
                 }
                 .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
-                    TranscriptScrollMetrics(
-                        offsetY: geometry.contentOffset.y,
-                        contentHeight: geometry.contentSize.height,
-                        viewportHeight: geometry.containerSize.height
-                    )
-                } action: { old, new in
-                    let atLiveEdge = new.distanceFromBottom < 72
+                    TranscriptScrollMetrics(geometry: geometry)
+                } action: { _, new in
+                    let atLiveEdge = new.isAtLiveEdge
                     hasMeasuredScrollGeometry = true
                     measuredBoundaryID = state.rows.last?.id
                     isAtLiveEdge = atLiveEdge
-                    if atLiveEdge {
+                    if atLiveEdge, isJumpingToLiveEdge {
+                        isJumpingToLiveEdge = false
                         followsLiveEdge = true
-                    } else if abs(new.contentHeight - old.contentHeight) < 0.5,
-                              abs(new.offsetY - old.offsetY) > 1 {
-                        // Only user-driven offset changes disengage following.
-                        // Content growth at the tail must not turn a reader who
-                        // was already following into a slow-reader state.
-                        followsLiveEdge = false
                     }
+                }
+                .onScrollPhaseChange { oldPhase, newPhase, context in
+                    if newPhase == .interacting {
+                        // A direct gesture owns the reader's position until it
+                        // settles, including any momentum after finger lift.
+                        isJumpingToLiveEdge = false
+                        followsLiveEdge = false
+                        return
+                    }
+
+                    guard newPhase == .idle,
+                          oldPhase == .interacting
+                            || oldPhase == .decelerating
+                    else { return }
+                    // Resolve only at rest so a short flick is classified after
+                    // its momentum ends.
+                    followsLiveEdge = TranscriptScrollMetrics(
+                        geometry: context.geometry
+                    ).isAtLiveEdge
                 }
                 .onScrollTargetVisibilityChange(
                     idType: ToasttyConversationScrollTarget.self,
@@ -128,13 +139,14 @@ struct ToasttyTranscriptView: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if isAtLiveEdge == false, let target = lastScrollTarget {
+                    if isAtLiveEdge == false,
+                       followsLiveEdge == false,
+                       lastScrollTarget != nil {
                         HStack {
                             Spacer(minLength: 0)
                             Button {
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    proxy.scrollTo(target, anchor: .bottom)
-                                }
+                                followsLiveEdge = true
+                                isJumpingToLiveEdge = true
                             } label: {
                                 Label("Jump to latest", systemImage: "arrow.down")
                                     .font(.caption.weight(.semibold))
@@ -147,6 +159,24 @@ struct ToasttyTranscriptView: View {
                         }
                         .padding(14)
                         .background(ToasttyDesignTokens.background)
+                    }
+                }
+                .task(id: isJumpingToLiveEdge) {
+                    guard isJumpingToLiveEdge, let target = lastScrollTarget else { return }
+                    // Removing the jump inset changes the viewport. Let that
+                    // layout settle before calculating the live-edge scroll.
+                    await Task.yield()
+                    await Task.yield()
+                    guard Task.isCancelled == false else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(target, anchor: .bottom)
+                    }
+
+                    try? await Task.sleep(for: .milliseconds(400))
+                    guard Task.isCancelled == false, isJumpingToLiveEdge else { return }
+                    isJumpingToLiveEdge = false
+                    if isAtLiveEdge == false {
+                        followsLiveEdge = false
                     }
                 }
                 .task(id: scrollChangeKey) {
@@ -332,13 +362,28 @@ struct ToasttyTranscriptView: View {
     }
 }
 
-private struct TranscriptScrollMetrics: Equatable {
-    let offsetY: CGFloat
+struct TranscriptScrollMetrics: Equatable {
+    static let liveEdgeThreshold: CGFloat = 72
+
     let contentHeight: CGFloat
-    let viewportHeight: CGFloat
+    let visibleMaxY: CGFloat
+
+    init(geometry: ScrollGeometry) {
+        contentHeight = geometry.contentSize.height
+        visibleMaxY = geometry.visibleRect.maxY
+    }
+
+    init(contentHeight: CGFloat, visibleMaxY: CGFloat) {
+        self.contentHeight = contentHeight
+        self.visibleMaxY = visibleMaxY
+    }
 
     var distanceFromBottom: CGFloat {
-        contentHeight - offsetY - viewportHeight
+        contentHeight - visibleMaxY
+    }
+
+    var isAtLiveEdge: Bool {
+        distanceFromBottom < Self.liveEdgeThreshold
     }
 }
 

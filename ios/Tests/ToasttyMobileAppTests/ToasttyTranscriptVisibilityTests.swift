@@ -5,6 +5,29 @@ import XCTest
 @testable import ToasttyMobileApp
 
 final class ToasttyTranscriptVisibilityTests: XCTestCase {
+    func testScrollMetricsUseInsetAdjustedVisibleRectAtLiveEdge() {
+        XCTAssertTrue(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_300.7
+            ).isAtLiveEdge,
+            "The inset-adjusted visible rect can extend beyond content at the physical bottom"
+        )
+        XCTAssertTrue(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_089
+            ).isAtLiveEdge
+        )
+        XCTAssertFalse(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_088
+            ).isAtLiveEdge,
+            "The 72-point threshold is exclusive"
+        )
+    }
+
     func testVisibleLiveEdgeRequiresActiveLiveMeasuredNonemptyBoundary() {
         let boundary = rowID(sequence: 7)
 

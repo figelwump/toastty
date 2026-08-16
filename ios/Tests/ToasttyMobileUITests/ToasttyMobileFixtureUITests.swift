@@ -323,16 +323,23 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
     func testSlowReaderKeepsPositionAndCanJumpBackToLiveTail() {
         let app = launchFixtureConversation()
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        let newestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-14"]
+        XCTAssertTrue(newestRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(newestRow.isHittable, "The conversation should open at its live tail")
+        XCTAssertFalse(
+            jumpToLatest.waitForExistence(timeout: 1),
+            "Opening at the live tail must not show the jump affordance"
+        )
+
         let oldestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-1"]
         XCTAssertTrue(scrollToOlder(oldestRow, in: app))
 
-        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
         XCTAssertTrue(oldestRow.exists, "Showing the jump affordance must not move a slow reader")
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 5))
 
-        let newestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-14"]
         XCTAssertTrue(newestRow.waitForExistence(timeout: 5))
         XCTAssertTrue(newestRow.isHittable)
         let liveEdgeY = newestRow.frame.minY
