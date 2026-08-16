@@ -75,6 +75,7 @@ struct RemoteAccessSettingsView: View {
                     HStack(spacing: 8) {
                         TextField("Tailnet origin", text: $service.tailnetOrigin)
                             .labelsHidden()
+                            .multilineTextAlignment(.leading)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: .infinity)
 
@@ -92,9 +93,19 @@ struct RemoteAccessSettingsView: View {
                         .accessibilityLabel("Detect Tailnet origin")
                         .accessibilityIdentifier("toastty-remote-access-detect-origin")
                     }
-                    Text(verbatim: "Example: https://your-mac.tailnet.ts.net")
+                    if originDetectionState == .detecting {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text("Detecting Tailnet origin…")
+                        }
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    } else {
+                        Text(verbatim: "Example: https://your-mac.tailnet.ts.net")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         } footer: {
