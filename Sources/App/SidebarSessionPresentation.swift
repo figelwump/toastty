@@ -321,6 +321,12 @@ enum SidebarSessionPresentation {
         if let context = normalizedSidebarHelperText(child.context) {
             components.append(context)
         }
+        if let modelIdentifier = normalizedSidebarHelperText(child.executionProfile?.modelIdentifier) {
+            components.append("model \(modelIdentifier)")
+        }
+        if let reasoningEffort = normalizedSidebarHelperText(child.executionProfile?.reasoningEffort) {
+            components.append("reasoning effort \(reasoningEffort)")
+        }
         if let workspaceTag {
             components.append(workspaceTag)
         }
@@ -461,8 +467,18 @@ enum SidebarSessionPresentation {
             typeLabel: typeLabel,
             statusDotColorKind: statusDotColorKind,
             bodyText: bodyText,
+            executionProfileText: sessionChildExecutionProfileText(child.executionProfile),
             metaItems: metaItems
         )
+    }
+
+    static func sessionChildExecutionProfileText(
+        _ profile: SessionAgentExecutionProfile?
+    ) -> String? {
+        guard let profile else { return nil }
+        let components = [profile.modelIdentifier, profile.reasoningEffort]
+            .compactMap(normalizedSidebarHelperText)
+        return components.isEmpty ? nil : components.joined(separator: " · ")
     }
 
     static func sessionChildHoverTipStatusLabel(for kind: SessionStatusKind?) -> String {

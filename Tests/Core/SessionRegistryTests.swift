@@ -1010,6 +1010,10 @@ struct SessionRegistryTests {
                 kind: .subagent,
                 displayName: "general-purpose",
                 command: "Review diff",
+                executionProfile: SessionAgentExecutionProfile(
+                    modelIdentifier: "gpt-5.6-luna",
+                    reasoningEffort: "xhigh"
+                ),
                 startedAt: now.addingTimeInterval(2),
                 lastUpdatedAt: now.addingTimeInterval(2)
             ),
@@ -1021,7 +1025,13 @@ struct SessionRegistryTests {
         #expect(activity.startedAt == now.addingTimeInterval(1))
         #expect(activity.displayName == "general-purpose")
         #expect(activity.command == "Review diff")
+        #expect(activity.executionProfile == SessionAgentExecutionProfile(
+            modelIdentifier: "gpt-5.6-luna",
+            reasoningEffort: "xhigh"
+        ))
         #expect(activity.lastUpdatedAt == now.addingTimeInterval(2))
+        #expect(registry.workspaceStatuses(for: workspaceID).first?.children.first?.executionProfile
+            == activity.executionProfile)
     }
 
     @Test

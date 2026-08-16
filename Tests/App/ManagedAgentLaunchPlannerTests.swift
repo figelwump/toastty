@@ -2186,7 +2186,15 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     }
 
     func testCodexRolloutWatcherOnlyHandlesBackgroundActivityEvents() async throws {
-        let fixture = try makePlannerFixture()
+        let expectedProfile = SessionAgentExecutionProfile(
+            modelIdentifier: "gpt-5.6-luna",
+            reasoningEffort: "xhigh"
+        )
+        let fixture = try makePlannerFixture(
+            codexSubagentProfileResolver: TestCodexSubagentProfileResolver(
+                profile: expectedProfile
+            )
+        )
         let rolloutURL = temporaryJSONLURL()
         defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
 
@@ -2238,7 +2246,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             fixture.sessionRuntimeStore
                 .sessionRegistry
                 .activeSession(sessionID: plan.sessionID)?
-                .backgroundActivitiesByID["agent-1"] != nil
+                .backgroundActivitiesByID["agent-1"]?.executionProfile == expectedProfile
         }
 
         let activeSession = try XCTUnwrap(
@@ -2250,6 +2258,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
         XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.displayName, "Focused check")
         XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.command, "Run focused checks")
+        XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.executionProfile, expectedProfile)
     }
 
     func testCodexRolloutWatcherProjectsCurrentCollaborationLifecycle() async throws {
@@ -2577,6 +2586,7 @@ private func makePlannerFixture(
     nowProvider: @escaping @Sendable () -> Date = Date.init,
     nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
     codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
+    codexSubagentProfileResolver: (any CodexSubagentProfileResolving)? = nil,
     codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
         .sessionLogFallback(reason: "test")
     },
@@ -2624,6 +2634,7 @@ private func makePlannerFixture(
         promptState: { _ in .unavailable },
         nativeSessionObserverRegistry: nativeSessionObserverRegistry,
         codexResumeResolver: codexResumeResolver,
+        codexSubagentProfileResolver: codexSubagentProfileResolver,
         codexSkillsResolver: resolvedCodexSkillsResolver,
         claudeSkillsBundleManager: claudeSkillsBundleManager ?? TestClaudeSkillsBundleManager(configuration: nil),
         userSkillSnapshotProvider: userSkillSnapshotProvider
@@ -2632,6 +2643,21 @@ private func makePlannerFixture(
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
+}
+
+private final class TestCodexSubagentProfileResolver: CodexSubagentProfileResolving, @unchecked Sendable {
+    private let profile: SessionAgentExecutionProfile?
+
+    init(profile: SessionAgentExecutionProfile?) {
+        self.profile = profile
+    }
+
+    func resolveProfile(
+        childThreadID _: String,
+        parentRolloutURL _: URL
+    ) async -> SessionAgentExecutionProfile? {
+        profile
+    }
 }
 
 private final class RecordingUserSkillSnapshotProvider: ToasttyUserSkillSnapshotProviding, @unchecked Sendable {

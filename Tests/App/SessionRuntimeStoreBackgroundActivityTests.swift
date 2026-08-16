@@ -579,6 +579,110 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexSubagentProfileEnrichmentUsesAuthorityAndNeverCreatesRows() {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_292)
+        let hookSessionID = "sess-codex-profile-hooks"
+        let fallbackSessionID = "sess-codex-profile-fallback"
+        let profile = SessionAgentExecutionProfile(
+            modelIdentifier: "gpt-5.6-luna",
+            reasoningEffort: "xhigh"
+        )
+
+        for (sessionID, source) in [
+            (hookSessionID, CodexStatusTrackingSource.hooks),
+            (fallbackSessionID, .sessionLogFallback(reason: "test")),
+        ] {
+            store.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: UUID(),
+                windowID: UUID(),
+                workspaceID: UUID(),
+                usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: source,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: now
+            )
+        }
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: hookSessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: "provider-agent",
+                subagentType: "explorer"
+            ),
+            at: now.addingTimeInterval(1)
+        ))
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: fallbackSessionID,
+            observation: .started(CodexSessionBackgroundActivity(
+                activityID: "/root/explore",
+                hookActivityID: "provider-agent",
+                kind: .subagent,
+                displayName: "explore"
+            )),
+            at: now.addingTimeInterval(1)
+        ))
+        let hookSessionUpdatedAt = store.sessionRegistry.activeSession(sessionID: hookSessionID)?.updatedAt
+        let hookActivityUpdatedAt = store.sessionRegistry.activeSession(sessionID: hookSessionID)?
+            .backgroundActivitiesByID["provider-agent"]?.lastUpdatedAt
+        let fallbackSessionUpdatedAt = store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?.updatedAt
+        let fallbackActivityUpdatedAt = store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?
+            .backgroundActivitiesByID["/root/explore"]?.lastUpdatedAt
+
+        #expect(store.enrichCodexSubagentExecutionProfile(
+            sessionID: hookSessionID,
+            rolloutActivityID: "/root/explore",
+            providerAgentID: "provider-agent",
+            profile: profile,
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.enrichCodexSubagentExecutionProfile(
+            sessionID: fallbackSessionID,
+            rolloutActivityID: "/root/explore",
+            providerAgentID: "provider-agent",
+            profile: profile,
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: hookSessionID)?
+            .backgroundActivitiesByID["provider-agent"]?.executionProfile == profile)
+        #expect(store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?
+            .backgroundActivitiesByID["/root/explore"]?.executionProfile == profile)
+        #expect(store.sessionRegistry.activeSession(sessionID: hookSessionID)?.updatedAt == hookSessionUpdatedAt)
+        #expect(store.sessionRegistry.activeSession(sessionID: hookSessionID)?
+            .backgroundActivitiesByID["provider-agent"]?.lastUpdatedAt == hookActivityUpdatedAt)
+        #expect(store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?.updatedAt == fallbackSessionUpdatedAt)
+        #expect(store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?
+            .backgroundActivitiesByID["/root/explore"]?.lastUpdatedAt == fallbackActivityUpdatedAt)
+
+        #expect(store.finishBackgroundActivity(
+            sessionID: fallbackSessionID,
+            activityID: "/root/explore",
+            at: now.addingTimeInterval(3)
+        ))
+        #expect(store.enrichCodexSubagentExecutionProfile(
+            sessionID: fallbackSessionID,
+            rolloutActivityID: "/root/explore",
+            providerAgentID: "provider-agent",
+            profile: profile,
+            at: now.addingTimeInterval(4)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?
+            .backgroundActivitiesByID.isEmpty == true)
+    }
+
+    @Test
     func codexSubagentNilSourcePreservesLegacyHookAndRolloutResetBehavior() {
         let store = SessionRuntimeStore()
         defer { store.reset() }

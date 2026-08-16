@@ -240,6 +240,10 @@ final class SidebarSessionPresentationTests: XCTestCase {
                     source: .activity,
                     displayName: "Explore",
                     context: "agent: find session log callers",
+                    executionProfile: SessionAgentExecutionProfile(
+                        modelIdentifier: "gpt-5.6-luna",
+                        reasoningEffort: "xhigh"
+                    ),
                     startedAt: start
                 ),
                 workspaceName: nil,
@@ -251,6 +255,7 @@ final class SidebarSessionPresentationTests: XCTestCase {
                 typeLabel: "sub-agent",
                 statusDotColorKind: .working,
                 bodyText: "agent: find session log callers",
+                executionProfileText: "gpt-5.6-luna · xhigh",
                 metaItems: ["running · 2m 30s", "started 12:04"]
             )
         )
@@ -279,6 +284,7 @@ final class SidebarSessionPresentationTests: XCTestCase {
                 typeLabel: "session",
                 statusDotColorKind: .needsApproval,
                 bodyText: "Approve Bash: git push",
+                executionProfileText: nil,
                 metaItems: ["needs approval", "wt-sessions"]
             )
         )
@@ -305,6 +311,7 @@ final class SidebarSessionPresentationTests: XCTestCase {
                 typeLabel: "sub-agent",
                 statusDotColorKind: .working,
                 bodyText: nil,
+                executionProfileText: nil,
                 metaItems: ["running · 0s", "started 12:04"]
             )
         )
@@ -350,13 +357,33 @@ final class SidebarSessionPresentationTests: XCTestCase {
                     source: .activity,
                     displayName: "Explore",
                     context: "find session callers",
+                    executionProfile: SessionAgentExecutionProfile(
+                        modelIdentifier: "gpt-5.6-luna",
+                        reasoningEffort: "xhigh"
+                    ),
                     startedAt: Date(timeIntervalSince1970: 1)
                 ),
                 workspaceTag: nil,
                 elapsedText: "3m"
             ),
-            "activity child, Explore, find session callers, 3m"
+            "activity child, Explore, find session callers, model gpt-5.6-luna, reasoning effort xhigh, 3m"
         )
+    }
+
+    func testSessionChildExecutionProfileTextShowsAvailableFieldsOnly() {
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionChildExecutionProfileText(
+                SessionAgentExecutionProfile(modelIdentifier: "gpt-5.6-sol")
+            ),
+            "gpt-5.6-sol"
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionChildExecutionProfileText(
+                SessionAgentExecutionProfile(reasoningEffort: "high")
+            ),
+            "high"
+        )
+        XCTAssertNil(SidebarSessionPresentation.sessionChildExecutionProfileText(nil))
     }
 
     func testSessionIndicatorStateShowsSpinnerOnlyForWorking() {

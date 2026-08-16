@@ -129,6 +129,11 @@ timeouts, and launch failures to its structured local log. See
   requested through `CODEX_TUI_SESSION_LOG_PATH` for root-turn and approval
   context. After Codex identifies its native session file, Toastty also watches
   that rollout JSONL for collaboration-agent lifecycle and identity mapping.
+  When a collaboration event supplies an exact child thread ID, Toastty may
+  briefly inspect a bounded prefix of the matching local child rollout to read
+  its effective model identifier and reasoning effort. This lookup accepts only
+  complete `turn_context` records, retains only those two metadata fields in
+  memory, and does not log rollout contents.
   Toastty derives child-agent IDs, task/display names, and available plaintext
   descriptions for the live sidebar; task names are limited to 80 characters,
   descriptions to 512 characters, and opaque encrypted descriptions are
@@ -141,7 +146,7 @@ timeouts, and launch failures to its structured local log. See
   retaining additional fingerprints and records a local warning. This
   reconciliation state is memory-only and discarded with its owning session or
   watcher. Child-agent display names can appear in Toastty's structured local
-  logs. Toastty does not modify the Codex rollout file.
+  logs. Toastty does not modify the Codex rollout files.
 - During Codex skill preparation, Toastty invokes the resolved local Codex CLI
   against a throwaway Codex home to produce the canonical plugin cache bytes,
   and once per legacy install to deregister the retired marketplace mechanism.

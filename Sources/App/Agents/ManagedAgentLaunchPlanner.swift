@@ -60,6 +60,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let promptState: @MainActor (UUID) -> TerminalPromptState
     private let nativeSessionObserverRegistry: any ManagedAgentNativeSessionObserving
     private let codexResumeResolver: any CodexManagedSessionResolving
+    private let codexSubagentProfileResolver: any CodexSubagentProfileResolving
     private let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
     private let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
     private let userSkillSnapshotProvider: any ToasttyUserSkillSnapshotProviding
@@ -76,6 +77,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private var desiredCodexRolloutLogURLsBySessionID: [String: URL] = [:]
     private var codexRolloutWatcherTransitionsBySessionID: [String: CodexRolloutWatcherTransition] = [:]
     private var codexSessionLogCursorStatesByKey: [CodexSessionLogStreamKey: CodexSessionLogCursorStateRegistration] = [:]
+    private var codexSubagentProfileResolutionsByKey: [
+        CodexSubagentProfileResolutionKey: CodexSubagentProfileResolutionRegistration
+    ] = [:]
 
     init(
         store: AppStore,
@@ -90,6 +94,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         promptState: @escaping @MainActor (UUID) -> TerminalPromptState,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
         codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
+        codexSubagentProfileResolver: (any CodexSubagentProfileResolving)? = nil,
         codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
         claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
         userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil,
@@ -113,6 +118,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 nowProvider: nowProvider
             )
         self.codexResumeResolver = codexResumeResolver ?? CodexManagedSessionResolver()
+        self.codexSubagentProfileResolver = codexSubagentProfileResolver
+            ?? CodexSubagentProfileResolver()
         self.codexSkillsResolver = codexSkillsResolver
             ?? CodexManagedLaunchSkillsResolver(fileManager: fileManager)
         self.claudeSkillsBundleManager = claudeSkillsBundleManager
@@ -1333,11 +1340,94 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 approvalPolicy: event.approvalPolicyField,
                 approvalsReviewer: event.approvalsReviewerField
             )
-        case .backgroundActivityStarted, .backgroundActivityFinished:
+        case .backgroundActivityStarted:
             forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
+            if let activity = event.backgroundActivity {
+                scheduleCodexSubagentProfileResolution(
+                    activity: activity,
+                    sessionID: sessionID,
+                    parentRolloutURL: logURL
+                )
+            }
+        case .backgroundActivityFinished:
+            forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
+            if let childThreadID = event.backgroundActivity?.hookActivityID {
+                cancelCodexSubagentProfileResolution(
+                    sessionID: sessionID,
+                    childThreadID: childThreadID
+                )
+            }
         default:
             return
         }
+    }
+
+    private func scheduleCodexSubagentProfileResolution(
+        activity: CodexSessionBackgroundActivity,
+        sessionID: String,
+        parentRolloutURL: URL
+    ) {
+        guard activity.kind == .subagent,
+              let childThreadID = normalizedNonEmpty(activity.hookActivityID) else {
+            return
+        }
+        let key = CodexSubagentProfileResolutionKey(
+            sessionID: sessionID,
+            childThreadID: childThreadID
+        )
+        codexSubagentProfileResolutionsByKey.removeValue(forKey: key)?.task.cancel()
+
+        let registrationID = UUID()
+        let resolver = codexSubagentProfileResolver
+        let task = Task { @MainActor [weak self] in
+            let profile = await resolver.resolveProfile(
+                childThreadID: childThreadID,
+                parentRolloutURL: parentRolloutURL
+            )
+            guard Task.isCancelled == false else { return }
+            self?.finishCodexSubagentProfileResolution(
+                key: key,
+                registrationID: registrationID,
+                rolloutActivityID: activity.activityID,
+                profile: profile
+            )
+        }
+        codexSubagentProfileResolutionsByKey[key] = CodexSubagentProfileResolutionRegistration(
+            id: registrationID,
+            task: task
+        )
+    }
+
+    private func finishCodexSubagentProfileResolution(
+        key: CodexSubagentProfileResolutionKey,
+        registrationID: UUID,
+        rolloutActivityID: String,
+        profile: SessionAgentExecutionProfile?
+    ) {
+        guard codexSubagentProfileResolutionsByKey[key]?.id == registrationID else {
+            return
+        }
+        codexSubagentProfileResolutionsByKey.removeValue(forKey: key)
+        guard let profile else { return }
+        _ = sessionRuntimeStore?.enrichCodexSubagentExecutionProfile(
+            sessionID: key.sessionID,
+            rolloutActivityID: rolloutActivityID,
+            providerAgentID: key.childThreadID,
+            profile: profile,
+            at: nowProvider()
+        )
+    }
+
+    private func cancelCodexSubagentProfileResolution(
+        sessionID: String,
+        childThreadID: String
+    ) {
+        guard let childThreadID = normalizedNonEmpty(childThreadID) else { return }
+        let key = CodexSubagentProfileResolutionKey(
+            sessionID: sessionID,
+            childThreadID: childThreadID
+        )
+        codexSubagentProfileResolutionsByKey.removeValue(forKey: key)?.task.cancel()
     }
 
     private func cleanupManagedArtifacts(forInactiveSessionsIn registry: SessionRegistry) async {
@@ -1345,6 +1435,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             .union(codexRolloutWatchersBySessionID.keys)
             .union(desiredCodexRolloutLogURLsBySessionID.keys)
             .union(codexRolloutWatcherTransitionsBySessionID.keys)
+            .union(codexSubagentProfileResolutionsByKey.keys.map(\.sessionID))
         let inactiveSessionIDs = trackedSessionIDs.filter { sessionID in
             registry.activeSession(sessionID: sessionID) == nil
         }
@@ -1367,6 +1458,17 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     }
 
     private func cleanupCodexRolloutWatcher(for sessionID: String) async {
+        let profileResolutionKeys = codexSubagentProfileResolutionsByKey.keys.filter {
+            $0.sessionID == sessionID
+        }
+        let profileResolutionTasks = profileResolutionKeys.compactMap { key -> Task<Void, Never>? in
+            let registration = codexSubagentProfileResolutionsByKey.removeValue(forKey: key)
+            registration?.task.cancel()
+            return registration?.task
+        }
+        for task in profileResolutionTasks {
+            await task.value
+        }
         desiredCodexRolloutLogURLsBySessionID.removeValue(forKey: sessionID)
         if let transition = codexRolloutWatcherTransitionsBySessionID[sessionID] {
             await transition.task.value
@@ -1478,6 +1580,16 @@ private struct CodexRolloutSessionLogWatcherRegistration {
 }
 
 private struct CodexRolloutWatcherTransition {
+    let id: UUID
+    let task: Task<Void, Never>
+}
+
+private struct CodexSubagentProfileResolutionKey: Hashable {
+    let sessionID: String
+    let childThreadID: String
+}
+
+private struct CodexSubagentProfileResolutionRegistration {
     let id: UUID
     let task: Task<Void, Never>
 }

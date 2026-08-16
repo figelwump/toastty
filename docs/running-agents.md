@@ -514,7 +514,9 @@ a child needs approval or reports an error. A parent can also show a waiting
 projection while children or other background tasks are still outstanding, so a
 brief ready/idle event does not make an orchestration wave look complete. A
 short resuming grace period prevents stale ready state from flashing between
-waves.
+waves. For Codex collaboration agents, the child-row tooltip also shows the
+detected model identifier and reasoning effort when that runtime metadata is
+available; missing values are omitted.
 
 For Codex, `SubagentStart` and `SubagentStop` hooks are the authoritative source
 for collaboration-agent rows when trusted session hooks own telemetry. Session-recording

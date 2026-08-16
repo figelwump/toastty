@@ -132,6 +132,27 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return true
     }
 
+    /// Adds presentation metadata to an existing sub-agent without changing
+    /// lifecycle timestamps or creating a missing activity.
+    @discardableResult
+    public mutating func enrichBackgroundActivityExecutionProfile(
+        sessionID: String,
+        activityID: String,
+        executionProfile: SessionAgentExecutionProfile
+    ) -> Bool {
+        guard executionProfile.isEmpty == false,
+              var record = activeSession(sessionID: sessionID),
+              var activity = record.backgroundActivitiesByID[activityID],
+              activity.kind == .subagent,
+              activity.executionProfile != executionProfile else {
+            return false
+        }
+        activity.executionProfile = executionProfile
+        record.backgroundActivitiesByID[activityID] = activity
+        sessionsByID[sessionID] = record
+        return true
+    }
+
     @discardableResult
     public mutating func finishBackgroundActivity(
         sessionID: String,
@@ -486,6 +507,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                 source: .activity,
                 displayName: activity.displayName ?? Self.defaultActivityDisplayName(for: activity.kind),
                 context: activity.command,
+                executionProfile: activity.executionProfile,
                 startedAt: activity.startedAt
             )
         }
@@ -679,6 +701,7 @@ private extension SessionRegistry {
             kind: existing.kind,
             displayName: incoming.displayName ?? existing.displayName,
             command: incoming.command ?? existing.command,
+            executionProfile: incoming.executionProfile ?? existing.executionProfile,
             processID: incoming.processID ?? existing.processID,
             preserveWhenUnlisted: existing.preserveWhenUnlisted || incoming.preserveWhenUnlisted,
             startedAt: existing.startedAt,

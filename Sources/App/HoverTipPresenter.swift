@@ -45,6 +45,7 @@ struct SessionChildHoverTipModel: Hashable {
     var typeLabel: String
     var statusDotColorKind: StatusDotColorKind
     var bodyText: String?
+    var executionProfileText: String?
     var metaItems: [String]
 }
 
@@ -89,6 +90,15 @@ struct SessionChildHoverTipCard: View {
                     .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 6)
+            }
+
+            if let executionProfileText = model.executionProfileText {
+                Text(executionProfileText)
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.bottom, 5)
             }
 
             if model.metaItems.isEmpty == false {

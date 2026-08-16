@@ -1574,6 +1574,52 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
+    /// Enriches an already-projected Codex sub-agent without participating in
+    /// lifecycle authority. Missing or finished rows stay missing.
+    @discardableResult
+    func enrichCodexSubagentExecutionProfile(
+        sessionID: String,
+        rolloutActivityID: String,
+        providerAgentID: String?,
+        profile: SessionAgentExecutionProfile,
+        at now: Date
+    ) -> Bool {
+        guard profile.isEmpty == false,
+              let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              let reconciler = codexSubagentReconcilerBySessionID[sessionID] else {
+            return false
+        }
+
+        let targetActivityID: String
+        switch reconciler.authority {
+        case .hooks:
+            guard let providerAgentID = normalizedNonEmpty(providerAgentID) else {
+                return false
+            }
+            targetActivityID = providerAgentID
+        case .rolloutFallback:
+            guard let normalizedActivityID = normalizedNonEmpty(rolloutActivityID) else {
+                return false
+            }
+            targetActivityID = normalizedActivityID
+        }
+
+        guard record.backgroundActivitiesByID[targetActivityID] != nil else {
+            return false
+        }
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.enrichBackgroundActivityExecutionProfile(
+            sessionID: sessionID,
+            activityID: targetActivityID,
+            executionProfile: profile
+        ) else {
+            return false
+        }
+        publish(nextRegistry, reason: "enrich_background_activity_execution_profile", at: now)
+        return true
+    }
+
     @discardableResult
     func handleCodexSessionLogRootProgressObservation(
         sessionID: String,
