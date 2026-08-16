@@ -28,7 +28,6 @@ struct RemoteAccessSettingsView: View {
                 pairingSection
             }
             devicesSection
-            writeControlsSection
             if showsAudit {
                 auditSection
             }
@@ -293,12 +292,6 @@ struct RemoteAccessSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        Toggle("Send", isOn: Binding(
-                            get: { device.scopes.contains(.send) },
-                            set: { service.setDeviceSendScope($0, for: device.id) }
-                        ))
-                        .toggleStyle(.checkbox)
-                        .help("Allow this device to send messages to sessions where remote replies are enabled.")
                         Button("Revoke", role: .destructive) {
                             service.revokeDevice(device.id)
                         }
@@ -321,36 +314,6 @@ struct RemoteAccessSettingsView: View {
                     .controlSize(.small)
                 }
             }
-        }
-    }
-
-    private var writeControlsSection: some View {
-        Section {
-            let conversations = service.writeControllableSessions
-            if conversations.isEmpty {
-                Text("No agent sessions available.")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(conversations, id: \.conversationID) { conversation in
-                Toggle(isOn: Binding(
-                    get: { service.isSessionWriteEnabled(conversation.conversationID) },
-                    set: { service.setSessionWriteEnabled($0, for: conversation.conversationID) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(conversation.title)
-                        Text("\(conversation.provider.displayName)\(conversation.placement.workspaceTitle.map { " · \($0)" } ?? "")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.switch)
-            }
-        } header: {
-            Text("Remote Replies")
-        } footer: {
-            Text("On by default for each active session. Turn off a session for every device until Toastty restarts, or turn off Send on a device for a persistent block. Local typing always wins.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
