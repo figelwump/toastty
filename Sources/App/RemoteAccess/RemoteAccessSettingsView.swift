@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import Foundation
 import SwiftUI
@@ -33,6 +34,7 @@ struct RemoteAccessSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .background(WindowInitialFocusClearer())
         .frame(minWidth: 480, minHeight: 460)
         .onAppear {
             service.refreshDevices()
@@ -70,24 +72,30 @@ struct RemoteAccessSettingsView: View {
             }
 
             LabeledContent("Tailnet origin") {
-                HStack(spacing: 8) {
-                    TextField("https://your-mac.tailnet.ts.net", text: $service.tailnetOrigin)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        TextField("Tailnet origin", text: $service.tailnetOrigin)
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
 
-                    Button {
-                        originDetectionRequestID += 1
-                    } label: {
-                        if originDetectionState == .detecting {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Text("Detect")
+                        Button {
+                            originDetectionRequestID += 1
+                        } label: {
+                            if originDetectionState == .detecting {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Text("Detect")
+                            }
                         }
+                        .disabled(originDetectionState == .detecting)
+                        .accessibilityLabel("Detect Tailnet origin")
+                        .accessibilityIdentifier("toastty-remote-access-detect-origin")
                     }
-                    .disabled(originDetectionState == .detecting)
-                    .accessibilityLabel("Detect Tailnet origin")
-                    .accessibilityIdentifier("toastty-remote-access-detect-origin")
+                    Text(verbatim: "Example: https://your-mac.tailnet.ts.net")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         } footer: {
@@ -383,4 +391,29 @@ private enum TailnetOriginDetectionState: Equatable {
     case idle
     case detecting
     case failed(String)
+}
+
+/// AppKit focuses the window's first text field when it opens, which selects the
+/// tailnet origin field's contents. Clear the initial first responder so the
+/// window opens with nothing focused; clicking the field still edits normally.
+private struct WindowInitialFocusClearer: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { ClearingView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class ClearingView: NSView {
+        private var hasCleared = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard !hasCleared, let window else { return }
+            hasCleared = true
+            window.initialFirstResponder = nil
+            DispatchQueue.main.async { [weak window] in
+                guard let window else { return }
+                if window.firstResponder is NSTextView {
+                    window.makeFirstResponder(nil)
+                }
+            }
+        }
+    }
 }
