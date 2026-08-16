@@ -231,16 +231,18 @@ function resolveSimulator(worktreeComponent, environment) {
   );
   const devices = availableIPhoneDevices(devicesPayload, runtime.identifier);
   const simulatorName = `Toastty Mobile ${worktreeComponent}`;
-  const booted = devices.find((device) => device.state === "Booted");
-  if (booted) {
-    return { udid: booted.udid, runtime, created: false, booted: true };
+  const matchingDevices = devices.filter((device) => device.name === simulatorName);
+  if (matchingDevices.length > 1) {
+    fail(`multiple simulators are named ${simulatorName}; refusing ambiguous targeting`);
   }
 
-  const existing = devices.find((device) => device.name === simulatorName);
+  const existing = matchingDevices[0];
   if (existing) {
-    runChecked("xcrun", ["simctl", "boot", existing.udid], { env: environment });
-    runChecked("xcrun", ["simctl", "bootstatus", existing.udid, "-b"], { env: environment });
-    return { udid: existing.udid, runtime, created: false, booted: false };
+    if (existing.state !== "Booted") {
+      runChecked("xcrun", ["simctl", "boot", existing.udid], { env: environment });
+      runChecked("xcrun", ["simctl", "bootstatus", existing.udid, "-b"], { env: environment });
+    }
+    return { udid: existing.udid, runtime, created: false, booted: existing.state === "Booted" };
   }
 
   const deviceType = preferredDeviceType(runtime);

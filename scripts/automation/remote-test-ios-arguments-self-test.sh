@@ -6,6 +6,7 @@ WRAPPER="$ROOT_DIR/scripts/remote/test.sh"
 TEST_ROOT="$(mktemp -d /tmp/toastty-remote-test-ios-arguments.XXXXXX)"
 FAKE_BIN="$TEST_ROOT/bin"
 RECORDER="$TEST_ROOT/xcodebuild-arguments.log"
+SIMULATOR_STATE="$TEST_ROOT/simulator-state"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -30,15 +31,17 @@ run_remote_fixture() {
   local run_name="$1"
   local destination_mode="$2"
   shift 2
-  local run_root="$TEST_ROOT/$run_name"
+  local run_root="$TEST_ROOT/remote-gui/test-runs/$run_name"
   local encoded_args
   encoded_args="$(encode_args "$@")"
 
   mkdir -p "$run_root"
   : >"$RECORDER"
+  printf 'template\n' >"$SIMULATOR_STATE"
   PATH="$FAKE_BIN:$PATH" \
   FAKE_XCODEBUILD_ARGUMENTS_LOG="$RECORDER" \
   FAKE_DESTINATION_MODE="$destination_mode" \
+  FAKE_SIMULATOR_STATE="$SIMULATOR_STATE" \
   TOASTTY_REMOTE_TEST_RUN_LABEL="$run_name" \
   TOASTTY_REMOTE_TEST_REMOTE_RUN_ROOT="$run_root" \
   TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR="$ROOT_DIR" \
@@ -72,7 +75,77 @@ printf '%s\n' \
   'fi' \
   'exit 0' \
   >"$FAKE_BIN/xcodebuild"
-chmod +x "$FAKE_BIN/node" "$FAKE_BIN/xcodebuild"
+cat >"$FAKE_BIN/xcrun" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'xcrun %s\n' "$*" >>"$FAKE_XCODEBUILD_ARGUMENTS_LOG"
+state="$(cat "$FAKE_SIMULATOR_STATE")"
+clone_name="Toastty Remote test-focused-fixture"
+if [[ -f "$FAKE_SIMULATOR_STATE.name" ]]; then
+  clone_name="$(cat "$FAKE_SIMULATOR_STATE.name")"
+fi
+template_id="AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+clone_id="BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+if [[ "$*" == "simctl list runtimes available --json" ]]; then
+  jq -nc '{runtimes:[{
+    identifier:"com.apple.CoreSimulator.SimRuntime.iOS-26-3",
+    version:"26.3",
+    platform:"iOS",
+    isAvailable:true,
+    supportedDeviceTypes:[{
+      name:"iPhone 17 Pro",
+      identifier:"com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+      productFamily:"iPhone"
+    }]
+  }]}'
+  exit 0
+fi
+if [[ "$*" == "simctl list devices available --json" || "$*" == "simctl list devices --json" ]]; then
+  jq -nc \
+    --arg template "$template_id" \
+    --arg clone "$clone_id" \
+    --arg state "$state" \
+    --arg cloneName "$clone_name" '{
+      devices:{"com.apple.CoreSimulator.SimRuntime.iOS-26-3":(
+        [{name:"Toastty Remote Template",udid:$template,state:"Shutdown",isAvailable:true}]
+        + (if $state == "template" or $state == "deleted" then [] else [{
+          name:$cloneName,
+          udid:$clone,
+          state:(if $state == "booted" then "Booted" else "Shutdown" end),
+          isAvailable:true
+        }] end)
+      )}
+    }'
+  exit 0
+fi
+if [[ "$1" == simctl && "$2" == clone ]]; then
+  if [[ "$FAKE_DESTINATION_MODE" == fail ]]; then
+    printf 'simctl: clone fixture failed\n' >&2
+    exit 66
+  fi
+  printf '%s\n' "$4" >"$FAKE_SIMULATOR_STATE.name"
+  printf 'cloned\n' >"$FAKE_SIMULATOR_STATE"
+  printf '%s\n' "$clone_id"
+  exit 0
+fi
+if [[ "$1" == simctl && "$2" == boot && "$3" == "$clone_id" ]]; then
+  printf 'booted\n' >"$FAKE_SIMULATOR_STATE"
+  exit 0
+fi
+if [[ "$1" == simctl && "$2" == bootstatus && "$3" == "$clone_id" ]]; then
+  exit 0
+fi
+if [[ "$1" == simctl && "$2" == shutdown && "$3" == "$clone_id" ]]; then
+  printf 'shutdown\n' >"$FAKE_SIMULATOR_STATE"
+  exit 0
+fi
+if [[ "$1" == simctl && "$2" == delete && "$3" == "$clone_id" ]]; then
+  printf 'deleted\n' >"$FAKE_SIMULATOR_STATE"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$FAKE_BIN/node" "$FAKE_BIN/xcodebuild" "$FAKE_BIN/xcrun"
 
 # shellcheck source=../remote/test.sh
 source "$WRAPPER"
@@ -116,7 +189,6 @@ run_remote_fixture \
   success \
   -only-testing:ToasttyMobileDomainTests/GatewayCompatibilityDecoderTests
 
-focused_probe="$(grep '^probe ' "$RECORDER")"
 focused_test="$(grep '^test ' "$RECORDER")"
 for required in \
   '-workspace ios/ToasttyMobile.xcworkspace' \
@@ -124,13 +196,15 @@ for required in \
   '-configuration Debug' \
   '-parallel-testing-enabled NO' \
   '-only-testing:ToasttyMobileDomainTests/GatewayCompatibilityDecoderTests'; do
-  [[ "$focused_probe" == *"$required"* ]] \
-    || fail_test "focused destination probe omitted: $required"
   [[ "$focused_test" == *"$required"* ]] \
     || fail_test "focused test command omitted: $required"
 done
-[[ "$focused_test" == *'-destination platform=iOS Simulator,id=SIMULATOR-1'* ]] \
-  || fail_test "focused test command omitted the resolved simulator"
+[[ "$focused_test" == *'-destination platform=iOS Simulator,id=BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB'* ]] \
+  || fail_test "focused test command omitted the run-owned simulator"
+[[ "$(cat "$SIMULATOR_STATE")" == "deleted" ]] \
+  || fail_test "focused test did not delete its run-owned simulator"
+[[ -f "$TEST_ROOT/remote-gui/test-runs/focused/COMPLETED" ]] \
+  || fail_test "focused test did not record completed cleanup"
 
 run_remote_fixture \
   explicit \
@@ -142,8 +216,8 @@ run_remote_fixture \
   -destination 'platform=iOS Simulator,id=EXPLICIT-SIMULATOR' \
   -only-testing:CustomTests
 
-if grep -q '^probe ' "$RECORDER"; then
-  fail_test "an explicit destination still ran the destination probe"
+if grep -q '^xcrun ' "$RECORDER"; then
+  fail_test "an explicit destination still allocated a run-owned simulator"
 fi
 explicit_test="$(grep '^test ' "$RECORDER")"
 for required in \
@@ -158,17 +232,21 @@ done
 [[ "$explicit_test" != *'-workspace '* ]] \
   || fail_test "explicit project was combined with the default workspace"
 
-if run_remote_fixture probe-failure fail -only-testing:CustomTests; then
-  fail_test "destination probe failure unexpectedly passed"
+if run_remote_fixture clone-failure fail -only-testing:CustomTests; then
+  fail_test "simulator clone failure unexpectedly passed"
 else
-  probe_status=$?
+  clone_status=$?
 fi
-[[ "$probe_status" == "78" ]] \
-  || fail_test "destination probe failure returned $probe_status instead of setup-error status 78"
-jq -e '.status == "setup_error" and (.failureSummary | contains("status 66"))' \
-  "$TEST_ROOT/probe-failure/result.json" >/dev/null \
-  || fail_test "destination probe failure was not categorized in result.json"
-grep -q 'invalid destination probe fixture' "$TEST_ROOT/probe-failure/destination-probe.log" \
-  || fail_test "destination probe diagnostics were not retained"
+[[ "$clone_status" == "78" ]] \
+  || fail_test "simulator clone failure returned $clone_status instead of setup-error status 78"
+jq -e '
+  .schemaVersion == 2
+  and .status == "setup_error"
+  and (.testFailureSummary | contains("run-owned iPhone Simulator clone"))
+  and .cleanupFailureSummary == null
+' "$TEST_ROOT/remote-gui/test-runs/clone-failure/result.json" >/dev/null \
+  || fail_test "simulator clone failure was not categorized in result.json"
+grep -q 'clone fixture failed' "$TEST_ROOT/remote-gui/test-runs/clone-failure/xcodebuild.log" \
+  || fail_test "simulator clone diagnostics were not retained"
 
 printf 'ok: remote iOS test argument self-test passed\n'

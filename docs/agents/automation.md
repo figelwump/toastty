@@ -60,9 +60,20 @@ sv exec -- scripts/remote/test.sh \
   --run-label <label>
 ```
 
-`--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper asks `xcodebuild -showdestinations` for an iPhone Simulator compatible with the merged invocation and uses its identifier. The complete probe output is retained as `destination-probe.log` beside the other remote-test artifacts. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
+`--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
-The remote timeout watchdog owns a separate timer child and reaps it on success, timeout, or interruption. Cleanup is scoped to the run's recorded PIDs; never use broad `pkill` cleanup for remote tests.
+The remote timeout watchdog owns a separate timer child and reaps it on success, timeout, or interruption. Cleanup first stops the run's xcodebuild tree, then terminates only Toastty host executables under that run's DerivedData path, and finally removes only a matching manifest-owned simulator clone. `result.json` records test and cleanup failures separately. A run is marked `COMPLETED` only after cleanup succeeds; interrupted or ambiguous runs stay on the remote host for fail-closed review. Never use broad `pkill` cleanup for remote tests.
+
+Evaluate abandoned manifest-owned remote runs before simulator cleanup:
+
+```bash
+sv exec -- ./scripts/remote/cleanup-remote-runs.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-remote-runs.sh --apply
+sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
+```
+
+`cleanup-remote-runs.sh` requires exact root-child paths, immutable ownership, an expired retention window, no matching live owner or path-scoped process, and no `.keep` marker. It removes paired worktrees through `git worktree remove`, caps each apply to ten runs, and treats unowned, malformed, symlinked, live, or booted-simulator cases as retained/manual review. The simulator cleaner remains the legacy cleanup path for old `Plate Remote remote-test-*` and `Plate Remote remote-validate-*` devices.
 
 For changes under `Sources/RemoteProtocol/` or `Tests/RemoteProtocol/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
 

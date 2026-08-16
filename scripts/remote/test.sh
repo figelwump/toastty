@@ -4,9 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 SCRIPT_PATH="scripts/remote/test.sh"
 LIVE_GATEWAY_ENV_HELPER="$ROOT_DIR/scripts/remote/live-gateway-test-environment.sh"
+IOS_SIMULATOR_RUN_HELPER="$ROOT_DIR/scripts/remote/ios-simulator-run.sh"
 
 # shellcheck source=live-gateway-test-environment.sh
 source "$LIVE_GATEWAY_ENV_HELPER"
+# shellcheck source=ios-simulator-run.sh
+source "$IOS_SIMULATOR_RUN_HELPER"
 
 REMOTE_EXEC=0
 TEST_PLATFORM="macos"
@@ -376,12 +379,16 @@ write_result_json() {
   local remote_run_root="$5"
   local failure_summary="$6"
   local xcodebuild_command="$7"
+  local test_failure_summary="${8:-$failure_summary}"
+  local cleanup_failure_summary="${9:-}"
 
   mkdir -p "$(dirname "$path")"
 
   local remote_run_root_value='null'
   local failure_summary_value='null'
   local xcodebuild_command_value='null'
+  local test_failure_summary_value='null'
+  local cleanup_failure_summary_value='null'
 
   if [[ -n "$remote_run_root" ]]; then
     remote_run_root_value="\"$(json_escape "$remote_run_root")\""
@@ -392,10 +399,16 @@ write_result_json() {
   if [[ -n "$xcodebuild_command" ]]; then
     xcodebuild_command_value="\"$(json_escape "$xcodebuild_command")\""
   fi
+  if [[ -n "$test_failure_summary" ]]; then
+    test_failure_summary_value="\"$(json_escape "$test_failure_summary")\""
+  fi
+  if [[ -n "$cleanup_failure_summary" ]]; then
+    cleanup_failure_summary_value="\"$(json_escape "$cleanup_failure_summary")\""
+  fi
 
   cat >"$path" <<EOF
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "requestedTarget": "remote",
   "executionTarget": "remote",
   "platform": "$(json_escape "$TEST_PLATFORM")",
@@ -404,9 +417,69 @@ write_result_json() {
   "endedAt": "$(json_escape "$ended_at")",
   "remoteRunRoot": $remote_run_root_value,
   "failureSummary": $failure_summary_value,
+  "testFailureSummary": $test_failure_summary_value,
+  "cleanupFailureSummary": $cleanup_failure_summary_value,
   "xcodebuildCommand": $xcodebuild_command_value
 }
 EOF
+}
+
+write_remote_run_ownership() {
+  local manifest_path="$1"
+  local run_label="$2"
+  local remote_run_root="$3"
+  local remote_worktree_dir="$4"
+  local derived_path="$5"
+  local runtime_home="$6"
+  local platform="$7"
+  local owner_pid="$$"
+  local owner_pgid
+  local temporary_path
+
+  [[ ! -e "$manifest_path" && ! -L "$manifest_path" ]] || {
+    printf 'error: refusing to replace existing remote-run ownership: %s\n' "$manifest_path" >&2
+    return 1
+  }
+  owner_pgid="$(ps -o pgid= -p "$owner_pid" | tr -d '[:space:]')" || return 1
+  [[ "$owner_pgid" =~ ^[0-9]+$ ]] || return 1
+  temporary_path="${manifest_path}.tmp-${owner_pid}-${RANDOM}"
+  jq -n \
+    --arg runLabel "$run_label" \
+    --arg remoteRunRoot "$remote_run_root" \
+    --arg remoteWorktreePath "$remote_worktree_dir" \
+    --arg derivedDataPath "$derived_path" \
+    --arg runtimeHomePath "$runtime_home" \
+    --arg platform "$platform" \
+    --argjson ownerPID "$owner_pid" \
+    --argjson ownerPGID "$owner_pgid" \
+    --arg ownerStartedAt "$(LC_ALL=C TZ=UTC ps -o lstart= -p "$owner_pid" | awk '{$1=$1; print}')" \
+    --arg createdAt "$(timestamp_utc)" '
+      {
+        schemaVersion: 1,
+        ownership: "toastty-remote-test",
+        runLabel: $runLabel,
+        remoteRunRoot: $remoteRunRoot,
+        remoteWorktreePath: $remoteWorktreePath,
+        derivedDataPath: $derivedDataPath,
+        runtimeHomePath: $runtimeHomePath,
+        platform: $platform,
+        owner: {pid: $ownerPID, pgid: $ownerPGID, startedAt: $ownerStartedAt},
+        createdAt: $createdAt
+      }
+    ' >"$temporary_path" || {
+      rm -f -- "$temporary_path"
+      return 1
+  }
+  if ! chmod 0444 "$temporary_path"; then
+    rm -f -- "$temporary_path"
+    return 1
+  fi
+  if ! ln "$temporary_path" "$manifest_path"; then
+    rm -f -- "$temporary_path"
+    return 1
+  fi
+  rm -f -- "$temporary_path"
+  : >"$remote_run_root/STARTED"
 }
 
 export_ref_tree() {
@@ -700,8 +773,11 @@ EOF
 
 run_local_mode() {
   require_command git
+  require_command jq
   require_command ssh
   require_command rsync
+  [[ "$RUN_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
+    || fail "--run-label must use 1-128 letters, numbers, dots, underscores, or hyphens"
 
   configure_live_gateway_environment
 
@@ -762,10 +838,14 @@ REMOTE_WORKTREE_DIR=$(escape_sh "$remote_worktree_dir")
 REMOTE_RUN_ROOT=$(escape_sh "$remote_run_root")
 git -C \"\$REMOTE_REPO_ROOT\" rev-parse --is-inside-work-tree >/dev/null
 mkdir -p \"\$(dirname \"\$REMOTE_WORKTREE_DIR\")\" \"\$(dirname \"\$REMOTE_RUN_ROOT\")\"
-rm -rf \"\$REMOTE_RUN_ROOT\"
-if [[ -e \"\$REMOTE_WORKTREE_DIR\" ]]; then
-  git -C \"\$REMOTE_REPO_ROOT\" worktree remove --force \"\$REMOTE_WORKTREE_DIR\" >/dev/null 2>&1 || rm -rf \"\$REMOTE_WORKTREE_DIR\"
-fi
+[[ ! -e \"\$REMOTE_RUN_ROOT\" ]] || {
+  printf 'error: remote test run label already exists: %s\\n' \"\$REMOTE_RUN_ROOT\" >&2
+  exit 1
+}
+[[ ! -e \"\$REMOTE_WORKTREE_DIR\" ]] || {
+  printf 'error: remote test worktree label already exists: %s\\n' \"\$REMOTE_WORKTREE_DIR\" >&2
+  exit 1
+}
 git -C \"\$REMOTE_REPO_ROOT\" worktree add --detach \"\$REMOTE_WORKTREE_DIR\" >/dev/null
 mkdir -p \"\$REMOTE_RUN_ROOT\"
 "
@@ -847,7 +927,18 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
     remote_test_exit_code=1
   fi
 
-  if [[ "$KEEP_REMOTE" != "1" ]]; then
+  local cleanup_confirmed=0
+  if [[ -f "$LOCAL_ARTIFACTS_DIR/COMPLETED" ]] \
+    && [[ ! -e "$LOCAL_ARTIFACTS_DIR/INTERRUPTED" && ! -e "$LOCAL_ARTIFACTS_DIR/CLEANUP_FAILED" ]] \
+    && jq -e '
+      .schemaVersion == 2
+      and .cleanupFailureSummary == null
+      and (.status == "pass" or .status == "fail" or .status == "setup_error")
+    ' "$LOCAL_ARTIFACTS_DIR/result.json" >/dev/null 2>&1; then
+    cleanup_confirmed=1
+  fi
+
+  if [[ "$KEEP_REMOTE" != "1" && "$cleanup_confirmed" == "1" ]]; then
     log "Cleaning up remote worktree"
     remote_shell "
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
@@ -856,6 +947,8 @@ REMOTE_RUN_ROOT=$(escape_sh "$remote_run_root")
 git -C \"\$REMOTE_REPO_ROOT\" worktree remove --force \"\$REMOTE_WORKTREE_DIR\" >/dev/null 2>&1 || rm -rf \"\$REMOTE_WORKTREE_DIR\"
 rm -rf \"\$REMOTE_RUN_ROOT\"
 "
+  elif [[ "$KEEP_REMOTE" != "1" ]]; then
+    warn "Retaining remote run because run-owned cleanup was not confirmed: $remote_run_root"
   fi
 
   if [[ "$remote_test_exit_code" != "0" ]]; then
@@ -865,6 +958,7 @@ rm -rf \"\$REMOTE_RUN_ROOT\"
 }
 
 run_remote_mode() {
+  require_command jq
   require_command xcodebuild
 
   local run_label="${TOASTTY_REMOTE_TEST_RUN_LABEL:?TOASTTY_REMOTE_TEST_RUN_LABEL is required}"
@@ -872,6 +966,8 @@ run_remote_mode() {
   local remote_worktree_dir="${TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR:?TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR is required}"
   local xcodebuild_args_b64="${TOASTTY_REMOTE_TEST_XCODEBUILD_ARGS_B64:-}"
   TEST_PLATFORM="${TOASTTY_REMOTE_TEST_PLATFORM:-macos}"
+  [[ "$run_label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
+    || fail "remote run label is invalid"
   local decoded_args
   if [[ "$xcodebuild_args_b64" == "$DEFAULT_XCODEBUILD_ARGS_SENTINEL" ]]; then
     decoded_args=""
@@ -911,6 +1007,8 @@ EOF
   local exit_code=0
   local status="pass"
   local failure_summary=""
+  local test_failure_summary=""
+  local cleanup_failure_summary=""
   local remote_arch
   remote_arch="$(uname -m)"
   local timeout_seconds="${TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS:-$DEFAULT_REMOTE_TEST_TIMEOUT_SECONDS}"
@@ -918,21 +1016,46 @@ EOF
   local xcodebuild_pid=""
   local tail_pid=""
   local watchdog_pid=""
+  local owned_simulator_udid=""
+  local owned_simulator_name=""
+  local remote_resources_finalized=0
+  local remote_finalize_in_progress=0
+  local remote_finalize_status=1
 
   mkdir -p "$remote_run_root" "$runtime_home"
   rm -rf "$derived_path" "$result_bundle" "$timeout_marker" "$watchdog_timer_record" "$watchdog_reaped_marker"
   rm -f "$destination_probe_log"
   : >"$xcodebuild_log"
+  write_remote_run_ownership \
+    "$remote_run_root/run-ownership.json" \
+    "$run_label" \
+    "$remote_run_root" \
+    "$remote_worktree_dir" \
+    "$derived_path" \
+    "$runtime_home" \
+    "$TEST_PLATFORM"
 
-  cleanup_remote_xcodebuild() {
-    local cleanup_exit_code=$?
+  finalize_remote_resources() {
+    local cleanup_failed=0
+    if [[ "$remote_resources_finalized" == "1" ]]; then
+      return "$remote_finalize_status"
+    fi
+    if [[ "$remote_finalize_in_progress" == "1" ]]; then
+      return "$remote_finalize_status"
+    fi
+    remote_finalize_in_progress=1
+    remote_finalize_status=1
+    trap '' HUP INT TERM QUIT PIPE
+    toastty_ios_cancel_bounded_simctl
     if [[ -n "${watchdog_pid:-}" ]]; then
       kill "$watchdog_pid" >/dev/null 2>&1 || true
       wait "$watchdog_pid" >/dev/null 2>&1 || true
+      watchdog_pid=""
     fi
     if [[ -n "${tail_pid:-}" ]]; then
       kill "$tail_pid" >/dev/null 2>&1 || true
       wait "$tail_pid" >/dev/null 2>&1 || true
+      tail_pid=""
     fi
     if [[ -n "${xcodebuild_pid:-}" ]] && kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
       kill_process_tree "$xcodebuild_pid" TERM
@@ -941,10 +1064,75 @@ EOF
         kill_process_tree "$xcodebuild_pid" KILL
       fi
       wait "$xcodebuild_pid" >/dev/null 2>&1 || true
+      if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+        warn "Remote xcodebuild process survived TERM and KILL: $xcodebuild_pid"
+        cleanup_failed=1
+      fi
+    fi
+    xcodebuild_pid=""
+
+    if [[ "$cleanup_failed" == "0" ]] \
+      && ! toastty_cleanup_run_owned_host_apps "$derived_path"; then
+      warn "One or more run-owned Toastty host processes survived cleanup"
+      cleanup_failed=1
+    fi
+    if [[ "$cleanup_failed" == "0" ]] \
+      && toastty_run_paths_have_live_process "$derived_path" "$runtime_home"; then
+      warn "A process still references the run-owned DerivedData or runtime home"
+      cleanup_failed=1
+    fi
+    if [[ "$cleanup_failed" == "0" && -z "$owned_simulator_udid" \
+      && -e "$remote_run_root/simulator-ownership.json" ]]; then
+      if [[ -f "$remote_run_root/simulator-ownership.json" \
+        && ! -L "$remote_run_root/simulator-ownership.json" ]] \
+        && owned_simulator_udid="$(jq -er '.simulator.udid' "$remote_run_root/simulator-ownership.json")" \
+        && owned_simulator_name="$(jq -er '.simulator.name' "$remote_run_root/simulator-ownership.json")"; then
+        :
+      else
+        warn "Simulator ownership exists but cannot be read safely"
+        cleanup_failed=1
+      fi
+    fi
+    if [[ "$cleanup_failed" == "0" && -n "$owned_simulator_udid" ]]; then
+      if ! toastty_ios_simulator_delete_owned_clone \
+        "$run_label" "$remote_run_root" "$remote_worktree_dir" \
+        "$derived_path" "$runtime_home" \
+        "$owned_simulator_udid" "$owned_simulator_name"; then
+        warn "Run-owned simulator cleanup failed: $owned_simulator_name ($owned_simulator_udid)"
+        cleanup_failed=1
+      fi
+    fi
+    remote_resources_finalized=1
+    remote_finalize_in_progress=0
+    if [[ "$cleanup_failed" == "0" ]]; then
+      remote_finalize_status=0
+    fi
+    return "$remote_finalize_status"
+  }
+
+  cleanup_remote_test_on_exit() {
+    local cleanup_exit_code=$?
+    if [[ "$remote_resources_finalized" != "1" ]]; then
+      if finalize_remote_resources; then
+        : >"$remote_run_root/INTERRUPTED"
+      else
+        : >"$remote_run_root/CLEANUP_FAILED"
+      fi
     fi
     return "$cleanup_exit_code"
   }
-  trap cleanup_remote_xcodebuild EXIT HUP INT TERM
+
+  handle_remote_test_signal() {
+    local signal_exit_code="$1"
+    trap '' HUP INT TERM QUIT PIPE
+    exit "$signal_exit_code"
+  }
+  trap cleanup_remote_test_on_exit EXIT
+  trap 'handle_remote_test_signal 129' HUP
+  trap 'handle_remote_test_signal 130' INT
+  trap 'handle_remote_test_signal 143' TERM
+  trap 'handle_remote_test_signal 131' QUIT
+  trap 'handle_remote_test_signal 141' PIPE
 
   if [[ "$remote_arch" == "arm64" && "$allow_remote_x86_64_tests" != "1" ]] &&
      xcodebuild_args_request_x86_64_macos "${xcodebuild_args[@]}"; then
@@ -990,37 +1178,23 @@ EOF
           fi
         done
         if [[ "$has_destination" == "0" ]]; then
-          local simulator_id
-          local destination_probe_status=0
-          local scheme_name
-          scheme_name="$(xcodebuild_arg_value -scheme "${xcodebuild_args[@]}" || true)"
-          if xcodebuild "${xcodebuild_args[@]}" -showdestinations >"$destination_probe_log" 2>&1; then
+          local simulator_setup_status=0
+          if toastty_ios_simulator_create_owned_clone \
+            "$run_label" "$remote_run_root" "$remote_worktree_dir" \
+            "$derived_path" "$runtime_home" >>"$xcodebuild_log" 2>&1; then
             :
           else
-            destination_probe_status=$?
+            simulator_setup_status=$?
           fi
-          {
-            printf '[remote-test] xcodebuild destination probe\n'
-            cat "$destination_probe_log"
-          } >>"$xcodebuild_log"
-
-          if [[ "$destination_probe_status" != "0" ]]; then
+          owned_simulator_udid="$TOASTTY_IOS_OWNED_SIMULATOR_UDID"
+          owned_simulator_name="$TOASTTY_IOS_OWNED_SIMULATOR_NAME"
+          if [[ "$simulator_setup_status" == "0" ]]; then
+            xcodebuild_args+=( -destination "platform=iOS Simulator,id=${owned_simulator_udid}" )
+            xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
+          else
             exit_code=$SETUP_ERROR_EXIT_CODE
             status="setup_error"
-            failure_summary="xcodebuild -showdestinations failed${scheme_name:+ for scheme ${scheme_name}} with status ${destination_probe_status}; see destination-probe.log"
-          else
-            simulator_id="$(
-              awk '/platform:iOS Simulator/ && /name:iPhone/ && $0 !~ /unavailable/ { line=$0; sub(/^.*id:[[:space:]]*/, "", line); sub(/,[[:space:]].*$/, "", line); print line; exit }' \
-                "$destination_probe_log"
-            )"
-            if [[ -z "$simulator_id" ]]; then
-              exit_code=$SETUP_ERROR_EXIT_CODE
-              status="setup_error"
-              failure_summary="No compatible iPhone Simulator destination was reported${scheme_name:+ for scheme ${scheme_name}}; see destination-probe.log"
-            else
-              xcodebuild_args+=( -destination "platform=iOS Simulator,id=${simulator_id}" )
-              xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
-            fi
+            failure_summary="Failed to create and boot a run-owned iPhone Simulator clone; see xcodebuild.log"
           fi
         fi
       fi
@@ -1038,6 +1212,8 @@ EOF
     (
       cd "$remote_worktree_dir"
       TOASTTY_RUNTIME_HOME="$runtime_home" \
+      TOASTTY_RUNTIME_LABEL="$run_label" \
+      TOASTTY_RUN_ID="$run_label" \
       TOASTTY_DEV_WORKTREE_ROOT="$remote_worktree_dir" \
       xcodebuild \
         "${xcodebuild_args[@]}" \
@@ -1110,6 +1286,23 @@ EOF
     fi
   fi
 
+  test_failure_summary="$failure_summary"
+  if finalize_remote_resources; then
+    : >"$remote_run_root/COMPLETED"
+  else
+    cleanup_failure_summary="Run-owned remote test resource cleanup failed; inspect CLEANUP_FAILED and xcodebuild.log"
+    : >"$remote_run_root/CLEANUP_FAILED"
+    status="fail"
+    if [[ "$exit_code" == "0" ]]; then
+      exit_code=1
+    fi
+    if [[ -n "$failure_summary" ]]; then
+      failure_summary+="; ${cleanup_failure_summary}"
+    else
+      failure_summary="$cleanup_failure_summary"
+    fi
+  fi
+
   local ended_at
   ended_at="$(timestamp_utc)"
   write_result_json \
@@ -1119,8 +1312,11 @@ EOF
     "$ended_at" \
     "$remote_run_root" \
     "$failure_summary" \
-    "$xcodebuild_command"
+    "$xcodebuild_command" \
+    "$test_failure_summary" \
+    "$cleanup_failure_summary"
 
+  trap - EXIT HUP INT TERM QUIT PIPE
   return "$exit_code"
 }
 

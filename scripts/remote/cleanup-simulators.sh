@@ -124,6 +124,10 @@ evaluate_device_json() {
     EVALUATION_REASON="missing or invalid name"
     return 2
   }
+  if [[ "$DEVICE_NAME" == "Toastty Remote test-"* ]]; then
+    EVALUATION_REASON="run-owned simulator clone requires matching remote-run ownership cleanup"
+    return 2
+  fi
   if ! is_legacy_automation_name "$DEVICE_NAME"; then
     EVALUATION_REASON="not a legacy Toastty remote-automation simulator"
     return 3

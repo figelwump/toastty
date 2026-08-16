@@ -234,7 +234,7 @@ test("a booted iOS 17 device is rejected in favor of creating on the newest comp
   assert.ok(!JSON.stringify(commands).includes("id=IOS17-BOOTED"));
 });
 
-test("the newest compatible runtime reuses a booted iPhone without creating or booting", () => {
+test("the newest compatible runtime does not reuse an unrelated booted iPhone", () => {
   const ios18 = "com.apple.CoreSimulator.SimRuntime.iOS-18-4";
   const ios19 = "com.apple.CoreSimulator.SimRuntime.iOS-19-1";
   const toolchain = createStubToolchain({
@@ -254,15 +254,40 @@ test("the newest compatible runtime reuses a booted iPhone without creating or b
     ["tuist", ["install"]],
     ["tuist", ["generate", "--no-open"]],
   ]);
-  assert.equal(commands.filter(({ tool, args }) => tool === "xcrun" && args[1] === "create").length, 0);
-  assert.equal(commands.filter(({ tool, args }) => tool === "xcrun" && ["boot", "bootstatus"].includes(args[1])).length, 0);
+  assert.equal(commands.filter(({ tool, args }) => tool === "xcrun" && args[1] === "create").length, 1);
+  assert.equal(commands.filter(({ tool, args }) => tool === "xcrun" && ["boot", "bootstatus"].includes(args[1])).length, 2);
   const xcodebuild = commands.find(({ tool }) => tool === "xcodebuild");
-  assert.equal(xcodebuild.args[xcodebuild.args.indexOf("-destination") + 1], "platform=iOS Simulator,id=NEWEST-BOOTED");
+  assert.equal(xcodebuild.args[xcodebuild.args.indexOf("-destination") + 1], "platform=iOS Simulator,id=CREATED-UDID");
   assert.deepEqual(
     xcodebuild.args.slice(xcodebuild.args.indexOf("-parallel-testing-enabled"), -1),
     ["-parallel-testing-enabled", "NO"],
   );
   assert.equal(xcodebuild.args.at(-1), "test");
+});
+
+test("duplicate isolated simulator names fail closed", () => {
+  const ios18 = "com.apple.CoreSimulator.SimRuntime.iOS-18-4";
+  const duplicate = {
+    name: "Toastty Mobile script-tests",
+    state: "Shutdown",
+    isAvailable: true,
+  };
+  const toolchain = createStubToolchain({
+    runtimes: { runtimes: [runtime(ios18, "18.4")] },
+    devices: {
+      devices: {
+        [ios18]: [
+          { ...duplicate, udid: "DUPLICATE-ONE" },
+          { ...duplicate, udid: "DUPLICATE-TWO" },
+        ],
+      },
+    },
+  });
+
+  const result = runDispatcher(["test"], toolchain.environment);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /refusing ambiguous targeting/);
+  assert.equal(readLog(toolchain.logPath).some(({ tool }) => tool === "xcodebuild"), false);
 });
 
 test("an existing isolated simulator on the newest runtime is booted and reused", () => {

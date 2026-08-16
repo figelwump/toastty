@@ -101,6 +101,7 @@ MISSING_BOOT_ID="44444444-4444-4444-4444-444444444444"
 INVALID_ID="not-a-udid"
 ORDINARY_ID="55555555-5555-5555-5555-555555555555"
 CURRENT_TOASTTY_ID="66666666-6666-6666-6666-666666666666"
+RUN_OWNED_CLONE_ID="77777777-7777-7777-7777-777777777777"
 
 printf '%s\n' "$(jq -nc \
   --arg oldShutdownID "$OLD_SHUTDOWN_ID" \
@@ -110,6 +111,7 @@ printf '%s\n' "$(jq -nc \
   --arg invalidID "$INVALID_ID" \
   --arg ordinaryID "$ORDINARY_ID" \
   --arg currentToasttyID "$CURRENT_TOASTTY_ID" \
+  --arg runOwnedCloneID "$RUN_OWNED_CLONE_ID" \
   '{devices:{"com.apple.CoreSimulator.SimRuntime.iOS-26-3":[
     {name:"Plate Remote remote-test-20241220-old",udid:$oldShutdownID,state:"Shutdown",lastBootedAt:"2024-12-20T00:00:00Z",dataPathSize:1073741824},
     {name:"Plate Remote remote-validate-20241220-booted",udid:$oldBootedID,state:"Booted",lastBootedAt:"2024-12-20T00:00:00Z",dataPathSize:2147483648},
@@ -118,13 +120,14 @@ printf '%s\n' "$(jq -nc \
     {name:"Plate Remote remote-test-20241220-invalid-id",udid:$invalidID,state:"Shutdown",lastBootedAt:"2024-12-20T00:00:00Z",dataPathSize:1024},
     {name:"iPhone 17",udid:$ordinaryID,state:"Shutdown",lastBootedAt:"2024-01-01T00:00:00Z",dataPathSize:999},
     {name:"Toastty Mobile worktree",udid:$currentToasttyID,state:"Shutdown",lastBootedAt:"2024-01-01T00:00:00Z",dataPathSize:999}
+    ,{name:"Toastty Remote test-owned-fixture",udid:$runOwnedCloneID,state:"Shutdown",lastBootedAt:"2024-01-01T00:00:00Z",dataPathSize:999}
   ]}}')" >"$INITIAL_JSON"
 cp "$INITIAL_JSON" "$RECHECK_JSON"
 
 : >"$LIST_COUNT"
 dry_run_output="$(run_remote_fixture dry-run 2>&1)"
 [[ ! -s "$DELETE_LOG" ]] || fail_test "dry run deleted a simulator"
-[[ "$dry_run_output" == *'mode=dry-run eligible=1 deleted=0 retained=1 eligible_size=1.0 GiB reclaimed=0 B manual_review=3 delete_failures=0'* ]] \
+[[ "$dry_run_output" == *'mode=dry-run eligible=1 deleted=0 retained=1 eligible_size=1.0 GiB reclaimed=0 B manual_review=4 delete_failures=0'* ]] \
   || {
     printf '%s\n' "$dry_run_output" >&2
     fail_test "dry-run summary did not match the fail-closed fixture"
@@ -155,7 +158,7 @@ local_wrapper_output="$(
 apply_output="$(run_remote_fixture apply 2>&1)"
 [[ "$(cat "$DELETE_LOG")" == "$OLD_SHUTDOWN_ID" ]] \
   || fail_test "apply did not delete exactly the old shutdown legacy simulator"
-[[ "$apply_output" == *'mode=apply eligible=1 deleted=1 retained=1 eligible_size=1.0 GiB reclaimed=1.0 GiB manual_review=3 delete_failures=0'* ]] \
+[[ "$apply_output" == *'mode=apply eligible=1 deleted=1 retained=1 eligible_size=1.0 GiB reclaimed=1.0 GiB manual_review=4 delete_failures=0'* ]] \
   || {
     printf '%s\n' "$apply_output" >&2
     fail_test "apply summary did not report the deleted simulator"
