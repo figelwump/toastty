@@ -1475,7 +1475,7 @@ struct ToasttyApp: App {
             RemoteAccessSettingsView(service: remoteAccessService)
         }
         .windowResizability(.contentSize)
-        .defaultSize(width: 520, height: 480)
+        .defaultSize(width: 540, height: 600)
     }
 
     private var supportsConfigurationReload: Bool {

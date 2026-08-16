@@ -21,21 +21,19 @@ struct RemoteAccessSettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                gatewaySection
-                if service.isEnabled {
-                    pairingSection
-                }
-                devicesSection
-                writeControlsSection
-                if showsAudit {
-                    auditSection
-                }
+        Form {
+            gatewaySection
+            if service.isEnabled {
+                pairingSection
             }
-            .padding(20)
+            devicesSection
+            writeControlsSection
+            if showsAudit {
+                auditSection
+            }
         }
-        .frame(minWidth: 460, minHeight: 420)
+        .formStyle(.grouped)
+        .frame(minWidth: 480, minHeight: 460)
         .onAppear {
             service.refreshDevices()
             service.refreshNativePairingOffer()
@@ -51,24 +49,20 @@ struct RemoteAccessSettingsView: View {
     }
 
     private var gatewaySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        Section {
             Toggle(isOn: Binding(
                 get: { service.isEnabled },
                 set: { service.setEnabled($0) }
             )) {
-                Text("Enable Remote Access").font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Enable Remote Access")
+                    Text(gatewayStatusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .toggleStyle(.switch)
 
-            if let port = service.listeningPort {
-                Text("Listening on 127.0.0.1:\(String(port)) · \(service.connectedClientCount) connected")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Off. Phones cannot connect and all remote reads stop immediately.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
             if let startupError = service.startupError {
                 Text(startupError)
                     .font(.callout)
@@ -79,7 +73,7 @@ struct RemoteAccessSettingsView: View {
                 HStack(spacing: 8) {
                     TextField("https://your-mac.tailnet.ts.net", text: $service.tailnetOrigin)
                         .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 280)
+                        .frame(maxWidth: .infinity)
 
                     Button {
                         originDetectionRequestID += 1
@@ -96,15 +90,23 @@ struct RemoteAccessSettingsView: View {
                     .accessibilityIdentifier("toastty-remote-access-detect-origin")
                 }
             }
-            if case .failed(let message) = originDetectionState {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                if case .failed(let message) = originDetectionState {
+                    Text(message)
+                }
+                Text("Toastty detects this Mac’s Tailnet origin when possible. Tailscale Serve must still proxy the local gateway; only that exact origin may pair or subscribe.")
             }
-            Text("Toastty detects this Mac’s Tailnet origin when possible. Tailscale Serve must still proxy the local gateway; only that exact origin may pair or subscribe.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
+    }
+
+    private var gatewayStatusText: String {
+        if let port = service.listeningPort {
+            return "Listening on 127.0.0.1:\(String(port)) · \(service.connectedClientCount) connected"
+        }
+        return "Off — phones cannot connect and all remote reads stop immediately."
     }
 
     @MainActor
@@ -142,53 +144,23 @@ struct RemoteAccessSettingsView: View {
     }
 
     private var pairingSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Pair a phone").font(.headline)
-            browserPairingSection
-            Divider()
-            nativePairingSection
-        }
-    }
-
-    private var browserPairingSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Browser")
-                .font(.subheadline.weight(.semibold))
-            if let code = service.currentPairingCode {
-                HStack(spacing: 12) {
-                    Text(code.code)
-                        .font(.system(size: 28, weight: .bold, design: .monospaced))
-                        .textSelection(.enabled)
-                    Button("Cancel") {
-                        service.invalidatePairingCode()
-                    }
-                }
-                Text("Single use, expires after 5 minutes. New devices can read and send by default; you can disable Send below.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Button("Show Pairing Code") {
-                    service.issuePairingCode()
-                }
-            }
-        }
-    }
-
-    private var nativePairingSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Native app")
-                .font(.subheadline.weight(.semibold))
-            Text("Scan the QR code in Toastty Mobile. The fallback code is for manual pairing and expires with the QR code.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
+        Section {
             if let offer = service.currentNativePairingOffer {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     nativeOfferContent(offer, at: context.date)
                 }
             } else {
-                Button("Show Native Pairing QR") {
-                    service.issueNativePairingOffer()
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Toastty Mobile")
+                        Text("Pair a phone by scanning a QR code.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Show Pairing QR") {
+                        service.issueNativePairingOffer()
+                    }
                 }
             }
 
@@ -197,6 +169,12 @@ struct RemoteAccessSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.red)
             }
+        } header: {
+            Text("Pair a Phone")
+        } footer: {
+            Text("The QR code is single use. If the phone can’t scan it, enter the fallback code manually; it expires with the QR code.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -204,10 +182,10 @@ struct RemoteAccessSettingsView: View {
     private func nativeOfferContent(_ offer: RemoteNativePairingOffer, at date: Date) -> some View {
         let isExpired = date >= offer.expiresAt
         if isExpired {
-            HStack(spacing: 12) {
-                Text("Pairing offer expired")
-                    .font(.callout.weight(.semibold))
+            HStack {
+                Label("Pairing offer expired", systemImage: "clock.badge.exclamationmark")
                     .foregroundStyle(.secondary)
+                Spacer()
                 Button("Issue New QR") {
                     service.issueNativePairingOffer()
                 }
@@ -216,12 +194,14 @@ struct RemoteAccessSettingsView: View {
                 }
             }
         } else {
-            HStack(alignment: .top, spacing: 16) {
+            VStack(spacing: 12) {
                 if let image = service.currentNativePairingQRCode {
                     Image(nsImage: image)
                         .interpolation(.none)
                         .resizable()
-                        .frame(width: 176, height: 176)
+                        .frame(width: 180, height: 180)
+                        .padding(8)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 10))
                         .accessibilityLabel("Native pairing QR code")
                         .accessibilityHint("Scan with Toastty Mobile")
                         .privacySensitive()
@@ -233,30 +213,30 @@ struct RemoteAccessSettingsView: View {
                             .font(.caption)
                     }
                     .foregroundStyle(.secondary)
-                    .frame(width: 176, height: 176)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    .frame(width: 180, height: 180)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Fallback code")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
-                        Text(offer.fallbackCode)
-                            .font(.system(size: 22, weight: .bold, design: .monospaced))
-                            .textSelection(.enabled)
-                            .privacySensitive()
-                        Button(copiedNativeFallbackCode == offer.fallbackCode ? "Copied" : "Copy Code") {
-                            if RemoteAccessPairingClipboard.copy(offer.fallbackCode) {
-                                copiedNativeFallbackCode = offer.fallbackCode
-                            }
+                HStack(spacing: 8) {
+                    Text(offer.fallbackCode)
+                        .font(.system(size: 22, weight: .bold, design: .monospaced))
+                        .textSelection(.enabled)
+                        .privacySensitive()
+                    Button(copiedNativeFallbackCode == offer.fallbackCode ? "Copied" : "Copy") {
+                        if RemoteAccessPairingClipboard.copy(offer.fallbackCode) {
+                            copiedNativeFallbackCode = offer.fallbackCode
                         }
-                        .accessibilityLabel("Copy fallback code")
-                        .accessibilityIdentifier("toastty-remote-access-copy-fallback-code")
                     }
-                    Text(nativeOfferExpiryLabel(offer, at: date))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    .controlSize(.small)
+                    .accessibilityLabel("Copy fallback code")
+                    .accessibilityIdentifier("toastty-remote-access-copy-fallback-code")
+                }
+
+                Text(nativeOfferExpiryLabel(offer, at: date))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
                     Button("Issue New QR") {
                         service.issueNativePairingOffer()
                     }
@@ -265,6 +245,8 @@ struct RemoteAccessSettingsView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
         }
     }
 
@@ -273,23 +255,9 @@ struct RemoteAccessSettingsView: View {
     }
 
     private var devicesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Paired devices").font(.headline)
-                Spacer()
-                Button(showsAudit ? "Hide Audit Log" : "Show Audit Log") {
-                    showsAudit.toggle()
-                }
-                .buttonStyle(.link)
-                if service.devices.contains(where: { $0.isRevoked == false }) {
-                    Button("Revoke All", role: .destructive) {
-                        service.revokeAllDevices()
-                    }
-                }
-            }
+        Section {
             if service.devices.isEmpty {
                 Text("No devices paired yet.")
-                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             if let deviceManagementError = service.deviceManagementError {
@@ -298,13 +266,18 @@ struct RemoteAccessSettingsView: View {
                     .foregroundStyle(.red)
             }
             ForEach(service.devices) { device in
-                HStack {
+                HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(device.name)
                             .strikethrough(device.isRevoked)
                         Text(deviceDetail(device))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if let lastSeenAt = device.lastSeenAt {
+                            Text("Last seen \(lastSeenAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
                     if device.isRevoked {
@@ -323,21 +296,31 @@ struct RemoteAccessSettingsView: View {
                         }
                     }
                 }
-                .padding(.vertical, 2)
+            }
+        } header: {
+            HStack {
+                Text("Paired Devices")
+                Spacer()
+                Button(showsAudit ? "Hide Audit Log" : "Show Audit Log") {
+                    showsAudit.toggle()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                if service.devices.contains(where: { $0.isRevoked == false }) {
+                    Button("Revoke All", role: .destructive) {
+                        service.revokeAllDevices()
+                    }
+                    .controlSize(.small)
+                }
             }
         }
     }
 
     private var writeControlsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Remote replies").font(.headline)
-            Text("On by default for each active session. Turn off a session for every device until Toastty restarts, or turn off Send on a device for a persistent block. Local typing always wins.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Section {
             let conversations = service.writeControllableSessions
             if conversations.isEmpty {
                 Text("No agent sessions available.")
-                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             ForEach(conversations, id: \.conversationID) { conversation in
@@ -345,7 +328,7 @@ struct RemoteAccessSettingsView: View {
                     get: { service.isSessionWriteEnabled(conversation.conversationID) },
                     set: { service.setSessionWriteEnabled($0, for: conversation.conversationID) }
                 )) {
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(conversation.title)
                         Text("\(conversation.provider.displayName)\(conversation.placement.workspaceTitle.map { " · \($0)" } ?? "")")
                             .font(.caption)
@@ -354,16 +337,20 @@ struct RemoteAccessSettingsView: View {
                 }
                 .toggleStyle(.switch)
             }
+        } header: {
+            Text("Remote Replies")
+        } footer: {
+            Text("On by default for each active session. Turn off a session for every device until Toastty restarts, or turn off Send on a device for a persistent block. Local typing always wins.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
     private var auditSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Recent activity").font(.headline)
+        Section("Recent Activity") {
             let entries = service.recentAuditEntries(limit: 30).reversed()
             if entries.isEmpty {
                 Text("No remote-access activity recorded.")
-                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
@@ -379,13 +366,8 @@ struct RemoteAccessSettingsView: View {
     }
 
     private func deviceDetail(_ device: RemoteDeviceRecord) -> String {
-        let scopes = device.scopes.map(\.rawValue).sorted().joined(separator: ", ")
         let kind = device.authKind == .native ? "Native app" : "Browser"
-        let paired = "paired \(device.createdAt.formatted(date: .abbreviated, time: .shortened))"
-        if let lastSeenAt = device.lastSeenAt {
-            return "\(kind) · \(scopes) · \(paired) · last seen \(lastSeenAt.formatted(date: .abbreviated, time: .shortened))"
-        }
-        return "\(kind) · \(scopes) · \(paired)"
+        return "\(kind) · paired \(device.createdAt.formatted(date: .abbreviated, time: .shortened))"
     }
 
     private func auditLabel(_ entry: RemoteAccessAuditEntry) -> String {
