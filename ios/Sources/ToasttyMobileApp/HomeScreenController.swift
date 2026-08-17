@@ -4,12 +4,6 @@ import ToasttyMobileDomain
 
 struct SelectedConversationPresentation: Identifiable, Equatable {
     let id: UUID
-    let requestsComposerFocus: Bool
-
-    init(id: UUID, requestsComposerFocus: Bool = false) {
-        self.id = id
-        self.requestsComposerFocus = requestsComposerFocus
-    }
 }
 
 @MainActor
@@ -21,7 +15,6 @@ final class HomeScreenController {
     var freshness: LiveProjectionFreshness
     private(set) var latestTransportFailure: NativeTransportFailure?
     private(set) var selectedConversationID: UUID?
-    private(set) var selectedConversationRequestsComposerFocus = false
     private(set) var removedSelectionMessage: String?
     private var onConversationOpened: @MainActor (UUID) -> Void = { _ in }
     private var onConversationClosed: @MainActor (UUID) -> Void = { _ in }
@@ -41,25 +34,18 @@ final class HomeScreenController {
     }
 
     func open(_ conversation: MobileConversation) {
-        selectConversation(
-            conversation.id,
-            requestsComposerFocus: conversation.inputAvailability.allowsReply
-        )
+        selectConversation(conversation.id)
     }
 
     @discardableResult
-    func openConversation(id: UUID, requestsComposerFocus: Bool = false) -> Bool {
-        guard let conversation = conversation(id: id) else { return false }
-        selectConversation(
-            id,
-            requestsComposerFocus: requestsComposerFocus
-                && conversation.inputAvailability.allowsReply
-        )
+    func openConversation(id: UUID) -> Bool {
+        guard conversation(id: id) != nil else { return false }
+        selectConversation(id)
         return true
     }
 
     func dismissConversation() {
-        selectConversation(nil, requestsComposerFocus: false)
+        selectConversation(nil)
     }
 
     func update(
@@ -75,7 +61,7 @@ final class HomeScreenController {
         self.latestTransportFailure = latestTransportFailure
 
         if let removedConversation, conversation(id: removedConversation.id) == nil {
-            selectConversation(nil, requestsComposerFocus: false)
+            selectConversation(nil)
             removedSelectionMessage = "\(removedConversation.title) is no longer available on your Mac."
         }
     }
@@ -97,18 +83,10 @@ final class HomeScreenController {
 
     var selectedConversationPresentation: SelectedConversationPresentation? {
         get {
-            selectedConversationID.map {
-                SelectedConversationPresentation(
-                    id: $0,
-                    requestsComposerFocus: selectedConversationRequestsComposerFocus
-                )
-            }
+            selectedConversationID.map(SelectedConversationPresentation.init(id:))
         }
         set {
-            selectConversation(
-                newValue?.id,
-                requestsComposerFocus: newValue?.requestsComposerFocus ?? false
-            )
+            selectConversation(newValue?.id)
         }
     }
 
@@ -146,19 +124,12 @@ final class HomeScreenController {
         return "\(detail) Showing the last available update."
     }
 
-    private func selectConversation(
-        _ conversationID: UUID?,
-        requestsComposerFocus: Bool
-    ) {
-        guard selectedConversationID != conversationID else {
-            selectedConversationRequestsComposerFocus = requestsComposerFocus
-            return
-        }
+    private func selectConversation(_ conversationID: UUID?) {
+        guard selectedConversationID != conversationID else { return }
         if let selectedConversationID {
             onConversationClosed(selectedConversationID)
         }
         selectedConversationID = conversationID
-        selectedConversationRequestsComposerFocus = requestsComposerFocus
         if let conversationID {
             onConversationOpened(conversationID)
         }

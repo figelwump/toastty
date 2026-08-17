@@ -20,7 +20,7 @@ final class HomeScreenControllerTests: XCTestCase {
         XCTAssertNil(controller.selectedConversation)
     }
 
-    func testUserOpenRequestsFocusForOpenPromptWithoutReopeningConversation() throws {
+    func testUserOpenDoesNotReopenConversation() throws {
         let conversation = try XCTUnwrap(
             fixtureConversation(in: .ready) { $0.inputAvailability.allowsReply }
         )
@@ -39,35 +39,14 @@ final class HomeScreenControllerTests: XCTestCase {
         controller.open(conversation)
         XCTAssertEqual(
             controller.selectedConversationPresentation,
-            SelectedConversationPresentation(
-                id: conversation.id,
-                requestsComposerFocus: true
-            )
-        )
-        XCTAssertEqual(opened, [conversation.id])
-        XCTAssertTrue(closed.isEmpty)
-
-        controller.open(conversation)
-        XCTAssertEqual(opened, [conversation.id])
-        XCTAssertTrue(closed.isEmpty)
-    }
-
-    func testUserOpenDoesNotRequestFocusWithoutOpenPrompt() throws {
-        let conversation = try XCTUnwrap(
-            fixtureConversation(in: .ready) { $0.inputAvailability.allowsReply == false }
-        )
-        let controller = HomeScreenController(
-            runtimeMode: .fixture,
-            snapshot: ToasttyMobileFixture.home,
-            connectionState: .live
-        )
-
-        controller.open(conversation)
-
-        XCTAssertEqual(
-            controller.selectedConversationPresentation,
             SelectedConversationPresentation(id: conversation.id)
         )
+        XCTAssertEqual(opened, [conversation.id])
+        XCTAssertTrue(closed.isEmpty)
+
+        controller.open(conversation)
+        XCTAssertEqual(opened, [conversation.id])
+        XCTAssertTrue(closed.isEmpty)
     }
 
     func testStableIdentifierRouteOpensOnlyConversationInCurrentSnapshot() throws {
@@ -88,30 +67,6 @@ final class HomeScreenControllerTests: XCTestCase {
         controller.dismissConversation()
         XCTAssertFalse(controller.openConversation(id: UUID()))
         XCTAssertNil(controller.selectedConversationID)
-    }
-
-    func testStableIdentifierRouteOpensLockedConversationWithoutFocus() throws {
-        let conversation = try XCTUnwrap(
-            fixtureConversation(in: .needsApproval) {
-                $0.inputAvailability.allowsReply == false
-            }
-        )
-        let controller = HomeScreenController(
-            runtimeMode: .fixture,
-            snapshot: ToasttyMobileFixture.home,
-            connectionState: .live
-        )
-
-        XCTAssertTrue(
-            controller.openConversation(
-                id: conversation.id,
-                requestsComposerFocus: true
-            )
-        )
-        XCTAssertEqual(
-            controller.selectedConversationPresentation,
-            SelectedConversationPresentation(id: conversation.id)
-        )
     }
 
     func testConnectionNoticeClassifiesTransportFailures() {

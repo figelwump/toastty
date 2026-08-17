@@ -137,7 +137,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
-    func testFixtureReadyCardFocusesComposerWithoutTypingOrSending() {
+    func testFixtureReadyCardDoesNotFocusComposerUntilTapped() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
         )
@@ -153,9 +153,21 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         let input = app.textFields["toastty-mobile-composer-input"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertFalse(
+            keyboard.waitForExistence(timeout: 2),
+            "Opening a reply-capable conversation should not present the keyboard"
+        )
         XCTAssertEqual(input.value as? String, "Message Codex…")
         XCTAssertFalse(app.buttons["toastty-mobile-composer-send"].isEnabled)
+        attachScreenshot(named: "fixture-ready-composer-unfocused", of: app)
+
+        input.tap()
+        XCTAssertTrue(
+            keyboard.waitForExistence(timeout: 5),
+            "Tapping the composer should present the keyboard"
+        )
+        attachScreenshot(named: "fixture-ready-composer-focused", of: app)
     }
 
     func testFixtureCurrentBuildDeepLinksRouteWorkspaceAndConversation() throws {
@@ -527,11 +539,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let send = app.buttons["toastty-mobile-composer-send"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(
-            keyboard.waitForExistence(timeout: 5),
-            "Opening a reply-capable row should focus the composer without another tap"
+        XCTAssertFalse(
+            keyboard.waitForExistence(timeout: 2),
+            "Opening a conversation should not focus the composer"
         )
         XCTAssertTrue(input.isHittable)
+        input.tap()
+        XCTAssertTrue(
+            keyboard.waitForExistence(timeout: 5),
+            "Tapping the composer should present the keyboard"
+        )
         input.typeText("Accessible send")
         let title = app.staticTexts["toastty-mobile-conversation-title"]
         let back = app.navigationBars.firstMatch.buttons.firstMatch

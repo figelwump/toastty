@@ -4,10 +4,8 @@ import ToasttyMobileDomain
 struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @FocusState private var isComposerFocused: Bool
-    @State private var hasHandledComposerFocusRequest = false
 
     let conversationID: UUID
-    let requestsComposerFocus: Bool
     let controller: HomeScreenController
     let presentation: ToasttyConversationPresentationState?
     let composer: ToasttyComposerPresentation?
@@ -20,7 +18,6 @@ struct ToasttyConversationScreen: View {
 
     init(
         conversationID: UUID,
-        requestsComposerFocus: Bool = false,
         controller: HomeScreenController,
         presentation: ToasttyConversationPresentationState? = nil,
         composer: ToasttyComposerPresentation? = nil,
@@ -32,7 +29,6 @@ struct ToasttyConversationScreen: View {
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in }
     ) {
         self.conversationID = conversationID
-        self.requestsComposerFocus = requestsComposerFocus
         self.controller = controller
         self.presentation = presentation
         self.composer = composer
@@ -79,24 +75,6 @@ struct ToasttyConversationScreen: View {
                 }
             }
         }
-        .task(id: composerFocusIsReady) {
-            guard composerFocusIsReady, !hasHandledComposerFocusRequest else { return }
-            // A focus request during the push transition is dropped by
-            // SwiftUI, so wait out the navigation animation first.
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            hasHandledComposerFocusRequest = true
-            isComposerFocused = true
-        }
-    }
-
-    private var composerFocusIsReady: Bool {
-        guard requestsComposerFocus,
-              let conversation = controller.conversation(id: conversationID)
-        else {
-            return false
-        }
-        return (composer ?? lockedComposerFallback(conversation)).gate.allowsInput
     }
 
     private var resolvedPresentation: ToasttyConversationPresentationState {
@@ -207,6 +185,7 @@ struct ToasttyConversationScreen: View {
     ) -> some View {
         TextField(presentation.placeholder, text: $draft, axis: .vertical)
             .focused($isComposerFocused)
+            .textFieldStyle(.plain)
             .lineLimit(1...5)
             .textInputAutocapitalization(.sentences)
             .font(.body)
@@ -214,12 +193,14 @@ struct ToasttyConversationScreen: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(minHeight: 44)
-            .background(ToasttyDesignTokens.raisedSurface)
+            .background(
+                ToasttyDesignTokens.raisedSurface,
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: 11)
-                    .stroke(ToasttyDesignTokens.border)
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(ToasttyDesignTokens.border, lineWidth: 1)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 11))
             .disabled(presentation.gate.allowsInput == false)
             .accessibilityLabel("Message \(presentation.agentDisplayName)")
             .accessibilityHint(

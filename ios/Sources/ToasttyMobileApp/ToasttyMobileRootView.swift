@@ -222,11 +222,8 @@ struct ToasttyMobileRootView: View {
     }
 
     private func conversationScreen(for conversationID: UUID) -> some View {
-        let selection = sessionController.homeController.selectedConversationPresentation
         return ToasttyConversationScreen(
             conversationID: conversationID,
-            requestsComposerFocus: selection?.id == conversationID
-                && selection?.requestsComposerFocus == true,
             controller: sessionController.homeController,
             presentation: conversationPresentation(for: conversationID),
             composer: conversationComposer(for: conversationID),
