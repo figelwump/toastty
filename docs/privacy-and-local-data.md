@@ -147,6 +147,13 @@ timeouts, and launch failures to its structured local log. See
   reconciliation state is memory-only and discarded with its owning session or
   watcher. Child-agent display names can appear in Toastty's structured local
   logs. Toastty does not modify the Codex rollout files.
+- For managed Claude, OpenCode, MiMo Code, and Pi sessions, Toastty's injected
+  local hooks or extensions may read provider lifecycle events to retain a
+  bounded direct-child identity, display name, and provider-reported model or
+  effort metadata for the live sidebar. Toastty omits unavailable fields and
+  does not derive them from child prompts or tool output. This activity state is
+  held in memory and discarded when the owning session stops; helper failure
+  logs do not include full provider event payloads.
 - During Codex skill preparation, Toastty invokes the resolved local Codex CLI
   against a throwaway Codex home to produce the canonical plugin cache bytes,
   and once per legacy install to deregister the retired marketplace mechanism.

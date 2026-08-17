@@ -287,8 +287,9 @@ When the profile ID is `opencode` or `mimocode`, Toastty:
 2. **Injects the plugin through provider config content**. OpenCode launches receive `OPENCODE_CONFIG_CONTENT`; MiMo Code launches receive `MIMOCODE_CONFIG_CONTENT`. If a launch environment already sets the matching config-content variable, Toastty does not overwrite it and launches without status instrumentation.
 3. **Adds the four Toastty skills through the same config content**. Toastty extends that JSON blob with a `"skills": {"paths": [...]}` entry (plain absolute paths, never `file://`) pointing at the same staged shipped-skills tree used for Claude's `--plugin-dir` and, when user-created skills are accepted, the same staged user-skills snapshot — no new staging, caches, or config files. Because opencode and mimocode replace the `skills` object wholesale across config layers rather than merging it, a user's own `skills.paths` entries in global or project config are shadowed for the duration of a managed session (the `plugin` and `instructions` arrays in the same blob still merge normally). A discovered skill of the same name elsewhere in opencode/mimocode's discovery locations can win or lose against Toastty's injected copy nondeterministically, run to run. This collision is real in practice: repositories that mirror the shipped skills into `.agents/skills` (Toastty's own repos do), or home-level copies such as `~/.agents/skills/worktree-create`, collide with the injected set by name — harmless when the copies carry the same content, unpredictable when they diverge. The skills sheet's duplicate guidance covers removing stale copies. MiMo Code also auto-discovers project `.opencode/skills`, `.claude/skills`, `.agents/skills`, and `.mimocode/skills`, plus those same four directories and `~/.codex/skills` under `$HOME`, independent of anything Toastty injects.
 4. **Reports status through** `toastty session ingest-agent-event --source opencode-plugin` or `--source mimocode-plugin`. Toastty maps `session.status`, `session.idle`, `permission.asked`, `permission.replied`, and `session.error` into sidebar **Working**, **Ready**, **Needs approval**, and **Error** states.
-5. **Captures native resume metadata** when plugin hooks expose a provider session ID. The plugin writes a Toastty-owned per-session marker under `~/.toastty/managed-agent-resume/` (or `<runtime-home>/managed-agent-resume/` for isolated runs) and reports only the native session ID, marker path, and working directory back to Toastty.
-6. **Logs helper delivery failures** to `telemetry-failures.log` inside the temporary launch artifacts directory. The plugin logs event type, session context, exit status, and CLI stderr; it does not write full provider event payloads to the failure log.
+5. **Tracks direct provider sub-sessions** after the root session identity is known. Direct children appear as sidebar child rows, receive model updates from their own assistant-message metadata, and are removed on child or root termination. Nested descendants are intentionally not projected onto the root. Recognized effort-named model variants such as `low`, `medium`, `high`, and `xhigh` appear as reasoning effort; arbitrary custom variant names are omitted instead of being presented as an effort level.
+6. **Captures native resume metadata** when plugin hooks expose a provider session ID. An explicit `--session` / `-s` launch argument seeds an initial root-identity hint, which the first root message or root-creation event confirms or replaces; fresh launches claim the same identity from those hooks. The plugin writes a Toastty-owned per-session marker under `~/.toastty/managed-agent-resume/` (or `<runtime-home>/managed-agent-resume/` for isolated runs) and reports only the native session ID, marker path, and working directory back to Toastty.
+7. **Logs helper delivery failures** to `telemetry-failures.log` inside the temporary launch artifacts directory. The plugin logs event type, session context, exit status, and CLI stderr; it does not write full provider event payloads to the failure log.
 
 Capability evidence: `docs/plans/evidence/opencode-session-scoped-skills-2026-08-05.md` and `docs/plans/evidence/mimo-session-scoped-skills-2026-08-05.md`.
 
@@ -304,7 +305,8 @@ When the profile ID is `pi`, Toastty:
 4. **Respects Pi extension opt-out flags**. If `--no-extensions` or `-ne` appears before `--`, Toastty does not inject its Pi extension for that launch.
 5. **Reports compact telemetry** through `toastty session ingest-agent-event --source pi-extension`, covering the submitted prompt, final assistant summary, semantic tool-call progress, tool errors, and changed-file paths when Pi exposes them. Successful tool results update changed-file metadata without replacing the sidebar with generic `Finished ...` messages.
 6. **Captures native resume metadata** from Pi's extension context, including the native session ID, session file path, and working directory.
-7. **Avoids prompt and tool-output forwarding**. The extension records bounded metadata only and is a no-op outside Toastty when required `TOASTTY_*` environment variables are absent.
+7. **Tracks the standard Pi `subagent` extension when it is observable**. Single and parallel invocations create one child row per unambiguous task and add the model reported by Pi's streamed result metadata. Sequential chains reuse one row for the currently reported step so future steps are not shown as concurrently running. Pi's standard result contract does not expose a child thinking level, so Toastty does not infer one. Other custom subagent tools remain untracked unless they emit the same exact lifecycle metadata.
+8. **Avoids prompt and tool-output forwarding**. The extension records bounded metadata only and is a no-op outside Toastty when required `TOASTTY_*` environment variables are absent.
 
 Capability evidence: `docs/plans/evidence/pi-session-scoped-skills-2026-08-05.md`.
 
@@ -514,9 +516,10 @@ a child needs approval or reports an error. A parent can also show a waiting
 projection while children or other background tasks are still outstanding, so a
 brief ready/idle event does not make an orchestration wave look complete. A
 short resuming grace period prevents stale ready state from flashing between
-waves. For Codex collaboration agents, the child-row tooltip also shows the
-detected model identifier and reasoning effort when that runtime metadata is
-available; missing values are omitted.
+waves. The child-row tooltip shows a detected model identifier and reasoning
+effort when the owning provider exposes them with a stable child identity.
+Missing values are omitted; Toastty does not fill gaps from the parent model or
+from a prompt-derived guess.
 
 For Codex, `SubagentStart` and `SubagentStop` hooks are the authoritative source
 for collaboration-agent rows when trusted session hooks own telemetry. Session-recording
@@ -534,7 +537,9 @@ avoids duplicate rows and lets hook-tracked agents remain visible until Codex
 reports their completion.
 
 For Claude, asynchronous `Agent` and `Task` results create labeled subagent
-rows, and `SubagentStop` removes them. Dynamic Workflow results do not expose
+rows and include Claude's resolved child model when the launch response provides
+it; Claude's hook payload does not currently provide child effort. `SubagentStop`
+removes the rows. Dynamic Workflow results do not expose
 their child IDs, so `SubagentStart` creates one generic row per Workflow child;
 those lifecycle-owned rows remain visible through Claude's aggregate Workflow
 snapshot until their matching `SubagentStop` events arrive.

@@ -701,12 +701,27 @@ private extension SessionRegistry {
             kind: existing.kind,
             displayName: incoming.displayName ?? existing.displayName,
             command: incoming.command ?? existing.command,
-            executionProfile: incoming.executionProfile ?? existing.executionProfile,
+            executionProfile: mergedExecutionProfile(
+                existing: existing.executionProfile,
+                incoming: incoming.executionProfile
+            ),
             processID: incoming.processID ?? existing.processID,
             preserveWhenUnlisted: existing.preserveWhenUnlisted || incoming.preserveWhenUnlisted,
             startedAt: existing.startedAt,
             lastUpdatedAt: incoming.lastUpdatedAt
         )
+    }
+
+    static func mergedExecutionProfile(
+        existing: SessionAgentExecutionProfile?,
+        incoming: SessionAgentExecutionProfile?
+    ) -> SessionAgentExecutionProfile? {
+        guard let incoming else { return existing }
+        let merged = SessionAgentExecutionProfile(
+            modelIdentifier: incoming.modelIdentifier ?? existing?.modelIdentifier,
+            reasoningEffort: incoming.reasoningEffort ?? existing?.reasoningEffort
+        )
+        return merged.isEmpty ? nil : merged
     }
 
     static func defaultActivityDisplayName(for kind: SessionBackgroundActivityKind) -> String {

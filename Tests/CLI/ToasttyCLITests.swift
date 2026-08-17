@@ -639,7 +639,8 @@ struct ToasttyCLITests {
             let displayName,
             let command,
             let processID,
-            let preserveWhenUnlisted
+            let preserveWhenUnlisted,
+            let executionProfile
         ) = invocation.command else {
             Issue.record("expected session background activity command")
             return
@@ -654,6 +655,7 @@ struct ToasttyCLITests {
         #expect(command == "codex review")
         #expect(processID == 12_345)
         #expect(preserveWhenUnlisted == false)
+        #expect(executionProfile == nil)
 
         let envelope = invocation.command.makeEventEnvelope(requestID: "activity-request")
         #expect(envelope.eventType == "session.background_activity")
@@ -691,7 +693,8 @@ struct ToasttyCLITests {
             let displayName,
             let command,
             let processID,
-            let preserveWhenUnlisted
+            let preserveWhenUnlisted,
+            let executionProfile
         ) = invocation.command else {
             Issue.record("expected session background activity command")
             return
@@ -706,6 +709,7 @@ struct ToasttyCLITests {
         #expect(command == nil)
         #expect(processID == nil)
         #expect(preserveWhenUnlisted == false)
+        #expect(executionProfile == nil)
     }
 
     @Test
@@ -719,7 +723,11 @@ struct ToasttyCLITests {
                 SessionBackgroundActivitySyncEntry(
                     id: "agent-1",
                     displayName: "general-purpose",
-                    command: "Review the diff"
+                    command: "Review the diff",
+                    executionProfile: SessionAgentExecutionProfile(
+                        modelIdentifier: "anthropic/claude-sonnet-4",
+                        reasoningEffort: "high"
+                    )
                 ),
             ],
             pendingBackgroundTaskCount: 2,
@@ -746,6 +754,8 @@ struct ToasttyCLITests {
         #expect(entry.string("id") == "agent-1")
         #expect(entry.string("displayName") == "general-purpose")
         #expect(entry.string("command") == "Review the diff")
+        #expect(entry.string("modelIdentifier") == "anthropic/claude-sonnet-4")
+        #expect(entry.string("reasoningEffort") == "high")
     }
 
     @Test

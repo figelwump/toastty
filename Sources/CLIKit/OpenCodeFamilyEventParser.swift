@@ -136,9 +136,48 @@ private extension OpenCodeFamilyEventParser {
                 properties: properties
             )
 
+        case "toastty.background_activity":
+            return backgroundActivityCommands(
+                sessionID: sessionID,
+                panelID: panelID,
+                properties: properties
+            )
+
         default:
             return nil
         }
+    }
+
+    static func backgroundActivityCommands(
+        sessionID: String,
+        panelID: UUID?,
+        properties: [String: Any]
+    ) -> [CLICommand] {
+        guard normalizedString(properties["kind"], limit: 80) == SessionBackgroundActivityKind.subagent.rawValue,
+              let phaseRaw = normalizedString(properties["phase"], limit: 80),
+              let phase = SessionBackgroundActivityPhase(rawValue: phaseRaw),
+              phase != .sync,
+              let activityID = normalizedString(properties["activityID"], limit: 240) else {
+            return []
+        }
+        let profile = SessionAgentExecutionProfile(
+            modelIdentifier: normalizedString(properties["modelIdentifier"], limit: 200),
+            reasoningEffort: normalizedString(properties["reasoningEffort"], limit: 80)
+        )
+        return [
+            .sessionBackgroundActivity(
+                sessionID: sessionID,
+                panelID: panelID,
+                phase: phase,
+                activityID: activityID,
+                kind: .subagent,
+                displayName: normalizedString(properties["displayName"], limit: 120),
+                command: nil,
+                processID: nil,
+                preserveWhenUnlisted: false,
+                executionProfile: profile.isEmpty ? nil : profile
+            ),
+        ]
     }
 
     static func nativeSessionCommands(

@@ -1150,10 +1150,13 @@ Accepted payload keys:
 - `activityID?: String`
 - `displayName?: String`
 - `command?: String`
+- `modelIdentifier?: String` (bounded provider-reported child model metadata)
+- `reasoningEffort?: String` (bounded provider-reported child effort metadata)
 - `processID?: Int` (positive 32-bit integer)
 - `preserveWhenUnlisted?: Bool` (optional for `start`; defaults to `false`)
 - `pendingCount?: Int` (required and non-negative for `sync`)
-- `entries?: [{ id, displayName?, command? }]` (required for `sync`)
+- `entries?: [{ id, displayName?, command?, modelIdentifier?, reasoningEffort? }]`
+  (required for `sync`)
 - `preserveUnlistedActivities?: Bool` (optional for `sync`; defaults to `false`)
 
 Behavior:
@@ -1161,6 +1164,8 @@ Behavior:
 - `sessionID` must identify an active session
 - `panelID` is optional; when present it must match the active session
 - `start` requires `activityID` and creates or refreshes one child activity
+- profile fields are optional, sanitized at the socket boundary, and merged
+  field-by-field when a later update supplies only one of them
 - `finish` requires `activityID` and removes that activity
 - `sync` is valid only for `kind: "subagent"`; it replaces the current
   subagent activity set and records the pending background-task count

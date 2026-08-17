@@ -160,6 +160,9 @@ extension SessionRuntimeStoreTests {
                 kind: .subagent,
                 displayName: "Herschel",
                 command: "Inspect the diff",
+                executionProfile: SessionAgentExecutionProfile(
+                    modelIdentifier: "anthropic/claude-sonnet-4"
+                ),
                 startedAt: now.addingTimeInterval(2),
                 lastUpdatedAt: now.addingTimeInterval(2)
             ),
@@ -172,6 +175,9 @@ extension SessionRuntimeStoreTests {
                 kind: .subagent,
                 displayName: "Herschel",
                 command: "Inspect the diff",
+                executionProfile: SessionAgentExecutionProfile(
+                    reasoningEffort: "high"
+                ),
                 startedAt: now.addingTimeInterval(3),
                 lastUpdatedAt: now.addingTimeInterval(3)
             ),
@@ -185,9 +191,69 @@ extension SessionRuntimeStoreTests {
         let activity = try #require(activities["agent-1"])
         #expect(activity.startedAt == now.addingTimeInterval(2))
         #expect(activity.lastUpdatedAt == now.addingTimeInterval(3))
+        #expect(activity.executionProfile == SessionAgentExecutionProfile(
+            modelIdentifier: "anthropic/claude-sonnet-4",
+            reasoningEffort: "high"
+        ))
         #expect(store.workspaceStatuses(for: workspaceID).first?.projection == .waitingOnChildren(
             childCount: 1,
             pendingBackgroundTaskCount: 0
+        ))
+    }
+
+    @Test
+    func backgroundActivitySyncWithoutProfileRetainsObservedProfile() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_140)
+        let sessionID = "sess-profile-sync"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        #expect(store.updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: "agent-1",
+                kind: .subagent,
+                displayName: "reviewer",
+                executionProfile: SessionAgentExecutionProfile(
+                    modelIdentifier: "anthropic/claude-sonnet-4",
+                    reasoningEffort: "high"
+                ),
+                startedAt: now,
+                lastUpdatedAt: now
+            ),
+            at: now
+        ))
+        #expect(store.syncBackgroundActivities(
+            sessionID: sessionID,
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "agent-1",
+                    kind: .subagent,
+                    displayName: "reviewer",
+                    startedAt: now.addingTimeInterval(1),
+                    lastUpdatedAt: now.addingTimeInterval(1)
+                ),
+            ],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(1)
+        ))
+
+        let profile = store.sessionRegistry.sessionsByID[sessionID]?
+            .backgroundActivitiesByID["agent-1"]?.executionProfile
+        #expect(profile == SessionAgentExecutionProfile(
+            modelIdentifier: "anthropic/claude-sonnet-4",
+            reasoningEffort: "high"
         ))
     }
 

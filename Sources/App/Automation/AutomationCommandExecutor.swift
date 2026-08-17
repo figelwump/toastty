@@ -1011,6 +1011,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                         kind: kind,
                         displayName: event.payload.string("displayName"),
                         command: event.payload.string("command"),
+                        executionProfile: executionProfile(from: event.payload),
                         processID: processID,
                         preserveWhenUnlisted: preserveWhenUnlisted ?? false,
                         startedAt: now,
@@ -1065,6 +1066,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                         kind: kind,
                         displayName: normalizedOptionalText(object.string("displayName")),
                         command: normalizedOptionalText(object.string("command")),
+                        executionProfile: executionProfile(from: object),
                         startedAt: now,
                         lastUpdatedAt: now
                     )
@@ -2144,6 +2146,32 @@ final class AutomationCommandExecutor: @unchecked Sendable {
 
     private func normalizedOptionalText(_ value: String?, limit: Int) -> String? {
         normalizedOptionalText(value).map { String($0.prefix(limit)) }
+    }
+
+    private func executionProfile(
+        from object: [String: AutomationJSONValue]
+    ) -> SessionAgentExecutionProfile? {
+        let profile = SessionAgentExecutionProfile(
+            modelIdentifier: normalizedExecutionProfileText(object.string("modelIdentifier"), limit: 200),
+            reasoningEffort: normalizedExecutionProfileText(object.string("reasoningEffort"), limit: 80)
+        )
+        return profile.isEmpty ? nil : profile
+    }
+
+    private func normalizedExecutionProfileText(_ value: String?, limit: Int) -> String? {
+        guard let value else { return nil }
+        let withoutControls = value.unicodeScalars.map { scalar in
+            if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                return " "
+            }
+            return CharacterSet.controlCharacters.contains(scalar) ? "" : String(scalar)
+        }.joined()
+        let collapsed = withoutControls
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { $0.isEmpty == false }
+            .joined(separator: " ")
+        guard collapsed.isEmpty == false else { return nil }
+        return String(collapsed.prefix(limit))
     }
 
     private func codexNotifyCompletion(

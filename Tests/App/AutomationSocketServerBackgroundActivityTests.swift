@@ -53,6 +53,8 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
             "kind": .string(SessionBackgroundActivityKind.childAgent.rawValue),
             "displayName": .string("Codex"),
             "command": .string("codex review"),
+            "modelIdentifier": .string("anthropic/\u{0007}claude\nsonnet-4"),
+            "reasoningEffort": .string("  high\t"),
         ]
         let activityResponse = try sendEvent(
             AutomationEventEnvelope(
@@ -67,6 +69,15 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
         )
         #expect(activityResponse.ok)
         #expect(activityResponse.result?.string("status") == "accepted")
+
+        let storedProfile = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[sessionID]?
+                .backgroundActivitiesByID["child-activity"]?.executionProfile
+        }
+        #expect(storedProfile == SessionAgentExecutionProfile(
+            modelIdentifier: "anthropic/claude sonnet-4",
+            reasoningEffort: "high"
+        ))
 
         let projectedStatus = await MainActor.run {
             server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first

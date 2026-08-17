@@ -636,7 +636,10 @@ toastty session background-activity start|finish \
 `start` creates or refreshes a child row; `finish` removes it. The corresponding
 socket event also supports provider-owned `sync` payloads for replacing the
 current subagent set and reporting pending background-task counts. Outstanding
-activity contributes to the parent session's waiting projection.
+activity contributes to the parent session's waiting projection. Toastty-owned
+ingestors may also attach bounded `modelIdentifier` and `reasoningEffort`
+strings to `start` and `sync` socket payloads; those internal fields are not
+exposed as public CLI flags.
 
 ### `session update-files`
 
