@@ -89,6 +89,7 @@ struct ToasttyTranscriptView: View {
                 }
                 .background(ToasttyDesignTokens.background)
                 .accessibilityIdentifier("toastty-mobile-transcript")
+                .scrollDismissesKeyboard(.interactively)
                 .overlay(alignment: .topLeading) {
                     if state.rows.count == 5_000 {
                         Color.clear
@@ -138,34 +139,29 @@ struct ToasttyTranscriptView: View {
                         return rowID
                     }
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
+                .overlay(alignment: .bottomTrailing) {
                     if isAtLiveEdge == false,
                        followsLiveEdge == false,
                        lastScrollTarget != nil {
-                        HStack {
-                            Spacer(minLength: 0)
-                            Button {
-                                followsLiveEdge = true
-                                isJumpingToLiveEdge = true
-                            } label: {
-                                Label("Jump to latest", systemImage: "arrow.down")
-                                    .font(.caption.weight(.semibold))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 9)
-                                    .background(ToasttyDesignTokens.amber, in: Capsule())
-                                    .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
-                            }
-                            .accessibilityIdentifier("toastty-mobile-transcript-jump-latest")
+                        Button {
+                            followsLiveEdge = true
+                            isJumpingToLiveEdge = true
+                        } label: {
+                            Label("Jump to latest", systemImage: "arrow.down")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(ToasttyDesignTokens.amber, in: Capsule())
+                                .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
                         }
+                        .accessibilityIdentifier("toastty-mobile-transcript-jump-latest")
                         .padding(14)
-                        .background(ToasttyDesignTokens.background)
                     }
                 }
                 .task(id: isJumpingToLiveEdge) {
                     guard isJumpingToLiveEdge, let target = lastScrollTarget else { return }
-                    // Removing the jump inset changes the viewport. Let that
-                    // layout settle before calculating the live-edge scroll.
-                    await Task.yield()
+                    // Let the follow-state update settle before calculating the
+                    // live-edge scroll, without waiting on any layout change.
                     await Task.yield()
                     guard Task.isCancelled == false else { return }
                     withAnimation(.easeOut(duration: 0.2)) {

@@ -525,6 +525,65 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.textFields["toastty-mobile-composer-input"].isEnabled)
     }
 
+    func testGatedSendTranscriptDragDismissesKeyboard() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let input = app.textFields["toastty-mobile-composer-input"]
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        XCTAssertTrue(transcript.isHittable)
+        let dragStart = transcript.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)
+        )
+        let dragEnd = transcript.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)
+        )
+        dragStart.press(
+            forDuration: 0.1,
+            thenDragTo: dragEnd,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+
+        XCTAssertTrue(
+            keyboard.waitForNonExistence(timeout: 5),
+            "Dragging the transcript down should interactively dismiss the keyboard"
+        )
+    }
+
+    func testGatedSendJumpButtonStaysAboveFocusedComposer() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        transcript.swipeDown()
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
+
+        let input = app.textFields["toastty-mobile-composer-input"]
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(input.isHittable)
+        input.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        XCTAssertTrue(jumpToLatest.isHittable)
+        XCTAssertLessThanOrEqual(
+            jumpToLatest.frame.maxY,
+            input.frame.minY,
+            "The floating jump control must remain above the focused composer"
+        )
+    }
+
     func testGatedSendComposerReflowsAtAccessibilityXXXL() {
         let app = launchFixtureApp(
             launchArguments: [
