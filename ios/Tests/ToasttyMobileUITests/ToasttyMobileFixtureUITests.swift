@@ -559,6 +559,44 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
+    func testGatedSendKeyboardPresentationKeepsLiveTailVisible() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let newestRow = app.descendants(matching: .any)[
+            "toastty-mobile-transcript-row-13"
+        ]
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(newestRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(newestRow.isHittable)
+        XCTAssertFalse(jumpToLatest.exists)
+        let tailMaxYBeforeKeyboard = newestRow.frame.maxY
+
+        let input = app.textFields["toastty-mobile-composer-input"]
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(input.isHittable)
+        input.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+
+        XCTAssertTrue(newestRow.isHittable)
+        XCTAssertLessThan(
+            newestRow.frame.maxY,
+            tailMaxYBeforeKeyboard,
+            "The live tail should move up when the keyboard reduces the transcript viewport"
+        )
+        XCTAssertLessThanOrEqual(
+            newestRow.frame.maxY,
+            input.frame.minY + 1,
+            "The live tail should remain visible above the focused composer"
+        )
+        XCTAssertFalse(
+            jumpToLatest.exists,
+            "Keyboard presentation should preserve live-edge following"
+        )
+    }
+
     func testGatedSendJumpButtonStaysAboveFocusedComposer() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]

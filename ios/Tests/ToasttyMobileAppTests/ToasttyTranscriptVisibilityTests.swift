@@ -9,22 +9,48 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertTrue(
             TranscriptScrollMetrics(
                 contentHeight: 2_160,
-                visibleMaxY: 2_300.7
+                visibleMaxY: 2_300.7,
+                visibleHeight: 800
             ).isAtLiveEdge,
             "The inset-adjusted visible rect can extend beyond content at the physical bottom"
         )
         XCTAssertTrue(
             TranscriptScrollMetrics(
                 contentHeight: 2_160,
-                visibleMaxY: 2_089
+                visibleMaxY: 2_089,
+                visibleHeight: 800
             ).isAtLiveEdge
         )
         XCTAssertFalse(
             TranscriptScrollMetrics(
                 contentHeight: 2_160,
-                visibleMaxY: 2_088
+                visibleMaxY: 2_088,
+                visibleHeight: 800
             ).isAtLiveEdge,
             "The 72-point threshold is exclusive"
+        )
+    }
+
+    func testScrollMetricsIgnoreSubpointViewportJitter() {
+        let baseline = TranscriptScrollMetrics(
+            contentHeight: 2_160,
+            visibleMaxY: 2_160,
+            visibleHeight: 800
+        )
+
+        XCTAssertFalse(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_160,
+                visibleHeight: 799.51
+            ).hasViewportHeightChange(comparedTo: baseline)
+        )
+        XCTAssertTrue(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_160,
+                visibleHeight: 799.5
+            ).hasViewportHeightChange(comparedTo: baseline)
         )
     }
 

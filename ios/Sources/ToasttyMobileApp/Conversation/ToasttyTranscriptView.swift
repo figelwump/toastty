@@ -101,11 +101,24 @@ struct ToasttyTranscriptView: View {
                 }
                 .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
                     TranscriptScrollMetrics(geometry: geometry)
-                } action: { _, new in
+                } action: { old, new in
+                    let hadMeasuredScrollGeometry = hasMeasuredScrollGeometry
                     let atLiveEdge = new.isAtLiveEdge
                     hasMeasuredScrollGeometry = true
                     measuredBoundaryID = state.rows.last?.id
                     isAtLiveEdge = atLiveEdge
+                    if hadMeasuredScrollGeometry,
+                       new.hasViewportHeightChange(comparedTo: old),
+                       followsLiveEdge,
+                       let target = lastScrollTarget {
+                        // Keep the live tail pinned while the keyboard, composer,
+                        // or another safe-area change resizes the viewport.
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            proxy.scrollTo(target, anchor: .bottom)
+                        }
+                    }
                     if atLiveEdge, isJumpingToLiveEdge {
                         isJumpingToLiveEdge = false
                         followsLiveEdge = true
@@ -360,18 +373,30 @@ struct ToasttyTranscriptView: View {
 
 struct TranscriptScrollMetrics: Equatable {
     static let liveEdgeThreshold: CGFloat = 72
+    static let viewportResizeThreshold: CGFloat = 0.5
 
     let contentHeight: CGFloat
     let visibleMaxY: CGFloat
+    let visibleHeight: CGFloat
 
     init(geometry: ScrollGeometry) {
         contentHeight = geometry.contentSize.height
         visibleMaxY = geometry.visibleRect.maxY
+        visibleHeight = geometry.visibleRect.height
     }
 
-    init(contentHeight: CGFloat, visibleMaxY: CGFloat) {
+    init(
+        contentHeight: CGFloat,
+        visibleMaxY: CGFloat,
+        visibleHeight: CGFloat
+    ) {
         self.contentHeight = contentHeight
         self.visibleMaxY = visibleMaxY
+        self.visibleHeight = visibleHeight
+    }
+
+    func hasViewportHeightChange(comparedTo other: Self) -> Bool {
+        abs(visibleHeight - other.visibleHeight) >= Self.viewportResizeThreshold
     }
 
     var distanceFromBottom: CGFloat {
