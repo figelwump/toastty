@@ -5,6 +5,7 @@ import UIKit
 
 enum ToasttyMobileFixtureScenario: String, Equatable, Sendable {
     case home
+    case connecting
     case reconnecting
     case transcriptPerformance = "transcript-performance"
     case transcriptResyncing = "transcript-resyncing"
@@ -74,7 +75,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
              .transcriptStale, .transcriptTruncated, .transcriptPaging,
              .toolActivity, .gatedSend, .gatedSendReceipt:
             .live
-        case .reconnecting:
+        case .connecting, .reconnecting:
             .reconnecting
         case .unpaired, .cameraDenied, .scannerUnsupported,
              .pairingFailure, .pairingPrivacy, nil:
@@ -92,21 +93,31 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 scanner = FixturePairingScanner(authorization: .denied)
             case .scannerUnsupported:
                 scanner = FixturePairingScanner(availability: .unsupported)
-            case .home, .reconnecting, .transcriptPerformance, .transcriptResyncing,
-                 .transcriptStale, .transcriptTruncated, .transcriptPaging,
-                 .toolActivity, .gatedSend, .gatedSendReceipt,
+            case .home, .connecting, .reconnecting, .transcriptPerformance,
+                 .transcriptResyncing, .transcriptStale, .transcriptTruncated,
+                 .transcriptPaging, .toolActivity, .gatedSend, .gatedSendReceipt,
                  .unpaired, .pairingFailure, .pairingPrivacy:
                 scanner = FixturePairingScanner()
             }
             let usesPairedFixture: Bool
             switch fixtureScenario {
-            case .home, .reconnecting, .transcriptPerformance, .transcriptResyncing,
-                 .transcriptStale, .transcriptTruncated, .transcriptPaging,
-                 .toolActivity, .gatedSend, .gatedSendReceipt:
+            case .home, .connecting, .reconnecting, .transcriptPerformance,
+                 .transcriptResyncing, .transcriptStale, .transcriptTruncated,
+                 .transcriptPaging, .toolActivity, .gatedSend, .gatedSendReceipt:
                 usesPairedFixture = true
             case .unpaired, .cameraDenied, .scannerUnsupported,
                  .pairingFailure, .pairingPrivacy:
                 usesPairedFixture = false
+            }
+            let pairedPresentation: PairedConnectionPresentation = switch fixtureScenario {
+            case .connecting: .connecting
+            case .reconnecting: .reconnecting
+            case .home, .transcriptPerformance, .transcriptResyncing,
+                 .transcriptStale, .transcriptTruncated, .transcriptPaging,
+                 .toolActivity, .gatedSend, .gatedSendReceipt,
+                 .unpaired, .cameraDenied, .scannerUnsupported,
+                 .pairingFailure, .pairingPrivacy:
+                .live
             }
             let initialCredential = usesPairedFixture ? Self.fixtureCredential : nil
             let vault = FixtureAppCredentialVault(initialCredential: initialCredential)
@@ -119,9 +130,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 ),
                 scanner: scanner,
                 deviceName: { "Fixture iPhone" },
-                initialState: usesPairedFixture
-                    ? .paired(fixtureScenario == .reconnecting ? .reconnecting : .live)
-                    : .unpaired,
+                initialState: usesPairedFixture ? .paired(pairedPresentation) : .unpaired,
                 initialPairedDevice: initialCredential.map(PairedDevicePresentation.init),
                 initialSnapshot: initialSnapshot,
                 initialConnectionState: initialConnectionState

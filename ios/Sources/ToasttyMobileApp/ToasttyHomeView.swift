@@ -222,14 +222,14 @@ struct ToasttyHomeView: View {
             .toasttyCard()
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
-            .accessibilityValue(controller.freshness == .reconnecting ? "In progress" : "")
+            .accessibilityValue(showsProgressIndicator ? "In progress" : "")
             .accessibilityIdentifier("toastty-mobile-connection-notice")
         }
     }
 
     @ViewBuilder
     private var connectionNoticeIndicator: some View {
-        if controller.freshness == .reconnecting {
+        if showsProgressIndicator {
             ProgressView()
                 .controlSize(.small)
                 .tint(ToasttyDesignTokens.amber)
@@ -238,6 +238,10 @@ struct ToasttyHomeView: View {
                 ? "wifi.slash"
                 : "arrow.trianglehead.2.clockwise.rotate.90")
         }
+    }
+
+    private var showsProgressIndicator: Bool {
+        controller.freshness == .reconnecting || controller.freshness == .connecting
     }
 
     private var header: some View {

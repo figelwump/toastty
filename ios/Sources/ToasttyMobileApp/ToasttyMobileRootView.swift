@@ -30,23 +30,32 @@ struct ToasttyMobileRootView: View {
 
     var body: some View {
         Group {
-            switch sessionController.state {
-            case .pairing:
-                if let pairingController = sessionController.pairingController {
-                    PairingFlowView(
-                        controller: pairingController,
-                        onCancel: sessionController.cancelPairing,
-                        forcesPrivacyShield: forcesPairingPrivacyShield
-                    )
-                } else {
+            // The loading branch must stay a single view identity across the
+            // restoring → connecting handoff so its animations run
+            // uninterrupted and only the caption crossfades.
+            if let loadingPhase {
+                AppSessionLoadingView(phase: loadingPhase)
+                    .transition(.opacity)
+            } else {
+                switch sessionController.state {
+                case .pairing:
+                    if let pairingController = sessionController.pairingController {
+                        PairingFlowView(
+                            controller: pairingController,
+                            onCancel: sessionController.cancelPairing,
+                            forcesPrivacyShield: forcesPairingPrivacyShield
+                        )
+                    } else {
+                        sessionGate
+                    }
+                case .paired(let presentation):
+                    pairedApp(presentation: presentation)
+                case .restoring, .unpaired, .keychainLocked, .repairNeeded, .incompatible:
                     sessionGate
                 }
-            case .paired(let presentation):
-                pairedApp(presentation: presentation)
-            case .restoring, .unpaired, .keychainLocked, .repairNeeded, .incompatible:
-                sessionGate
             }
         }
+        .animation(.easeInOut(duration: 0.3), value: loadingPhase == nil)
         .task {
             sessionController.installDiagnosticEventHandler(recordDiagnostic)
             recordDiagnostic(.authStarted)
@@ -95,6 +104,17 @@ struct ToasttyMobileRootView: View {
                 Task { await sessionController.retryRestoration() }
             }
         )
+    }
+
+    private var loadingPhase: AppSessionLoadingPhase? {
+        switch sessionController.state {
+        case .restoring:
+            .restoring
+        case .paired(.connecting):
+            .connecting(hostName: sessionController.homeController.snapshot.hostName)
+        case .pairing, .paired, .unpaired, .keychainLocked, .repairNeeded, .incompatible:
+            nil
+        }
     }
 
     private func pairedApp(presentation: PairedConnectionPresentation) -> some View {
@@ -278,7 +298,7 @@ struct ToasttyMobileRootView: View {
                     ? fixtureSendItems
                     : []
             )
-        case .unpaired, .cameraDenied, .scannerUnsupported,
+        case .connecting, .unpaired, .cameraDenied, .scannerUnsupported,
              .pairingFailure, .pairingPrivacy, nil:
             break
         }
@@ -574,7 +594,7 @@ private struct PairedConnectionBanner: View {
 
     private var content: (message: String, symbol: String, color: Color, identifier: String)? {
         switch presentation {
-        case .live, .reconnecting, .unreachable:
+        case .connecting, .live, .reconnecting, .unreachable:
             nil
         case .authorizationDenied:
             ("This device does not have access to that action. Change its scopes on your Mac.", "lock.fill", ToasttyDesignTokens.red, "toastty-mobile-authorization-banner")

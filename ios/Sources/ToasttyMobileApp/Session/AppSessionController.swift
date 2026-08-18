@@ -58,10 +58,12 @@ final class AppSessionController {
     private let scanner: any PairingCodeScanning
     private let deviceName: @MainActor @Sendable () -> String
     private let liveSessionsFactory: AppLiveSessionsFactory
+    private let initialConnectTimeout: Duration
     private var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void
     private var hasRestored = false
     private var liveSessionID: UUID?
     private var deviceRefreshRequestID: UUID?
+    private var initialConnectTimeoutTask: Task<Void, Never>?
 
     var credentialProvider: any GatewayCredentialProvider { credentialVault }
 
@@ -80,6 +82,7 @@ final class AppSessionController {
         initialPairedDevice: PairedDevicePresentation? = nil,
         initialSnapshot: MobileHomeSnapshot,
         initialConnectionState: MobileConnectionState,
+        initialConnectTimeout: Duration = .seconds(10),
         onDiagnosticEvent: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in },
         liveSessionsFactory: @escaping AppLiveSessionsFactory = AppSessionController.makeLiveSessionsController
     ) {
@@ -90,6 +93,7 @@ final class AppSessionController {
         self.scanner = scanner
         self.deviceName = deviceName
         self.liveSessionsFactory = liveSessionsFactory
+        self.initialConnectTimeout = initialConnectTimeout
         self.onDiagnosticEvent = onDiagnosticEvent
         state = initialState
         pairedDevice = initialPairedDevice
@@ -114,7 +118,7 @@ final class AppSessionController {
         case .available(let credential):
             prepareProjection(for: credential)
             pairedDevice = PairedDevicePresentation(credential: credential)
-            state = .paired(.reconnecting)
+            state = .paired(initialPairedPresentation)
             await configureAndStartLive(for: credential)
         case .locked:
             state = .keychainLocked
@@ -140,10 +144,11 @@ final class AppSessionController {
             scanner: scanner,
             deviceName: deviceName,
             onPaired: { [weak self] credential in
-                self?.prepareProjection(for: credential)
-                self?.pairedDevice = PairedDevicePresentation(credential: credential)
-                self?.pairingController = nil
-                self?.state = .paired(.reconnecting)
+                guard let self else { return }
+                self.prepareProjection(for: credential)
+                self.pairedDevice = PairedDevicePresentation(credential: credential)
+                self.pairingController = nil
+                self.state = .paired(self.initialPairedPresentation)
                 Task { @MainActor [weak self] in
                     await self?.configureAndStartLive(for: credential)
                 }
@@ -320,6 +325,8 @@ final class AppSessionController {
     }
 
     private func transitionToUnpaired() {
+        initialConnectTimeoutTask?.cancel()
+        initialConnectTimeoutTask = nil
         liveController?.stopObserving()
         liveController = nil
         liveSessionID = nil
@@ -358,12 +365,25 @@ final class AppSessionController {
             },
             { [weak self] freshness in
                 guard let self, self.liveSessionID == sessionID, self.state.isPaired else { return }
+                let isInitialConnect = self.state == .paired(.connecting)
                 switch freshness {
                 case .live:
                     self.state = .paired(.live)
+                case .connecting:
+                    // The first attempt is in flight; the loading screen stays
+                    // up. Outside initial connect this reads as reconnecting.
+                    if !isInitialConnect {
+                        self.state = .paired(.reconnecting)
+                    }
                 case .reconnecting:
                     self.state = .paired(.reconnecting)
-                case .stale, .unreachable:
+                case .stale:
+                    // Backgrounding mid-initial-connect suspends the runtime;
+                    // keep the loading screen so foregrounding resumes it.
+                    if !isInitialConnect {
+                        self.state = .paired(.unreachable)
+                    }
+                case .unreachable:
                     self.state = .paired(.unreachable)
                 }
             }
@@ -371,7 +391,30 @@ final class AppSessionController {
         liveController?.stopObserving()
         liveController = controller
         await controller.updateDeviceScopes(credential.device.scopes)
+        beginInitialConnectTimeout(sessionID: sessionID)
         await controller.start()
+    }
+
+    /// The fixture harness has no live runtime to advance freshness, so it
+    /// must never enter `.connecting` or the loading screen would never
+    /// yield to home.
+    private var initialPairedPresentation: PairedConnectionPresentation {
+        usesFixtureHarness ? .reconnecting : .connecting
+    }
+
+    /// The loading screen must never spin forever. Transport failures fall
+    /// through promptly via freshness, but a hung first attempt (dead network
+    /// before the URL timeout) needs this cap.
+    private func beginInitialConnectTimeout(sessionID: UUID) {
+        initialConnectTimeoutTask?.cancel()
+        initialConnectTimeoutTask = Task { [weak self, initialConnectTimeout] in
+            try? await Task.sleep(for: initialConnectTimeout)
+            guard !Task.isCancelled,
+                  let self,
+                  self.liveSessionID == sessionID,
+                  self.state == .paired(.connecting) else { return }
+            self.state = .paired(.unreachable)
+        }
     }
 
     private func prepareProjection(for credential: StoredMobileCredential) {
@@ -384,7 +427,7 @@ final class AppSessionController {
                 workspaces: []
             ),
             connectionState: .reconnecting,
-            freshness: .reconnecting
+            freshness: .connecting
         )
     }
 

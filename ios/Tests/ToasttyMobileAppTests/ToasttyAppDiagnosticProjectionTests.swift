@@ -9,6 +9,14 @@ final class ToasttyAppDiagnosticProjectionTests: XCTestCase {
             []
         )
         XCTAssertEqual(
+            ToasttyAppDiagnosticProjection.events(from: .restoring, to: .paired(.connecting)),
+            [.authSucceeded, .streamConnecting]
+        )
+        XCTAssertEqual(
+            ToasttyAppDiagnosticProjection.events(from: .paired(.connecting), to: .paired(.live)),
+            [.streamConnected]
+        )
+        XCTAssertEqual(
             ToasttyAppDiagnosticProjection.events(from: .restoring, to: .paired(.reconnecting)),
             [.authSucceeded, .streamReconnecting]
         )

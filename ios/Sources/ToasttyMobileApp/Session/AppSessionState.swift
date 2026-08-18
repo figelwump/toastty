@@ -13,6 +13,9 @@ enum AppSessionState: Equatable {
 }
 
 enum PairedConnectionPresentation: Equatable {
+    /// Initial connect for this pairing session: nothing has been presented
+    /// yet, so the app shows the unified loading screen instead of home.
+    case connecting
     case live
     case reconnecting
     case unreachable

@@ -109,7 +109,94 @@ final class AppSessionControllerTests: XCTestCase {
         let spy = try XCTUnwrap(liveSpy)
         XCTAssertEqual(spy.scopeUpdates, [[.read, .send]])
         XCTAssertEqual(spy.startCount, 1)
+        XCTAssertEqual(controller.state, .paired(.connecting))
+    }
+
+    func testInitialConnectStaysOnLoadingUntilFirstLiveFreshness() async throws {
+        let credential = try Self.credential(deviceName: "Loading iPhone")
+        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        var onFreshness: (@MainActor (LiveProjectionFreshness) -> Void)?
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: vault,
+            pairingClient: FixturePairingClient(behavior: .success),
+            scanner: FixturePairingScanner(),
+            deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home,
+            initialConnectionState: .offline,
+            liveSessionsFactory: { _, _, _, _, freshness in
+                onFreshness = freshness
+                return AppLiveSessionsSpy()
+            }
+        )
+
+        await controller.restoreIfNeeded()
+        XCTAssertEqual(controller.state, .paired(.connecting))
+        let freshness = try XCTUnwrap(onFreshness)
+
+        freshness(.connecting)
+        XCTAssertEqual(controller.state, .paired(.connecting))
+
+        // Backgrounding mid-initial-connect reports stale; the loading screen
+        // must survive it so foregrounding resumes seamlessly.
+        freshness(.stale)
+        XCTAssertEqual(controller.state, .paired(.connecting))
+
+        freshness(.live)
+        XCTAssertEqual(controller.state, .paired(.live))
+
+        // After first live, the ordinary mapping applies again.
+        freshness(.stale)
+        XCTAssertEqual(controller.state, .paired(.unreachable))
+    }
+
+    func testInitialConnectFallsThroughToHomeWhenFirstAttemptFails() async throws {
+        let credential = try Self.credential(deviceName: "Failing iPhone")
+        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        var onFreshness: (@MainActor (LiveProjectionFreshness) -> Void)?
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: vault,
+            pairingClient: FixturePairingClient(behavior: .success),
+            scanner: FixturePairingScanner(),
+            deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home,
+            initialConnectionState: .offline,
+            liveSessionsFactory: { _, _, _, _, freshness in
+                onFreshness = freshness
+                return AppLiveSessionsSpy()
+            }
+        )
+
+        await controller.restoreIfNeeded()
+        XCTAssertEqual(controller.state, .paired(.connecting))
+
+        try XCTUnwrap(onFreshness)(.reconnecting)
         XCTAssertEqual(controller.state, .paired(.reconnecting))
+    }
+
+    func testInitialConnectTimeoutFallsThroughToUnreachable() async throws {
+        let credential = try Self.credential(deviceName: "Hung iPhone")
+        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: vault,
+            pairingClient: FixturePairingClient(behavior: .success),
+            scanner: FixturePairingScanner(),
+            deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home,
+            initialConnectionState: .offline,
+            initialConnectTimeout: .milliseconds(1),
+            liveSessionsFactory: { _, _, _, _, _ in AppLiveSessionsSpy() }
+        )
+
+        await controller.restoreIfNeeded()
+        XCTAssertEqual(controller.state, .paired(.connecting))
+
+        for _ in 0..<200 where controller.state == .paired(.connecting) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(controller.state, .paired(.unreachable))
     }
 
     func testRefreshLiveSessionsForwardsToLiveControllerOutsideFixtureHarness() async throws {

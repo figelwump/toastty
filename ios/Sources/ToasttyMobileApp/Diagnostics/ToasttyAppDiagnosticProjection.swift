@@ -43,6 +43,8 @@ enum ToasttyAppDiagnosticProjection {
         for state: AppSessionState
     ) -> ToasttyConnectionDiagnosticEvent? {
         switch state {
+        case .paired(.connecting):
+            .streamConnecting
         case .paired(.live):
             .streamConnected
         case .paired(.reconnecting):

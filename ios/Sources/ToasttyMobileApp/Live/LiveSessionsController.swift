@@ -390,7 +390,7 @@ final class LiveSessionsController {
         let freshness = freshnessOverride ?? resolvedFreshness
         let connectionState: MobileConnectionState = switch freshness {
         case .live: .live
-        case .reconnecting: .reconnecting
+        case .connecting, .reconnecting: .reconnecting
         case .stale, .unreachable: .offline
         }
 
@@ -442,10 +442,10 @@ final class LiveSessionsController {
             .reconnecting
         case .suspended:
             .stale
-        case .connecting, .awaitingFreshSessionSnapshot:
-            sessionsState.snapshot == nil ? .unreachable : .stale
-        case .idle:
-            sessionsState.snapshot == nil ? .unreachable : .stale
+        // A first attempt with no projection yet is connecting, not
+        // unreachable: nothing has failed and there is no stale data to show.
+        case .idle, .connecting, .awaitingFreshSessionSnapshot:
+            sessionsState.snapshot == nil ? .connecting : .stale
         case .requiresAuthentication, .incompatibleProtocol, .failed:
             .unreachable
         case .authorizationDenied:

@@ -75,6 +75,20 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
     }
 
+    func testConnectingScenarioShowsUnifiedLoadingScreen() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "connecting"],
+            selectsActivityHomeMode: false
+        )
+
+        let loading = app.descendants(matching: .any)["toastty-mobile-session-connecting"]
+        XCTAssertTrue(loading.waitForExistence(timeout: 10))
+        XCTAssertEqual(loading.label, "Connecting to mac-studio…")
+        XCTAssertEqual(loading.value as? String, "In progress")
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-home"].exists)
+        attachScreenshot(named: "fixture-connecting-loading", of: app)
+    }
+
     func testReconnectingNoticeShowsActivity() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting"]

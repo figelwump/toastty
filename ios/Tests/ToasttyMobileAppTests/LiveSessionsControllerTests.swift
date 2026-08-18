@@ -45,6 +45,33 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertEqual(home.selectedConversation?.title, "Alpha updated")
     }
 
+    func testFirstConnectWithoutSnapshotPresentsConnectingNotUnreachable() {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        var freshnesses: [LiveProjectionFreshness] = []
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home,
+            onFreshness: { freshnesses.append($0) }
+        )
+
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(phase: .idle))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(phase: .connecting))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            phase: .awaitingFreshSessionSnapshot
+        ))
+
+        XCTAssertEqual(freshnesses, [.connecting, .connecting, .connecting])
+        XCTAssertEqual(home.freshness, .connecting)
+        XCTAssertEqual(home.connectionState, .reconnecting)
+        XCTAssertEqual(home.connectionNoticeMessage, "Connecting to your Mac…")
+    }
+
     func testAwaitingFreshStreamSnapshotRetainsReadableDataAsStale() {
         let runtime = LiveRuntimeSpy()
         let home = HomeScreenController(

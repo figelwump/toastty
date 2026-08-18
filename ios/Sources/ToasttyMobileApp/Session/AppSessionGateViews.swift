@@ -9,15 +9,6 @@ struct AppSessionGateView: View {
         ZStack {
             ToasttyDesignTokens.background.ignoresSafeArea()
             switch state {
-            case .restoring:
-                sessionMessage(
-                    icon: "lock.shield",
-                    title: "Restoring this device…",
-                    message: "Toastty is checking the credential stored securely on this iPhone.",
-                    identifier: "toastty-mobile-session-restoring"
-                ) {
-                    ProgressView().tint(ToasttyDesignTokens.amber)
-                }
             case .unpaired:
                 sessionMessage(
                     icon: "iphone.and.arrow.forward",
@@ -65,7 +56,9 @@ struct AppSessionGateView: View {
                         .buttonStyle(.bordered)
                         .accessibilityIdentifier("toastty-mobile-session-retry-incompatible")
                 }
-            case .pairing, .paired:
+            case .restoring, .pairing, .paired:
+                // Restoring renders AppSessionLoadingView from the root, not
+                // this gate.
                 EmptyView()
             }
         }

@@ -1,6 +1,10 @@
 import Foundation
 
 enum LiveProjectionFreshness: Equatable, Sendable {
+    /// A connection attempt is in flight and no projection has ever been
+    /// received. Unlike `.reconnecting`/`.unreachable` there is no "last
+    /// available update" to show.
+    case connecting
     case live
     case reconnecting
     case stale
@@ -10,6 +14,8 @@ enum LiveProjectionFreshness: Equatable, Sendable {
         switch self {
         case .live:
             nil
+        case .connecting:
+            "Connecting to your Mac…"
         case .reconnecting:
             "Reconnecting to your Mac. Showing the last available update."
         case .stale:
@@ -21,6 +27,7 @@ enum LiveProjectionFreshness: Equatable, Sendable {
 
     var accessibilityLabel: String {
         switch self {
+        case .connecting: "Connecting"
         case .live: "Live"
         case .reconnecting: "Reconnecting"
         case .stale: "Stale"
