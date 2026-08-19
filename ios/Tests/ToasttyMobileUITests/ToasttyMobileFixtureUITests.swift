@@ -307,6 +307,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
                 "Sequence \(sequence) should expose its semantic content to accessibility; got \(row.label)"
             )
         }
+        let oldestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-1"]
+        XCTAssertTrue(
+            scrollToOlder(oldestRow, in: app),
+            "Scrolling forward should start from a visible oldest-row anchor"
+        )
         let toolDisclosure = app.buttons["toastty-mobile-transcript-tool-4"]
         XCTAssertTrue(scrollToNewer(toolDisclosure, in: app))
         XCTAssertTrue(toolDisclosure.label.contains("1 tool call"))
@@ -333,7 +338,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         let dismissToolSheet = app.buttons["toastty-mobile-tool-activity-done"]
         XCTAssertTrue(dismissToolSheet.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.sheets.firstMatch.exists)
+        XCTAssertTrue(
+            app.descendants(matching: .any)["toastty-mobile-tool-activity-sheet"].exists
+        )
         let toolStarted = app.descendants(matching: .any)["toastty-mobile-transcript-row-4"]
         let toolFinished = app.descendants(matching: .any)["toastty-mobile-transcript-row-5"]
         XCTAssertTrue(toolStarted.waitForExistence(timeout: 5))

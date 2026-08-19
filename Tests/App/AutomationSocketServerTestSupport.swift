@@ -50,6 +50,7 @@ extension AutomationSocketServerTestSupport {
         socketPath: String,
         automationConfig: AutomationConfig? = nil,
         terminalCommandRouter: (any TerminalCommandRouting)? = nil,
+        annotationStyleStore: AnnotationStyleStore? = nil,
         recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
         testHooks: AutomationSocketServerTestHooks = .disabled,
         codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
@@ -102,6 +103,7 @@ extension AutomationSocketServerTestSupport {
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
+            annotationStyleStore: annotationStyleStore,
             codexStatusHooksPreflightProvider: codexStatusHooksPreflightProvider,
             codexStatusHooksWarningPresenter: codexStatusHooksWarningPresenter,
             recoveryPolicy: recoveryPolicy,

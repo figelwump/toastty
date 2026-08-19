@@ -159,6 +159,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var selectedTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
+    public var annotations: [String: WorkspaceAnnotation]
 
     public init(
         id: UUID,
@@ -166,7 +167,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         hasBeenVisited: Bool = true,
         selectedTabID: UUID?,
         tabIDs: [UUID],
-        tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
+        tabsByID: [UUID: WorkspaceLayoutTabSnapshot],
+        annotations: [String: WorkspaceAnnotation] = [:]
     ) {
         self.id = id
         self.title = title
@@ -174,6 +176,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         self.selectedTabID = selectedTabID
         self.tabIDs = tabIDs
         self.tabsByID = tabsByID
+        self.annotations = annotations
     }
 
     init(workspace: WorkspaceState) {
@@ -185,6 +188,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         tabsByID = workspace.tabsByID.reduce(into: [:]) { partialResult, entry in
             partialResult[entry.key] = WorkspaceLayoutTabSnapshot(tab: entry.value)
         }
+        annotations = workspace.annotations
     }
 
     public var orderedTabs: [WorkspaceLayoutTabSnapshot] {
@@ -233,6 +237,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             tabsByID: tabsByID.reduce(into: [UUID: WorkspaceTabState]()) { partialResult, entry in
                 partialResult[entry.key] = entry.value.makeWorkspaceTabState()
             },
+            annotations: annotations,
             unreadWorkspaceNotificationCount: 0
         )
     }
@@ -246,6 +251,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case selectedTabID
         case tabIDs
         case tabsByID
+        case annotations
         case layoutTree
         case panels
         case focusedPanelID
@@ -256,6 +262,13 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         hasBeenVisited = try container.decodeIfPresent(Bool.self, forKey: .hasBeenVisited) ?? true
+        // The layout profile file is user-editable; keep only entries that
+        // pass the same validation the CLI enforces.
+        annotations = WorkspaceAnnotation.decodeSanitizedAnnotations(
+            from: container,
+            forKey: .annotations,
+            workspaceID: id
+        )
 
         let decodedSelectedTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTabID)
         let decodedTabIDs = try container.decodeIfPresent([UUID].self, forKey: .tabIDs)
@@ -286,6 +299,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encodeIfPresent(selectedTabID, forKey: .selectedTabID)
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
+        try container.encode(annotations, forKey: .annotations)
         // Preserve a selected-tab legacy mirror while older layout snapshots
         // are still on disk in the field.
         let legacyTab = selectedTabID.flatMap { tabsByID[$0] } ?? tabIDs.first.flatMap { tabsByID[$0] }

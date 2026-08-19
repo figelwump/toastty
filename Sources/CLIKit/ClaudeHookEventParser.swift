@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 enum ClaudeHookEventParser {
@@ -88,7 +89,8 @@ enum ClaudeHookEventParser {
                     displayName: nil,
                     command: nil,
                     processID: nil,
-                    preserveWhenUnlisted: true
+                    preserveWhenUnlisted: true,
+                    executionProfile: nil
                 ),
             ]
 
@@ -106,7 +108,8 @@ enum ClaudeHookEventParser {
                     displayName: nil,
                     command: nil,
                     processID: nil,
-                    preserveWhenUnlisted: false
+                    preserveWhenUnlisted: false,
+                    executionProfile: nil
                 ),
             ]
 
@@ -164,6 +167,11 @@ enum ClaudeHookEventParser {
         let displayName = normalizedString(toolInput["subagent_type"]) ?? "Sub-agent"
         let command = normalizedString(toolResponse["description"])
             ?? normalizedString(toolInput["description"])
+        let modelIdentifier = normalizedString(toolResponse["resolvedModel"])
+            ?? normalizedString(toolResponse["resolved_model"])
+        let executionProfile = SessionAgentExecutionProfile(
+            modelIdentifier: modelIdentifier
+        )
 
         return [
             .sessionBackgroundActivity(
@@ -175,7 +183,8 @@ enum ClaudeHookEventParser {
                 displayName: displayName,
                 command: command,
                 processID: nil,
-                preserveWhenUnlisted: false
+                preserveWhenUnlisted: false,
+                executionProfile: executionProfile.isEmpty ? nil : executionProfile
             ),
         ]
     }

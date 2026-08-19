@@ -61,6 +61,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let promptState: @MainActor (UUID) -> TerminalPromptState
     private let nativeSessionObserverRegistry: any ManagedAgentNativeSessionObserving
     private let codexResumeResolver: any CodexManagedSessionResolving
+    private let codexSubagentProfileResolver: any CodexSubagentProfileResolving
     private let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
     private let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
     private let userSkillSnapshotProvider: any ToasttyUserSkillSnapshotProviding
@@ -77,6 +78,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private var desiredCodexRolloutLogURLsBySessionID: [String: URL] = [:]
     private var codexRolloutWatcherTransitionsBySessionID: [String: CodexRolloutWatcherTransition] = [:]
     private var codexSessionLogCursorStatesByKey: [CodexSessionLogStreamKey: CodexSessionLogCursorStateRegistration] = [:]
+    private var codexSubagentProfileResolutionsByKey: [
+        CodexSubagentProfileResolutionKey: CodexSubagentProfileResolutionRegistration
+    ] = [:]
 
     init(
         store: AppStore,
@@ -91,6 +95,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         promptState: @escaping @MainActor (UUID) -> TerminalPromptState,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
         codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
+        codexSubagentProfileResolver: (any CodexSubagentProfileResolving)? = nil,
         codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
         claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
         userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil,
@@ -114,6 +119,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 nowProvider: nowProvider
             )
         self.codexResumeResolver = codexResumeResolver ?? CodexManagedSessionResolver()
+        self.codexSubagentProfileResolver = codexSubagentProfileResolver
+            ?? CodexSubagentProfileResolver()
         self.codexSkillsResolver = codexSkillsResolver
             ?? CodexManagedLaunchSkillsResolver(fileManager: fileManager)
         self.claudeSkillsBundleManager = claudeSkillsBundleManager
@@ -242,7 +249,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 for: request.agent,
                 resolution: userSkillResolution
             ),
-            assessedWorkingDirectory: assessedWorkingDirectory
+            assessedWorkingDirectory: assessedWorkingDirectory,
+            launchReason: .restore
         )
         postSkillsProvisionedNoticeIfNeeded(
             request: request,
@@ -402,7 +410,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
         stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
         deliveredUserSkillsRootPath: String?,
-        assessedWorkingDirectory: String?
+        assessedWorkingDirectory: String?,
+        launchReason: AgentHookLaunchReason = .managed
     ) throws -> ManagedAgentLaunchPlan {
         guard let sessionRuntimeStore else {
             throw AgentLaunchError.serviceUnavailable
@@ -472,6 +481,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             cwd: resolvedCWD,
             repoRoot: repoRoot,
             scopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
+            launchReason: launchReason,
             at: launchStart
         )
         sessionRuntimeStore.updateStatus(
@@ -1042,6 +1052,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
             return
         case .turnContextUpdated:
+            // The launch recorder captures outbound override intent, not the
+            // effective turn context. Hook-tracked sessions get that state
+            // from the canonical rollout watcher below.
+            guard codexStatusTrackingSource != .hooks else {
+                return
+            }
             sessionRuntimeStore.recordCodexOverrideTurnContext(
                 sessionID: sessionID,
                 approvalPolicy: event.approvalPolicyField,
@@ -1049,14 +1065,22 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return
         case .turnStarted:
+            if event.rootInputFingerprint != nil {
+                rearmCodexNativeSessionObservationIfNeeded(sessionID: sessionID)
+            }
             if event.hasRootTurnContext {
+                let useLaunchApprovalContext = codexStatusTrackingSource != .hooks
                 sessionRuntimeStore.recordCodexRootTurnInput(
                     sessionID: sessionID,
                     fingerprint: event.rootInputFingerprint,
                     threadID: event.rootThreadID,
                     turnID: event.rootTurnID,
-                    approvalPolicyField: event.approvalPolicyField,
-                    approvalsReviewerField: event.approvalsReviewerField
+                    approvalPolicyField: useLaunchApprovalContext
+                        ? event.approvalPolicyField
+                        : .unspecified,
+                    approvalsReviewerField: useLaunchApprovalContext
+                        ? event.approvalsReviewerField
+                        : .unspecified
                 )
             }
             _ = sessionRuntimeStore.handleCodexSessionLogRootProgressObservation(
@@ -1117,6 +1141,41 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return
         }
+    }
+
+    private func rearmCodexNativeSessionObservationIfNeeded(sessionID: String) {
+        guard let store,
+              let sessionRuntimeStore,
+              let activeSession = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID),
+              activeSession.agent == .codex,
+              let cwd = normalizedNonEmpty(activeSession.cwd),
+              case .terminal(let terminalState)? = store.state
+                .workspaceSelection(containingPanelID: activeSession.panelID)?
+                .workspace
+                .panelState(for: activeSession.panelID),
+              terminalState.resumeRecord == nil else {
+            return
+        }
+
+        let observationStart = nowProvider()
+        nativeSessionObserverRegistry.startObservationIfAbsent(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: sessionID,
+                agent: .codex,
+                panelID: activeSession.panelID,
+                cwd: cwd,
+                launchStart: observationStart
+            )
+        )
+        ToasttyLog.debug(
+            "Ensured Codex native session observation after first prompt",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "panel_id": activeSession.panelID.uuidString,
+                "cwd": cwd,
+            ]
+        )
     }
 
     private func forwardCodexBackgroundActivityObservation(
@@ -1313,11 +1372,104 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
         switch event.kind {
-        case .backgroundActivityStarted, .backgroundActivityFinished:
+        case .turnStarted:
+            // Canonical turn_context entries are effective, turn-scoped state.
+            // Keep status/completion ownership with hooks; forward only the
+            // approval fields needed to classify PermissionRequest events.
+            sessionRuntimeStore?.recordCodexCanonicalTurnContext(
+                sessionID: sessionID,
+                turnID: event.rootTurnID,
+                approvalPolicy: event.approvalPolicyField,
+                approvalsReviewer: event.approvalsReviewerField
+            )
+        case .backgroundActivityStarted:
             forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
+            if let activity = event.backgroundActivity {
+                scheduleCodexSubagentProfileResolution(
+                    activity: activity,
+                    sessionID: sessionID,
+                    parentRolloutURL: logURL
+                )
+            }
+        case .backgroundActivityFinished:
+            forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
+            if let childThreadID = event.backgroundActivity?.hookActivityID {
+                cancelCodexSubagentProfileResolution(
+                    sessionID: sessionID,
+                    childThreadID: childThreadID
+                )
+            }
         default:
             return
         }
+    }
+
+    private func scheduleCodexSubagentProfileResolution(
+        activity: CodexSessionBackgroundActivity,
+        sessionID: String,
+        parentRolloutURL: URL
+    ) {
+        guard activity.kind == .subagent,
+              let childThreadID = normalizedNonEmpty(activity.hookActivityID) else {
+            return
+        }
+        let key = CodexSubagentProfileResolutionKey(
+            sessionID: sessionID,
+            childThreadID: childThreadID
+        )
+        codexSubagentProfileResolutionsByKey.removeValue(forKey: key)?.task.cancel()
+
+        let registrationID = UUID()
+        let resolver = codexSubagentProfileResolver
+        let task = Task { @MainActor [weak self] in
+            let profile = await resolver.resolveProfile(
+                childThreadID: childThreadID,
+                parentRolloutURL: parentRolloutURL
+            )
+            guard Task.isCancelled == false else { return }
+            self?.finishCodexSubagentProfileResolution(
+                key: key,
+                registrationID: registrationID,
+                rolloutActivityID: activity.activityID,
+                profile: profile
+            )
+        }
+        codexSubagentProfileResolutionsByKey[key] = CodexSubagentProfileResolutionRegistration(
+            id: registrationID,
+            task: task
+        )
+    }
+
+    private func finishCodexSubagentProfileResolution(
+        key: CodexSubagentProfileResolutionKey,
+        registrationID: UUID,
+        rolloutActivityID: String,
+        profile: SessionAgentExecutionProfile?
+    ) {
+        guard codexSubagentProfileResolutionsByKey[key]?.id == registrationID else {
+            return
+        }
+        codexSubagentProfileResolutionsByKey.removeValue(forKey: key)
+        guard let profile else { return }
+        _ = sessionRuntimeStore?.enrichCodexSubagentExecutionProfile(
+            sessionID: key.sessionID,
+            rolloutActivityID: rolloutActivityID,
+            providerAgentID: key.childThreadID,
+            profile: profile,
+            at: nowProvider()
+        )
+    }
+
+    private func cancelCodexSubagentProfileResolution(
+        sessionID: String,
+        childThreadID: String
+    ) {
+        guard let childThreadID = normalizedNonEmpty(childThreadID) else { return }
+        let key = CodexSubagentProfileResolutionKey(
+            sessionID: sessionID,
+            childThreadID: childThreadID
+        )
+        codexSubagentProfileResolutionsByKey.removeValue(forKey: key)?.task.cancel()
     }
 
     private func cleanupManagedArtifacts(forInactiveSessionsIn registry: SessionRegistry) async {
@@ -1325,6 +1477,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             .union(codexRolloutWatchersBySessionID.keys)
             .union(desiredCodexRolloutLogURLsBySessionID.keys)
             .union(codexRolloutWatcherTransitionsBySessionID.keys)
+            .union(codexSubagentProfileResolutionsByKey.keys.map(\.sessionID))
         let inactiveSessionIDs = trackedSessionIDs.filter { sessionID in
             registry.activeSession(sessionID: sessionID) == nil
         }
@@ -1347,6 +1500,17 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     }
 
     private func cleanupCodexRolloutWatcher(for sessionID: String) async {
+        let profileResolutionKeys = codexSubagentProfileResolutionsByKey.keys.filter {
+            $0.sessionID == sessionID
+        }
+        let profileResolutionTasks = profileResolutionKeys.compactMap { key -> Task<Void, Never>? in
+            let registration = codexSubagentProfileResolutionsByKey.removeValue(forKey: key)
+            registration?.task.cancel()
+            return registration?.task
+        }
+        for task in profileResolutionTasks {
+            await task.value
+        }
         desiredCodexRolloutLogURLsBySessionID.removeValue(forKey: sessionID)
         if let transition = codexRolloutWatcherTransitionsBySessionID[sessionID] {
             await transition.task.value
@@ -1414,7 +1578,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     static func defaultCodexStatusTrackingSource() -> CodexStatusTrackingSource {
         do {
             let status = try CodexStatusHookInstaller().installationStatus()
-            guard status.isInstalled else {
+            guard status.supportsStatusForwarding else {
                 return .sessionLogFallback(reason: "hooks_\(status.state.rawValue)")
             }
             return .hooks
@@ -1458,6 +1622,16 @@ private struct CodexRolloutSessionLogWatcherRegistration {
 }
 
 private struct CodexRolloutWatcherTransition {
+    let id: UUID
+    let task: Task<Void, Never>
+}
+
+private struct CodexSubagentProfileResolutionKey: Hashable {
+    let sessionID: String
+    let childThreadID: String
+}
+
+private struct CodexSubagentProfileResolutionRegistration {
     let id: UUID
     let task: Task<Void, Never>
 }

@@ -10,6 +10,7 @@ enum ManagedSessionStopReason: Equatable, Sendable {
     case ghosttyCommandFinished(exitCode: Int?)
     case idleAtPrompt
     case panelRemovedFromAppState
+    case replacedByNewSession
 
     var code: String {
         switch self {
@@ -21,6 +22,8 @@ enum ManagedSessionStopReason: Equatable, Sendable {
             return "idle_at_prompt"
         case .panelRemovedFromAppState:
             return "panel_removed_from_app_state"
+        case .replacedByNewSession:
+            return "replaced_by_new_session"
         }
     }
 
@@ -28,7 +31,7 @@ enum ManagedSessionStopReason: Equatable, Sendable {
         switch self {
         case .explicit:
             return false
-        case .ghosttyCommandFinished, .idleAtPrompt, .panelRemovedFromAppState:
+        case .ghosttyCommandFinished, .idleAtPrompt, .panelRemovedFromAppState, .replacedByNewSession:
             return true
         }
     }

@@ -93,6 +93,7 @@ struct ToasttyToolActivitySheet: View {
                 }
             }
         }
+        .accessibilityIdentifier("toastty-mobile-tool-activity-sheet")
         .tint(ToasttyDesignTokens.amber)
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)

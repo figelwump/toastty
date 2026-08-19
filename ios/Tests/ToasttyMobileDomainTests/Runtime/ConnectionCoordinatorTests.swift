@@ -94,6 +94,8 @@ final class ConnectionCoordinatorTests: XCTestCase {
     func testAdmissionAndAuthorizationFailuresNeverSceneRetry() async throws {
         let cases: [(GatewayFailure, ConnectionCoordinatorPhase)] = [
             (.unauthenticated(code: .unauthorized, message: nil), .requiresAuthentication),
+            (.unauthenticated(code: .credentialInvalid, message: nil), .requiresAuthentication),
+            (.unauthenticated(code: nil, message: nil), .requiresAuthentication),
             (.authorizationDenied(code: .originDenied, message: nil), .authorizationDenied),
             (.protocolMismatch(version: "2.0"), .incompatibleProtocol(version: "2.0")),
         ]

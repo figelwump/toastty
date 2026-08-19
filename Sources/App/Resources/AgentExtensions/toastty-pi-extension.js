@@ -196,6 +196,7 @@ module.exports = function toasttyPiExtension(pi) {
   let activeIngest = false;
   let currentPrompt;
   let lastAssistantSummary;
+  const subagentTools = new Map();
 
   function cliEnvironment() {
     const env = {
@@ -278,6 +279,117 @@ module.exports = function toasttyPiExtension(pi) {
     });
   }
 
+  function subagentToolCallID(event) {
+    return cleanString(event && (event.toolCallId || event.toolCallID), 120);
+  }
+
+  function subagentToolName(event) {
+    return cleanString(event && event.toolName, 120);
+  }
+
+  function subagentInput(event) {
+    return (event && (event.input || event.args)) || {};
+  }
+
+  function emitSubagentActivity(phase, activity) {
+    emit(`background_activity_${phase}`, {
+      activityID: activity.id,
+      displayName: cleanString(activity.displayName, 120) || "Sub-agent",
+      modelIdentifier: cleanString(activity.modelIdentifier, 200),
+    });
+  }
+
+  function startSubagentTool(event) {
+    if (subagentToolName(event) !== "subagent") return;
+    const toolCallID = subagentToolCallID(event);
+    if (!toolCallID || subagentTools.has(toolCallID)) return;
+    const input = subagentInput(event);
+    let mode;
+    let requests = [];
+    if (Array.isArray(input.chain) && input.chain.length > 0) {
+      mode = "chain";
+      requests = [input.chain[0]];
+    } else if (Array.isArray(input.tasks) && input.tasks.length > 0) {
+      mode = "parallel";
+      requests = input.tasks;
+    } else if (input.agent && input.task) {
+      mode = "single";
+      requests = [{ agent: input.agent, task: input.task }];
+    } else {
+      return;
+    }
+    const activities = requests.slice(0, 8).map((request, index) => ({
+      id: `pi-subagent:${toolCallID}:${index}`,
+      displayName: cleanString(request && request.agent, 120) || "Sub-agent",
+      modelIdentifier: undefined,
+      finished: false,
+    }));
+    subagentTools.set(toolCallID, { mode, activities });
+    for (const activity of activities) emitSubagentActivity("start", activity);
+  }
+
+  function updateSubagentTool(event) {
+    if (subagentToolName(event) !== "subagent") return;
+    const toolCallID = subagentToolCallID(event);
+    const tracked = subagentTools.get(toolCallID);
+    if (!tracked) return;
+    const partialResult = (event && event.partialResult) || {};
+    const details = partialResult.details || {};
+    const results = Array.isArray(details.results) ? details.results : [];
+
+    if (tracked.mode === "chain") {
+      const result = results[results.length - 1];
+      const activity = tracked.activities[0];
+      if (!result || !activity || activity.finished) return;
+      const displayName = cleanString(result.agent, 120) || activity.displayName;
+      const modelIdentifier = cleanString(result.model, 200) || activity.modelIdentifier;
+      if (displayName === activity.displayName && modelIdentifier === activity.modelIdentifier) return;
+      activity.displayName = displayName;
+      activity.modelIdentifier = modelIdentifier;
+      emitSubagentActivity("start", activity);
+      return;
+    }
+
+    for (let index = 0; index < tracked.activities.length; index += 1) {
+      const activity = tracked.activities[index];
+      const result = results[index];
+      if (!result || activity.finished) continue;
+      const modelIdentifier = cleanString(result.model, 200) || activity.modelIdentifier;
+      if (modelIdentifier !== activity.modelIdentifier) {
+        activity.modelIdentifier = modelIdentifier;
+        emitSubagentActivity("start", activity);
+      }
+      if (tracked.mode === "parallel" && Number.isFinite(result.exitCode) && result.exitCode !== -1) {
+        activity.finished = true;
+        emitSubagentActivity("finish", activity);
+      }
+    }
+  }
+
+  function finishSubagentTool(event) {
+    if (subagentToolName(event) !== "subagent") return;
+    const toolCallID = subagentToolCallID(event);
+    const tracked = subagentTools.get(toolCallID);
+    if (!tracked) return;
+    subagentTools.delete(toolCallID);
+    for (const activity of tracked.activities) {
+      if (activity.finished) continue;
+      activity.finished = true;
+      emitSubagentActivity("finish", activity);
+    }
+  }
+
+  function finishAllSubagents() {
+    for (const [toolCallID, tracked] of subagentTools) {
+      subagentTools.delete(toolCallID);
+      for (const activity of tracked.activities) {
+        if (activity.finished) continue;
+        activity.finished = true;
+        emitSubagentActivity("finish", activity);
+      }
+    }
+  }
+
   pi.on("session_start", (event, context) => {
     emitNativeSession(event, context);
     emit("session_start", { reason: cleanString(event && event.reason) });
@@ -301,6 +413,7 @@ module.exports = function toasttyPiExtension(pi) {
 
   pi.on("tool_call", (event) => {
     const input = event && event.input;
+    startSubagentTool(event);
     emit("tool_call", {
       toolCallID: cleanString(event && event.toolCallId, 120),
       toolName: cleanString(event && event.toolName, 120),
@@ -310,6 +423,7 @@ module.exports = function toasttyPiExtension(pi) {
   });
 
   pi.on("tool_result", (event) => {
+    finishSubagentTool(event);
     emit("tool_result", {
       toolCallID: cleanString(event && event.toolCallId, 120),
       toolName: cleanString(event && event.toolName, 120),
@@ -321,7 +435,21 @@ module.exports = function toasttyPiExtension(pi) {
     });
   });
 
+  pi.on("tool_execution_start", (event) => {
+    startSubagentTool(event);
+  });
+
+  pi.on("tool_execution_update", (event) => {
+    updateSubagentTool(event);
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    updateSubagentTool({ ...event, partialResult: event && event.result });
+    finishSubagentTool(event);
+  });
+
   pi.on("agent_end", (event) => {
+    finishAllSubagents();
     const summary = latestAssistantSummary(event && event.messages) || lastAssistantSummary;
     emit("agent_end", { summary });
     currentPrompt = undefined;
@@ -329,6 +457,7 @@ module.exports = function toasttyPiExtension(pi) {
   });
 
   pi.on("session_shutdown", (event) => {
+    finishAllSubagents();
     currentPrompt = undefined;
     lastAssistantSummary = undefined;
     emit("session_shutdown", { reason: cleanString(event && event.reason) });

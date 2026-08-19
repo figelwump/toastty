@@ -117,6 +117,7 @@ public final class RemoteConversationProjectionStore {
         reason: ConversationBindingChangeReason,
         providerSessionID: String? = nil,
         providerSessionFilePath: String? = nil,
+        clearsProviderSessionFilePath: Bool = false,
         bindingID: UUID,
         at date: Date
     ) -> [ConversationEvent] {
@@ -125,11 +126,18 @@ public final class RemoteConversationProjectionStore {
             reason: reason,
             providerSessionID: providerSessionID,
             providerSessionFilePath: providerSessionFilePath,
+            clearsProviderSessionFilePath: clearsProviderSessionFilePath,
             bindingID: bindingID,
             at: date
         )
         projectorsByID[conversationID] = projector
         return emitted
+    }
+
+    public func clearProviderSessionFilePath(for conversationID: RemoteConversationID) {
+        guard var projector = projectorsByID[conversationID] else { return }
+        projector.clearProviderSessionFilePath()
+        projectorsByID[conversationID] = projector
     }
 
     /// Discards one conversation's sequence space (unreconcilable provider

@@ -741,6 +741,7 @@ final class RemoteAccessService: ObservableObject {
                             for: candidate.conversationID,
                             reason: reason,
                             providerSessionFilePath: candidate.transcriptPath,
+                            clearsProviderSessionFilePath: candidate.transcriptPath == nil,
                             bindingID: UUID(),
                             at: candidate.runtimeBindingStartedAt ?? Date()
                         )
@@ -770,6 +771,7 @@ final class RemoteAccessService: ObservableObject {
                 let emitted = projectionStore.noteBinding(
                     for: candidate.conversationID,
                     reason: .runtimeEnded,
+                    clearsProviderSessionFilePath: candidate.transcriptPath == nil,
                     bindingID: UUID(),
                     at: Date()
                 )
@@ -780,6 +782,11 @@ final class RemoteAccessService: ObservableObject {
 
             if let rolloutPath = candidate.transcriptPath {
                 ensureTailer(for: candidate.conversationID, provider: candidate.provider, path: rolloutPath)
+            } else if invalidateTranscriptBinding(
+                for: candidate.conversationID,
+                runtimeBound: candidate.activeSessionID != nil
+            ) {
+                listChanged = true
             }
 
             // Maintain the panel↔conversation maps used by send delivery and
@@ -1079,6 +1086,36 @@ final class RemoteAccessService: ObservableObject {
             tailersByConversationID[conversationID] = nil
         }
         startTailer(for: conversationID, provider: provider, path: path)
+    }
+
+    /// A nil path is authoritative: stop watching the previous file and, for
+    /// a live runtime, mint a fresh binding epoch so stale transcript state
+    /// cannot continue authorizing remote input while metadata is absent.
+    @discardableResult
+    private func invalidateTranscriptBinding(
+        for conversationID: RemoteConversationID,
+        runtimeBound: Bool
+    ) -> Bool {
+        tailersByConversationID.removeValue(forKey: conversationID)?.stop()
+        pendingSendCorrelator.discard(for: conversationID)
+
+        guard let projector = projectionStore.projectorState(for: conversationID),
+              projector.providerSessionFilePath != nil else {
+            return false
+        }
+        if runtimeBound {
+            let emitted = projectionStore.noteBinding(
+                for: conversationID,
+                reason: .runtimeResumed,
+                clearsProviderSessionFilePath: true,
+                bindingID: UUID(),
+                at: Date()
+            )
+            broadcastEvents(emitted, for: conversationID)
+        } else {
+            projectionStore.clearProviderSessionFilePath(for: conversationID)
+        }
+        return true
     }
 
     private func startTailer(for conversationID: RemoteConversationID, provider: AgentKind, path: String) {

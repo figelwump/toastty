@@ -5,7 +5,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 ## What Toastty writes locally
 
 - `~/.toastty/config`
-  - User-authored Toastty defaults such as `terminal-font-size`, `default-terminal-profile`, `enable-agent-command-shims`, and URL-opening preferences.
+  - User-authored Toastty defaults such as `terminal-font-size`, `default-terminal-profile`, `enable-agent-command-shims`, `agent-hook`, and URL-opening preferences.
 - `~/.toastty/config-reference`
   - Generated commented reference for every supported Toastty config key. Toastty rewrites this file on launch and when you open `Toastty > Open Config Reference…`.
 - `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/bin/` when runtime isolation is enabled and agent command shims are enabled
@@ -19,12 +19,32 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/workspace-layout-profiles.json`
   - Saved workspace and window layout snapshots, including window-local sidebar
     widths, window-local terminal font overrides, window-local local-document
-    text-size overrides, per-browser page zoom overrides, and managed agent
+    text-size overrides, per-browser page zoom overrides, persisted workspace
+    annotation chips (`key`, chip text, and optional `http`/`https` URL per
+    workspace, written by `workspace.set-annotation` callers such as agents and
+    hook scripts), and managed agent
     native-resume metadata for restored Codex, Claude, OpenCode, MiMo Code, and Pi panels. Native-resume
     metadata can include the provider, provider-native session ID, provider
     session file path or Toastty-owned marker path, working directory, capture
     timestamp, and any explicit workspace-scope identifiers needed to restore a
     scoped session after app restart.
+- `~/.toastty/annotation-styles.json`
+  - The global annotation color map: one named or `#RRGGBB` color token per
+    annotation key, shared across workspaces and layout profiles. First use
+    records automatic as well as explicit colors so a live key cannot be
+    recolored by another annotation call. Contains only keys and color tokens,
+    never chip text or URLs. Runtime-isolated instances keep their own copy
+    inside the runtime home.
+  - The read-only `annotation.keys` app-control query exposes all registered
+    key strings in the current runtime, including historical keys, to
+    automation callers even when a managed session is workspace-scoped. Keys
+    are caller-authored and may contain sensitive semantic labels. The query
+    does not expose the stored colors, workspace IDs, usage counts, chip text,
+    or URLs.
+  - To remove a mistakenly disclosed historical key, quit every Toastty
+    instance using that runtime home, remove that key's entry from
+    `annotation-styles.json`, and relaunch Toastty. Do not edit the file while
+    Toastty is running because the in-memory registry remains authoritative.
 - `~/.toastty/recent-right-panel-items.json`
   - The locally persisted Recently Opened list for right-panel browsers, local
     document paths, and Scratchpad document IDs/titles. The list contains up to
@@ -55,10 +75,13 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
+- `~/.toastty/hooks/agent-hook`
+  - An executable but inert, fully commented starter template that Toastty creates once and never overwrites. Toastty invokes it only when the user points the `agent-hook` config key at this path or another trusted executable.
 - `~/.toastty/skills/` (created only through `Toastty > Manage Toastty Skills…` or by the user)
   - User-authored skill packages (`<name>/SKILL.md` plus supporting files). Toastty scans this directory read-only. Anything you (or an agent acting on your request) put here becomes agent-visible instructions in managed Codex, Claude Code, OpenCode, MiMo Code, and Pi sessions, and is copied into the snapshot and cache locations below.
 - `~/.toastty/agent-plugins/codex/`
   - Per-Codex-home receipt sidecars under `homes/<key>/` recording the verified plugin cache identity, so later managed launches can byte-verify without running Codex. A custom `CODEX_HOME` receives its own hashed `homes/<key>/` entry.
+  - These receipts validate cached plugin bytes; they do not establish ownership of the managed profile file.
 - `~/.toastty/agent-plugins/claude/`
   - Immutable validated Toastty plugin copies staged once and passed to managed Claude Code processes with `--plugin-dir`. The same staged `skills/` subtree is also the source Toastty points managed Pi (`--skill`), OpenCode, and MiMo Code (`skills.paths` inside their config-content JSON) launches at directly — pi/opencode/mimocode delivery introduces no separate copy and no new on-disk location. Toastty does not register these copies in Claude's user configuration, and nothing is written to pi's, opencode's, or mimocode's own config or data directories; the tree is only ever referenced per-launch via an argv flag (pi) or per-launch environment JSON (OpenCode, MiMo Code).
 - `~/.toastty/agent-plugins/user/`
@@ -68,14 +91,14 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - A stable Codex hook forwarder script plus `telemetry-failures.log` when the forwarder cannot deliver hook events back to Toastty.
 - Toastty-owned files inside `$CODEX_HOME` (written automatically for supported managed Codex launches)
   - `$CODEX_HOME/plugins/cache/toastty/toastty/` and, when user skills are accepted, `$CODEX_HOME/plugins/cache/toastty-user/toastty-user/`: Toastty's plugin cache subtrees, produced by installing the plugin into a throwaway Codex home with the local Codex CLI, digest-verifying the bytes, and swapping them in atomically. User-authored skill content is copied into the `toastty-user` subtree.
-  - `$CODEX_HOME/toastty-managed.config.toml`: a Toastty-owned profile overlay (with an ownership marker) that enables those cached plugins only for processes launched with `--profile toastty-managed`. The user's `config.toml` is never written by skills delivery (the only exception is the one-time legacy cleanup edit below), and ordinary Codex sessions are unaffected.
+  - `$CODEX_HOME/toastty-managed.config.toml`: a Toastty-owned profile overlay that enables those cached plugins only for processes launched with `--profile toastty-managed`. Its exact full-line ownership marker may appear anywhere because Codex can prepend profile-scoped settings. Toastty preserves those settings and unrelated TOML content when it refreshes its plugin entries; an existing file without the marker is treated as foreign and is never overwritten. The user's `config.toml` is never written by skills delivery (the only exception is the one-time legacy cleanup edit below), and ordinary Codex sessions are unaffected.
   - The startup sweeper also removes aged Toastty-owned transient litter (`.toastty-staging-*` / `.toastty-old-*` directories left by interrupted cache swaps) inside `$CODEX_HOME/plugins/cache/toastty/` and `$CODEX_HOME/plugins/cache/toastty-user/`; nothing else inside `CODEX_HOME` is touched by cleanup.
   - On the first provisioning after updating from an older Toastty, a one-shot cleanup deregisters the retired Toastty marketplace through Codex and removes the old `~/.toastty/codex-plugin/` staging. It also performs a one-time surgical edit of the user's `$CODEX_HOME/config.toml`: only the `[[skills.config]]` blocks the old mechanism wrote with `name = "toastty:…"` are removed (they would otherwise suppress the newly delivered skills); every other line is preserved byte-identically, and the original file is first backed up as `~/.toastty/agent-plugins/codex/homes/<key>/config-backup-<timestamp>.toml` — never written inside `$CODEX_HOME`.
   - Removing skills delivery means deleting only these Toastty-owned cache subtrees, the overlay, and the receipts; each is inert for ordinary sessions and safe to delete at any time.
 - Global and repository-local skill directories
   - Toastty does not inspect, move, remove, or back up entries under `~/.codex/skills`, `~/.claude/skills`, `~/.agents/skills`, a repository's `.agents/skills`, pi's `.pi/skills` or `$PI_CODING_AGENT_DIR/skills` (default `~/.pi/agent/skills`), or opencode/mimocode's project or home `.opencode/skills`, `.claude/skills`, `.agents/skills`, or `.mimocode/skills`. The skills sheet only provides manual guidance if separately installed copies cause duplicate entries or, for opencode/mimocode, unpredictable per-launch collisions.
 - `~/.codex/hooks.json` (updated by `Toastty > Set Up Agent Status Hooks…`)
-  - Toastty adds or updates only its own Codex hook entries while preserving unrelated hooks. Skills provisioning, repair, upgrade, and uninstall do not modify this file.
+  - Toastty adds or updates only its own Codex hook entries while preserving unrelated hooks. Skills provisioning, repair, upgrades, and manual removal do not modify this file.
 - Temporary launch artifact directories under the system temporary directory for managed agent sessions.
   - OpenCode and MiMo Code launches include a Toastty-owned per-session plugin file plus `telemetry-failures.log` when the plugin cannot deliver status events back to Toastty. The failure log records event type, session context, exit status, and CLI stderr, not full provider event payload JSON. These artifacts are removed when the managed session stops.
 - `~/.toastty/history/pane-journals/`
@@ -87,6 +110,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - When runtime isolation is enabled for an isolated dev/test run, either by setting `TOASTTY_RUNTIME_HOME` directly or by setting `TOASTTY_DEV_WORKTREE_ROOT` and letting Toastty derive a runtime home under `artifacts/dev-runs/`:
   - `<runtime-home>/config`
   - `<runtime-home>/config-reference`
+  - `<runtime-home>/annotation-styles.json`
+  - `<runtime-home>/hooks/agent-hook`
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
@@ -101,12 +126,31 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/instance.json`
   - a dedicated `UserDefaults` suite derived from that runtime-home path
 
+## What the configured agent hook receives
+
+When `agent-hook` is configured, Toastty executes that user-provided script for
+managed-session lifecycle and status events. Each invocation receives, on stdin
+and in `TOASTTY_*` environment values, session and workspace metadata: the
+event name, session ID, agent ID, workspace and panel UUIDs, the session
+working directory, the accepted previous/next status kinds, the launch reason,
+and the current instance's CLI and automation socket paths. Prompts, terminal
+output, file lists, and file contents are not included. The script runs with
+your user account's full permissions and inherits the app environment; only
+configure a script you trust. Toastty logs hook invocations, nonzero exits,
+timeouts, and launch failures to its structured local log. See
+[Agent Hooks](agent-hooks.md).
+
 ## What Toastty reads locally for agent status
 
 - For managed Codex sessions, Toastty reads the temporary TUI session record it
   requested through `CODEX_TUI_SESSION_LOG_PATH` for root-turn and approval
   context. After Codex identifies its native session file, Toastty also watches
   that rollout JSONL for collaboration-agent lifecycle and identity mapping.
+  When a collaboration event supplies an exact child thread ID, Toastty may
+  briefly inspect a bounded prefix of the matching local child rollout to read
+  its effective model identifier and reasoning effort. This lookup accepts only
+  complete `turn_context` records, retains only those two metadata fields in
+  memory, and does not log rollout contents.
   Toastty derives child-agent IDs, task/display names, and available plaintext
   descriptions for the live sidebar; task names are limited to 80 characters,
   descriptions to 512 characters, and opaque encrypted descriptions are
@@ -119,7 +163,14 @@ Toastty is designed to run locally on your machine. The app itself does not send
   retaining additional fingerprints and records a local warning. This
   reconciliation state is memory-only and discarded with its owning session or
   watcher. Child-agent display names can appear in Toastty's structured local
-  logs. Toastty does not modify the Codex rollout file.
+  logs. Toastty does not modify the Codex rollout files.
+- For managed Claude, OpenCode, MiMo Code, and Pi sessions, Toastty's injected
+  local hooks or extensions may read provider lifecycle events to retain a
+  bounded direct-child identity, display name, and provider-reported model or
+  effort metadata for the live sidebar. Toastty omits unavailable fields and
+  does not derive them from child prompts or tool output. This activity state is
+  held in memory and discarded when the owning session stops; helper failure
+  logs do not include full provider event payloads.
 - During Codex skill preparation, Toastty invokes the resolved local Codex CLI
   against a throwaway Codex home to produce the canonical plugin cache bytes,
   and once per legacy install to deregister the retired marketplace mechanism.

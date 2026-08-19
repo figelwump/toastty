@@ -562,7 +562,7 @@ public final class RemoteDeviceStore: @unchecked Sendable {
                 offset += result
             }
         }
-        guard Darwin.fsync(descriptor) == 0 else { throw currentPOSIXError() }
+        try synchronizeFileContents(descriptor)
         guard Darwin.close(descriptor) == 0 else {
             descriptor = -1
             throw currentPOSIXError()
@@ -572,6 +572,7 @@ public final class RemoteDeviceStore: @unchecked Sendable {
         guard Darwin.rename(temporaryURL.path, fileURL.path) == 0 else {
             throw currentPOSIXError()
         }
+        try synchronizeDirectory(parentDirectory)
     }
 
     private static func encodedStateData(_ state: State) throws -> Data {
@@ -586,6 +587,27 @@ public final class RemoteDeviceStore: @unchecked Sendable {
 
     private static func validateEncodedStateSize(_ state: State) throws {
         _ = try encodedStateData(state)
+    }
+
+    private static func synchronizeFileContents(_ descriptor: Int32) throws {
+        if Darwin.fcntl(descriptor, F_FULLFSYNC) == 0 {
+            return
+        }
+        guard errno == EINVAL || errno == ENOTSUP else {
+            throw currentPOSIXError()
+        }
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw currentPOSIXError()
+        }
+    }
+
+    private static func synchronizeDirectory(_ directoryURL: URL) throws {
+        let descriptor = Darwin.open(directoryURL.path, O_RDONLY | O_DIRECTORY)
+        guard descriptor >= 0 else { throw currentPOSIXError() }
+        defer { _ = Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw currentPOSIXError()
+        }
     }
 
     private static func currentPOSIXError() -> POSIXError {

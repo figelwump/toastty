@@ -364,13 +364,18 @@ enum AgentLaunchInstrumentation {
             let runtimeEnvironment = ProcessInfo.processInfo.environment.merging(launchEnvironment) { _, new in new }
             let resumeDirectoryURL = ToasttyRuntimePaths.resolve(environment: runtimeEnvironment)
                 .managedAgentResumeDirectoryURL
+            let initialRootSessionID = explicitOpenCodeFamilySessionID(
+                runtime: runtime,
+                argv: argv
+            )
             try Data(
                 makeOpenCodeFamilyStatusPlugin(
                     cliExecutablePath: cliExecutablePath,
                     source: runtime.eventSource,
                     workingDirectory: workingDirectory,
                     resumeDirectoryURL: resumeDirectoryURL,
-                    telemetryErrorLogURL: telemetryErrorLogURL
+                    telemetryErrorLogURL: telemetryErrorLogURL,
+                    initialRootSessionID: initialRootSessionID
                 ).appending("\n").utf8
             ).write(to: pluginURL, options: .atomic)
 
@@ -530,6 +535,58 @@ private extension AgentLaunchInstrumentation {
                 return "toastty-opencode-status-plugin.js"
             }
         }
+
+        var executableBasenames: Set<String> {
+            switch self {
+            case .mimocode:
+                return ["mimo", "mimocode"]
+            case .opencode:
+                return ["opencode"]
+            }
+        }
+    }
+
+    static func explicitOpenCodeFamilySessionID(
+        runtime: OpenCodeFamilyRuntime,
+        argv: [String]
+    ) -> String? {
+        guard argv.isEmpty == false else { return nil }
+        let boundaryIndex = argv.firstIndex(of: "--") ?? argv.endIndex
+        let candidates = argv.indices.filter { index in
+            guard index < boundaryIndex else { return false }
+            let basename = URL(fileURLWithPath: argv[index]).lastPathComponent.lowercased()
+            return runtime.executableBasenames.contains(basename)
+        }
+        guard candidates.count == 1, let executableIndex = candidates.first else { return nil }
+
+        if executableIndex > 0 {
+            let wrapperBasename = URL(fileURLWithPath: argv[0]).lastPathComponent.lowercased()
+            let supportedWrappers: Set<String> = ["agent-safehouse", "run-sandboxed.sh"]
+            guard supportedWrappers.contains(wrapperBasename),
+                  ManagedAgentCommandResolver.inferManagedAgent(
+                      commandName: argv[0],
+                      argv: argv
+                  ) == runtime.agent else {
+                return nil
+            }
+        }
+
+        var index = executableIndex + 1
+        while index < boundaryIndex {
+            let argument = argv[index]
+            if argument == "--session" || argument == "-s" {
+                guard index + 1 < boundaryIndex else { return nil }
+                let value = argv[index + 1]
+                guard value.hasPrefix("-") == false else { return nil }
+                return normalizedNonEmptyValue(value).map { String($0.prefix(240)) }
+            }
+            if argument.hasPrefix("--session=") {
+                return normalizedNonEmptyValue(String(argument.dropFirst("--session=".count)))
+                    .map { String($0.prefix(240)) }
+            }
+            index += 1
+        }
+        return nil
     }
 
     struct ResolvedClaudeSettings {
@@ -703,13 +760,15 @@ private extension AgentLaunchInstrumentation {
         source: String,
         workingDirectory: String?,
         resumeDirectoryURL: URL,
-        telemetryErrorLogURL: URL
+        telemetryErrorLogURL: URL,
+        initialRootSessionID: String?
     ) -> String {
         let cliLiteral = jsonStringLiteral(cliExecutablePath)
         let sourceLiteral = jsonStringLiteral(source)
         let workingDirectoryLiteral = jsonStringLiteral(normalizedNonEmptyValue(workingDirectory) ?? "")
         let resumeDirectoryLiteral = jsonStringLiteral(resumeDirectoryURL.path)
         let logLiteral = jsonStringLiteral(telemetryErrorLogURL.path)
+        let initialRootSessionLiteral = jsonStringLiteral(initialRootSessionID ?? "")
 
         return """
         export async function ToasttyOpenCodeFamilyStatusPlugin() {
@@ -718,6 +777,8 @@ private extension AgentLaunchInstrumentation {
           const launchWorkingDirectory = \(workingDirectoryLiteral);
           const resumeDirectoryPath = \(resumeDirectoryLiteral);
           const logPath = \(logLiteral);
+          let rootNativeSessionID = \(initialRootSessionLiteral);
+          let rootSessionIdentityObserved = false;
           const isMiMoCode = source === "mimocode-plugin";
           let queue = Promise.resolve();
           let lastFinalText = "";
@@ -738,6 +799,12 @@ private extension AgentLaunchInstrumentation {
           const pendingFinalTexts = new Set();
           const pendingNativeSessionKeys = new Set();
           const forwardedNativeSessionKeys = new Set();
+          const childActivities = new Map();
+          const finishedChildIDs = new Set();
+          const finishedChildIDLimit = 256;
+          const recognizedReasoningEfforts = new Set([
+            "off", "none", "minimal", "low", "medium", "high", "xhigh", "max",
+          ]);
 
           function envValue(name) {
             const value = process.env[name];
@@ -786,6 +853,184 @@ private extension AgentLaunchInstrumentation {
               || stringValue(properties.sessionId, nativeSessionIDLimit)
               || stringValue(properties.session_id, nativeSessionIDLimit)
               || stringValue(objectValue(properties.session).id, nativeSessionIDLimit);
+          }
+
+          function claimRootSessionID(input) {
+            const observedSessionID = sessionIDFrom(input);
+            if (!observedSessionID) return rootNativeSessionID;
+            if (!rootSessionIdentityObserved) {
+              rootNativeSessionID = observedSessionID;
+              rootSessionIdentityObserved = true;
+            }
+            return rootNativeSessionID;
+          }
+
+          function claimRootFromProviderEvent(event) {
+            if (rootSessionIdentityObserved || !event || event.type !== "session.created") return;
+            const info = objectValue(objectValue(event.properties).info);
+            const parentID = stringValue(info.parentID, nativeSessionIDLimit)
+              || stringValue(info.parentId, nativeSessionIDLimit);
+            if (parentID) return;
+            const observedSessionID = stringValue(info.id, nativeSessionIDLimit);
+            if (!observedSessionID) return;
+            rootNativeSessionID = observedSessionID;
+            rootSessionIdentityObserved = true;
+          }
+
+          function isRootInput(input) {
+            if (!rootNativeSessionID) return false;
+            const nativeSessionID = sessionIDFrom(input);
+            return !nativeSessionID || nativeSessionID === rootNativeSessionID;
+          }
+
+          function providerEventSessionID(event) {
+            const properties = objectValue(event && event.properties);
+            const info = objectValue(properties.info);
+            return stringValue(properties.sessionID, nativeSessionIDLimit)
+              || stringValue(properties.sessionId, nativeSessionIDLimit)
+              || stringValue(properties.session_id, nativeSessionIDLimit)
+              || stringValue(info.sessionID, nativeSessionIDLimit)
+              || stringValue(info.sessionId, nativeSessionIDLimit)
+              || stringValue(info.session_id, nativeSessionIDLimit)
+              || ((event && (event.type === "session.created" || event.type === "session.updated" || event.type === "session.deleted"))
+                ? stringValue(info.id, nativeSessionIDLimit)
+                : "");
+          }
+
+          function normalizedReasoningEffort(value) {
+            const effort = stringValue(value, 80).toLowerCase();
+            return recognizedReasoningEfforts.has(effort) ? effort : "";
+          }
+
+          function executionProfileFrom(value) {
+            const info = objectValue(value);
+            const model = objectValue(info.model);
+            const providerID = stringValue(info.providerID, 100)
+              || stringValue(info.providerId, 100)
+              || stringValue(model.providerID, 100)
+              || stringValue(model.providerId, 100);
+            const modelID = stringValue(info.modelID, 160)
+              || stringValue(info.modelId, 160)
+              || stringValue(model.modelID, 160)
+              || stringValue(model.modelId, 160)
+              || stringValue(model.id, 160);
+            let modelIdentifier = modelID;
+            if (providerID && modelID && !modelID.startsWith(`${providerID}/`)) {
+              modelIdentifier = stringValue(`${providerID}/${modelID}`, 200);
+            }
+            const reasoningEffort = normalizedReasoningEffort(info.variant || model.variant);
+            return { modelIdentifier, reasoningEffort };
+          }
+
+          function executionProfileKey(profile) {
+            return [profile.modelIdentifier || "", profile.reasoningEffort || ""].join("|");
+          }
+
+          function backgroundActivityEvent(phase, activityID, activity) {
+            const properties = {
+              phase,
+              activityID,
+              kind: "subagent",
+            };
+            if (activity && activity.displayName) properties.displayName = activity.displayName;
+            if (activity && activity.profile.modelIdentifier) {
+              properties.modelIdentifier = activity.profile.modelIdentifier;
+            }
+            if (activity && activity.profile.reasoningEffort) {
+              properties.reasoningEffort = activity.profile.reasoningEffort;
+            }
+            return { type: "toastty.background_activity", properties };
+          }
+
+          function startOrUpdateChild(info) {
+            if (!rootNativeSessionID) return;
+            const parentID = stringValue(info.parentID, nativeSessionIDLimit)
+              || stringValue(info.parentId, nativeSessionIDLimit);
+            if (parentID !== rootNativeSessionID) return;
+            const activityID = stringValue(info.id, nativeSessionIDLimit);
+            if (!activityID || finishedChildIDs.has(activityID)) return;
+            const existing = childActivities.get(activityID);
+            const profile = executionProfileFrom(info);
+            const mergedProfile = {
+              modelIdentifier: profile.modelIdentifier || (existing && existing.profile.modelIdentifier) || "",
+              reasoningEffort: profile.reasoningEffort || (existing && existing.profile.reasoningEffort) || "",
+            };
+            const activity = {
+              displayName: stringValue(info.agent, 120) || (existing && existing.displayName) || "Sub-agent",
+              profile: mergedProfile,
+            };
+            const key = [activity.displayName, executionProfileKey(activity.profile)].join("|");
+            if (existing && existing.forwardedKey === key) return;
+            activity.forwardedKey = key;
+            childActivities.set(activityID, activity);
+            fire(backgroundActivityEvent("start", activityID, activity));
+          }
+
+          function updateChildProfile(info) {
+            const activityID = stringValue(info.sessionID, nativeSessionIDLimit)
+              || stringValue(info.sessionId, nativeSessionIDLimit)
+              || stringValue(info.session_id, nativeSessionIDLimit);
+            if (finishedChildIDs.has(activityID)) return;
+            const existing = childActivities.get(activityID);
+            if (!existing) return;
+            const profile = executionProfileFrom(info);
+            const mergedProfile = {
+              modelIdentifier: profile.modelIdentifier || existing.profile.modelIdentifier || "",
+              reasoningEffort: profile.reasoningEffort || existing.profile.reasoningEffort || "",
+            };
+            const key = [existing.displayName, executionProfileKey(mergedProfile)].join("|");
+            if (key === existing.forwardedKey) return;
+            const activity = { ...existing, profile: mergedProfile, forwardedKey: key };
+            childActivities.set(activityID, activity);
+            fire(backgroundActivityEvent("start", activityID, activity));
+          }
+
+          function finishChild(activityID) {
+            const existing = childActivities.get(activityID);
+            if (!existing) return;
+            childActivities.delete(activityID);
+            finishedChildIDs.add(activityID);
+            if (finishedChildIDs.size > finishedChildIDLimit) {
+              finishedChildIDs.delete(finishedChildIDs.values().next().value);
+            }
+            fire(backgroundActivityEvent("finish", activityID));
+          }
+
+          function finishAllChildren() {
+            for (const activityID of Array.from(childActivities.keys())) finishChild(activityID);
+          }
+
+          function isTerminalProviderEvent(event) {
+            if (!event) return false;
+            if (event.type === "session.idle" || event.type === "session.error" || event.type === "session.deleted") return true;
+            if (event.type !== "session.status") return false;
+            const statusType = stringValue(objectValue(objectValue(event.properties).status).type, 80);
+            return statusType === "idle" || statusType === "error";
+          }
+
+          function handleChildProviderEvent(event) {
+            if (!event) return;
+            const properties = objectValue(event.properties);
+            const info = objectValue(properties.info);
+            switch (event.type) {
+              case "session.created":
+              case "session.updated":
+                startOrUpdateChild(info);
+                return;
+              case "message.updated":
+                updateChildProfile(info);
+                return;
+              case "session.status":
+              case "session.idle":
+              case "session.error":
+              case "session.deleted": {
+                const activityID = providerEventSessionID(event);
+                if (isTerminalProviderEvent(event)) finishChild(activityID);
+                return;
+              }
+              default:
+                return;
+            }
           }
 
           function stableHashHex(value, seed) {
@@ -1294,6 +1539,7 @@ private extension AgentLaunchInstrumentation {
           }
 
           function recordNativeSession(input) {
+            if (!isRootInput(input)) return queue;
             const event = nativeSessionEvent(input);
             if (!event) return queue;
             const properties = objectValue(event.properties);
@@ -1374,15 +1620,34 @@ private extension AgentLaunchInstrumentation {
           const hooks = {
             event(input) {
               try {
+                const providerEvent = normalizeProviderEvent(input);
+                claimRootFromProviderEvent(providerEvent);
+                handleChildProviderEvent(providerEvent);
+                const eventSessionID = providerEventSessionID(providerEvent);
+                const terminalEvent = isTerminalProviderEvent(providerEvent);
+                if (!rootNativeSessionID || (eventSessionID && eventSessionID !== rootNativeSessionID)) return;
+                if (!eventSessionID && !terminalEvent) return;
                 recordNativeSession(input);
-                fire(statusFromProviderEvent(normalizeProviderEvent(input)));
+                if (terminalEvent) finishAllChildren();
+                fire(statusFromProviderEvent(providerEvent));
               } catch (error) {
                 hookFailure("event", error);
               }
             },
 
+            "chat.message"(input) {
+              try {
+                claimRootSessionID(input);
+                recordNativeSession(input);
+              } catch (error) {
+                hookFailure("chat.message", error);
+              }
+            },
+
             "permission.ask"(input) {
               try {
+                claimRootSessionID(input);
+                if (!isRootInput(input)) return;
                 recordNativeSession(input);
                 fire(toasttyStatus("needs_approval", "Needs approval", permissionDetail(objectValue(input))));
               } catch (error) {
@@ -1392,6 +1657,8 @@ private extension AgentLaunchInstrumentation {
 
             "tool.execute.before"(input) {
               try {
+                claimRootSessionID(input);
+                if (!isRootInput(input)) return;
                 recordNativeSession(input);
                 const toolName = toolNameFromInput(input);
                 fire(isQuestionToolName(toolName)
@@ -1404,6 +1671,8 @@ private extension AgentLaunchInstrumentation {
 
             "tool.execute.after"(input, output) {
               try {
+                claimRootSessionID(input);
+                if (!isRootInput(input)) return;
                 recordNativeSession(input);
                 fire(isQuestionToolName(toolNameFromInput(input))
                   ? questionResolvedStatus()
@@ -1415,6 +1684,8 @@ private extension AgentLaunchInstrumentation {
 
             "experimental.text.complete"(input, output) {
               try {
+                claimRootSessionID(input);
+                if (!isRootInput(input)) return;
                 recordNativeSession(input);
                 const text = rememberFinalTextCandidate(input, output);
                 if (!isMiMoCode) return;
@@ -1427,7 +1698,10 @@ private extension AgentLaunchInstrumentation {
           if (isMiMoCode) {
             hooks["session.pre"] = function () {
               try {
-                recordNativeSession(arguments[0]);
+                const input = arguments[0];
+                claimRootSessionID(input);
+                if (!isRootInput(input)) return;
+                recordNativeSession(input);
                 resetTurnState();
                 fire(toasttyStatus("working", "Working", "Starting"));
               } catch (error) {
@@ -1437,7 +1711,9 @@ private extension AgentLaunchInstrumentation {
 
             hooks["session.userQuery.pre"] = function () {
               try {
-                recordNativeSession(arguments[0]);
+                const input = arguments[0];
+                if (!isRootInput(input)) return;
+                recordNativeSession(input);
                 resetTurnState();
                 fire(toasttyStatus("working", "Working", "Running query"));
               } catch (error) {
@@ -1447,6 +1723,7 @@ private extension AgentLaunchInstrumentation {
 
             hooks["session.userQuery.post"] = function (input, output) {
               try {
+                if (!isRootInput(input)) return;
                 recordNativeSession(input);
                 const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
                 if (detail) {
@@ -1463,7 +1740,9 @@ private extension AgentLaunchInstrumentation {
 
             hooks["session.post"] = function (input, output) {
               try {
+                if (!isRootInput(input)) return;
                 recordNativeSession(input);
+                finishAllChildren();
                 const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
                 if (detail) {
                   return flush(toasttyStatus("error", "Error", detail), { suppressFollowingWorking: true });

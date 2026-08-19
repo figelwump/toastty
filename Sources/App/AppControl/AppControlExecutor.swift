@@ -15,6 +15,8 @@ final class AppControlExecutor {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
+    private let annotationStyleStore: AnnotationStyleStore?
+    private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let scratchpadDocumentStore: ScratchpadDocumentStore
     private var currentRequestContext: AutomationRequestContext?
@@ -26,6 +28,8 @@ final class AppControlExecutor {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
+        annotationStyleStore: AnnotationStyleStore? = nil,
+        inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
         reloadConfigurationAction: (@MainActor () -> Void)?,
         scratchpadDocumentStore: ScratchpadDocumentStore? = nil
     ) {
@@ -35,6 +39,8 @@ final class AppControlExecutor {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
+        self.annotationStyleStore = annotationStyleStore
+        self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
         self.reloadConfigurationAction = reloadConfigurationAction
         self.scratchpadDocumentStore = scratchpadDocumentStore ?? webPanelRuntimeRegistry.scratchpadDocumentStore
     }
@@ -178,6 +184,23 @@ final class AppControlExecutor {
             let title = try requireTextParameter("title", args: args)
             return .init(
                 didMutateState: try requiredStore().send(.renameWorkspace(workspaceID: try resolveWorkspaceID(args: args), title: title)),
+                result: nil
+            )
+
+        case .workspaceSetAnnotation:
+            return try runSetWorkspaceAnnotation(args: args)
+
+        case .workspaceClearAnnotation:
+            let workspaceID = try resolveWorkspaceID(args: args)
+            guard let key = WorkspaceAnnotation.canonicalKey(try requireTextParameter("key", args: args)) else {
+                throw AutomationSocketError.invalidPayload(
+                    "key must be 1-\(WorkspaceAnnotation.maximumKeyLength) ASCII letters, digits, '.', '_', or '-'"
+                )
+            }
+            return .init(
+                didMutateState: try requiredStore().send(
+                    .clearWorkspaceAnnotation(workspaceID: workspaceID, key: key)
+                ),
                 result: nil
             )
 
@@ -691,6 +714,12 @@ final class AppControlExecutor {
         }
 
         switch query {
+        case .annotationKeys:
+            // This selector-free catalog is intentionally runtime-global even
+            // for workspace-scoped callers. It exposes key strings only; the
+            // workspace access boundary still protects annotation contents.
+            return try annotationKeysSnapshot()
+
         case .workspaceSnapshot:
             return try workspaceSnapshot(workspaceID: try resolveWorkspaceID(args: args))
 
@@ -1979,6 +2008,156 @@ private extension AppControlExecutor {
         return .object(result)
     }
 
+    /// Validates the whole request, claims or verifies the key's global color,
+    /// then mutates the workspace. A live key's claim cannot be replaced; a
+    /// key becomes replaceable only after its usage reaches zero across the
+    /// live state and inactive persisted layout profiles.
+    private func runSetWorkspaceAnnotation(
+        args: [String: AutomationJSONValue]
+    ) throws -> AppControlActionOutcome {
+        let store = try requiredStore()
+        let workspaceID = try resolveWorkspaceID(args: args)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+        guard let key = WorkspaceAnnotation.canonicalKey(try requireTextParameter("key", args: args)) else {
+            throw AutomationSocketError.invalidPayload(
+                "key must be 1-\(WorkspaceAnnotation.maximumKeyLength) ASCII letters, digits, '.', '_', or '-'"
+            )
+        }
+        guard let text = WorkspaceAnnotation.normalizedText(try requireTextParameter("text", args: args)) else {
+            throw AutomationSocketError.invalidPayload(
+                "text must be 1-\(WorkspaceAnnotation.maximumTextCharacterCount) characters without control, line-separator, or bidi-control characters"
+            )
+        }
+
+        var url: String?
+        if let rawURL = normalizedOptionalText(args.stringValue("url")) {
+            guard let validatedURL = WorkspaceAnnotation.validatedURLString(rawURL) else {
+                throw AutomationSocketError.invalidPayload("url must be an absolute http or https URL")
+            }
+            url = validatedURL
+        }
+
+        var colorToken: AnnotationColorToken?
+        if let rawColor = normalizedOptionalText(args.stringValue("color")) {
+            guard let parsedToken = AnnotationColorToken.parse(rawColor) else {
+                let namedTokens = AnnotationColorToken.NamedColor.allCases.map(\.rawValue).joined(separator: ", ")
+                throw AutomationSocketError.invalidPayload(
+                    "color must be one of \(namedTokens), or #RRGGBB"
+                )
+            }
+            colorToken = parsedToken
+        }
+
+        let annotation = WorkspaceAnnotation(text: text, url: url)
+        let isExistingKey = workspace.annotations[key] != nil
+        if isExistingKey == false,
+           workspace.annotations.count >= WorkspaceAnnotation.maximumAnnotationsPerWorkspace {
+            throw AutomationSocketError.invalidPayload(
+                "workspace already has \(WorkspaceAnnotation.maximumAnnotationsPerWorkspace) annotations; clear one first or update an existing key"
+            )
+        }
+
+        guard let annotationStyleStore else {
+            throw AutomationSocketError.invalidPayload("annotation styles are unavailable in this app instance")
+        }
+
+        let existingToken = annotationStyleStore.colorTokensByKey[key]
+        let resolvedToken: AnnotationColorToken
+        if let existingToken {
+            if let colorToken,
+               colorToken.isVisuallyEquivalent(to: existingToken) == false {
+                let liveUsageCount = liveAnnotationUsageCount(forKey: key, in: store.state)
+                guard liveUsageCount == 0 else {
+                    throw AutomationSocketError.annotationColorLocked(
+                        key: key,
+                        currentColor: existingToken.storageValue
+                    )
+                }
+                let inactiveUsageCount: Int
+                do {
+                    inactiveUsageCount = try inactiveAnnotationUsageCountsProvider()[key, default: 0]
+                } catch {
+                    throw AutomationSocketError.annotationUsageUnavailable
+                }
+                guard inactiveUsageCount == 0 else {
+                    throw AutomationSocketError.annotationColorLocked(
+                        key: key,
+                        currentColor: existingToken.storageValue
+                    )
+                }
+                resolvedToken = colorToken
+            } else {
+                resolvedToken = existingToken
+            }
+        } else if let colorToken {
+            // A missing claim can follow a legacy upgrade or failed startup
+            // migration. Adopt the first explicit color instead of rejecting
+            // against a fabricated, unpersisted automatic token.
+            resolvedToken = colorToken
+        } else {
+            do {
+                resolvedToken = try AnnotationStyleStore.automaticColorToken(
+                    forKey: key,
+                    avoiding: Set(annotationStyleStore.colorTokensByKey.values.map(\.baseHexValue))
+                )
+            } catch {
+                throw AutomationSocketError.invalidPayload(
+                    "failed to allocate annotation color: \(error.localizedDescription)"
+                )
+            }
+        }
+
+        // Persist before the reducer mutation so every successful first use
+        // has a durable claim and a failed style write cannot create an
+        // annotation whose color may change on restart.
+        let didChangeStyle: Bool
+        do {
+            if let existingToken,
+               existingToken.isVisuallyEquivalent(to: resolvedToken) {
+                didChangeStyle = false
+            } else {
+                didChangeStyle = try annotationStyleStore.setColor(resolvedToken, forKey: key)
+            }
+        } catch {
+            throw AutomationSocketError.invalidPayload(
+                "failed to persist annotation style: \(error.localizedDescription)"
+            )
+        }
+
+        let didChangeAnnotation = store.send(
+            .setWorkspaceAnnotation(workspaceID: workspaceID, key: key, annotation: annotation)
+        )
+        return .init(
+            didMutateState: didChangeStyle || didChangeAnnotation,
+            result: [
+                "workspaceID": .string(workspaceID.uuidString),
+                "key": .string(key),
+            ]
+        )
+    }
+
+    private func liveAnnotationUsageCount(forKey key: String, in state: AppState) -> Int {
+        state.workspacesByID.values.reduce(into: 0) { count, workspace in
+            if workspace.annotations[key] != nil {
+                count += 1
+            }
+        }
+    }
+
+    func annotationKeysSnapshot() throws -> [String: AutomationJSONValue] {
+        guard let annotationStyleStore else {
+            throw AutomationSocketError.invalidPayload("annotation styles are unavailable in this app instance")
+        }
+        return [
+            "keys": .array(
+                annotationStyleStore.registeredKeys()
+                    .map(AutomationJSONValue.string)
+            ),
+        ]
+    }
+
     func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {
         let store = try requiredStore()
         guard let workspace = store.state.workspacesByID[workspaceID] else {
@@ -2062,9 +2241,24 @@ private extension AppControlExecutor {
         case .slot:
             rootSplitRatio = .null
         }
+        // Bytewise key order keeps the annotation listing deterministic; the
+        // reported color is the effective explicit-or-fallback token.
+        let annotations = workspace.annotations
+            .sorted { $0.key < $1.key }
+            .map { key, annotation -> AutomationJSONValue in
+                let colorToken = annotationStyleStore?.effectiveColorToken(forKey: key)
+                    ?? AnnotationStyleStore.fallbackColorToken(forKey: key)
+                return .object([
+                    "key": .string(key),
+                    "text": .string(annotation.text),
+                    "url": annotation.url.map(AutomationJSONValue.string) ?? .null,
+                    "color": .string(colorToken.storageValue),
+                ])
+            }
 
         return [
             "workspaceID": .string(workspaceID.uuidString),
+            "annotations": .array(annotations),
             "tabCount": .int(workspace.tabIDs.count),
             "selectedTabID": selectedTabID.map { .string($0.uuidString) } ?? .null,
             "selectedTabIndex": selectedTabIndex.map { .int($0) } ?? .null,

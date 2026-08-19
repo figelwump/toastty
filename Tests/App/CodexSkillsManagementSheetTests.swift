@@ -71,6 +71,29 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Provisioned banner wording
 
+    func testProvisionedBannerTitleIdentifiesTheManagedAgent() {
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .codex),
+            "Toastty skills are now available in Codex"
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .claude),
+            "Toastty skills are now available in Claude Code"
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .pi),
+            "Toastty skills are now available in Pi"
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .opencode),
+            "Toastty skills are now available in OpenCode"
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .mimocode),
+            "Toastty skills are now available in MiMo Code"
+        )
+    }
+
     func testProvisionedBannerMessageForShippedOnlyLaunch() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
@@ -148,45 +171,72 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
-    // MARK: - Other-runtimes status card (Pi, OpenCode, MiMo Code)
+    // MARK: - Launch-provided delivery row (Claude Code, Pi, OpenCode, MiMo Code)
 
-    func testOtherRuntimesStatusDetailForProvidedAtLaunch() {
-        let configuration = ClaudeSkillsLaunchConfiguration(
-            pluginRootPath: "/tmp/plugin",
-            skillsRootPath: "/tmp/plugin/skills",
-            version: "0.1.0-abc",
-            contentDigest: "digest"
-        )
+    func testLaunchDeliveryStatusTitleForEachState() {
         XCTAssertEqual(
-            ToasttySkillsManagementSheet.otherRuntimesStatusDetail(
-                for: .providedAtLaunch(configuration)
+            ToasttySkillsManagementSheet.launchDeliveryStatusTitle(
+                for: .providedAtLaunch(makeLaunchConfiguration(version: "0.1.0-abc"))
             ),
-            "Toastty passes version 0.1.0-abc only to managed Pi, OpenCode, and MiMo Code launches."
+            "Provided at launch"
         )
-    }
-
-    func testOtherRuntimesStatusDetailForStagesOnNextLaunch() {
         XCTAssertEqual(
-            ToasttySkillsManagementSheet.otherRuntimesStatusDetail(
+            ToasttySkillsManagementSheet.launchDeliveryStatusTitle(
                 for: .stagesOnNextLaunch(version: "0.2.0-def")
             ),
-            "Toastty will stage version 0.2.0-def when the next managed Pi, OpenCode, or MiMo Code session launches."
+            "Stages on next launch"
         )
-    }
-
-    func testOtherRuntimesStatusDetailForUnavailable() {
         XCTAssertEqual(
-            ToasttySkillsManagementSheet.otherRuntimesStatusDetail(
+            ToasttySkillsManagementSheet.launchDeliveryStatusTitle(
                 for: .unavailable(detail: "Toastty could not verify the staged skills plugin.")
             ),
-            "Toastty could not verify the staged skills plugin."
+            "Needs attention"
+        )
+        XCTAssertEqual(
+            ToasttySkillsManagementSheet.launchDeliveryStatusTitle(for: nil),
+            "Checking"
         )
     }
 
-    func testOtherRuntimesStatusDetailWhileChecking() {
+    func testDeliveredSkillsVersionPrefersStagedSkillsVersion() {
+        let codexStatus = makeCodexStatus(bundledVersion: "0.3.0")
+
         XCTAssertEqual(
-            ToasttySkillsManagementSheet.otherRuntimesStatusDetail(for: nil),
-            "Checking Toastty's bundled skills for Pi, OpenCode, and MiMo Code."
+            ToasttySkillsManagementSheet.deliveredSkillsVersion(
+                claudeStatus: .providedAtLaunch(makeLaunchConfiguration(version: "0.1.0-abc")),
+                codexStatus: codexStatus
+            ),
+            "0.1.0-abc"
+        )
+        XCTAssertEqual(
+            ToasttySkillsManagementSheet.deliveredSkillsVersion(
+                claudeStatus: .stagesOnNextLaunch(version: "0.2.0-def"),
+                codexStatus: codexStatus
+            ),
+            "0.2.0-def"
+        )
+    }
+
+    func testDeliveredSkillsVersionFallsBackToCodexBundledVersion() {
+        XCTAssertEqual(
+            ToasttySkillsManagementSheet.deliveredSkillsVersion(
+                claudeStatus: .unavailable(detail: "broken"),
+                codexStatus: makeCodexStatus(bundledVersion: "0.3.0")
+            ),
+            "0.3.0"
+        )
+        XCTAssertEqual(
+            ToasttySkillsManagementSheet.deliveredSkillsVersion(
+                claudeStatus: nil,
+                codexStatus: makeCodexStatus(bundledVersion: "0.3.0")
+            ),
+            "0.3.0"
+        )
+        XCTAssertNil(
+            ToasttySkillsManagementSheet.deliveredSkillsVersion(
+                claudeStatus: nil,
+                codexStatus: nil
+            )
         )
     }
 
@@ -453,6 +503,31 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             existingSnapshotProvider: existingSnapshot,
             refreshProvider: refresh,
             revealFolder: revealFolder
+        )
+    }
+
+    private func makeLaunchConfiguration(version: String) -> ClaudeSkillsLaunchConfiguration {
+        ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/plugin",
+            skillsRootPath: "/tmp/plugin/skills",
+            version: version,
+            contentDigest: "digest"
+        )
+    }
+
+    private func makeCodexStatus(bundledVersion: String?) -> CodexSkillsStatus {
+        CodexSkillsStatus(
+            availability: .ready,
+            detail: "Ready.",
+            bundledVersion: bundledVersion,
+            installedVersion: bundledVersion,
+            bundledDigest: "digest",
+            installedDigest: "digest",
+            cachePath: "/tmp/plugin-cache",
+            profileConfigPath: "/tmp/profile.toml",
+            updatePending: false,
+            repairPending: false,
+            hasActiveManagedSession: false
         )
     }
 

@@ -27,10 +27,8 @@ enum CodexUserSkillsContract {
 /// docs/plans/evidence/codex-session-scoped-skills-2026-08-04.md).
 enum CodexManagedProfileConfig {
     /// Marker attached to Toastty's managed plugin entries. Codex may prepend
-    /// its own profile-scoped preferences, so ownership is not position-based
-    /// after Toastty has a receipt for this Codex home.
+    /// its own profile-scoped preferences, so ownership is not position-based.
     static let ownershipMarker = "# managed by Toastty — other profile settings are preserved"
-    static let legacyOwnershipMarker = "# managed by Toastty — do not edit; safe to delete"
 
     private static let shippedPluginHeader = #"[plugins."toastty@toastty"]"#
     private static let userPluginHeader = #"[plugins."toastty-user@toastty-user"]"#
@@ -57,22 +55,14 @@ enum CodexManagedProfileConfig {
         return contents
     }
 
-    /// The current marker is a full-line ownership declaration wherever Codex
-    /// moves it. The unreleased legacy marker is accepted only with a matching
-    /// receipt so migration cannot claim a coincidental user-authored file.
-    static func isToasttyOwned(
-        _ contents: String,
-        allowLegacyMarker: Bool = false
-    ) -> Bool {
+    /// The marker is a full-line ownership declaration wherever Codex moves
+    /// it. Cache receipts verify installed plugin bytes; they are not part of
+    /// the profile ownership decision.
+    static func isToasttyOwned(_ contents: String) -> Bool {
         let lines = profileLines(in: contents)
         guard lines.isEmpty == false else { return false }
-        if lines.enumerated().contains(where: { index, line in
-            isCurrentOwnershipMarker(line.body, toleratingLeadingBOM: index == 0)
-        }) {
-            return true
-        }
-        return allowLegacyMarker && lines.enumerated().contains { index, line in
-            isLegacyOwnershipMarker(line.body, toleratingLeadingBOM: index == 0)
+        return lines.enumerated().contains { index, line in
+            isOwnershipMarker(line.body, toleratingLeadingBOM: index == 0)
         }
     }
 
@@ -159,29 +149,7 @@ enum CodexManagedProfileConfig {
             candidate.removeFirst()
         }
         let trimmed = candidate.trimmingCharacters(in: .whitespaces)
-        return trimmed == ownershipMarker || trimmed == legacyOwnershipMarker
-    }
-
-    private static func isCurrentOwnershipMarker(
-        _ line: String,
-        toleratingLeadingBOM: Bool
-    ) -> Bool {
-        var candidate = line
-        if toleratingLeadingBOM, candidate.hasPrefix("\u{FEFF}") {
-            candidate.removeFirst()
-        }
-        return candidate.trimmingCharacters(in: .whitespaces) == ownershipMarker
-    }
-
-    private static func isLegacyOwnershipMarker(
-        _ line: String,
-        toleratingLeadingBOM: Bool
-    ) -> Bool {
-        var candidate = line
-        if toleratingLeadingBOM, candidate.hasPrefix("\u{FEFF}") {
-            candidate.removeFirst()
-        }
-        return candidate.trimmingCharacters(in: .whitespaces) == legacyOwnershipMarker
+        return trimmed == ownershipMarker
     }
 
     private static func isManagedPluginHeader(_ line: String) -> Bool {

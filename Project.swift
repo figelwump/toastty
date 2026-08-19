@@ -4,6 +4,42 @@ import Foundation
 let ghosttyDebugXCFrameworkRelativePath = "Dependencies/GhosttyKit.Debug.xcframework"
 let ghosttyReleaseXCFrameworkRelativePath = "Dependencies/GhosttyKit.Release.xcframework"
 let environment = ProcessInfo.processInfo.environment
+
+// These values are materialized in the generated, gitignored Release scheme
+// and inherited by Toastty's child processes. Keep this list limited to
+// non-secret runtime configuration that intentionally escapes worktree state
+// isolation; build credentials must never be added here.
+let localReleaseRuntimeEnvironmentKeys = [
+    (
+        manifestKey: "TUIST_TOASTTY_TERMINAL_PROFILES_PATH",
+        runtimeKey: "TOASTTY_TERMINAL_PROFILES_PATH"
+    ),
+]
+
+func resolvedLocalReleaseRuntimeEnvironmentVariables() -> [String: EnvironmentVariable] {
+    var resolvedVariables: [String: EnvironmentVariable] = [:]
+
+    for forwarding in localReleaseRuntimeEnvironmentKeys {
+        guard let rawValue = environment[forwarding.manifestKey] else { continue }
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.isEmpty == false else {
+            fatalError("\(forwarding.manifestKey) must not be empty when set at `tuist generate` time.")
+        }
+        guard value.contains("$") == false else {
+            fatalError("\(forwarding.manifestKey) must not contain '$' because Xcode expands scheme values.")
+        }
+        guard resolvedVariables[forwarding.runtimeKey] == nil else {
+            fatalError("Duplicate local Release runtime key: \(forwarding.runtimeKey)")
+        }
+        resolvedVariables[forwarding.runtimeKey] = .environmentVariable(
+            value: value,
+            isEnabled: true
+        )
+    }
+
+    return resolvedVariables
+}
+
 // Fail fast if both the manifest-visible and compatibility env names are set
 // but disagree, so release metadata cannot silently drift during generation.
 func resolvedManifestEnvironmentValue(
@@ -85,6 +121,7 @@ let ghosttyMacOSSliceDirectoryCandidates = [
     "macos-x86_64",
 ]
 let ghosttyStaticLibraryFilenameCandidates = [
+    "libghostty-internal.a",
     "libghostty.a",
     "libghostty-fat.a",
     "ghostty-internal.a",
@@ -149,6 +186,16 @@ let debugFishShellPath = [
     "/opt/homebrew/bin/fish",
     "/usr/local/bin/fish",
 ].first(where: { FileManager.default.fileExists(atPath: $0) }) ?? "/path/to/fish"
+var localReleaseRunEnvironmentVariables: [String: EnvironmentVariable] = [
+    "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
+    "TOASTTY_DEBUG_LOGIN_SHELL": .environmentVariable(value: debugFishShellPath, isEnabled: false),
+]
+for (key, value) in resolvedLocalReleaseRuntimeEnvironmentVariables() {
+    guard localReleaseRunEnvironmentVariables[key] == nil else {
+        fatalError("Local Release runtime key conflicts with an isolated scheme value: \(key)")
+    }
+    localReleaseRunEnvironmentVariables[key] = value
+}
 
 func applyGhosttyVariantModuleSettings(
     configurationName: String,
@@ -607,10 +654,7 @@ let project = Project(
                 configuration: .release,
                 executable: .project(path: .relativeToRoot("."), target: "ToasttyApp"),
                 arguments: .arguments(
-                    environmentVariables: [
-                        "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
-                        "TOASTTY_DEBUG_LOGIN_SHELL": .environmentVariable(value: debugFishShellPath, isEnabled: false),
-                    ]
+                    environmentVariables: localReleaseRunEnvironmentVariables
                 )
             ),
             archiveAction: .archiveAction(

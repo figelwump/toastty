@@ -291,7 +291,10 @@ struct AgentEventParsersTests {
                 displayName: "general-purpose",
                 command: "Test background agent sleep command",
                 processID: nil,
-                preserveWhenUnlisted: false
+                preserveWhenUnlisted: false,
+                executionProfile: SessionAgentExecutionProfile(
+                    modelIdentifier: "claude-haiku-4-5-20251001"
+                )
             ),
         ])
     }
@@ -317,7 +320,8 @@ struct AgentEventParsersTests {
                 displayName: "reviewer",
                 command: "Ask a task",
                 processID: nil,
-                preserveWhenUnlisted: false
+                preserveWhenUnlisted: false,
+                executionProfile: nil
             ),
         ])
     }
@@ -343,7 +347,8 @@ struct AgentEventParsersTests {
                 displayName: nil,
                 command: nil,
                 processID: nil,
-                preserveWhenUnlisted: true
+                preserveWhenUnlisted: true,
+                executionProfile: nil
             ),
         ])
     }
@@ -369,7 +374,8 @@ struct AgentEventParsersTests {
                 displayName: nil,
                 command: nil,
                 processID: nil,
-                preserveWhenUnlisted: false
+                preserveWhenUnlisted: false,
+                executionProfile: nil
             ),
         ])
     }
@@ -1165,6 +1171,35 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func piSubagentActivityCarriesObservedModelProfile() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"background_activity_start","activityID":"pi-subagent:call-1:0","displayName":"reviewer","modelIdentifier":"anthropic/claude-sonnet-4"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "pi-subagent:call-1:0",
+                kind: .subagent,
+                displayName: "reviewer",
+                command: nil,
+                processID: nil,
+                preserveWhenUnlisted: false,
+                executionProfile: SessionAgentExecutionProfile(
+                    modelIdentifier: "anthropic/claude-sonnet-4"
+                )
+            ),
+        ])
+    }
+
+    @Test
     func piFailedToolResultMapsToFailureStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .piExtension,
@@ -1256,6 +1291,57 @@ struct AgentEventParsersTests {
         )
 
         #expect(commands.isEmpty)
+    }
+
+    @Test
+    func opencodeBackgroundActivityMapsModelAndReasoningProfile() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"toastty.background_activity","properties":{"phase":"start","activityID":"child-session","kind":"subagent","displayName":"explore","modelIdentifier":"openai/gpt-5.4","reasoningEffort":"high"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "child-session",
+                kind: .subagent,
+                displayName: "explore",
+                command: nil,
+                processID: nil,
+                preserveWhenUnlisted: false,
+                executionProfile: SessionAgentExecutionProfile(
+                    modelIdentifier: "openai/gpt-5.4",
+                    reasoningEffort: "high"
+                )
+            ),
+        ])
+    }
+
+    @Test
+    func mimocodeBackgroundActivityUsesTheSameProviderNeutralContract() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .mimocodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"toastty.background_activity","properties":{"phase":"start","activityID":"mimo-child","kind":"subagent","displayName":"reviewer","modelIdentifier":"xiaomi/mimo-v2-pro"}}"#.utf8
+            )
+        )
+
+        guard case .sessionBackgroundActivity(_, _, _, let activityID, _, let displayName, _, _, _, let profile) = try #require(commands.first) else {
+            Issue.record("expected MiMo background activity")
+            return
+        }
+        #expect(activityID == "mimo-child")
+        #expect(displayName == "reviewer")
+        #expect(profile?.modelIdentifier == "xiaomi/mimo-v2-pro")
+        #expect(profile?.reasoningEffort == nil)
     }
 
     @Test

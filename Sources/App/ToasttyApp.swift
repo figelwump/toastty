@@ -660,6 +660,7 @@ struct ToasttyApp: App {
     @StateObject private var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
     @StateObject private var remoteAccessService: RemoteAccessService
+    @StateObject private var annotationStyleStore: AnnotationStyleStore
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
@@ -668,6 +669,7 @@ struct ToasttyApp: App {
     private let runtimePaths: ToasttyRuntimePaths
     private let agentLaunchSocketPath: String
     private let agentLaunchCLIExecutablePath: String?
+    private let agentHookDispatcher: AgentHookDispatcher
     private let agentLaunchShimExecutablePath: String?
     private let codexProcessPathStore: CodexProcessPathStore
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
@@ -849,8 +851,56 @@ struct ToasttyApp: App {
             basePath: processInfo.environment["PATH"],
             agentBasePath: resolvedAgentBasePath
         )
-        let sessionRuntimeStore = SessionRuntimeStore()
+        // The dispatcher receives the authoritative current-instance socket
+        // and staged CLI paths here; it never rediscovers them via
+        // AutomationSocketLocator.
+        let agentHookDispatcher = AgentHookDispatcher(
+            socketPath: socketPath,
+            cliExecutablePath: cliExecutablePath,
+            scriptPath: initialToasttyConfig.agentHookScriptPath
+        )
+        if let issue = AgentHookDispatcher.configuredScriptPathIssue(
+            initialToasttyConfig.agentHookScriptPath
+        ) {
+            ToasttyLog.warning(
+                "Configured agent hook script is not currently usable",
+                category: .automation,
+                metadata: ["issue": issue]
+            )
+        }
+        let sessionRuntimeStore = SessionRuntimeStore(agentHookDispatcher: agentHookDispatcher)
         sessionRuntimeStore.bind(store: store)
+        let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
+        if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
+            // Layout profile selection is fixed for this app process, so the
+            // bootstrap identities remain the live-state exclusions for every
+            // later usage scan.
+            let representedProfileIDs = bootstrap.layoutProfileIDsRepresentedByState
+            inactiveAnnotationUsageCountsProvider = {
+                try WorkspaceLayoutPersistenceStore(fileURL: layoutPersistenceContext.fileURL)
+                    .annotationUsageCounts(excludingProfileIDs: representedProfileIDs)
+            }
+        } else {
+            inactiveAnnotationUsageCountsProvider = { [:] }
+        }
+        let annotationStyleStore = AnnotationStyleStore(runtimePaths: runtimePaths)
+        var restoredAnnotationKeys = Set(
+            store.state.workspacesByID.values.flatMap { $0.annotations.keys }
+        )
+        do {
+            restoredAnnotationKeys.formUnion(
+                try inactiveAnnotationUsageCountsProvider()
+                    .filter { $0.value > 0 }
+                    .map(\.key)
+            )
+            try annotationStyleStore.materializeMissingClaims(forKeys: restoredAnnotationKeys)
+        } catch {
+            ToasttyLog.warning(
+                "Failed to materialize restored annotation color claims",
+                category: .state,
+                metadata: ["error": error.localizedDescription]
+            )
+        }
         terminalRuntimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
         terminalRuntimeRegistry.setTerminalProfileProvider(
             terminalProfileStore,
@@ -879,6 +929,7 @@ struct ToasttyApp: App {
                 legacyTerminalFontSizePoints: legacyTerminalFontSizePoints
             )
             Self.ensureToasttyConfigTemplateExists()
+            Self.ensureAgentHookTemplateExists()
         }
         Self.writeToasttyConfigReference()
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
@@ -978,7 +1029,8 @@ struct ToasttyApp: App {
                     agentLaunchCLIExecutablePath: cliExecutablePath,
                     agentLaunchShimExecutablePath: agentShimExecutablePath,
                     codexProcessPathStore: codexProcessPathStore,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    agentHookDispatcher: agentHookDispatcher
                 )
             },
             openLocalDocumentAction: { preferredWindowID, placement in
@@ -1119,6 +1171,7 @@ struct ToasttyApp: App {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths
         ))
+        _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
             usesPersistentPreferences: persistUserSettings,
@@ -1129,6 +1182,7 @@ struct ToasttyApp: App {
         agentLaunchSocketPath = socketPath
         agentLaunchCLIExecutablePath = cliExecutablePath
         agentLaunchShimExecutablePath = agentShimExecutablePath
+        self.agentHookDispatcher = agentHookDispatcher
         self.codexProcessPathStore = codexProcessPathStore
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
@@ -1173,6 +1227,8 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
+                annotationStyleStore: annotationStyleStore,
+                inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
                 reloadConfigurationAction: {
                     Self.reloadConfiguration(
                         store: store,
@@ -1183,7 +1239,8 @@ struct ToasttyApp: App {
                         agentLaunchCLIExecutablePath: cliExecutablePath,
                         agentLaunchShimExecutablePath: agentShimExecutablePath,
                         codexProcessPathStore: codexProcessPathStore,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        agentHookDispatcher: agentHookDispatcher
                     )
                 }
             )
@@ -1407,6 +1464,7 @@ struct ToasttyApp: App {
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
+                annotationStyleStore: annotationStyleStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
@@ -1493,7 +1551,8 @@ struct ToasttyApp: App {
             agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
             agentLaunchShimExecutablePath: agentLaunchShimExecutablePath,
             codexProcessPathStore: codexProcessPathStore,
-            terminalRuntimeRegistry: terminalRuntimeRegistry
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            agentHookDispatcher: agentHookDispatcher
         )
     }
 
@@ -1507,7 +1566,8 @@ struct ToasttyApp: App {
         agentLaunchCLIExecutablePath: String?,
         agentLaunchShimExecutablePath: String?,
         codexProcessPathStore: CodexProcessPathStore,
-        terminalRuntimeRegistry: TerminalRuntimeRegistry
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        agentHookDispatcher: AgentHookDispatcher
     ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
@@ -1529,6 +1589,14 @@ struct ToasttyApp: App {
         let toasttyConfig = ToasttyConfigStore.load()
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
+        // Only newly enqueued hook events observe the reloaded path; queued
+        // and running invocations drain with their captured path.
+        agentHookDispatcher.updateScriptPath(toasttyConfig.agentHookScriptPath)
+        if let agentHookIssue = AgentHookDispatcher.configuredScriptPathIssue(
+            toasttyConfig.agentHookScriptPath
+        ) {
+            warningMessages.append(agentHookIssue)
+        }
         let resolvedAgentBasePath = ManagedAgentBasePathResolver(
             environment: ProcessInfo.processInfo.environment,
             fallbackPath: nil
@@ -2111,6 +2179,21 @@ struct ToasttyApp: App {
                 category: .bootstrap,
                 metadata: [
                     "path": ToasttyConfigStore.configFileURL().path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
+    }
+
+    private static func ensureAgentHookTemplateExists() {
+        do {
+            try AgentHookTemplateFile.ensureTemplateExists()
+        } catch {
+            ToasttyLog.warning(
+                "Failed to ensure agent hook template exists",
+                category: .bootstrap,
+                metadata: [
+                    "path": AgentHookTemplateFile.fileURL().path,
                     "error": error.localizedDescription,
                 ]
             )

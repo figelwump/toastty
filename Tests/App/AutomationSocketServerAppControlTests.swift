@@ -203,6 +203,67 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
     }
 
     @Test
+    func appControlRunQueryReturnsAnnotationKeysWithoutAutomationMode() async throws {
+        let socketPath = temporarySocketPath()
+        let runtimeHomeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-socket-annotation-tests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: runtimeHomeURL)
+        }
+        let annotationStyleStore = await MainActor.run {
+            AnnotationStyleStore(
+                runtimePaths: ToasttyRuntimePaths.resolve(
+                    homeDirectoryPath: runtimeHomeURL.path,
+                    environment: [ToasttyRuntimePaths.environmentKey: runtimeHomeURL.path]
+                )
+            )
+        }
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                annotationStyleStore: annotationStyleStore
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let setResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("workspace.set-annotation"),
+                    "args": .object([
+                        "workspaceID": .string(server.workspaceID.uuidString),
+                        "key": .string("github-pr"),
+                        "text": .string("PR #4512"),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(setResponse.ok)
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_query",
+                payload: [
+                    "id": .string("annotation.keys"),
+                    "args": .object([:]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.stringArray("keys") == ["github-pr"])
+    }
+
+    @Test
     func appControlRunActionCanLaunchAgentWithoutAutomationMode() async throws {
         let socketPath = temporarySocketPath()
         let terminalRouter = TestTerminalCommandRouter()

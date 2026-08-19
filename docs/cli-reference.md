@@ -215,6 +215,12 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
 ```bash
 "$TOASTTY_CLI_PATH" action run window.sidebar.toggle --window "$WINDOW_ID"
 "$TOASTTY_CLI_PATH" action run workspace.rename --workspace "$WORKSPACE_ID" title="Infra"
+"$TOASTTY_CLI_PATH" action run workspace.set-annotation \
+  --workspace "$WORKSPACE_ID" \
+  key=github-pr \
+  text="PR #4512" \
+  url=https://github.com/example/repo/pull/4512
+"$TOASTTY_CLI_PATH" action run workspace.clear-annotation --workspace "$WORKSPACE_ID" key=github-pr
 "$TOASTTY_CLI_PATH" action run panel.create.local-document \
   --workspace "$WORKSPACE_ID" \
   filePath=/tmp/README.md \
@@ -276,6 +282,79 @@ arguments. Reordering keeps the selected workspace or tab selected, but changes
 which item each numeric shortcut targets because shortcuts follow the current
 visual order.
 
+`workspace.set-annotation` sets or updates one structured `key -> (text, url?)`
+chip rendered under the workspace name in the sidebar, and
+`workspace.clear-annotation` removes one by key. The caller chooses the key;
+Toastty never derives it from the displayed text. Use a stable semantic identity
+for the annotation kind rather than copying its current value into the key. For
+example:
+
+- Linear issue: `key=linear`, `text=LIN-030`, plus its verified canonical URL
+  when available.
+- GitHub pull request: `key=github-pr`, `text="PR #1931"`, plus its verified pull
+  URL when available.
+- GitHub issue: `key=github-issue`, `text="Issue #482"`, plus its verified issue
+  URL when available.
+- Git branch: `key=git-branch`, `text=feat/hooks-chips`; a URL is usually
+  omitted.
+
+Before choosing a key, callers can run:
+
+```bash
+"$TOASTTY_CLI_PATH" --json query run annotation.keys
+```
+
+The query returns `{"keys": [...]}` in bytewise key order. It is
+runtime-global and intentionally available to workspace-scoped callers, so it
+can include historical keys and keys registered from workspaces outside the
+caller's scope. Keys are caller-authored and may themselves contain sensitive
+semantic labels. The response does not include colors, workspace IDs, usage
+counts, chip text, or URLs.
+
+Reuse an exact catalog key only when its semantic meaning clearly matches. Do
+not fuzzy-match ambiguous keys. Before setting the annotation, also query the
+target `workspace.snapshot`: setting a key already present in that workspace
+replaces that chip's text and URL. Omit `color` when reusing a catalog key so
+its existing global claim remains authoritative.
+
+The same exact key updates one chip within a workspace. Multiple annotations of
+the same kind therefore need distinct stable keys. Include a URL only when it
+was supplied or verified; do not guess one from the label. Validation rules:
+
+- `key` is trimmed, lowercased, and must be 1-32 characters of ASCII letters,
+  digits, `.`, `_`, and `-`. Invalid or overlong keys are rejected, never
+  truncated.
+- `text` is trimmed, NFC-normalized, must be non-empty, and is limited to 80
+  user-perceived characters. Control characters, newlines, Unicode
+  line/paragraph separators, and bidi override/isolate controls are rejected;
+  emoji, including zero-width-joiner sequences, are allowed.
+- `url` is optional and must be an absolute `http` or `https` URL. Chips with
+  a URL render as clickable links routed through Toastty's URL-opening
+  preferences.
+- `color` is optional: one of `neutral`, `green`, `amber`, `red`, `violet`,
+  `blue`, or `#RRGGBB`. The first annotation for a key claims its global color
+  across all workspaces and layout profiles. Omitting `color` records a stable
+  automatic `#RRGGBB` claim; automatic claims avoid every color already
+  recorded for another key as well as reserved error red and Toastty amber.
+- While at least one annotation with that key exists, later calls may omit
+  `color` or repeat the claimed color, but cannot replace it. A conflict fails
+  with `ANNOTATION_COLOR_LOCKED` and leaves both the annotation and style
+  unchanged. Explicitly requested colors may intentionally duplicate semantic
+  colors used by other keys.
+- If Toastty cannot read inactive layout profiles while checking an unlocked
+  replacement, the call fails closed with `ANNOTATION_USAGE_UNAVAILABLE` and
+  changes nothing.
+- Clearing the last annotation unlocks the claim. A later colorless annotation
+  reuses it; a later first-use call with an explicit color replaces it. Saved
+  annotations in inactive layout profiles count as existing uses.
+- Existing keys without a recorded claim are assigned and persisted once during
+  startup migration. Automatic colors may therefore change once when upgrading
+  from the earlier unrecorded fallback behavior. Existing explicit colors stay
+  unchanged.
+- A workspace holds at most 12 annotations. Updating an existing key remains
+  allowed at the limit.
+- Setting an identical annotation again reports `didMutateState=false`.
+
 Prefer `action list --json` to discover the current canonical IDs. Common actions include:
 
 - `window.create`
@@ -284,6 +363,8 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `workspace.select`
 - `workspace.move`
 - `workspace.rename`
+- `workspace.set-annotation`
+- `workspace.clear-annotation`
 - `workspace.close`
 - `workspace.tab.create`
 - `workspace.tab.select`
@@ -384,12 +465,14 @@ toastty query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=va
 Query selectors and `key=value` argument handling follow the same rules as `action run`.
 
 ```bash
+"$TOASTTY_CLI_PATH" query run annotation.keys
 "$TOASTTY_CLI_PATH" query run workspace.snapshot --workspace "$WORKSPACE_ID"
 "$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$PANEL_ID" contains="ready"
 ```
 
 Prefer `query list --json` to discover the current canonical IDs. Common queries include:
 
+- `annotation.keys`
 - `workspace.snapshot`
 - `terminal.state` (returns `windowID`, `workspaceID`, `panelID`, and terminal metadata)
 - `terminal.visible-text`
@@ -404,6 +487,17 @@ and `title`, plus `filePath` for local documents, `url` for browsers, and
 `scratchpadDocumentID`, `scratchpadRevision`, and `scratchpadSessionID` for
 Scratchpads. Fields that do not apply are null. Right-panel tabs belonging to
 unselected workspace tabs are not included.
+
+`workspace.snapshot` also returns `annotations` as an array of
+`{key, text, url, color}` objects sorted by key in bytewise order. `url` is
+null for text-only chips, and `color` is the effective token for the key —
+the explicit global color when one was set, otherwise the stable automatic
+`#RRGGBB` fallback.
+
+`annotation.keys` takes no selector and returns `keys`, the bytewise-sorted
+array of annotation keys previously registered in the current runtime. The
+catalog is historical rather than an active-usage listing and is intentionally
+runtime-global even for workspace-scoped callers.
 
 `panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 
@@ -542,7 +636,10 @@ toastty session background-activity start|finish \
 `start` creates or refreshes a child row; `finish` removes it. The corresponding
 socket event also supports provider-owned `sync` payloads for replacing the
 current subagent set and reporting pending background-task counts. Outstanding
-activity contributes to the parent session's waiting projection.
+activity contributes to the parent session's waiting projection. Toastty-owned
+ingestors may also attach bounded `modelIdentifier` and `reasoningEffort`
+strings to `start` and `sync` socket payloads; those internal fields are not
+exposed as public CLI flags.
 
 ### `session update-files`
 

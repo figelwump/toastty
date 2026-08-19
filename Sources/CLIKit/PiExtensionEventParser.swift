@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 enum PiExtensionEventParser {
@@ -100,6 +101,29 @@ enum PiExtensionEventParser {
                     )
                 )
             }
+
+        case "background_activity_start", "background_activity_finish":
+            guard let activityID = normalizedString(object["activityID"], limit: 240) else {
+                return []
+            }
+            let profile = SessionAgentExecutionProfile(
+                modelIdentifier: normalizedString(object["modelIdentifier"], limit: 200),
+                reasoningEffort: normalizedString(object["reasoningEffort"], limit: 80)
+            )
+            commands.append(
+                .sessionBackgroundActivity(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    phase: event == "background_activity_start" ? .start : .finish,
+                    activityID: activityID,
+                    kind: .subagent,
+                    displayName: normalizedString(object["displayName"], limit: 120),
+                    command: nil,
+                    processID: nil,
+                    preserveWhenUnlisted: false,
+                    executionProfile: profile.isEmpty ? nil : profile
+                )
+            )
 
         case "agent_end":
             commands.append(

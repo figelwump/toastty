@@ -352,8 +352,24 @@ final class GatewayClientTests: XCTestCase {
     }
 
     func testHTTPStatusClassificationPreservesAuthSemantics() async throws {
-        try await assertFailure(status: 401, body: Self.errorJSON(code: "unauthorized")) {
-            guard case .unauthenticated(code: .unauthorized, message: "failure") = $0 else { return false }
+        let authenticationCodes: [(String, GatewayAPIErrorCode?)] = [
+            ("unauthorized", .unauthorized),
+            ("credential_invalid", .credentialInvalid),
+            ("identity_unavailable", .identityUnavailable),
+            ("identity_mismatch", .identityMismatch),
+            ("future_authentication_error", nil),
+        ]
+        for (rawCode, expectedCode) in authenticationCodes {
+            try await assertFailure(status: 401, body: Self.errorJSON(code: rawCode)) {
+                guard case .unauthenticated(let code, message: "failure") = $0 else { return false }
+                return code == expectedCode
+            }
+        }
+        try await assertFailure(
+            status: 401,
+            body: Self.errorJSON(code: "future_authentication_error", protocolVersion: "2.0")
+        ) {
+            guard case .unauthenticated(code: nil, message: "failure") = $0 else { return false }
             return true
         }
         try await assertFailure(status: 403, body: Self.errorJSON(code: "origin_denied")) {
@@ -409,8 +425,8 @@ final class GatewayClientTests: XCTestCase {
         }
     }
 
-    private static func errorJSON(code: String) -> Data {
-        Data("{\"code\":\"\(code)\",\"message\":\"failure\",\"protocolVersion\":\"1.0\"}".utf8)
+    private static func errorJSON(code: String, protocolVersion: String = "1.0") -> Data {
+        Data("{\"code\":\"\(code)\",\"message\":\"failure\",\"protocolVersion\":\"\(protocolVersion)\"}".utf8)
     }
 
     private static let conversationID = RemoteConversationID(

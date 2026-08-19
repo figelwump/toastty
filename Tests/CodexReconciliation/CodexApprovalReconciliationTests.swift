@@ -121,22 +121,49 @@ struct CodexApprovalReconciliationTests {
                 name: "on-request policy",
                 request: request(),
                 root: root(current: context(policy: .string("on-request"), reviewer: .null)),
-                expected: .accept(reason: .missingApprovalsReviewer)
+                expected: .accept(reason: .humanApproval)
             ),
             DecisionCase(
                 name: "other nonempty policy",
                 request: request(),
                 root: root(current: context(policy: .string("human"), reviewer: .null)),
-                expected: .accept(reason: .missingApprovalsReviewer)
+                expected: .accept(reason: .humanApproval)
             ),
             DecisionCase(
-                name: "nonempty reviewer",
+                name: "explicit user reviewer",
+                request: request(),
+                root: root(current: context(
+                    policy: .string("on-request"),
+                    reviewer: .string(" user ")
+                )),
+                expected: .accept(reason: .humanApproval)
+            ),
+            DecisionCase(
+                name: "legacy auto reviewer",
                 request: request(),
                 root: root(current: context(
                     policy: .string("on-request"),
                     reviewer: .string(" reviewer ")
                 )),
                 expected: .suppress(reason: .autoReviewApproval)
+            ),
+            DecisionCase(
+                name: "current auto reviewer",
+                request: request(),
+                root: root(current: context(
+                    policy: .string("on-request"),
+                    reviewer: .string("auto_review")
+                )),
+                expected: .suppress(reason: .autoReviewApproval)
+            ),
+            DecisionCase(
+                name: "unknown reviewer fails open through deferral",
+                request: request(),
+                root: root(current: context(
+                    policy: .string("on-request"),
+                    reviewer: .string("future_reviewer")
+                )),
+                expected: .deferForContext(reason: .unknownApprovalsReviewer)
             ),
         ]
 
@@ -351,7 +378,7 @@ struct CodexApprovalReconciliationTests {
                 root: root(current: context(policy: .string("on-request"), reviewer: .null))
             )
             if isAccepted {
-                #expect(reduction.decision == .accept(reason: .missingApprovalsReviewer))
+                #expect(reduction.decision == .accept(reason: .humanApproval))
             } else {
                 #expect(reduction.decision == .ignore(reason: .incompatibleWithAuthority))
             }

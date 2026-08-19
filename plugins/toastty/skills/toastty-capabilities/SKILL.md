@@ -1,6 +1,6 @@
 ---
 name: toastty-capabilities
-description: Use this skill when a user asks an agent to orchestrate, inspect, automate, control, coordinate, or present work inside Toastty, including creating workspaces or panels, launching agents, opening browser or local-document panels, using Scratchpad, checking terminal state, managing workspace scope, or notifying the user.
+description: Use this skill when a user asks an agent to orchestrate, inspect, automate, control, coordinate, or present work inside Toastty, including setting or clearing Toastty workspace annotations, creating workspaces or panels, launching agents, opening browser or local-document panels, using Scratchpad, checking terminal state, managing workspace scope, or notifying the user.
 ---
 
 # Toastty Capabilities
@@ -71,12 +71,55 @@ list includes right-panel tabs belonging to unselected workspace tabs.
 
 Common workflow families:
 
-- Workspaces and tabs: `workspace.create`, `workspace.select`, `workspace.rename`, `workspace.tab.create`, `workspace.tab.select`.
+- Annotation discovery: `annotation.keys`.
+- Workspaces and tabs: `workspace.create`, `workspace.select`, `workspace.rename`, `workspace.set-annotation`, `workspace.clear-annotation`, `workspace.tab.create`, `workspace.tab.select`.
 - Panels: `panel.create.browser`, `panel.create.local-document`, `panel.close`, `panel.focus-mode.toggle`.
 - Terminal control: `terminal.send-text`, `terminal.visible-text`, `terminal.state`.
 - Agents: `agent.launch`.
 - Scratchpad: `panel.scratchpad.set-content`, `panel.scratchpad.patch-content`, `panel.scratchpad.export`, `panel.scratchpad.state`.
 - Notifications: `toastty notify`.
+
+## Workspace Annotations
+
+Treat requests to annotate, label, tag, or mark a Toastty workspace as workspace
+annotation actions. Do not turn them into document annotation or code review
+flows. A user-supplied identifier is enough to set the annotation text. A
+remote lookup may provide a canonical URL, but a missing or unverifiable remote
+record must not block the annotation; omit the URL instead.
+
+The caller chooses the annotation `key`; Toastty does not derive it from the
+displayed `text`. Use a stable semantic identity for the kind of annotation,
+not its current value. The same exact key updates one chip within a workspace
+and shares one claimed color across workspaces. The first use records either
+the supplied color or an automatic color. While any annotation with that key
+exists, omit color or repeat the claim; attempting to replace it fails. Examples:
+
+- Linear issue: `key=linear`, `text=LIN-030`, and
+  `url=<verified canonical Linear issue URL>` when available.
+- GitHub pull request: `key=github-pr`, `text="PR #1931"`, and
+  `url=<verified GitHub pull URL>` when available.
+- GitHub issue: `key=github-issue`, `text="Issue #482"`, and
+  `url=<verified GitHub issue URL>` when available.
+- Git branch: `key=git-branch`, `text=feat/hooks-chips`; omit `url` unless a
+  canonical branch URL is already known.
+
+Before setting an annotation, query `annotation.keys`. It returns every key
+previously registered in the current Toastty runtime, including historical
+keys and keys created outside the caller's workspace scope. Reuse an exact key
+when its semantic meaning clearly matches the requested annotation kind; do
+not fuzzy-match or infer meaning from an ambiguous key. Omit `color` when
+reusing a key so its existing global claim remains authoritative.
+
+Also query `workspace.snapshot` for the target workspace before setting the
+annotation. Because one exact key represents one chip per workspace, setting a
+key already present there replaces that chip's text and URL. Do so only when
+the request intends to update that same semantic annotation; otherwise choose
+a distinct stable key. If no catalog key is a clear match, use the established
+canonical key for the annotation kind, such as the examples above.
+
+Include a URL only when the user supplied it or available context verified it;
+never construct one by guessing from the label. Multiple annotations of the
+same kind need distinct stable keys.
 
 ## Scope Semantics
 

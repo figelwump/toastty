@@ -37,6 +37,7 @@ public struct SessionChildRow: Equatable, Sendable {
     public var source: SessionChildRowSource
     public var displayName: String
     public var context: String?
+    public var executionProfile: SessionAgentExecutionProfile?
     public var startedAt: Date
     public var statusKind: SessionStatusKind?
     public var panelID: UUID?
@@ -48,6 +49,7 @@ public struct SessionChildRow: Equatable, Sendable {
         source: SessionChildRowSource,
         displayName: String,
         context: String? = nil,
+        executionProfile: SessionAgentExecutionProfile? = nil,
         startedAt: Date,
         statusKind: SessionStatusKind? = nil,
         panelID: UUID? = nil,
@@ -58,6 +60,7 @@ public struct SessionChildRow: Equatable, Sendable {
         self.source = source
         self.displayName = displayName
         self.context = Self.normalizedOptionalText(context)
+        self.executionProfile = executionProfile?.isEmpty == false ? executionProfile : nil
         self.startedAt = startedAt
         self.statusKind = statusKind
         self.panelID = panelID

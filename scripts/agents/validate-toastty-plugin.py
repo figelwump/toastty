@@ -155,6 +155,15 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
             skill_text = skill_path.read_text(encoding="utf-8")
         except OSError:
             continue
+        if skill_name == "toastty-capabilities":
+            description = re.search(r"^description:\s*(.+)$", skill_text, re.MULTILINE)
+            if (
+                description is None
+                or "toastty workspace annotations" not in description.group(1).lower()
+            ):
+                errors.append(
+                    "toastty-capabilities description must route Toastty workspace annotations"
+                )
         if skill_name in skills_requiring_managed_root:
             if "TOASTTY_SKILLS_ROOT" not in skill_text:
                 errors.append(f"{skill_name} does not require TOASTTY_SKILLS_ROOT")

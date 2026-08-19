@@ -26,6 +26,13 @@ final class SessionRuntimeStore: ObservableObject {
 
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
+    private let agentHookDispatcher: AgentHookDispatcher?
+    private var lastAcceptedHookStatusKindBySessionID: [String: SessionStatusKind] = [:]
+    private var pendingHookReadyBySessionID: [String: PendingHookReady] = [:]
+    /// Process-watch rows remain active after command completion so their
+    /// ready/error result stays visible. Track the independently completed hook
+    /// lifecycle so no later status can follow its `session-stop` event.
+    private var completedHookLifecycleSessionIDs: Set<String> = []
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
     private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
@@ -49,6 +56,47 @@ final class SessionRuntimeStore: ObservableObject {
     private struct PendingPanelParentSessionID: Equatable {
         let sessionID: String
         let recordedAt: Date
+    }
+
+    /// A `turn-complete` hook event held while the session still projects as
+    /// waiting on children or resuming. `previousKind` preserves the accepted
+    /// kind the session transitioned from when `ready` was first requested.
+    private struct PendingHookReady: Equatable {
+        let previousKind: SessionStatusKind?
+    }
+
+    enum CodexStatusInfoEvent: Equatable {
+        case stopApplied
+        case transitionedToWorking
+    }
+
+    static func codexStatusInfoEvent(
+        isCodexStop: Bool,
+        previousKind: SessionStatusKind?,
+        currentKind: SessionStatusKind?
+    ) -> CodexStatusInfoEvent? {
+        if isCodexStop {
+            return .stopApplied
+        }
+        guard let previousKind,
+              previousKind != .working,
+              currentKind == .working else {
+            return nil
+        }
+        return .transitionedToWorking
+    }
+
+    static func codexRootProgressLogSource(_ observation: CodexRootProgressObservation) -> String {
+        switch observation {
+        case .hookWorking:
+            return "hook"
+        case .sessionLogWorking, .sessionLogTurnAborted:
+            return "session_log"
+        case .visibleTextWorking:
+            return "visible_text"
+        case .localInterrupt:
+            return "local_interrupt"
+        }
     }
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
@@ -87,12 +135,14 @@ final class SessionRuntimeStore: ObservableObject {
     init(
         sendSessionStatusNotification: @escaping SessionStatusNotificationHandler = SessionRuntimeStore.defaultSendSessionStatusNotification,
         isApplicationActive: @escaping ApplicationActiveHandler = SessionRuntimeStore.defaultIsApplicationActive,
+        agentHookDispatcher: AgentHookDispatcher? = nil,
         codexHookApprovalDeferralNanoseconds: UInt64 = 1_000_000_000,
         backgroundActivityReapIntervalNanoseconds: UInt64 = 10_000_000_000,
         maximumBackgroundActivityAge: TimeInterval = 8 * 60 * 60
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
         self.isApplicationActive = isApplicationActive
+        self.agentHookDispatcher = agentHookDispatcher
         self.codexHookApprovalDeferralNanoseconds = codexHookApprovalDeferralNanoseconds
         self.backgroundActivityReapIntervalNanoseconds = backgroundActivityReapIntervalNanoseconds
         self.maximumBackgroundActivityAge = maximumBackgroundActivityAge
@@ -127,6 +177,9 @@ final class SessionRuntimeStore: ObservableObject {
 
     func reset() {
         sessionRegistry = SessionRegistry()
+        lastAcceptedHookStatusKindBySessionID = [:]
+        pendingHookReadyBySessionID = [:]
+        completedHookLifecycleSessionIDs = []
         suppressedCodexVisibleErrorDetailBySessionID = [:]
         codexSessionReconciliationBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
@@ -170,13 +223,27 @@ final class SessionRuntimeStore: ObservableObject {
         cwd: String?,
         repoRoot: String?,
         scopedWorkspaceIDs: Set<UUID>? = nil,
+        launchReason: AgentHookLaunchReason = .managed,
         at now: Date
     ) {
+        var nextRegistry = sessionRegistry
+        // A start that displaces this panel's active session (or restarts an
+        // active session ID) ends the old lifecycle: tear it down through the
+        // shared helper so `session-stop` fires exactly once for it.
+        if let displaced = sessionRegistry.activeSession(for: panelID),
+           displaced.sessionID != sessionID {
+            tearDownActiveSession(displaced, reason: .replacedByNewSession, registry: &nextRegistry, at: now)
+        }
+        if let existing = sessionRegistry.sessionsByID[sessionID], existing.isActive {
+            tearDownActiveSession(existing, reason: .replacedByNewSession, registry: &nextRegistry, at: now)
+        }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
+        completedHookLifecycleSessionIDs.remove(sessionID)
+        clearHookTransitionState(sessionID: sessionID)
         if agent == .codex {
             if let codexStatusTrackingSource {
                 codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
@@ -193,7 +260,6 @@ final class SessionRuntimeStore: ObservableObject {
             codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
             codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         }
-        var nextRegistry = sessionRegistry
         nextRegistry.startSession(
             sessionID: sessionID,
             agent: agent,
@@ -225,6 +291,16 @@ final class SessionRuntimeStore: ObservableObject {
         )
         publish(nextRegistry, reason: "start_session", at: now)
         synchronizePersistedResumeRecordScope(sessionID: sessionID, in: nextRegistry)
+        if let startedRecord = nextRegistry.sessionsByID[sessionID] {
+            enqueueHookEvent(
+                kind: .sessionStart,
+                record: startedRecord,
+                previousStatus: nil,
+                newStatus: nil,
+                launchReason: launchReason,
+                at: now
+            )
+        }
     }
 
     func startProcessWatch(
@@ -248,6 +324,7 @@ final class SessionRuntimeStore: ObservableObject {
             displayTitleOverride: displayTitleOverride,
             cwd: cwd,
             repoRoot: repoRoot,
+            launchReason: .processWatch,
             at: now
         )
         updateStatus(
@@ -280,6 +357,28 @@ final class SessionRuntimeStore: ObservableObject {
         status: SessionStatus,
         at now: Date
     ) {
+        updateStatus(
+            sessionID: sessionID,
+            status: status,
+            isUIOnlyReadyCollapse: false,
+            statusUpdateSource: "direct",
+            codexHookEvent: nil,
+            at: now
+        )
+    }
+
+    /// `isUIOnlyReadyCollapse` marks the synthetic focused/read `ready -> idle`
+    /// collapse. It updates stored/UI state normally but is invisible to hook
+    /// transition tracking: hooks compare accepted post-reconciliation status,
+    /// and a UI-only collapse is not a provider transition.
+    private func updateStatus(
+        sessionID: String,
+        status: SessionStatus,
+        isUIOnlyReadyCollapse: Bool,
+        statusUpdateSource: String,
+        codexHookEvent: CodexHookEvent?,
+        at now: Date
+    ) {
         let previousRecord = sessionRegistry.sessionsByID[sessionID]
         let previousProjectedStatus = previousRecord.flatMap { record in
             sessionRegistry.panelStatus(for: record.panelID, at: now)?.status
@@ -302,16 +401,41 @@ final class SessionRuntimeStore: ObservableObject {
             nextStatus: storedStatus,
             registry: &nextRegistry
         )
+        if isUIOnlyReadyCollapse == false {
+            // Compare the requested reconciled status, not `storedStatus`: the
+            // focused-panel storage collapse must never hide a hook event.
+            processHookStatusTransition(
+                sessionID: sessionID,
+                requestedKind: status.kind,
+                registry: nextRegistry,
+                at: now
+            )
+        }
         if let currentRecord = nextRegistry.sessionsByID[sessionID] {
+            let transitionMetadata = sessionStatusTransitionMetadata(
+                previousRecord: previousRecord,
+                currentRecord: currentRecord,
+                status: storedStatus,
+                now: now
+            )
             ToasttyLog.debug(
                 "Updated managed session status",
                 category: .terminal,
-                metadata: sessionStatusTransitionMetadata(
-                    previousRecord: previousRecord,
-                    currentRecord: currentRecord,
-                    status: storedStatus,
-                    now: now
-                )
+                metadata: transitionMetadata
+            )
+            logCodexStatusInfoEvent(
+                Self.codexStatusInfoEvent(
+                    isCodexStop: codexHookEvent?.isStop == true,
+                    previousKind: previousRecord?.status?.kind,
+                    currentKind: currentRecord.status?.kind
+                ),
+                currentRecord: currentRecord,
+                requestedStatus: status,
+                registry: nextRegistry,
+                statusUpdateSource: statusUpdateSource,
+                codexHookEvent: codexHookEvent,
+                baseMetadata: transitionMetadata,
+                now: now
             )
         }
         publish(nextRegistry, reason: "update_status", at: now)
@@ -338,6 +462,61 @@ final class SessionRuntimeStore: ObservableObject {
                 sessionID: sessionID,
                 status: storedStatus
             )
+        }
+    }
+
+    private func logCodexStatusInfoEvent(
+        _ event: CodexStatusInfoEvent?,
+        currentRecord: SessionRecord,
+        requestedStatus: SessionStatus,
+        registry: SessionRegistry,
+        statusUpdateSource: String,
+        codexHookEvent: CodexHookEvent?,
+        baseMetadata: [String: String],
+        now: Date
+    ) {
+        guard currentRecord.agent == .codex,
+              let event else {
+            return
+        }
+
+        var metadata = baseMetadata
+        let projected = registry.panelStatus(for: currentRecord.panelID, at: now)
+        let state = codexLegacyPolicySnapshot(sessionID: currentRecord.sessionID)
+        metadata["requested_status_kind"] = requestedStatus.kind.rawValue
+        metadata["stored_status_kind"] = currentRecord.status?.kind.rawValue ?? "none"
+        metadata["projected_status_kind"] = projected?.status.kind.rawValue ?? "none"
+        metadata["status_projection"] = statusProjectionMetadata(projected?.projection)
+        metadata["status_update_source"] = statusUpdateSource
+        metadata["status_tracking_source"] = codexStatusTrackingSourceMetadata(
+            sessionID: currentRecord.sessionID
+        )
+        metadata["root_thread_id"] = state.rootThreadID ?? "none"
+        metadata["root_turn_id"] = state.rootTurnID ?? "none"
+        metadata["hook_event_name"] = codexHookEvent?.hookEventName ?? "none"
+        metadata["hook_thread_id"] = codexHookEvent?.threadID ?? "none"
+        metadata["hook_turn_id"] = codexHookEvent?.turnID ?? "none"
+
+        ToasttyLog.info(
+            event == .stopApplied
+                ? "Applied Codex Stop status"
+                : "Codex session transitioned to working",
+            category: .terminal,
+            metadata: metadata
+        )
+    }
+
+    private func statusProjectionMetadata(_ projection: SessionStatusProjection?) -> String {
+        guard let projection else {
+            return "none"
+        }
+        switch projection {
+        case .none:
+            return "none"
+        case .waitingOnChildren(let childCount, let pendingBackgroundTaskCount):
+            return "waiting_on_children(children:\(childCount),pending:\(pendingBackgroundTaskCount))"
+        case .resuming:
+            return "resuming"
         }
     }
 
@@ -604,6 +783,59 @@ final class SessionRuntimeStore: ObservableObject {
             record: record,
             state: state,
             reasonPrefix: "context_update"
+        )
+    }
+
+    func recordCodexCanonicalTurnContext(
+        sessionID: String,
+        turnID: String?,
+        approvalPolicy: CodexSessionLogContextField,
+        approvalsReviewer: CodexSessionLogContextField
+    ) {
+        guard let turnID = normalizedNonEmpty(turnID),
+              approvalPolicy.isSpecified || approvalsReviewer.isSpecified else {
+            return
+        }
+        guard let record = sessionRegistry.sessionsByID[sessionID],
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            return
+        }
+
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .canonicalTurnContext(
+                turnID: turnID,
+                context: CodexRootTurnApprovalContext(
+                    approvalPolicy: approvalPolicy.rootTurnContextField,
+                    approvalsReviewer: approvalsReviewer.rootTurnContextField
+                )
+            )
+        )
+        let state = codexLegacyPolicySnapshot(
+            root: reduction.snapshot,
+            sessionID: sessionID
+        )
+
+        ToasttyLog.debug(
+            "Recorded canonical Codex turn approval context",
+            category: .terminal,
+            metadata: codexNotifyMetadata(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                additional: [
+                    "turn_id": turnID,
+                    "approval_policy": approvalPolicy.metadataValue,
+                    "approvals_reviewer": approvalsReviewer.metadataValue,
+                ]
+            )
+        )
+        resolvePendingCodexHookApprovalIfPossible(
+            sessionID: sessionID,
+            record: record,
+            state: state,
+            reasonPrefix: "canonical_context_update"
         )
     }
 
@@ -981,6 +1213,57 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
+    /// Records the durable root Codex thread named by a qualified SessionStart
+    /// without treating the hook as authoritative for status or approvals.
+    @discardableResult
+    func observeCodexRootSessionIdentity(
+        sessionID: String,
+        threadID: String,
+        isClear: Bool
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            return false
+        }
+
+        let previousThreadID = codexLegacyPolicySnapshot(sessionID: sessionID).rootThreadID
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .hookSessionIdentity(
+                threadID: threadID,
+                isClear: isClear
+            )
+        )
+        guard reduction.qualification == .proceed else {
+            ToasttyLog.debug(
+                "Ignored Codex root session identity observation",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "panel_id": record.panelID.uuidString,
+                    "native_session_id": threadID,
+                    "reason": codexHookRejectionReason(reduction.reason),
+                ]
+            )
+            return false
+        }
+
+        if previousThreadID != reduction.snapshot.rootThreadID {
+            ToasttyLog.debug(
+                "Observed Codex root session identity",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "panel_id": record.panelID.uuidString,
+                    "native_session_id": threadID,
+                    "source": isClear ? "clear" : "session_start",
+                ]
+            )
+        }
+        return true
+    }
+
     @discardableResult
     func handleCodexHookEvent(
         sessionID: String,
@@ -1199,13 +1482,21 @@ final class SessionRuntimeStore: ObservableObject {
                 let didProject = applyCodexRootProgressObservation(
                     sessionID: sessionID,
                     observation: .hookWorking(summary: status.summary, detail: status.detail),
+                    codexHookEvent: event,
                     at: now
                 )
                 return stateChanged || didProject
             }
         }
 
-        updateStatus(sessionID: sessionID, status: status, at: now)
+        updateStatus(
+            sessionID: sessionID,
+            status: status,
+            isUIOnlyReadyCollapse: false,
+            statusUpdateSource: "hook",
+            codexHookEvent: event,
+            at: now
+        )
         return true
     }
 
@@ -1284,6 +1575,52 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
+    /// Enriches an already-projected Codex sub-agent without participating in
+    /// lifecycle authority. Missing or finished rows stay missing.
+    @discardableResult
+    func enrichCodexSubagentExecutionProfile(
+        sessionID: String,
+        rolloutActivityID: String,
+        providerAgentID: String?,
+        profile: SessionAgentExecutionProfile,
+        at now: Date
+    ) -> Bool {
+        guard profile.isEmpty == false,
+              let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              let reconciler = codexSubagentReconcilerBySessionID[sessionID] else {
+            return false
+        }
+
+        let targetActivityID: String
+        switch reconciler.authority {
+        case .hooks:
+            guard let providerAgentID = normalizedNonEmpty(providerAgentID) else {
+                return false
+            }
+            targetActivityID = providerAgentID
+        case .rolloutFallback:
+            guard let normalizedActivityID = normalizedNonEmpty(rolloutActivityID) else {
+                return false
+            }
+            targetActivityID = normalizedActivityID
+        }
+
+        guard record.backgroundActivitiesByID[targetActivityID] != nil else {
+            return false
+        }
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.enrichBackgroundActivityExecutionProfile(
+            sessionID: sessionID,
+            activityID: targetActivityID,
+            executionProfile: profile
+        ) else {
+            return false
+        }
+        publish(nextRegistry, reason: "enrich_background_activity_execution_profile", at: now)
+        return true
+    }
+
     @discardableResult
     func handleCodexSessionLogRootProgressObservation(
         sessionID: String,
@@ -1350,21 +1687,19 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) {
         let activeRecord = sessionRegistry.sessionsByID[sessionID].flatMap { $0.isActive ? $0 : nil }
-        if let record = activeRecord {
-            logSessionStop(record, reason: reason, at: now)
-        }
-        suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
-        codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
-        codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
-        backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
-        codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
-        removePendingCodexHookApproval(sessionID: sessionID)
-        removePendingPanelParentSessionIDs(parentSessionID: sessionID)
         var nextRegistry = sessionRegistry
-        if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
-            nextRegistry.removeSession(sessionID: sessionID)
+        if let record = activeRecord {
+            tearDownActiveSession(record, reason: reason, registry: &nextRegistry, at: now)
         } else {
-            nextRegistry.stopSession(sessionID: sessionID, at: now)
+            // Stale-map cleanup for repeated stops of an already-stopped
+            // session; no lifecycle hook fires here.
+            clearSessionRuntimeState(sessionID: sessionID)
+            removePendingPanelParentSessionIDs(parentSessionID: sessionID)
+            if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
+                nextRegistry.removeSession(sessionID: sessionID)
+            } else {
+                nextRegistry.stopSession(sessionID: sessionID, at: now)
+            }
         }
         publish(nextRegistry, reason: "stop_session", at: now)
         if let activeRecord {
@@ -1378,20 +1713,9 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) {
         let activeRecord = sessionRegistry.activeSession(for: panelID)
-        if let record = activeRecord {
-            logSessionStop(record, reason: reason, at: now)
-            suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
-            codexSessionReconciliationBySessionID.removeValue(forKey: record.sessionID)
-            codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
-            backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
-            codexSubagentReconcilerBySessionID.removeValue(forKey: record.sessionID)
-            removePendingCodexHookApproval(sessionID: record.sessionID)
-            removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
-        }
         var nextRegistry = sessionRegistry
-        if let record = sessionRegistry.activeSession(for: panelID),
-           record.agent == .processWatch {
-            nextRegistry.removeSession(sessionID: record.sessionID)
+        if let record = activeRecord {
+            tearDownActiveSession(record, reason: reason, registry: &nextRegistry, at: now)
         } else {
             nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
         }
@@ -1399,6 +1723,38 @@ final class SessionRuntimeStore: ObservableObject {
         if activeRecord != nil {
             clearPersistedResumeRecord(panelID: panelID)
         }
+    }
+
+    /// The single teardown path for an active session. Every stop route —
+    /// explicit stops, panel-based stops, panel removal synchronization, and
+    /// same-panel replacement launches — funnels through here so
+    /// `session-stop` is emitted exactly once per session lifecycle and all
+    /// per-session runtime state is cleared together.
+    private func tearDownActiveSession(
+        _ record: SessionRecord,
+        reason: ManagedSessionStopReason,
+        registry: inout SessionRegistry,
+        at now: Date
+    ) {
+        logSessionStop(record, reason: reason, at: now)
+        clearSessionRuntimeState(sessionID: record.sessionID)
+        removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
+        completeHookLifecycle(record: record, at: now)
+        if record.agent == .processWatch {
+            registry.removeSession(sessionID: record.sessionID)
+        } else {
+            registry.stopSession(sessionID: record.sessionID, at: now)
+        }
+        completedHookLifecycleSessionIDs.remove(record.sessionID)
+    }
+
+    private func clearSessionRuntimeState(sessionID: String) {
+        suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+        codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
+        codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+        backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
+        codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
+        removePendingCodexHookApproval(sessionID: sessionID)
     }
 
     func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
@@ -1564,18 +1920,12 @@ final class SessionRuntimeStore: ObservableObject {
 
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
             guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
-                logSessionStop(record, reason: .panelRemovedFromAppState, at: now)
-                suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
-                codexSessionReconciliationBySessionID.removeValue(forKey: record.sessionID)
-                codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
-                backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
-                codexSubagentReconcilerBySessionID.removeValue(forKey: record.sessionID)
-                removePendingCodexHookApproval(sessionID: record.sessionID)
-                if record.agent == .processWatch {
-                    nextRegistry.removeSession(sessionID: record.sessionID)
-                } else {
-                    nextRegistry.stopSession(sessionID: record.sessionID, at: now)
-                }
+                tearDownActiveSession(
+                    record,
+                    reason: .panelRemovedFromAppState,
+                    registry: &nextRegistry,
+                    at: now
+                )
                 continue
             }
             if record.windowID != location.windowID || record.workspaceID != location.workspaceID {
@@ -1607,6 +1957,161 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry = nextRegistry
         updateBackgroundActivityReaperState()
         updateResumeGraceRepublishState(at: now)
+        reevaluatePendingHookReadyEvents(at: now)
+    }
+
+    // MARK: - Agent hook transitions
+
+    /// Tracks the accepted post-reconciliation status kind per session and
+    /// emits hook events on kind changes. Runs on the store's main-actor
+    /// isolation so rapid updates cannot race pending-state mutation.
+    private func processHookStatusTransition(
+        sessionID: String,
+        requestedKind: SessionStatusKind,
+        registry: SessionRegistry,
+        at now: Date
+    ) {
+        guard completedHookLifecycleSessionIDs.contains(sessionID) == false,
+              let record = registry.sessionsByID[sessionID], record.isActive else {
+            return
+        }
+        let previousKind = lastAcceptedHookStatusKindBySessionID[sessionID]
+        let isRepeatedKind = previousKind == requestedKind
+        lastAcceptedHookStatusKindBySessionID[sessionID] = requestedKind
+
+        switch requestedKind {
+        case .idle, .working:
+            // Non-emitting kinds still update transition state, and any
+            // non-ready transition cancels a held ready event.
+            pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+
+        case .needsApproval:
+            pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+            guard isRepeatedKind == false else { return }
+            enqueueHookEvent(
+                kind: .needsApproval,
+                record: record,
+                previousStatus: previousKind,
+                newStatus: .needsApproval,
+                at: now
+            )
+
+        case .error:
+            pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+            guard isRepeatedKind == false else { return }
+            enqueueHookEvent(
+                kind: .sessionError,
+                record: record,
+                previousStatus: previousKind,
+                newStatus: .error,
+                at: now
+            )
+
+        case .ready:
+            guard isRepeatedKind == false else { return }
+            if hookReadyIsBlockedByProjection(record: record, registry: registry, at: now) {
+                pendingHookReadyBySessionID[sessionID] = PendingHookReady(previousKind: previousKind)
+            } else {
+                enqueueHookEvent(
+                    kind: .turnComplete,
+                    record: record,
+                    previousStatus: previousKind,
+                    newStatus: .ready,
+                    at: now
+                )
+            }
+        }
+    }
+
+    /// Re-checks held `turn-complete` events whenever the registry publishes,
+    /// so background-activity completion (including the resume-grace expiry
+    /// republish) emits each held event exactly once.
+    private func reevaluatePendingHookReadyEvents(at now: Date) {
+        guard pendingHookReadyBySessionID.isEmpty == false else { return }
+        for (sessionID, pending) in pendingHookReadyBySessionID {
+            guard let record = sessionRegistry.sessionsByID[sessionID],
+                  record.isActive else {
+                pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+                continue
+            }
+            guard hookReadyIsBlockedByProjection(
+                record: record,
+                registry: sessionRegistry,
+                at: now
+            ) == false else {
+                continue
+            }
+            pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+            enqueueHookEvent(
+                kind: .turnComplete,
+                record: record,
+                previousStatus: pending.previousKind,
+                newStatus: .ready,
+                at: now
+            )
+        }
+    }
+
+    private func hookReadyIsBlockedByProjection(
+        record: SessionRecord,
+        registry: SessionRegistry,
+        at now: Date
+    ) -> Bool {
+        guard let projection = registry.panelStatus(for: record.panelID, at: now)?.projection else {
+            return false
+        }
+        switch projection {
+        case .none:
+            return false
+        case .waitingOnChildren, .resuming:
+            return true
+        }
+    }
+
+    private func enqueueHookEvent(
+        kind: AgentHookEventKind,
+        record: SessionRecord,
+        previousStatus: SessionStatusKind?,
+        newStatus: SessionStatusKind?,
+        launchReason: AgentHookLaunchReason? = nil,
+        at now: Date
+    ) {
+        guard let agentHookDispatcher else { return }
+        agentHookDispatcher.enqueue(
+            AgentHookEvent(
+                kind: kind,
+                timestamp: now,
+                sessionID: record.sessionID,
+                agent: record.agent,
+                workspaceID: record.workspaceID,
+                panelID: record.panelID,
+                cwd: record.cwd,
+                previousStatus: previousStatus,
+                newStatus: newStatus,
+                launchReason: launchReason
+            )
+        )
+    }
+
+    private func clearHookTransitionState(sessionID: String) {
+        lastAcceptedHookStatusKindBySessionID.removeValue(forKey: sessionID)
+        pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+    }
+
+    /// Ends hook delivery exactly once without necessarily removing the UI
+    /// session record. Process watch uses this split lifecycle so its completed
+    /// status can remain visible while hook consumers still receive a terminal
+    /// `session-stop` event.
+    private func completeHookLifecycle(record: SessionRecord, at now: Date) {
+        guard completedHookLifecycleSessionIDs.insert(record.sessionID).inserted else { return }
+        enqueueHookEvent(
+            kind: .sessionStop,
+            record: record,
+            previousStatus: lastAcceptedHookStatusKindBySessionID[record.sessionID],
+            newStatus: nil,
+            at: now
+        )
+        clearHookTransitionState(sessionID: record.sessionID)
     }
 
     private func shouldSuppressProjectedWaitingSideEffects(
@@ -2317,7 +2822,7 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         switch reason {
-        case .explicit, .panelRemovedFromAppState:
+        case .explicit, .panelRemovedFromAppState, .replacedByNewSession:
             break
         case .ghosttyCommandFinished(let exitCode):
             metadata["exit_code"] = exitCode.map(String.init) ?? "none"
@@ -2525,6 +3030,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func applyCodexRootProgressObservation(
         sessionID: String,
         observation: CodexRootProgressObservation,
+        codexHookEvent: CodexHookEvent? = nil,
         at now: Date
     ) -> Bool {
         guard let source = codexStatusTrackingSourceBySessionID[sessionID],
@@ -2544,6 +3050,9 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(
                 sessionID: sessionID,
                 status: SessionStatus(kind: .working, summary: summary, detail: detail),
+                isUIOnlyReadyCollapse: false,
+                statusUpdateSource: Self.codexRootProgressLogSource(observation),
+                codexHookEvent: codexHookEvent,
                 at: now
             )
             return true
@@ -2552,6 +3061,9 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(
                 sessionID: sessionID,
                 status: SessionStatus(kind: .idle, summary: "Waiting", detail: detail),
+                isUIOnlyReadyCollapse: false,
+                statusUpdateSource: Self.codexRootProgressLogSource(observation),
+                codexHookEvent: codexHookEvent,
                 at: now
             )
             return true
@@ -2763,8 +3275,8 @@ final class SessionRuntimeStore: ObservableObject {
             return "unknown_approvals_reviewer"
         case .missingHumanApprovalPolicy:
             return "missing_human_approval_policy"
-        case .missingApprovalsReviewer:
-            return "missing_approvals_reviewer"
+        case .humanApproval:
+            return "human_approval"
         case .autoReviewApproval:
             return "auto_review_approval"
         }
@@ -2781,7 +3293,8 @@ final class SessionRuntimeStore: ObservableObject {
         removePendingCodexHookApproval(sessionID: sessionID)
         pendingCodexHookApprovalBySessionID[sessionID] = PendingCodexHookApproval(
             event: event,
-            token: token
+            token: token,
+            statusBeforeDeferral: record.status
         )
         logCodexHookEventDecision(
             sessionID: sessionID,
@@ -2855,15 +3368,19 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(sessionID: sessionID, status: status, at: Date())
 
         case .deferForContext(let reason):
-            removePendingCodexHookApproval(sessionID: sessionID)
+            var surfaced = pending
+            surfaced.didSurfaceAfterContextTimeout = true
+            pendingCodexHookApprovalBySessionID[sessionID] = surfaced
+            pendingCodexHookApprovalTaskBySessionID.removeValue(forKey: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 event: pending.event,
-                decision: "ignored",
+                decision: "accepted",
                 reason: "context_timeout_\(codexApprovalReason(reason, source: .hook))"
             )
+            updateStatus(sessionID: sessionID, status: status, at: Date())
         }
     }
 
@@ -2899,6 +3416,10 @@ final class SessionRuntimeStore: ObservableObject {
                 decision: "suppressed",
                 reason: codexApprovalReason(reason, source: .hook)
             )
+            restoreStatusBeforeDeferredApprovalIfNeeded(
+                sessionID: sessionID,
+                pending: pending
+            )
 
         case .ignore(let reason):
             removePendingCodexHookApproval(sessionID: sessionID)
@@ -2909,6 +3430,10 @@ final class SessionRuntimeStore: ObservableObject {
                 event: pending.event,
                 decision: "ignored",
                 reason: "\(reasonPrefix)_\(codexApprovalReason(reason, source: .hook))"
+            )
+            restoreStatusBeforeDeferredApprovalIfNeeded(
+                sessionID: sessionID,
+                pending: pending
             )
 
         case .accept(let reason):
@@ -2923,6 +3448,17 @@ final class SessionRuntimeStore: ObservableObject {
             )
             updateStatus(sessionID: sessionID, status: status, at: Date())
         }
+    }
+
+    private func restoreStatusBeforeDeferredApprovalIfNeeded(
+        sessionID: String,
+        pending: PendingCodexHookApproval
+    ) {
+        guard pending.didSurfaceAfterContextTimeout,
+              let status = pending.statusBeforeDeferral else {
+            return
+        }
+        updateStatus(sessionID: sessionID, status: status, at: Date())
     }
 
     private func removePendingCodexHookApprovalIfSuperseded(
@@ -3331,6 +3867,9 @@ final class SessionRuntimeStore: ObservableObject {
         updateStatus(
             sessionID: record.sessionID,
             status: collapsedReadyStatus(from: status),
+            isUIOnlyReadyCollapse: true,
+            statusUpdateSource: "ui_ready_collapse",
+            codexHookEvent: nil,
             at: now
         )
     }
@@ -3659,6 +4198,8 @@ private extension CodexRootTurnContextField {
 private struct PendingCodexHookApproval {
     let event: CodexHookEvent
     let token: UUID
+    let statusBeforeDeferral: SessionStatus?
+    var didSurfaceAfterContextTimeout = false
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
@@ -3821,6 +4362,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             status: processWatchCompletionStatus(exitCode: exitCode),
             at: now
         )
+        completeHookLifecycle(record: record, at: now)
         return true
     }
 
@@ -3848,6 +4390,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
                     status: processWatchCompletionStatus(exitCode: nil),
                     at: now
                 )
+                completeHookLifecycle(record: record, at: now)
                 return true
             }
         }

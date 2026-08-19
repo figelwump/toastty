@@ -128,6 +128,10 @@ case "$file:$key" in
   *Toastty.app/Info.plist:CFBundleIconName) printf 'AppIcon\\n' ;;
   *Toastty.app/Info.plist:ITSAppUsesNonExemptEncryption) printf 'false\\n' ;;
   *PrivacyInfo.xcprivacy:NSPrivacyTracking) printf 'false\\n' ;;
+  *PrivacyInfo.xcprivacy:NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPIType) printf 'NSPrivacyAccessedAPICategoryUserDefaults\\n' ;;
+  *PrivacyInfo.xcprivacy:NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPITypeReasons:0) printf 'CA92.1\\n' ;;
+  *PrivacyInfo.xcprivacy:NSPrivacyAccessedAPITypes:1:NSPrivacyAccessedAPIType) printf 'NSPrivacyAccessedAPICategorySystemBootTime\\n' ;;
+  *PrivacyInfo.xcprivacy:NSPrivacyAccessedAPITypes:1:NSPrivacyAccessedAPITypeReasons:0) printf '35F9.1\\n' ;;
   *PrivacyInfo.xcprivacy:NSPrivacyAccessedAPITypes|*PrivacyInfo.xcprivacy:NSPrivacyCollectedDataTypes|*PrivacyInfo.xcprivacy:NSPrivacyTrackingDomains) printf 'Array {\\n}\\n' ;;
   *) exit 1 ;;
 esac
@@ -375,14 +379,14 @@ test("workflow and names-only manifest expose all release inputs without enablin
   assert.match(secrets, /^APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64\?$/m);
 });
 
-test("privacy manifest declares no tracking or collected/accessed API categories", () => {
+test("privacy manifest declares required-reason APIs without tracking or collected data", () => {
   const privacyManifest = read("ios/Resources/ToasttyMobileApp/PrivacyInfo.xcprivacy");
   assert.match(privacyManifest, /<key>NSPrivacyTracking<\/key>\s*<false\/>/);
-  for (const key of [
-    "NSPrivacyAccessedAPITypes",
-    "NSPrivacyCollectedDataTypes",
-    "NSPrivacyTrackingDomains",
-  ]) {
+  for (const key of ["NSPrivacyCollectedDataTypes", "NSPrivacyTrackingDomains"]) {
     assert.match(privacyManifest, new RegExp(`<key>${key}<\\/key>\\s*<array\\/>`));
   }
+  assert.match(privacyManifest, /NSPrivacyAccessedAPICategoryUserDefaults/);
+  assert.match(privacyManifest, /<string>CA92\.1<\/string>/);
+  assert.match(privacyManifest, /NSPrivacyAccessedAPICategorySystemBootTime/);
+  assert.match(privacyManifest, /<string>35F9\.1<\/string>/);
 });

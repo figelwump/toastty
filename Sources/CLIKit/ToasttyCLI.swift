@@ -18,6 +18,32 @@ struct SessionBackgroundActivitySyncEntry: Equatable {
     var id: String
     var displayName: String?
     var command: String?
+    var executionProfile: SessionAgentExecutionProfile?
+
+    init(
+        id: String,
+        displayName: String? = nil,
+        command: String? = nil,
+        executionProfile: SessionAgentExecutionProfile? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.command = command
+        self.executionProfile = executionProfile?.isEmpty == false ? executionProfile : nil
+    }
+}
+
+private func appendExecutionProfile(
+    _ executionProfile: SessionAgentExecutionProfile?,
+    to object: inout [String: AutomationJSONValue]
+) {
+    guard let executionProfile else { return }
+    if let modelIdentifier = executionProfile.modelIdentifier {
+        object["modelIdentifier"] = .string(modelIdentifier)
+    }
+    if let reasoningEffort = executionProfile.reasoningEffort {
+        object["reasoningEffort"] = .string(reasoningEffort)
+    }
 }
 
 enum CLICommand: Equatable {
@@ -41,7 +67,8 @@ enum CLICommand: Equatable {
         displayName: String?,
         command: String?,
         processID: Int32?,
-        preserveWhenUnlisted: Bool
+        preserveWhenUnlisted: Bool,
+        executionProfile: SessionAgentExecutionProfile?
     )
     case sessionBackgroundActivitySync(
         sessionID: String,
@@ -201,7 +228,8 @@ enum CLICommand: Equatable {
             let displayName,
             let command,
             let processID,
-            let preserveWhenUnlisted
+            let preserveWhenUnlisted,
+            let executionProfile
         ):
             var payload: [String: AutomationJSONValue] = [
                 "phase": .string(phase.rawValue),
@@ -220,6 +248,7 @@ enum CLICommand: Equatable {
             if preserveWhenUnlisted {
                 payload["preserveWhenUnlisted"] = .bool(true)
             }
+            appendExecutionProfile(executionProfile, to: &payload)
             return AutomationEventEnvelope(
                 eventType: "session.background_activity",
                 sessionID: sessionID,
@@ -246,6 +275,7 @@ enum CLICommand: Equatable {
                 if let command = entry.command {
                     object["command"] = .string(command)
                 }
+                appendExecutionProfile(entry.executionProfile, to: &object)
                 return .object(object)
             }
             return AutomationEventEnvelope(
@@ -434,7 +464,7 @@ enum CLICommand: Equatable {
             return resolvedSessionID
         case .sessionStatus(let sessionID, _, let kind, let summary, _):
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
-        case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _, _):
+        case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _, _, _):
             return "\(phase.rawValue)ed background activity \(activityID) for \(sessionID)"
         case .sessionBackgroundActivitySync(let sessionID, _, _, let entries, let pendingBackgroundTaskCount, _):
             return "synced \(entries.count) background activities and \(pendingBackgroundTaskCount) pending tasks for \(sessionID)"
@@ -1398,7 +1428,8 @@ public enum ToasttyCLI {
             displayName: parsed.singleValue("--display-name"),
             command: parsed.singleValue("--command"),
             processID: processID,
-            preserveWhenUnlisted: false
+            preserveWhenUnlisted: false,
+            executionProfile: nil
         )
     }
 

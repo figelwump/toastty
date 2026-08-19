@@ -59,6 +59,182 @@ private struct SidebarScrollViewportHeightReporter: NSViewRepresentable {
     }
 }
 
+/// Reports a child's intrinsic width until it reaches either the configured
+/// cap or a tighter parent proposal. Unlike `fixedSize`, the layout stays
+/// compressible so narrow sidebars can truncate chip content normally.
+private struct SidebarCappedIntrinsicWidthLayout: Layout {
+    let maximumWidth: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        assert(subviews.count <= 1, "SidebarCappedIntrinsicWidthLayout expects one subview")
+        guard let subview = subviews.first else { return .zero }
+
+        let cap = max(0, maximumWidth)
+        let idealSize = subview.sizeThatFits(.unspecified)
+        let availableWidth = proposal.width.map { max(0, $0) } ?? cap
+        let width = min(idealSize.width, cap, availableWidth)
+        let constrainedSize = subview.sizeThatFits(
+            ProposedViewSize(width: width, height: nil)
+        )
+        return CGSize(width: width, height: constrainedSize.height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        guard let subview = subviews.first else { return }
+        let width = min(bounds.width, max(0, maximumWidth))
+        subview.place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY),
+            anchor: .leading,
+            proposal: ProposedViewSize(width: width, height: nil)
+        )
+    }
+}
+
+struct SidebarWrappingFlowLayout: Layout {
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+
+    private struct Item {
+        let index: Int
+        let size: CGSize
+    }
+
+    private struct Row {
+        var items: [Item] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private struct Placement {
+        let index: Int
+        let origin: CGPoint
+        let size: CGSize
+    }
+
+    private struct ResolvedLayout {
+        let size: CGSize
+        let placements: [Placement]
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        resolve(availableWidth: proposal.width, subviews: subviews).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        let resolved = resolve(availableWidth: bounds.width, subviews: subviews)
+        for placement in resolved.placements {
+            subviews[placement.index].place(
+                at: CGPoint(
+                    x: bounds.minX + placement.origin.x,
+                    y: bounds.minY + placement.origin.y
+                ),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(
+                    width: placement.size.width,
+                    height: nil
+                )
+            )
+        }
+    }
+
+    private func resolve(
+        availableWidth rawAvailableWidth: CGFloat?,
+        subviews: Subviews
+    ) -> ResolvedLayout {
+        let availableWidth = rawAvailableWidth.flatMap { width in
+            width.isFinite ? max(0, width) : nil
+        }
+        if availableWidth == 0 {
+            return ResolvedLayout(size: .zero, placements: [])
+        }
+        let resolvedHorizontalSpacing = max(0, horizontalSpacing)
+        let resolvedVerticalSpacing = max(0, verticalSpacing)
+        var rows: [Row] = []
+        var currentRow = Row()
+
+        for (index, subview) in subviews.enumerated() {
+            let idealSize = subview.sizeThatFits(.unspecified)
+            let proposedItemWidth = availableWidth.map {
+                min(max(0, idealSize.width), $0)
+            }
+            let measuredSize = subview.sizeThatFits(
+                ProposedViewSize(width: proposedItemWidth, height: nil)
+            )
+            let itemSize = CGSize(
+                width: availableWidth.map { min(max(0, measuredSize.width), $0) }
+                    ?? max(0, measuredSize.width),
+                height: max(0, measuredSize.height)
+            )
+            let nextWidth = currentRow.items.isEmpty
+                ? itemSize.width
+                : currentRow.width + resolvedHorizontalSpacing + itemSize.width
+
+            if currentRow.items.isEmpty == false,
+               let availableWidth,
+               nextWidth > availableWidth {
+                rows.append(currentRow)
+                currentRow = Row()
+            }
+
+            let itemSpacing = currentRow.items.isEmpty ? 0 : resolvedHorizontalSpacing
+            currentRow.items.append(Item(index: index, size: itemSize))
+            currentRow.width += itemSpacing + itemSize.width
+            currentRow.height = max(currentRow.height, itemSize.height)
+        }
+
+        if currentRow.items.isEmpty == false {
+            rows.append(currentRow)
+        }
+
+        var placements: [Placement] = []
+        var nextY: CGFloat = 0
+        var maximumRowWidth: CGFloat = 0
+        for row in rows {
+            var nextX: CGFloat = 0
+            for item in row.items {
+                placements.append(
+                    Placement(
+                        index: item.index,
+                        origin: CGPoint(
+                            x: nextX,
+                            y: nextY + ((row.height - item.size.height) / 2)
+                        ),
+                        size: item.size
+                    )
+                )
+                nextX += item.size.width + resolvedHorizontalSpacing
+            }
+            maximumRowWidth = max(maximumRowWidth, row.width)
+            nextY += row.height + resolvedVerticalSpacing
+        }
+
+        let height = rows.isEmpty ? 0 : max(0, nextY - resolvedVerticalSpacing)
+        let width = availableWidth.map { min(maximumRowWidth, $0) } ?? maximumRowWidth
+        return ResolvedLayout(
+            size: CGSize(width: width, height: height),
+            placements: placements
+        )
+    }
+}
+
 @MainActor
 private final class SidebarScrollViewportHeightReporterView: NSView {
     var onHeightChange: (@MainActor (CGFloat) -> Void)?
@@ -187,6 +363,9 @@ struct SidebarView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    // Observed so first-use claims, unlocked replacements, and legacy
+    // materialization immediately restyle every visible chip with that key.
+    @ObservedObject var annotationStyleStore: AnnotationStyleStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
@@ -298,6 +477,7 @@ struct SidebarView: View {
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
+        annotationStyleStore: AnnotationStyleStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
         workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
@@ -307,6 +487,7 @@ struct SidebarView: View {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
+        self.annotationStyleStore = annotationStyleStore
         self.terminalRuntimeContext = terminalRuntimeContext
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
@@ -672,6 +853,11 @@ struct SidebarView: View {
                     SidebarSemanticTextBridge(text: accessibilityLabel)
                 }
 
+                // Rendered below and outside the title header's AppKit
+                // pointer-interaction overlay: workspace drag keeps starting
+                // from the title region while link chips stay real buttons.
+                workspaceAnnotationChipsRow(workspace: workspace)
+
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
                         .padding(.horizontal, 10)
@@ -723,6 +909,7 @@ struct SidebarView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                workspaceAnnotationChipsRow(workspace: workspace)
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
                         .padding(.horizontal, 10)
@@ -730,6 +917,106 @@ struct SidebarView: View {
                 }
             }
         }
+    }
+
+    /// Intrinsic-width annotation chips in deterministic bytewise key order.
+    /// Whole chips wrap before they shrink; an individually overlong chip
+    /// truncates to the row width and exposes its full value in a tooltip.
+    @ViewBuilder
+    private func workspaceAnnotationChipsRow(workspace: WorkspaceState) -> some View {
+        let sortedAnnotations = workspace.annotations.sorted { $0.key < $1.key }
+        if sortedAnnotations.isEmpty == false {
+            SidebarWrappingFlowLayout(horizontalSpacing: 4, verticalSpacing: 4) {
+                ForEach(sortedAnnotations, id: \.key) { key, annotation in
+                    workspaceAnnotationChip(key: key, annotation: annotation)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.top, -6)
+            .padding(.bottom, 10)
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceAnnotationChip(key: String, annotation: WorkspaceAnnotation) -> some View {
+        let chipColors = ToastyTheme.annotationChipColors(
+            for: annotationStyleStore.effectiveColorToken(forKey: key)
+        )
+        if let url = annotation.url {
+            Button {
+                openWorkspaceAnnotationURL(url)
+            } label: {
+                Self.workspaceAnnotationChipLabel(
+                    annotation: annotation,
+                    chipColors: chipColors,
+                    isLink: true
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(key): \(annotation.text), link")
+            .background {
+                ZStack {
+                    SidebarTooltipBridge(text: annotation.text)
+                    SidebarSemanticTextBridge(text: "\(key): \(annotation.text)")
+                        .frame(width: 0, height: 0)
+                }
+                .allowsHitTesting(false)
+            }
+        } else {
+            Self.workspaceAnnotationChipLabel(
+                annotation: annotation,
+                chipColors: chipColors,
+                isLink: false
+            )
+                .background {
+                    SidebarTooltipBridge(text: annotation.text)
+                        .allowsHitTesting(false)
+                }
+                .accessibilityHidden(true)
+        }
+    }
+
+    static func workspaceAnnotationChipLabel(
+        annotation: WorkspaceAnnotation,
+        chipColors: ToastyTheme.AnnotationChipColors,
+        isLink: Bool
+    ) -> some View {
+        SidebarCappedIntrinsicWidthLayout(maximumWidth: 160) {
+            HStack(spacing: 3) {
+                Text(annotation.text)
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if isLink {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 7, weight: .semibold))
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+        }
+        .foregroundStyle(chipColors.foreground)
+        .background(chipColors.background)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay {
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(chipColors.border, lineWidth: 1)
+        }
+    }
+
+    private func openWorkspaceAnnotationURL(_ urlString: String) {
+        // Persisted layout files are user-editable; revalidate the scheme
+        // immediately before opening rather than trusting stored state.
+        guard let validated = WorkspaceAnnotation.validatedURLString(urlString),
+              let url = URL(string: validated) else {
+            return
+        }
+        _ = AppURLRouter.open(
+            url,
+            preferredWindowID: windowID,
+            appStore: store
+        )
     }
 
     private func workspaceRowChrome<Content: View>(

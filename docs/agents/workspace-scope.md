@@ -43,6 +43,12 @@ Use `set-current` from inside a managed session to fence that session to its cur
 
 V1 enforcement focuses on orchestration-relevant app-control paths, including workspace and terminal targeting, reading terminal state or visible text, sending terminal text, browser/local-document/Scratchpad panel targets, workspace creation, and agent launch.
 
+`workspace.set-annotation` and `workspace.clear-annotation` enforce access to
+their target workspace. The read-only `annotation.keys` query is an intentional
+exception: it returns runtime-global current and historical annotation key
+strings to scoped callers, but never colors, workspace IDs, usage counts, chip
+text, or URLs.
+
 Legacy and debug automation-mode commands such as `automation.reset`, `automation.load_fixture`, `automation.dump_state`, `automation.capture_screenshot`, and session/status events are outside v1 scope enforcement unless they delegate through app-control. Treat workspace scope as cooperative guidance, not complete automation isolation.
 
 When a scoped request targets an unassigned workspace, Toastty returns:

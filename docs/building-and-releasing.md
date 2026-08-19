@@ -38,16 +38,31 @@ sv exec -- <command>
 
 ## Install Ghostty XCFramework (optional)
 
+Toastty's full Ghostty integration requires the internal
+`ghostty_surface_is_at_prompt` API carried by the maintained
+[`toastty-downstream`](https://github.com/figelwump/ghostty/tree/toastty-downstream)
+branch. Clone that branch as a sibling of the Toastty checkout, then build its
+XCFramework using the command in [Ghostty Integration](ghostty-integration.md):
+
+```bash
+git clone --branch toastty-downstream \
+  https://github.com/figelwump/ghostty.git \
+  ../ghostty
+```
+
+After building the XCFramework, install it into Toastty:
+
 ```bash
 GHOSTTY_BUILD_FLAGS="-Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal -Dsentry=false" \
-GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
+GHOSTTY_XCFRAMEWORK_SOURCE=../ghostty/macos/GhosttyKit.xcframework \
   ./scripts/ghostty/install-local-xcframework.sh
 ```
 
 Set `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to control the destination artifact path. The installer also auto-detects a sibling `../ghostty/macos/GhosttyKit.xcframework` checkout when present.
 When the source path lives inside a Ghostty git checkout, the installer also records the Ghostty commit and source cleanliness in an ignored sidecar metadata file next to the installed xcframework.
 
-For the recommended upstream Ghostty build command, release note guidance, see [ghostty-integration.md](ghostty-integration.md).
+For the recommended Ghostty build command, downstream branch policy, and release
+note guidance, see [Ghostty Integration](ghostty-integration.md).
 
 After installing, regenerate:
 
@@ -161,6 +176,38 @@ Set `TOASTTY_DEV_WORKTREE_ROOT` to derive a stable sandbox from the current work
 For fresh linked worktrees, run `./scripts/dev/bootstrap-worktree.sh` once to symlink Ghostty artifacts from another Toastty checkout before building.
 
 For the full runtime-home model, `instance.json` fields, and cleanup conventions, see [Runtime Sandboxing](runtime-sandboxing.md).
+
+### Use personal runtime configuration with the local Release scheme
+
+The generated `ToasttyApp-Release` Run scheme keeps normal worktree runtime
+isolation, but bootstrap can opt specific non-secret runtime settings into that
+scheme from `sv`. The allowlist lives in `Project.swift`; values outside that
+list are never copied into the app's launch environment.
+
+For example, configure the shared terminal-profile catalog once:
+
+```bash
+sv set TUIST_TOASTTY_TERMINAL_PROFILES_PATH
+```
+
+Enter an absolute path or a `~/`-prefixed path such as
+`~/.toastty/terminal-profiles.toml`. Do not use `$HOME` or another shell
+variable because Xcode expands `$` expressions in generated scheme values.
+Then regenerate and open the workspace:
+
+```bash
+./scripts/dev/bootstrap-worktree.sh
+open toastty.xcworkspace
+```
+
+Select `ToasttyApp-Release` in Xcode and use Build and Run normally. Repeat
+bootstrap after changing the stored value, creating a fresh worktree, or
+regenerating the project. The resolved value is written in plaintext to the
+generated, gitignored Xcode scheme, so this mechanism is only for non-secret
+configuration. Never add tokens, passwords, signing credentials, or other
+secrets to the Release runtime allowlist. The override applies only to Xcode's
+`ToasttyApp-Release` Run action; Debug, Finder, `open`, and direct executable
+launches do not receive it.
 
 ## Build a signed release DMG
 

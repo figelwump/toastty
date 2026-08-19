@@ -8,6 +8,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceSelect = "workspace.select"
     case workspaceMove = "workspace.move"
     case workspaceRename = "workspace.rename"
+    case workspaceSetAnnotation = "workspace.set-annotation"
+    case workspaceClearAnnotation = "workspace.clear-annotation"
     case workspaceClose = "workspace.close"
     case workspaceTabCreate = "workspace.tab.create"
     case workspaceTabSelect = "workspace.tab.select"
@@ -165,6 +167,27 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Rename a workspace.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.title(required: true)]
+            )
+        case .workspaceSetAnnotation:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Set or update a structured annotation chip under a workspace name.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [
+                    .annotationKey(required: true),
+                    .annotationText(required: true),
+                    .annotationURL(required: false),
+                    .annotationColor(required: false),
+                ]
+            )
+        case .workspaceClearAnnotation:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Remove a workspace annotation chip by key.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [.annotationKey(required: true)]
             )
         case .workspaceClose:
             return .init(id: rawValue, kind: .action, summary: "Close a workspace.", selectors: [.windowID, .workspaceID])
@@ -372,6 +395,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
 }
 
 enum AppControlQueryID: String, CaseIterable, Sendable {
+    case annotationKeys = "annotation.keys"
     case workspaceSnapshot = "workspace.snapshot"
     case terminalState = "terminal.state"
     case terminalVisibleText = "terminal.visible-text"
@@ -402,6 +426,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
 
     var descriptor: AppControlCommandDescriptor {
         switch self {
+        case .annotationKeys:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return runtime-global workspace annotation keys previously registered in this Toastty instance.",
+                selectors: []
+            )
         case .workspaceSnapshot:
             return .init(id: rawValue, kind: .query, summary: "Return workspace structure and tab metadata.", selectors: [.windowID, .workspaceID])
         case .terminalState:
@@ -439,6 +470,43 @@ private extension AppControlParameterDescriptor {
 
     static func amount(required: Bool) -> Self {
         .init(name: "amount", summary: "Positive resize amount.", valueType: .integer, required: required)
+    }
+
+    static func annotationKey(required: Bool) -> Self {
+        .init(
+            name: "key",
+            summary: "Stable semantic identity such as linear, github-pr, github-issue, or git-branch. The same key updates one workspace chip and keeps one claimed color across workspaces. Uses 1-32 ASCII letters, digits, '.', '_', or '-'; lowercased on write.",
+            valueType: .string,
+            required: required
+        )
+    }
+
+    static func annotationText(required: Bool) -> Self {
+        .init(
+            name: "text",
+            summary: "Chip text, up to 80 characters, no control or bidi characters.",
+            valueType: .string,
+            required: required
+        )
+    }
+
+    static func annotationURL(required: Bool) -> Self {
+        .init(
+            name: "url",
+            summary: "Optional absolute http or https link opened when the chip is clicked.",
+            valueType: .string,
+            required: required
+        )
+    }
+
+    static func annotationColor(required: Bool) -> Self {
+        .init(
+            name: "color",
+            summary: "First-use global color for this key. Locked while any annotation with the key exists; omit for an automatic claim.",
+            valueType: .string,
+            required: required,
+            allowedValues: AnnotationColorToken.NamedColor.allCases.map(\.rawValue) + ["#RRGGBB"]
+        )
     }
 
     static func allowUnavailable(required: Bool) -> Self {

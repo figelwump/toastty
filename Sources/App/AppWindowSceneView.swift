@@ -10,6 +10,7 @@ struct AppWindowSceneView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let annotationStyleStore: AnnotationStyleStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
@@ -95,6 +96,7 @@ struct AppWindowSceneView: View {
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
+                    annotationStyleStore: annotationStyleStore,
                     profileShortcutRegistry: profileShortcutRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
                     agentLaunchService: agentLaunchService,

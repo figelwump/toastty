@@ -131,6 +131,34 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .setWorkspaceAnnotation(let workspaceID, let key, let annotation):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard let canonicalKey = WorkspaceAnnotation.canonicalKey(key),
+                  let validatedAnnotation = WorkspaceAnnotation.validated(
+                      text: annotation.text,
+                      url: annotation.url
+                  ) else {
+                return false
+            }
+            if workspace.annotations[canonicalKey] == nil,
+               workspace.annotations.count >= WorkspaceAnnotation.maximumAnnotationsPerWorkspace {
+                return false
+            }
+            guard workspace.annotations[canonicalKey] != validatedAnnotation else { return false }
+            workspace.annotations[canonicalKey] = validatedAnnotation
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .clearWorkspaceAnnotation(let workspaceID, let key):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard let canonicalKey = WorkspaceAnnotation.canonicalKey(key),
+                  workspace.annotations[canonicalKey] != nil else {
+                return false
+            }
+            workspace.annotations.removeValue(forKey: canonicalKey)
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
         case .setWorkspaceTabCustomTitle(let workspaceID, let tabID, let title):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let normalizedTitle = normalizedMetadataValue(title)

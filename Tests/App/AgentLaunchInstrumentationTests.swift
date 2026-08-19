@@ -694,6 +694,82 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(userQueryPostHook.contains("toasttyFinal"))
     }
 
+    func testPrepareOpenCodeFamilyLaunchSeedsExplicitResumeSessionIdentity() throws {
+        for scenario in [
+            (agent: AgentKind.opencode, argv: ["opencode", "--session", "ses-opencode"], key: "OPENCODE_CONFIG_CONTENT", expected: "ses-opencode"),
+            (agent: AgentKind.mimocode, argv: ["agent-safehouse", "mimo", "-s", "ses-mimo"], key: "MIMOCODE_CONFIG_CONTENT", expected: "ses-mimo"),
+            (agent: AgentKind.opencode, argv: ["opencode", "--session", "--print-logs"], key: "OPENCODE_CONFIG_CONTENT", expected: ""),
+        ] {
+            let prepared = try AgentLaunchInstrumentation.prepare(
+                agent: scenario.agent,
+                argv: scenario.argv,
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default
+            )
+            defer { cleanup([prepared]) }
+
+            let config = try XCTUnwrap(prepared.environment[scenario.key])
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(config.utf8)) as? [String: Any])
+            let pluginSpec = try XCTUnwrap((object["plugin"] as? [String])?.first)
+            let pluginURL = try XCTUnwrap(URL(string: pluginSpec))
+            let plugin = try String(contentsOf: pluginURL, encoding: .utf8)
+            XCTAssertTrue(plugin.contains(#"let rootNativeSessionID = "\#(scenario.expected)";"#))
+        }
+    }
+
+    func testOpenCodeFamilyPluginTreatsResumeIdentityAsAHintAndCanClaimFromRootCreation() throws {
+        let staleHintResult = try runOpenCodeFamilyPluginScenarioResult(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            launchArguments: ["opencode", "--session", "stale-session"],
+            rootSessionID: "actual-root",
+            runnerBody: """
+            hooks.event?.({
+              type: "session.created",
+              properties: { info: { id: "child-after-resume", parentID: "actual-root", agent: "explore" } },
+            });
+            """
+        )
+        let staleHintActivities = staleHintResult.events.filter {
+            $0["type"] as? String == "toastty.background_activity"
+        }
+        XCTAssertEqual(staleHintActivities.count, 1)
+        XCTAssertEqual(
+            (staleHintActivities[0]["properties"] as? [String: Any])?["activityID"] as? String,
+            "child-after-resume"
+        )
+
+        let providerClaimResult = try runOpenCodeFamilyPluginScenarioResult(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            rootSessionID: "created-root",
+            claimRootSession: false,
+            enrichProviderEventsWithRootSessionID: false,
+            runnerBody: """
+            hooks.event?.({
+              type: "session.created",
+              properties: { info: { id: "created-root", title: "Root" } },
+            });
+            hooks.event?.({
+              type: "session.created",
+              properties: { info: { id: "child-after-create", parentID: "created-root", agent: "review" } },
+            });
+            """
+        )
+        let providerClaimActivities = providerClaimResult.events.filter {
+            $0["type"] as? String == "toastty.background_activity"
+        }
+        XCTAssertEqual(providerClaimActivities.count, 1)
+        XCTAssertEqual(
+            (providerClaimActivities[0]["properties"] as? [String: Any])?["activityID"] as? String,
+            "child-after-create"
+        )
+    }
+
     func testMiMoCodePluginFlushesUserQueryFinalAndSuppressesLateWorking() throws {
         let events = try runOpenCodeFamilyPluginScenario(
             agent: .mimocode,
@@ -853,6 +929,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
                 agent: scenario.agent,
                 commandName: scenario.commandName,
                 configContentEnvironmentKey: scenario.environmentKey,
+                rootSessionID: nativeSessionID,
                 runnerBody: """
                 hooks.event?.({
                   type: "session.status",
@@ -891,6 +968,120 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             XCTAssertEqual(statusProperties["kind"] as? String, "working", scenario.commandName)
             XCTAssertEqual(statusProperties["detail"] as? String, "Indexing", scenario.commandName)
         }
+    }
+
+    func testOpenCodeFamilyPluginTracksOnlyDirectChildrenAndKeepsChildStatusOffRoot() throws {
+        for scenario in [
+            (agent: AgentKind.opencode, commandName: "opencode", environmentKey: "OPENCODE_CONFIG_CONTENT"),
+            (agent: AgentKind.mimocode, commandName: "mimo", environmentKey: "MIMOCODE_CONFIG_CONTENT"),
+        ] {
+            let events = try runOpenCodeFamilyPluginScenario(
+                agent: scenario.agent,
+                commandName: scenario.commandName,
+                configContentEnvironmentKey: scenario.environmentKey,
+                runnerBody: """
+                hooks.event?.({
+                  type: "session.created",
+                  properties: {
+                    info: {
+                      id: "child-session",
+                      parentID: "root-session",
+                      agent: "explore",
+                      model: { providerID: "openai", modelID: "gpt-5.4", variant: "high" },
+                    },
+                  },
+                });
+                hooks.event?.({
+                  type: "session.created",
+                  properties: {
+                    info: { id: "grandchild-session", parentID: "child-session", agent: "nested" },
+                  },
+                });
+                hooks.event?.({
+                  type: "message.updated",
+                  properties: {
+                    info: {
+                      sessionID: "child-session",
+                      providerID: "openai",
+                      modelID: "gpt-5.4",
+                      variant: "high",
+                    },
+                  },
+                });
+                hooks.event?.({
+                  type: "session.status",
+                  properties: { sessionID: "child-session", status: { type: "busy", message: "Child work" } },
+                });
+                hooks.event?.({
+                  type: "session.status",
+                  properties: { sessionID: "child-session", status: { type: "idle" } },
+                });
+                hooks.event?.({
+                  type: "session.updated",
+                  properties: {
+                    info: {
+                      id: "child-session",
+                      parentID: "root-session",
+                      agent: "renamed-after-finish",
+                    },
+                  },
+                });
+                hooks.event?.({
+                  type: "session.status",
+                  properties: { sessionID: "root-session", status: { type: "idle" } },
+                });
+                """
+            )
+
+            XCTAssertEqual(events.count, 3, scenario.commandName)
+            XCTAssertEqual(events[0]["type"] as? String, "toastty.background_activity", scenario.commandName)
+            let start = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+            XCTAssertEqual(start["phase"] as? String, "start", scenario.commandName)
+            XCTAssertEqual(start["activityID"] as? String, "child-session", scenario.commandName)
+            XCTAssertEqual(start["displayName"] as? String, "explore", scenario.commandName)
+            XCTAssertEqual(start["modelIdentifier"] as? String, "openai/gpt-5.4", scenario.commandName)
+            XCTAssertEqual(start["reasoningEffort"] as? String, "high", scenario.commandName)
+
+            let finish = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+            XCTAssertEqual(finish["phase"] as? String, "finish", scenario.commandName)
+            XCTAssertEqual(finish["activityID"] as? String, "child-session", scenario.commandName)
+
+            XCTAssertEqual(events[2]["type"] as? String, "toastty.status", scenario.commandName)
+            let rootStatus = try XCTUnwrap(events[2]["properties"] as? [String: Any])
+            XCTAssertEqual(rootStatus["kind"] as? String, "ready", scenario.commandName)
+            XCTAssertFalse(String(describing: events).contains("grandchild-session"), scenario.commandName)
+            XCTAssertFalse(String(describing: events).contains("Child work"), scenario.commandName)
+            XCTAssertFalse(String(describing: events).contains("renamed-after-finish"), scenario.commandName)
+        }
+    }
+
+    func testOpenCodeFamilyPluginTreatsAnonymousTerminalEventAsRootTermination() throws {
+        let result = try runOpenCodeFamilyPluginScenarioResult(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            enrichProviderEventsWithRootSessionID: false,
+            runnerBody: """
+            hooks.event?.({
+              type: "session.created",
+              properties: {
+                info: { id: "child-before-error", parentID: "root-session", agent: "explore" },
+              },
+            });
+            hooks.event?.({
+              type: "session.error",
+              properties: { error: { name: "ProviderError", data: { message: "rate limited" } } },
+            });
+            """
+        )
+        let events = result.events.filter { ($0["type"] as? String) != "toastty.native_session" }
+        XCTAssertEqual(events.count, 3)
+        XCTAssertEqual(events[0]["type"] as? String, "toastty.background_activity")
+        XCTAssertEqual((events[0]["properties"] as? [String: Any])?["phase"] as? String, "start")
+        XCTAssertEqual(events[1]["type"] as? String, "toastty.background_activity")
+        XCTAssertEqual((events[1]["properties"] as? [String: Any])?["phase"] as? String, "finish")
+        XCTAssertEqual(events[2]["type"] as? String, "toastty.status")
+        XCTAssertEqual((events[2]["properties"] as? [String: Any])?["kind"] as? String, "error")
     }
 
     func testOpenCodeFamilyPluginMapsQuestionMessagePartToApprovalStatus() throws {
@@ -1331,6 +1522,114 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
+    func testPiExtensionTracksStandardSubagentProfilesAndUsesOneChainRow() throws {
+        let fileManager = FileManager.default
+        guard let nodeURL = nodeExecutableURLForTests(fileManager: fileManager) else {
+            throw XCTSkip("node is unavailable")
+        }
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-pi-subagent-test-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directoryURL) }
+
+        let extensionURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/App/Resources/AgentExtensions/toastty-pi-extension.js")
+        let extensionLiteral = String(decoding: try JSONEncoder().encode(extensionURL.path), as: UTF8.self)
+        let runnerURL = directoryURL.appendingPathComponent("runner.cjs")
+        let telemetryURL = directoryURL.appendingPathComponent("telemetry.ndjson")
+        let runner = """
+        const handlers = new Map();
+        const extension = require(\(extensionLiteral));
+        extension({ on(name, handler) { handlers.set(name, handler); } });
+
+        handlers.get("tool_execution_start")?.({
+          toolCallId: "parallel-call",
+          toolName: "subagent",
+          args: { tasks: [{ agent: "explore", task: "one" }, { agent: "review", task: "two" }] },
+        });
+        handlers.get("tool_execution_update")?.({
+          toolCallId: "parallel-call",
+          toolName: "subagent",
+          partialResult: { details: { mode: "parallel", results: [
+            { agent: "explore", model: "openai/gpt-5.4", exitCode: -1 },
+            { agent: "review", model: "anthropic/claude-sonnet-4", exitCode: -1 },
+          ] } },
+        });
+        handlers.get("tool_execution_update")?.({
+          toolCallId: "parallel-call",
+          toolName: "subagent",
+          partialResult: { details: { mode: "parallel", results: [
+            { agent: "explore", model: "openai/gpt-5.4", exitCode: 0 },
+            { agent: "review", model: "anthropic/claude-sonnet-4", exitCode: -1 },
+          ] } },
+        });
+        handlers.get("tool_execution_end")?.({
+          toolCallId: "parallel-call",
+          toolName: "subagent",
+          result: { details: { mode: "parallel", results: [
+            { agent: "explore", model: "openai/gpt-5.4", exitCode: 0 },
+            { agent: "review", model: "anthropic/claude-sonnet-4", exitCode: 0 },
+          ] } },
+        });
+
+        handlers.get("tool_execution_start")?.({
+          toolCallId: "chain-call",
+          toolName: "subagent",
+          args: { chain: [{ agent: "plan", task: "one" }, { agent: "build", task: "two" }] },
+        });
+        handlers.get("tool_execution_update")?.({
+          toolCallId: "chain-call",
+          toolName: "subagent",
+          partialResult: { details: { mode: "chain", results: [
+            { agent: "plan", model: "openai/gpt-5.4", exitCode: 0 },
+            { agent: "build", model: "xiaomi/mimo-v2-pro", exitCode: 0 },
+          ] } },
+        });
+        handlers.get("tool_execution_end")?.({
+          toolCallId: "chain-call",
+          toolName: "subagent",
+          result: { details: { mode: "chain", results: [
+            { agent: "plan", model: "openai/gpt-5.4", exitCode: 0 },
+            { agent: "build", model: "xiaomi/mimo-v2-pro", exitCode: 0 },
+          ] } },
+        });
+        """
+        try Data(runner.utf8).write(to: runnerURL)
+
+        let result = try runScript(
+            at: nodeURL,
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-pi",
+                "TOASTTY_CLI_PATH": "/usr/bin/true",
+                "TOASTTY_PI_TELEMETRY_LOG_PATH": telemetryURL.path,
+            ],
+            arguments: [runnerURL.path]
+        )
+        XCTAssertEqual(result.exitCode, 0, result.stderr)
+
+        let events = try String(contentsOf: telemetryURL, encoding: .utf8)
+            .split(separator: "\n")
+            .compactMap { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+            .filter { ($0["event"] as? String)?.hasPrefix("background_activity_") == true }
+        let starts = events.filter { $0["event"] as? String == "background_activity_start" }
+        let finishes = events.filter { $0["event"] as? String == "background_activity_finish" }
+        XCTAssertEqual(Set(starts.compactMap { $0["activityID"] as? String }), [
+            "pi-subagent:parallel-call:0",
+            "pi-subagent:parallel-call:1",
+            "pi-subagent:chain-call:0",
+        ])
+        XCTAssertEqual(Set(finishes.compactMap { $0["activityID"] as? String }), [
+            "pi-subagent:parallel-call:0",
+            "pi-subagent:parallel-call:1",
+            "pi-subagent:chain-call:0",
+        ])
+        XCTAssertTrue(starts.contains { $0["modelIdentifier"] as? String == "xiaomi/mimo-v2-pro" })
+        XCTAssertFalse(events.contains { $0["activityID"] as? String == "pi-subagent:chain-call:1" })
+    }
+
     func testPreparePiLaunchSkipsToasttyExtensionForNoExtensionsBeforeTerminator() throws {
         AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
 
@@ -1753,7 +2052,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             commandName: commandName,
             configContentEnvironmentKey: configContentEnvironmentKey,
             runnerBody: runnerBody
-        ).events
+        ).events.filter { ($0["type"] as? String) != "toastty.native_session" }
     }
 
     private struct OpenCodeFamilyPluginScenarioResult {
@@ -1765,6 +2064,10 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         agent: AgentKind,
         commandName: String,
         configContentEnvironmentKey: String,
+        launchArguments: [String]? = nil,
+        rootSessionID: String = "root-session",
+        claimRootSession: Bool = true,
+        enrichProviderEventsWithRootSessionID: Bool = true,
         runnerBody: String
     ) throws -> OpenCodeFamilyPluginScenarioResult {
         let fileManager = FileManager.default
@@ -1804,7 +2107,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
         let preparedLaunch = try AgentLaunchInstrumentation.prepare(
             agent: agent,
-            argv: [commandName],
+            argv: launchArguments ?? [commandName],
             cliExecutablePath: cliURL.path,
             sessionID: "test-\(UUID().uuidString)",
             workingDirectory: workingDirectoryURL.path,
@@ -1822,6 +2125,26 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let configObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any])
         let plugins = try XCTUnwrap(configObject["plugin"] as? [String])
         let pluginSpec = try XCTUnwrap(plugins.first)
+        let rootClaimScript = claimRootSession
+            ? #"await hooks["chat.message"]?.({ sessionID: "\#(rootSessionID)" }, {});"#
+            : ""
+        let providerEventWrapperScript = enrichProviderEventsWithRootSessionID
+            ? """
+            const providerEventHook = hooks.event;
+            hooks.event = (input) => {
+              const candidate = input && typeof input === "object" && "event" in input ? input.event : input;
+              if (candidate && typeof candidate === "object") {
+                const properties = candidate.properties && typeof candidate.properties === "object"
+                  ? candidate.properties
+                  : {};
+                if (!properties.sessionID && !properties.sessionId && !properties.session_id) {
+                  candidate.properties = { ...properties, sessionID: "\(rootSessionID)" };
+                }
+              }
+              return providerEventHook?.(input);
+            };
+            """
+            : ""
 
         let runner = """
         import { ToasttyOpenCodeFamilyStatusPlugin } from "\(pluginSpec)";
@@ -1831,6 +2154,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         process.env.TOASTTY_SOCKET_PATH = "/tmp/toastty-test.sock";
 
         const hooks = await ToasttyOpenCodeFamilyStatusPlugin();
+        \(rootClaimScript)
+        \(providerEventWrapperScript)
         \(runnerBody)
         await new Promise((resolve) => setTimeout(resolve, 250));
         """

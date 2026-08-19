@@ -114,6 +114,10 @@ NODE
   if command -v plutil >/dev/null 2>&1; then
     plutil -lint "$privacy_manifest" >/dev/null
   fi
+  assert_file_contains "$privacy_manifest" "NSPrivacyAccessedAPICategoryUserDefaults" "UserDefaults required-reason category"
+  assert_file_contains "$privacy_manifest" "CA92.1" "UserDefaults required reason"
+  assert_file_contains "$privacy_manifest" "NSPrivacyAccessedAPICategorySystemBootTime" "system boot-time required-reason category"
+  assert_file_contains "$privacy_manifest" "35F9.1" "system boot-time required reason"
   assert_file_contains "$IOS_ROOT/Project.swift" '"ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon"' "AppIcon build setting"
   assert_file_contains "$IOS_ROOT/Project.swift" '"CFBundleIconName": .string("AppIcon")' "AppIcon Info.plist setting"
   assert_file_contains "$IOS_ROOT/Project.swift" 'name: "ToasttyMobileApp-Release"' "release scheme"
@@ -367,7 +371,10 @@ verify_archive_configuration() {
   assert_plist_value "$app_plist" "CFBundleIconName" "AppIcon"
   assert_plist_value "$app_plist" "ITSAppUsesNonExemptEncryption" "false"
   assert_plist_value "$privacy_manifest" "NSPrivacyTracking" "false"
-  assert_plist_key "$privacy_manifest" "NSPrivacyAccessedAPITypes"
+  assert_plist_value "$privacy_manifest" "NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPIType" "NSPrivacyAccessedAPICategoryUserDefaults"
+  assert_plist_value "$privacy_manifest" "NSPrivacyAccessedAPITypes:0:NSPrivacyAccessedAPITypeReasons:0" "CA92.1"
+  assert_plist_value "$privacy_manifest" "NSPrivacyAccessedAPITypes:1:NSPrivacyAccessedAPIType" "NSPrivacyAccessedAPICategorySystemBootTime"
+  assert_plist_value "$privacy_manifest" "NSPrivacyAccessedAPITypes:1:NSPrivacyAccessedAPITypeReasons:0" "35F9.1"
   assert_plist_key "$privacy_manifest" "NSPrivacyCollectedDataTypes"
   assert_plist_key "$privacy_manifest" "NSPrivacyTrackingDomains"
   log "Verified production archive $RELEASE_BUNDLE_ID $TUIST_TOASTTY_MOBILE_VERSION ($TUIST_TOASTTY_MOBILE_BUILD_NUMBER), AppIcon, encryption declaration, and privacy manifest."

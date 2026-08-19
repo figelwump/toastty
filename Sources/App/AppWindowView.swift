@@ -10,6 +10,7 @@ struct AppWindowView: View {
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let annotationStyleStore: AnnotationStyleStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
@@ -50,6 +51,7 @@ struct AppWindowView: View {
                         store: store,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         sessionRuntimeStore: sessionRuntimeStore,
+                        annotationStyleStore: annotationStyleStore,
                         terminalRuntimeContext: terminalRuntimeContext
                     )
                     .frame(width: effectiveSidebarWidth)

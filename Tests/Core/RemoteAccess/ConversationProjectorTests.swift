@@ -162,6 +162,35 @@ struct ConversationProjectorTests {
         #expect(epoch.bindingID == Self.resumedBindingID)
     }
 
+    @Test func clearingTranscriptBindingInvalidatesPromptAndFileAuthority() {
+        var projector = Self.makeProjector()
+        _ = projector.noteBinding(
+            reason: .runtimeBound,
+            providerSessionFilePath: "/tmp/old-rollout.jsonl",
+            bindingID: Self.bindingID,
+            at: Self.epochDate
+        )
+        for observation in Self.observations(CodexRolloutFixtures.basicSession) {
+            projector.ingest(observation)
+        }
+        #expect(projector.inputAvailability.allowsRemoteSend)
+
+        let emitted = projector.noteBinding(
+            reason: .runtimeResumed,
+            clearsProviderSessionFilePath: true,
+            bindingID: Self.resumedBindingID,
+            at: Self.restoredBindingDate
+        )
+
+        #expect(projector.providerSessionFilePath == nil)
+        #expect(projector.state == .starting)
+        #expect(projector.inputAvailability == .unavailable(reason: .unknownProviderState))
+        #expect(emitted.contains { event in
+            guard case .sessionBindingChanged(let payload) = event.payload else { return false }
+            return payload.providerSessionFilePath == nil
+        })
+    }
+
     @Test func abortedTurnLeavesInputUnavailable() {
         var projector = Self.makeProjector()
         for observation in Self.observations(CodexRolloutFixtures.subagentAndInterruptSession) {

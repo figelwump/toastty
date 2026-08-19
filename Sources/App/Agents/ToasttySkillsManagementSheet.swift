@@ -378,16 +378,14 @@ struct ToasttySkillsManagementSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
-            statusCards
+            deliveryCard
             skillsList
             userSkillsSection
-            details
             Spacer(minLength: 0)
-            actionBar
         }
         .padding(24)
         .frame(width: 620)
-        .frame(minHeight: 650)
+        .frame(minHeight: 560)
         .background(ToastyTheme.chromeBackground)
         .foregroundStyle(ToastyTheme.primaryText)
         .preferredColorScheme(.dark)
@@ -420,55 +418,103 @@ struct ToasttySkillsManagementSheet: View {
         }
     }
 
-    private var statusCards: some View {
-        VStack(spacing: 12) {
-            codexStatusCard
-            claudeStatusCard
-            otherRuntimesStatusCard
+    /// One compact card for every delivery target: a header with the shared
+    /// bundled version, one row per runtime path, and prose only for degraded
+    /// states. Codex-specific plugin details and Repair live in the Codex
+    /// row's disclosure instead of separate sections at the bottom.
+    private var deliveryCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            deliveryHeader
+            rowDivider
+            codexRow
+            if detailsExpanded {
+                codexDetails
+            }
+            rowDivider
+            launchProvidedRow
         }
+        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(ToastyTheme.hairline, lineWidth: 1)
+        }
+        .accessibilityIdentifier("sheet.toastty-skills.status")
     }
 
-    private var codexStatusCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: statusSymbolName)
-                    .foregroundStyle(statusColor)
-                Text("Codex")
-                    .font(.system(size: 13, weight: .semibold))
-                statusPill(statusTitle, color: statusColor)
-                Spacer()
-                if model.isWorking {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Button {
-                        model.refresh(
-                            hasActiveManagedCodexSession: hasActiveManagedCodexSession,
-                            refreshProcessPath: true
-                        )
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.plain)
+    private var deliveryHeader: some View {
+        HStack(spacing: 8) {
+            Text("Skill Delivery")
+                .font(.system(size: 13, weight: .semibold))
+            if let version = deliveredSkillsVersion {
+                Text(version)
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(ToastyTheme.inactiveText)
-                    .help("Recheck Codex skills status")
-                    .accessibilityLabel("Recheck Codex skills status")
-                }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+                    }
+                    .help("Toastty skills version delivered to managed sessions")
             }
+            Spacer()
+            if model.isWorking || claudeModel.isWorking {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Button {
+                    model.refresh(
+                        hasActiveManagedCodexSession: hasActiveManagedCodexSession,
+                        refreshProcessPath: true
+                    )
+                    claudeModel.refresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .help("Recheck skills delivery status")
+                .accessibilityLabel("Recheck skills delivery status")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
 
-            if let status = model.status {
+    private var rowDivider: some View {
+        Rectangle()
+            .fill(ToastyTheme.hairline)
+            .frame(height: 1)
+    }
+
+    private var codexRow: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Button {
+                detailsExpanded.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: statusSymbolName)
+                        .foregroundStyle(statusColor)
+                    Text("Codex")
+                        .font(.system(size: 12, weight: .medium))
+                    Spacer()
+                    statusPill(statusTitle, color: statusColor)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .rotationEffect(.degrees(detailsExpanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Show Codex plugin details and maintenance")
+            .accessibilityIdentifier("sheet.codex-skills.details-toggle")
+
+            if let status = model.status, status.isReady == false {
                 Text(status.detail)
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
-                if let installedVersion = status.installedVersion {
-                    Text("Installed version \(installedVersion)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(ToastyTheme.inactiveText)
-                }
-            } else if model.isWorking {
-                Text("Checking the managed Codex plugin.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(ToastyTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let codexNotFoundMessage = model.codexNotFoundMessage {
@@ -485,230 +531,234 @@ struct ToasttySkillsManagementSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(14)
-        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(ToastyTheme.hairline, lineWidth: 1)
-        }
-        .accessibilityIdentifier("sheet.toastty-skills.status")
-    }
-
-    private var claudeStatusCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: claudeStatusSymbolName)
-                    .foregroundStyle(claudeStatusColor)
-                Text("Claude Code")
-                    .font(.system(size: 13, weight: .semibold))
-                statusPill(claudeStatusTitle, color: claudeStatusColor)
-                Spacer()
-                if claudeModel.isWorking {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-            }
-
-            Text(claudeStatusDetail)
-                .font(.system(size: 12))
-                .foregroundStyle(
-                    claudeStatusIsUnavailable
-                        ? ToastyTheme.sessionErrorText
-                        : ToastyTheme.mutedText
-                )
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(14)
-        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(ToastyTheme.hairline, lineWidth: 1)
-        }
-        .accessibilityIdentifier("sheet.claude-skills.status")
-    }
-
-    /// Pi, OpenCode, and MiMo Code consume the same staged skills tree Claude
-    /// Code does, so this card reuses `claudeModel`'s status rather than
-    /// running a second fetch against the shared bundle manager.
-    private var otherRuntimesStatusCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: claudeStatusSymbolName)
-                    .foregroundStyle(claudeStatusColor)
-                Text("Pi, OpenCode, MiMo Code")
-                    .font(.system(size: 13, weight: .semibold))
-                statusPill(claudeStatusTitle, color: claudeStatusColor)
-                Spacer()
-                if claudeModel.isWorking {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-            }
-
-            Text(otherRuntimesStatusDetail)
-                .font(.system(size: 12))
-                .foregroundStyle(
-                    claudeStatusIsUnavailable
-                        ? ToastyTheme.sessionErrorText
-                        : ToastyTheme.mutedText
-                )
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Pi adds skills per launch with --skill; OpenCode and MiMo Code add them through per-launch config content.")
-                .font(.system(size: 11))
-                .foregroundStyle(ToastyTheme.inactiveText)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(14)
-        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(ToastyTheme.hairline, lineWidth: 1)
-        }
-        .accessibilityIdentifier("sheet.other-runtimes-skills.status")
-    }
-
-    private var skillsList: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Built-in Skills")
-                .font(.system(size: 13, weight: .semibold))
-            ForEach(ToasttyAgentPluginBundle.skills, id: \.name) { skill in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("toastty:\(skill.name)")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    Text(skill.summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ToastyTheme.mutedText)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("sheet.toastty-skills.skill.\(skill.name)")
-            }
-
-            Text(Self.duplicateSkillsGuidanceText)
-                .font(.system(size: 11))
-                .foregroundStyle(ToastyTheme.inactiveText)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 2)
-        }
-    }
-
-    private var userSkillsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text(userSkillsModel.sectionTitle)
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                if userSkillsModel.isWorking {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                Button("Rescan") {
-                    userSkillsModel.rescan()
-                }
-                .disabled(userSkillsModel.isWorking)
-                .accessibilityIdentifier("sheet.toastty-skills.user.rescan")
-                if userSkillsModel.showsCreateFolderAffordance {
-                    Button("Create Skills Folder") {
-                        userSkillsModel.createUserSkillsFolder()
-                    }
-                    .accessibilityIdentifier("sheet.toastty-skills.user.create-folder")
-                } else {
-                    Button("Open User Skills Folder") {
-                        userSkillsModel.openUserSkillsFolder()
-                    }
-                    .accessibilityIdentifier("sheet.toastty-skills.user.open-folder")
-                }
-            }
-
-            Text("Put custom Toastty skills in \(userSkillsModel.userSkillsDirectoryDisplayPath) and they load automatically into new agent sessions.")
-                .font(.system(size: 12))
-                .foregroundStyle(ToastyTheme.mutedText)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let catalogState = userSkillsModel.catalogState, catalogState.packages.isEmpty == false {
-                ForEach(catalogState.packages, id: \.name) { package in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(package.name)
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        Text(UserSkillsManagementModel.statusDescription(for: package))
-                            .font(.system(size: 12))
-                            .foregroundStyle(
-                                package.isAccepted
-                                    ? ToastyTheme.mutedText
-                                    : ToastyTheme.sessionNeedsApprovalText
-                            )
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("sheet.toastty-skills.user.\(package.name)")
-                }
-            } else {
-                Text("No user skills found. Add a skill as <name>/SKILL.md with name and description frontmatter.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(ToastyTheme.mutedText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                if let errorMessage = userSkillsModel.errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(ToastyTheme.sessionErrorText)
-                }
-                Text("Running sessions keep the skills they launched with; new launches use the current set.")
-            }
-            .font(.system(size: 11))
-            .foregroundStyle(ToastyTheme.inactiveText)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 2)
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("sheet.toastty-skills.user")
+        .accessibilityIdentifier("sheet.codex-skills.status")
     }
 
-    private var details: some View {
-        DisclosureGroup("Codex plugin details", isExpanded: $detailsExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                if let status = model.status {
-                    technicalRow("Managed profile", value: status.profileConfigPath)
-                    technicalRow("Plugin cache", value: status.cachePath ?? "Not installed")
-                    technicalRow("Bundled version", value: status.bundledVersion ?? "Unavailable")
-                    technicalRow("Bundled digest", value: status.bundledDigest ?? "Unavailable")
-                    technicalRow("Installed version", value: status.installedVersion ?? "Not installed")
-                    technicalRow("Installed digest", value: status.installedDigest ?? "Not installed")
-                } else if model.codexNotFoundMessage != nil {
-                    Text("Codex paths are unavailable because Toastty could not find a supported codex or cdx executable.")
-                        .foregroundStyle(ToastyTheme.mutedText)
-                } else {
-                    Text("Details are available after the status check completes.")
-                        .foregroundStyle(ToastyTheme.mutedText)
-                }
-            }
-            .padding(.top, 8)
-        }
-        .font(.system(size: 12))
-        .accessibilityIdentifier("sheet.codex-skills.details")
-    }
-
-    private var actionBar: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Codex plugin maintenance")
-                    .font(.system(size: 11, weight: .semibold))
+    private var codexDetails: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let status = model.status {
+                technicalRow("Managed profile", value: status.profileConfigPath)
+                technicalRow("Plugin cache", value: status.cachePath ?? "Not installed")
+                technicalRow("Bundled version", value: status.bundledVersion ?? "Unavailable")
+                technicalRow("Bundled digest", value: status.bundledDigest ?? "Unavailable")
+                technicalRow("Installed version", value: status.installedVersion ?? "Not installed")
+                technicalRow("Installed digest", value: status.installedDigest ?? "Not installed")
+            } else if model.codexNotFoundMessage != nil {
+                Text("Codex paths are unavailable because Toastty could not find a supported codex or cdx executable.")
                     .foregroundStyle(ToastyTheme.mutedText)
+            } else {
+                Text("Details are available after the status check completes.")
+                    .foregroundStyle(ToastyTheme.mutedText)
+            }
+
+            HStack(alignment: .firstTextBaseline) {
                 if hasActiveManagedCodexSession {
                     Text("Running sessions pick up repairs after restart.")
                         .font(.system(size: 11))
                         .foregroundStyle(ToastyTheme.inactiveText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer()
+                Button("Repair") {
+                    model.repair()
+                }
+                .disabled(model.isWorking)
+                .accessibilityIdentifier("sheet.codex-skills.repair")
             }
-            Spacer()
-            Button("Repair") {
-                model.repair()
-            }
-            .disabled(model.isWorking)
-            .accessibilityIdentifier("sheet.codex-skills.repair")
+            .padding(.top, 2)
         }
+        .font(.system(size: 12))
+        .padding(.leading, 36)
+        .padding(.trailing, 14)
+        .padding(.bottom, 12)
+        .accessibilityIdentifier("sheet.codex-skills.details")
+    }
+
+    /// Claude Code, Pi, OpenCode, and MiMo Code all consume the same staged
+    /// skills tree, so one row reports the shared `claudeModel` status.
+    private var launchProvidedRow: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: claudeStatusSymbolName)
+                    .foregroundStyle(claudeStatusColor)
+                Text("Claude Code · Pi · OpenCode · MiMo Code")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                statusPill(claudeStatusTitle, color: claudeStatusColor)
+            }
+
+            if case .unavailable(let detail) = claudeModel.status {
+                Text(detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(ToastyTheme.sessionErrorText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sheet.launch-provided-skills.status")
+    }
+
+    private var skillsList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Built-in Skills")
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+
+                ForEach(ToasttyAgentPluginBundle.skills, id: \.name) { skill in
+                    rowDivider
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        (Text("toastty:").foregroundStyle(ToastyTheme.subtleText)
+                            + Text(skill.name))
+                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                            .frame(width: 210, alignment: .leading)
+                        Text(skill.summary)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ToastyTheme.inactiveText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("sheet.toastty-skills.skill.\(skill.name)")
+                }
+            }
+            .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(ToastyTheme.hairline, lineWidth: 1)
+            }
+
+            Text(Self.duplicateSkillsGuidanceText)
+                .font(.system(size: 11))
+                .foregroundStyle(ToastyTheme.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 2)
+        }
+    }
+
+    private var userSkillsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(userSkillsModel.sectionTitle)
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        if userSkillsModel.isWorking {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Button {
+                                userSkillsModel.rescan()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(ToastyTheme.inactiveText)
+                            .help("Rescan user skills")
+                            .accessibilityLabel("Rescan user skills")
+                            .accessibilityIdentifier("sheet.toastty-skills.user.rescan")
+                        }
+                        if userSkillsModel.showsCreateFolderAffordance {
+                            Button("Create Skills Folder") {
+                                userSkillsModel.createUserSkillsFolder()
+                            }
+                            .controlSize(.small)
+                            .accessibilityIdentifier("sheet.toastty-skills.user.create-folder")
+                        } else {
+                            Button {
+                                userSkillsModel.openUserSkillsFolder()
+                            } label: {
+                                Image(systemName: "folder")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(ToastyTheme.inactiveText)
+                            .help("Open \(userSkillsModel.userSkillsDirectoryDisplayPath) in Finder")
+                            .accessibilityLabel("Open User Skills Folder")
+                            .accessibilityIdentifier("sheet.toastty-skills.user.open-folder")
+                        }
+                    }
+                    Text("Put custom Toastty skills in \(userSkillsModel.userSkillsDirectoryDisplayPath) and they load automatically into new agent sessions.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ToastyTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+
+                if let catalogState = userSkillsModel.catalogState, catalogState.packages.isEmpty == false {
+                    ForEach(catalogState.packages, id: \.name) { package in
+                        rowDivider
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(package.name)
+                                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                                .frame(width: 210, alignment: .leading)
+                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                                Image(systemName: package.isAccepted
+                                    ? "checkmark.circle.fill"
+                                    : "exclamationmark.triangle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(package.isAccepted
+                                        ? ToastyTheme.sessionReadyText
+                                        : ToastyTheme.sessionNeedsApprovalText)
+                                Text(UserSkillsManagementModel.statusDescription(for: package))
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(
+                                        package.isAccepted
+                                            ? ToastyTheme.inactiveText
+                                            : ToastyTheme.sessionNeedsApprovalText
+                                    )
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("sheet.toastty-skills.user.\(package.name)")
+                    }
+                } else {
+                    rowDivider
+                    Text("No user skills found. Add a skill as <name>/SKILL.md with name and description frontmatter.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+
+                if let errorMessage = userSkillsModel.errorMessage {
+                    rowDivider
+                    Text(errorMessage)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ToastyTheme.sessionErrorText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+            }
+            .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(ToastyTheme.hairline, lineWidth: 1)
+            }
+
+            Text("Running sessions keep the skills they launched with; new launches use the current set.")
+                .font(.system(size: 11))
+                .foregroundStyle(ToastyTheme.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 2)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sheet.toastty-skills.user")
     }
 
     @ViewBuilder
@@ -787,29 +837,14 @@ struct ToasttySkillsManagementSheet: View {
     }
 
     private var claudeStatusTitle: String {
-        switch claudeModel.status {
-        case .providedAtLaunch:
-            return "Provided at launch"
-        case .stagesOnNextLaunch:
-            return "Stages on next launch"
-        case .unavailable:
-            return "Needs attention"
-        case nil:
-            return "Checking"
-        }
+        Self.launchDeliveryStatusTitle(for: claudeModel.status)
     }
 
-    private var claudeStatusDetail: String {
-        switch claudeModel.status {
-        case .providedAtLaunch(let configuration):
-            return "Toastty passes version \(configuration.version) only to managed Claude Code launches."
-        case .stagesOnNextLaunch(let version):
-            return "Toastty will stage version \(version) when the next managed Claude Code session launches."
-        case .unavailable(let detail):
-            return detail
-        case nil:
-            return "Checking Toastty's bundled Claude Code skills."
-        }
+    private var deliveredSkillsVersion: String? {
+        Self.deliveredSkillsVersion(
+            claudeStatus: claudeModel.status,
+            codexStatus: model.status
+        )
     }
 
     private var claudeStatusSymbolName: String {
@@ -838,26 +873,34 @@ struct ToasttySkillsManagementSheet: View {
         }
     }
 
-    private var claudeStatusIsUnavailable: Bool {
-        guard case .unavailable = claudeModel.status else { return false }
-        return true
-    }
-
-    private var otherRuntimesStatusDetail: String {
-        Self.otherRuntimesStatusDetail(for: claudeModel.status)
-    }
-
-    /// Static for testability, matching `ManagedAgentSkillsProvisionedBanner.message(for:)`.
-    static func otherRuntimesStatusDetail(for status: ClaudeSkillsDeliveryStatus?) -> String {
+    /// Static for testability.
+    static func launchDeliveryStatusTitle(for status: ClaudeSkillsDeliveryStatus?) -> String {
         switch status {
-        case .providedAtLaunch(let configuration):
-            return "Toastty passes version \(configuration.version) only to managed Pi, OpenCode, and MiMo Code launches."
-        case .stagesOnNextLaunch(let version):
-            return "Toastty will stage version \(version) when the next managed Pi, OpenCode, or MiMo Code session launches."
-        case .unavailable(let detail):
-            return detail
+        case .providedAtLaunch:
+            return "Provided at launch"
+        case .stagesOnNextLaunch:
+            return "Stages on next launch"
+        case .unavailable:
+            return "Needs attention"
         case nil:
-            return "Checking Toastty's bundled skills for Pi, OpenCode, and MiMo Code."
+            return "Checking"
+        }
+    }
+
+    /// Every runtime delivers the same bundled payload, so the header shows a
+    /// single version: the staged skills version when known, otherwise the
+    /// Codex plugin's bundled version while the staged check runs.
+    static func deliveredSkillsVersion(
+        claudeStatus: ClaudeSkillsDeliveryStatus?,
+        codexStatus: CodexSkillsStatus?
+    ) -> String? {
+        switch claudeStatus {
+        case .providedAtLaunch(let configuration):
+            return configuration.version
+        case .stagesOnNextLaunch(let version):
+            return version
+        case .unavailable, nil:
+            return codexStatus?.bundledVersion
         }
     }
 
@@ -935,15 +978,15 @@ struct ManagedAgentSkillsProvisionedBanner: View {
     }
 
     private var title: String {
-        switch notice.agent {
-        case .codex: "Codex skills are ready"
-        case .claude: "Claude Code skills are ready"
-        default: "Toastty skills are ready"
-        }
+        Self.title(for: notice.agent)
     }
 
     private var message: String {
         Self.message(for: notice)
+    }
+
+    static func title(for agent: AgentKind) -> String {
+        "Toastty skills are now available in \(agent.displayName)"
     }
 
     static func message(for notice: ManagedAgentSkillsProvisionedNotice) -> String {

@@ -167,6 +167,7 @@ public struct ConversationProjector: Sendable {
         reason: ConversationBindingChangeReason,
         providerSessionID: String? = nil,
         providerSessionFilePath: String? = nil,
+        clearsProviderSessionFilePath: Bool = false,
         bindingID: UUID,
         at date: Date
     ) -> [ConversationEvent] {
@@ -174,7 +175,9 @@ public struct ConversationProjector: Sendable {
         if let providerSessionID {
             self.providerSessionID = providerSessionID
         }
-        if let providerSessionFilePath {
+        if clearsProviderSessionFilePath {
+            self.providerSessionFilePath = nil
+        } else if let providerSessionFilePath {
             self.providerSessionFilePath = providerSessionFilePath
         }
 
@@ -183,7 +186,7 @@ public struct ConversationProjector: Sendable {
             .sessionBindingChanged(ConversationSessionBindingChangedPayload(
                 reason: reason,
                 providerSessionID: providerSessionID ?? self.providerSessionID,
-                providerSessionFilePath: providerSessionFilePath ?? self.providerSessionFilePath
+                providerSessionFilePath: self.providerSessionFilePath
             )),
             at: date
         ))
@@ -205,6 +208,13 @@ public struct ConversationProjector: Sendable {
 
         updatedAt = max(updatedAt, date)
         return emitted
+    }
+
+    /// Removes a historical file association while preserving the projected
+    /// transcript. Runtime-bound callers should use `noteBinding` with
+    /// `clearsProviderSessionFilePath` so the input epoch is also invalidated.
+    mutating func clearProviderSessionFilePath() {
+        providerSessionFilePath = nil
     }
 
     // MARK: - Internals

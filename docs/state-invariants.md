@@ -95,6 +95,11 @@ During `WorkspaceState` decode:
 - `unreadWorkspaceNotificationCount` is clamped to `>= 0`.
 - missing `hasBeenVisited` values default to `true` for compatibility with
   older persisted state.
+- missing or `null` `annotations` values default to an empty dictionary.
+  Annotation objects are decoded entry by entry: malformed or invalid entries
+  are dropped, valid text and URLs are normalized through the shared
+  validation rules, and at most 12 canonical keys are retained in lexical
+  order.
 
 During `WorkspaceTabState` decode:
 
@@ -125,8 +130,9 @@ During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 
 - window membership and `selectedWindowID` are restored from the snapshot as-is
 - `makeAppState()` itself does not call `StateValidator`
-- workspace titles, visit state, tab order, layout trees, panel kinds, and
-  `focusedPanelID` are restored
+- workspace titles, visit state, annotations, tab order, layout trees, panel
+  kinds, and `focusedPanelID` are restored; layout-snapshot annotation decode
+  applies the same entry-by-entry sanitization described above
 - `focusedPanelModeActive` is reset to `false`
 - `unreadPanelIDs` is reset to `[]`
 - `unreadWorkspaceNotificationCount` is reset to `0`

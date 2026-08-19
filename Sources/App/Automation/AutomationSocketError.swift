@@ -8,6 +8,8 @@ enum AutomationSocketError: Error {
     case unknownEventType
     case unknownCommand
     case invalidPayload(String)
+    case annotationColorLocked(key: String, currentColor: String)
+    case annotationUsageUnavailable
     case scopeDenied(workspaceID: UUID)
     case internalError(String)
 
@@ -34,6 +36,16 @@ enum AutomationSocketError: Error {
             return AutomationResponseError(code: "UNKNOWN_COMMAND", message: "command is not supported")
         case .invalidPayload(let message):
             return AutomationResponseError(code: "INVALID_PAYLOAD", message: message)
+        case .annotationColorLocked(let key, let currentColor):
+            return AutomationResponseError(
+                code: "ANNOTATION_COLOR_LOCKED",
+                message: "annotation key '\(key)' is locked to color '\(currentColor)' while at least one annotation with that key exists"
+            )
+        case .annotationUsageUnavailable:
+            return AutomationResponseError(
+                code: "ANNOTATION_USAGE_UNAVAILABLE",
+                message: "could not verify annotation usage in saved layout profiles; no annotation or color was changed"
+            )
         case .scopeDenied:
             return AutomationResponseError(
                 code: "scope_denied",

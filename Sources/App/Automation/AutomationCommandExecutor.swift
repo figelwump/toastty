@@ -28,10 +28,12 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         "focusUnreadSessionPanel",
         "hookEventName",
         "id",
+        "color",
         "includeRuntime",
         "index",
         "initialCommands",
         "initialPrompt",
+        "key",
         "kind",
         "name",
         "nativeSessionID",
@@ -65,6 +67,8 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
+    private let annotationStyleStore: AnnotationStyleStore?
+    private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let codexStatusHooksPreflightProvider: CodexStatusHooksPreflightProvider
     private let codexStatusHooksWarningPresenter: CodexStatusHooksAsyncWarningPresenter
@@ -89,6 +93,8 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         sessionRuntimeStore: sessionRuntimeStore,
         focusedPanelCommandController: focusedPanelCommandController,
         agentLaunchService: agentLaunchService,
+        annotationStyleStore: annotationStyleStore,
+        inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
         reloadConfigurationAction: reloadConfigurationAction
     )
 
@@ -99,6 +105,8 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
+        annotationStyleStore: AnnotationStyleStore? = nil,
+        inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
         reloadConfigurationAction: (@MainActor () -> Void)?,
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider,
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter,
@@ -110,6 +118,8 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
+        self.annotationStyleStore = annotationStyleStore
+        self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
         self.reloadConfigurationAction = reloadConfigurationAction
         self.codexStatusHooksPreflightProvider = codexStatusHooksPreflightProvider
         self.codexStatusHooksWarningPresenter = codexStatusHooksWarningPresenter
@@ -1017,6 +1027,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                         kind: kind,
                         displayName: event.payload.string("displayName"),
                         command: event.payload.string("command"),
+                        executionProfile: executionProfile(from: event.payload),
                         processID: processID,
                         preserveWhenUnlisted: preserveWhenUnlisted ?? false,
                         startedAt: now,
@@ -1071,6 +1082,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                         kind: kind,
                         displayName: normalizedOptionalText(object.string("displayName")),
                         command: normalizedOptionalText(object.string("command")),
+                        executionProfile: executionProfile(from: object),
                         startedAt: now,
                         lastUpdatedAt: now
                     )
@@ -1125,28 +1137,32 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 rawPanelID: event.panelID
             )
             let hookEvent = try codexHookEvent(from: event.payload)
+            let resumeRecord = codexHookResumeRecord(
+                from: hookEvent,
+                activeSession: activeSession,
+                capturedAt: now
+            )
             let accepted = sessionRuntimeStore.handleCodexHookEvent(
                 sessionID: sessionID,
                 event: hookEvent,
                 at: now
             )
+            let didCaptureResumeRecord: Bool
+            if let resumeRecord {
+                didCaptureResumeRecord = captureCodexHookResumeRecord(
+                    sessionID: sessionID,
+                    activeSession: activeSession,
+                    event: hookEvent,
+                    resumeRecord: resumeRecord
+                )
+            } else {
+                didCaptureResumeRecord = false
+            }
             if accepted {
                 stateVersion += 1
-                if let resumeRecord = codexHookResumeRecord(
-                    from: hookEvent,
-                    activeSession: activeSession,
-                    capturedAt: now
-                ) {
-                    let didMutate = updateManagedAgentResumeRecordFromHook(
-                        sessionID: sessionID,
-                        activeSession: activeSession,
-                        resumeRecord: resumeRecord,
-                        captureSource: "codex_hook_event"
-                    )
-                    if didMutate {
-                        stateVersion += 1
-                    }
-                }
+            }
+            if didCaptureResumeRecord {
+                stateVersion += 1
             }
             return [
                 "eventType": .string(event.eventType),
@@ -2148,6 +2164,32 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         normalizedOptionalText(value).map { String($0.prefix(limit)) }
     }
 
+    private func executionProfile(
+        from object: [String: AutomationJSONValue]
+    ) -> SessionAgentExecutionProfile? {
+        let profile = SessionAgentExecutionProfile(
+            modelIdentifier: normalizedExecutionProfileText(object.string("modelIdentifier"), limit: 200),
+            reasoningEffort: normalizedExecutionProfileText(object.string("reasoningEffort"), limit: 80)
+        )
+        return profile.isEmpty ? nil : profile
+    }
+
+    private func normalizedExecutionProfileText(_ value: String?, limit: Int) -> String? {
+        guard let value else { return nil }
+        let withoutControls = value.unicodeScalars.map { scalar in
+            if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                return " "
+            }
+            return CharacterSet.controlCharacters.contains(scalar) ? "" : String(scalar)
+        }.joined()
+        let collapsed = withoutControls
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { $0.isEmpty == false }
+            .joined(separator: " ")
+        guard collapsed.isEmpty == false else { return nil }
+        return String(collapsed.prefix(limit))
+    }
+
     private func codexNotifyCompletion(
         from payload: [String: AutomationJSONValue]
     ) throws -> CodexNotifyCompletion {
@@ -2168,6 +2210,35 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
+    private func captureCodexHookResumeRecord(
+        sessionID: String,
+        activeSession: SessionRecord,
+        event: CodexHookEvent,
+        resumeRecord: ManagedAgentResumeRecord
+    ) -> Bool {
+        let captureSource = "codex_hook_event"
+        guard shouldAcceptManagedAgentResumeRecordHookClaim(
+            sessionID: sessionID,
+            activeSession: activeSession,
+            resumeRecord: resumeRecord,
+            captureSource: captureSource
+        ), sessionRuntimeStore.observeCodexRootSessionIdentity(
+            sessionID: sessionID,
+            threadID: resumeRecord.nativeSessionID,
+            isClear: event.source == "clear"
+        ) else {
+            return false
+        }
+
+        return persistManagedAgentResumeRecordFromHook(
+            sessionID: sessionID,
+            activeSession: activeSession,
+            resumeRecord: resumeRecord,
+            captureSource: captureSource
+        )
+    }
+
+    @MainActor
     private func updateManagedAgentResumeRecordFromHook(
         sessionID: String,
         activeSession: SessionRecord,
@@ -2183,12 +2254,38 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             return false
         }
 
+        return persistManagedAgentResumeRecordFromHook(
+            sessionID: sessionID,
+            activeSession: activeSession,
+            resumeRecord: resumeRecord,
+            captureSource: captureSource
+        )
+    }
+
+    @MainActor
+    private func persistManagedAgentResumeRecordFromHook(
+        sessionID: String,
+        activeSession: SessionRecord,
+        resumeRecord: ManagedAgentResumeRecord,
+        captureSource: String
+    ) -> Bool {
+        var scopedResumeRecord = resumeRecord
+        scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        if let currentResumeRecord = managedAgentResumeRecord(panelID: activeSession.panelID),
+           currentResumeRecord.capturedAt >= activeSession.startedAt,
+           currentResumeRecord.agent == scopedResumeRecord.agent,
+           currentResumeRecord.nativeSessionID == scopedResumeRecord.nativeSessionID,
+           standardizedPath(currentResumeRecord.sessionFilePath)
+                == standardizedPath(scopedResumeRecord.sessionFilePath),
+           standardizedPath(currentResumeRecord.cwd) == standardizedPath(scopedResumeRecord.cwd),
+           currentResumeRecord.scopedWorkspaceIDs == scopedResumeRecord.scopedWorkspaceIDs {
+            return false
+        }
+
         // The hook event names this pane's native session directly, so the
         // file-scanning observation is no longer needed after the claim is
         // accepted.
         agentLaunchService.cancelNativeSessionObservation(sessionID: sessionID)
-        var scopedResumeRecord = resumeRecord
-        scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
         let didMutate = store.send(.updateTerminalPanelResumeRecord(
             panelID: activeSession.panelID,
             resumeRecord: scopedResumeRecord
@@ -2209,6 +2306,17 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             ]
         )
         return didMutate
+    }
+
+    @MainActor
+    private func managedAgentResumeRecord(panelID: UUID) -> ManagedAgentResumeRecord? {
+        guard case .terminal(let terminalState)? = store.state
+            .workspaceSelection(containingPanelID: panelID)?
+            .workspace
+            .panelState(for: panelID) else {
+            return nil
+        }
+        return terminalState.resumeRecord
     }
 
     @MainActor
@@ -2278,12 +2386,16 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         activeSession: SessionRecord,
         capturedAt: Date
     ) -> ManagedAgentResumeRecord? {
+        let hookThreadID = normalizedOptionalText(event.threadID)
         guard event.hookEventName == "SessionStart",
               activeSession.agent == .codex,
               let nativeSessionID = normalizedOptionalText(event.nativeSessionID)
-                ?? normalizedOptionalText(event.threadID),
+                ?? hookThreadID,
+              hookThreadID == nil || hookThreadID == nativeSessionID,
               let sessionFilePath = normalizedOptionalText(event.sessionFilePath),
-              let cwd = normalizedOptionalText(event.cwd) else {
+              let cwd = normalizedOptionalText(event.cwd),
+              let activeCWD = normalizedOptionalText(activeSession.cwd),
+              standardizedPath(cwd) == standardizedPath(activeCWD) else {
             return nil
         }
 
@@ -2294,6 +2406,10 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             cwd: cwd,
             capturedAt: capturedAt
         )
+    }
+
+    private func standardizedPath(_ path: String) -> String {
+        (path as NSString).standardizingPath
     }
 
     private func parseArgsPayload(_ payload: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {

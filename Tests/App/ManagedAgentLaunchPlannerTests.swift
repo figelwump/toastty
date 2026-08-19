@@ -1146,10 +1146,11 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
-    func testCodexSessionLogOverrideContextPersistsAcrossUserTurnsWhenHooksAreAvailable() async throws {
+    func testCodex0147ServiceTierOverrideDoesNotSurfaceAutoReviewedApproval() async throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
         )
+        let rolloutURL = temporaryJSONLURL()
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
                 agent: .codex,
@@ -1163,27 +1164,22 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         defer {
             fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
             try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+            try? fixture.fileManager.removeItem(at: rolloutURL)
         }
 
-        try appendCodexSessionLogLine(
-            """
-            {"ts":"2026-05-28T19:22:32.686Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"cwd":null,"approval_policy":"on-request","approvals_reviewer":"guardian_subagent","permission_profile":{"type":"managed"}}}}
-            """,
-            to: logURL
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: codexResumeRecord(
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: rolloutURL.path
+                )
+            )
+        ))
+        XCTAssertEqual(
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
+            rolloutURL.path
         )
-        try appendCodexSessionLogLine(
-            """
-            {"ts":"2026-05-28T19:24:59.371Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"ok make a plan","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
-            """,
-            to: logURL
-        )
-        try appendCodexSessionLogLine(
-            """
-            {"ts":"2026-05-28T19:56:55.411Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"go ahead","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
-            """,
-            to: logURL
-        )
-        try await Task.sleep(nanoseconds: 500_000_000)
 
         _ = fixture.sessionRuntimeStore.handleCodexHookEvent(
             sessionID: plan.sessionID,
@@ -1194,11 +1190,43 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 promptFingerprint: promptFingerprint,
                 status: SessionStatus(kind: .working, summary: "Working", detail: "go ahead"),
                 nativeSessionID: "thread-root",
-                sessionFilePath: nil,
+                sessionFilePath: rolloutURL.path,
                 cwd: nil
             ),
             at: Date()
         )
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-08-13T21:32:42.856Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"cwd":null,"approval_policy":null,"approvals_reviewer":null,"sandbox_policy":null,"model":null,"effort":null,"summary":null,"service_tier":"default","collaboration_mode":null,"personality":null}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-08-13T21:32:53.181Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"go ahead","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"2026-08-13T21:32:53.215Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":"auto_review"}}
+            """,
+            to: rolloutURL
+        )
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .codexRootTurnSnapshotForTesting(sessionID: plan.sessionID)?
+                .currentApprovalContext?
+                .approvalsReviewer == .string("auto_review")
+        }
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore
+                .codexRootTurnSnapshotForTesting(sessionID: plan.sessionID)?
+                .currentApprovalContext?
+                .approvalsReviewer,
+            .string("auto_review")
+        )
+
         let accepted = fixture.sessionRuntimeStore.handleCodexHookEvent(
             sessionID: plan.sessionID,
             event: CodexHookEvent(
@@ -1216,6 +1244,17 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
 
         XCTAssertFalse(accepted)
+        XCTAssertFalse(
+            fixture.sessionRuntimeStore.hasPendingCodexHookApprovalForTesting(
+                sessionID: plan.sessionID
+            )
+        )
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.codexAutoReviewedPermissionTurnIDsForTesting(
+                sessionID: plan.sessionID
+            ),
+            ["turn-root"]
+        )
         XCTAssertEqual(
             fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
             .working
@@ -1348,7 +1387,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
-    func testCodexSessionLogFallbackPublishesApprovalWhenReviewerIsExplicitlyCleared() async throws {
+    func testCodexSessionLogFallbackPublishesApprovalForCanonicalUserReviewer() async throws {
         let fixture = try makePlannerFixture()
         let threadID = "019e316e-human-review"
         let plan = try fixture.planner.prepareManagedLaunch(
@@ -1373,13 +1412,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
         try appendCodexSessionLogLine(
             """
-            {"ts":"2026-05-28T17:30:32.495Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"approval_policy":"on-request","approvals_reviewer":null}}}
-            """,
-            to: logURL
-        )
-        try appendCodexSessionLogLine(
-            """
-            {"timestamp":"2026-06-02T17:53:00.654Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request"}}
+            {"timestamp":"2026-06-02T17:53:00.654Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":"user"}}
             """,
             to: logURL
         )
@@ -1658,6 +1691,72 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertEqual(resumeRecord.sessionFilePath, rolloutURL.path)
         XCTAssertEqual(resumeRecord.cwd, cwdURL.path)
         XCTAssertTrue(observer.cancelledSessionIDs.contains(plan.sessionID))
+    }
+
+    func testCodexPromptRearmsExpiredNativeSessionObservationWithoutReplacingActiveObservation() async throws {
+        let observer = StubManagedAgentNativeSessionObserver()
+        let fixture = try makePlannerFixture(nativeSessionObserverRegistry: observer)
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertEqual(observer.observations.count, 1)
+        let launchObservationStart = try XCTUnwrap(observer.observations.first?.launchStart)
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"user_message","message":"First prompt"}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(observer.observations.count, 1)
+
+        observer.expireObservation(sessionID: plan.sessionID)
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-next","msg":{"type":"user_message","message":"Second prompt"}}}
+            """,
+            to: logURL
+        )
+
+        await waitUntil {
+            observer.observations.count == 2
+        }
+        let promptObservation = try XCTUnwrap(observer.observations.last)
+        XCTAssertEqual(promptObservation.managedSessionID, plan.sessionID)
+        XCTAssertEqual(promptObservation.panelID, fixture.panelID)
+        XCTAssertEqual(promptObservation.cwd, "/tmp/repo")
+        XCTAssertNil(promptObservation.expectedNativeSessionID)
+        XCTAssertGreaterThanOrEqual(promptObservation.launchStart, launchObservationStart)
+
+        XCTAssertTrue(fixture.store.send(.updateTerminalPanelResumeRecord(
+            panelID: fixture.panelID,
+            resumeRecord: codexResumeRecord(
+                nativeSessionID: "thread-root",
+                sessionFilePath: "/tmp/codex/root.jsonl"
+            )
+        )))
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-third","msg":{"type":"user_message","message":"Third prompt"}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(observer.observations.count, 2)
     }
 
     func testCodexSessionConfiguredEventDoesNotStealResumeRecordFromLivePanel() async throws {
@@ -2161,7 +2260,15 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     }
 
     func testCodexRolloutWatcherOnlyHandlesBackgroundActivityEvents() async throws {
-        let fixture = try makePlannerFixture()
+        let expectedProfile = SessionAgentExecutionProfile(
+            modelIdentifier: "gpt-5.6-luna",
+            reasoningEffort: "xhigh"
+        )
+        let fixture = try makePlannerFixture(
+            codexSubagentProfileResolver: TestCodexSubagentProfileResolver(
+                profile: expectedProfile
+            )
+        )
         let rolloutURL = temporaryJSONLURL()
         defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
 
@@ -2213,7 +2320,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             fixture.sessionRuntimeStore
                 .sessionRegistry
                 .activeSession(sessionID: plan.sessionID)?
-                .backgroundActivitiesByID["agent-1"] != nil
+                .backgroundActivitiesByID["agent-1"]?.executionProfile == expectedProfile
         }
 
         let activeSession = try XCTUnwrap(
@@ -2225,6 +2332,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
         XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.displayName, "Focused check")
         XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.command, "Run focused checks")
+        XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.executionProfile, expectedProfile)
     }
 
     func testCodexRolloutWatcherProjectsCurrentCollaborationLifecycle() async throws {
@@ -2552,6 +2660,7 @@ private func makePlannerFixture(
     nowProvider: @escaping @Sendable () -> Date = Date.init,
     nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
     codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
+    codexSubagentProfileResolver: (any CodexSubagentProfileResolving)? = nil,
     codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
         .sessionLogFallback(reason: "test")
     },
@@ -2599,6 +2708,7 @@ private func makePlannerFixture(
         promptState: { _ in .unavailable },
         nativeSessionObserverRegistry: nativeSessionObserverRegistry,
         codexResumeResolver: codexResumeResolver,
+        codexSubagentProfileResolver: codexSubagentProfileResolver,
         codexSkillsResolver: resolvedCodexSkillsResolver,
         claudeSkillsBundleManager: claudeSkillsBundleManager ?? TestClaudeSkillsBundleManager(configuration: nil),
         userSkillSnapshotProvider: userSkillSnapshotProvider
@@ -2607,6 +2717,21 @@ private func makePlannerFixture(
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
+}
+
+private final class TestCodexSubagentProfileResolver: CodexSubagentProfileResolving, @unchecked Sendable {
+    private let profile: SessionAgentExecutionProfile?
+
+    init(profile: SessionAgentExecutionProfile?) {
+        self.profile = profile
+    }
+
+    func resolveProfile(
+        childThreadID _: String,
+        parentRolloutURL _: URL
+    ) async -> SessionAgentExecutionProfile? {
+        profile
+    }
 }
 
 private final class RecordingUserSkillSnapshotProvider: ToasttyUserSkillSnapshotProviding, @unchecked Sendable {
@@ -2978,12 +3103,26 @@ private enum ManagedAgentLaunchPlannerTestError: Error {
 private final class StubManagedAgentNativeSessionObserver: ManagedAgentNativeSessionObserving {
     private(set) var observations: [ManagedAgentNativeSessionObservationContext] = []
     private(set) var cancelledSessionIDs: [String] = []
+    private var activeSessionIDs: Set<String> = []
 
     func startObservation(_ observation: ManagedAgentNativeSessionObservationContext) {
         observations.append(observation)
+        activeSessionIDs.insert(observation.managedSessionID)
+    }
+
+    func startObservationIfAbsent(_ observation: ManagedAgentNativeSessionObservationContext) {
+        guard activeSessionIDs.contains(observation.managedSessionID) == false else {
+            return
+        }
+        startObservation(observation)
     }
 
     func cancelObservation(sessionID: String) {
         cancelledSessionIDs.append(sessionID)
+        activeSessionIDs.remove(sessionID)
+    }
+
+    func expireObservation(sessionID: String) {
+        activeSessionIDs.remove(sessionID)
     }
 }

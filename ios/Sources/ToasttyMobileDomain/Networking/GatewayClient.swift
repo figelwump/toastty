@@ -25,6 +25,9 @@ public struct StaticGatewayCredentialProvider: GatewayCredentialProvider {
 }
 
 public enum GatewayAPIErrorCode: String, Equatable, Sendable {
+    case credentialInvalid = "credential_invalid"
+    case identityMismatch = "identity_mismatch"
+    case identityUnavailable = "identity_unavailable"
     case invalidBody = "invalid_body"
     case invalidCode = "invalid_code"
     case notFound = "not_found"
@@ -327,7 +330,11 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         let isServerFailure = (500...599).contains(response.statusCode)
         let errorBody = try decodeErrorBody(
             response.body,
-            toleratesUnsupportedCode: isServerFailure
+            // Authentication is determined by the HTTP status. Future host
+            // rejection codes must still return the app to pairing instead of
+            // becoming compatibility failures.
+            toleratesUnsupportedCode: isServerFailure || response.statusCode == 401,
+            toleratesProtocolMismatch: response.statusCode == 401
         )
         switch response.statusCode {
         case 401:
@@ -345,7 +352,8 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
 
     private func decodeErrorBody(
         _ data: Data,
-        toleratesUnsupportedCode: Bool = false
+        toleratesUnsupportedCode: Bool = false,
+        toleratesProtocolMismatch: Bool = false
     ) throws -> (code: GatewayAPIErrorCode?, message: String?)? {
         guard data.isEmpty == false else { return nil }
         guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -353,7 +361,8 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
             return nil
         }
         if let version = value["protocolVersion"] as? String,
-           version != RemoteGatewayProtocol.version {
+           version != RemoteGatewayProtocol.version,
+           toleratesProtocolMismatch == false {
             throw GatewayFailure.protocolMismatch(version: version)
         }
         guard let code = GatewayAPIErrorCode(rawValue: rawCode) else {

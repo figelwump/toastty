@@ -25,6 +25,54 @@ struct WorkspaceLayoutPersistenceStoreTests {
     }
 
     @Test
+    func annotationUsageCountsExcludeProfilesRepresentedByLiveState() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        #expect(store.persistLayout(
+            makeLayout(
+                title: "Desktop",
+                cwd: "/tmp/desktop",
+                annotations: [
+                    "git-branch": WorkspaceAnnotation(text: "main"),
+                    "github-pr": WorkspaceAnnotation(text: "PR #1"),
+                ]
+            ),
+            for: "desktop"
+        ))
+        #expect(store.persistLayout(
+            makeLayout(
+                title: "Laptop",
+                cwd: "/tmp/laptop",
+                annotations: ["git-branch": WorkspaceAnnotation(text: "feature")]
+            ),
+            for: "laptop"
+        ))
+
+        #expect(try store.annotationUsageCounts(excludingProfileIDs: []) == [
+            "git-branch": 2,
+            "github-pr": 1,
+        ])
+        #expect(try store.annotationUsageCounts(excludingProfileIDs: ["desktop"]) == [
+            "git-branch": 1,
+        ])
+    }
+
+    @Test
+    func annotationUsageCountsFailClosedForUnreadableDocument() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        try Data("not valid json".utf8).write(to: fileURL, options: .atomic)
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+
+        #expect(throws: (any Error).self) {
+            try store.annotationUsageCounts(excludingProfileIDs: [])
+        }
+    }
+
+    @Test
     func persistsCommittedSplitRatio() throws {
         let fileURL = try makeTempStoreURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
@@ -226,7 +274,11 @@ struct WorkspaceLayoutPersistenceStoreTests {
         return directory.appendingPathComponent("workspace-layout-profiles.json", isDirectory: false)
     }
 
-    private func makeLayout(title: String, cwd: String) -> WorkspaceLayoutSnapshot {
+    private func makeLayout(
+        title: String,
+        cwd: String,
+        annotations: [String: WorkspaceAnnotation] = [:]
+    ) -> WorkspaceLayoutSnapshot {
         var state = AppState.bootstrap()
         guard let workspaceID = state.windows.first?.selectedWorkspaceID,
               var workspace = state.workspacesByID[workspaceID],
@@ -236,6 +288,7 @@ struct WorkspaceLayoutPersistenceStoreTests {
         }
 
         workspace.title = title
+        workspace.annotations = annotations
         terminalState.cwd = cwd
         workspace.panels[panelID] = .terminal(terminalState)
         state.workspacesByID[workspaceID] = workspace
