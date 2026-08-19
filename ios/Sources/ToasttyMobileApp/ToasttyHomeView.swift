@@ -293,7 +293,7 @@ struct ToasttyHomeView: View {
                 }
         }
         .buttonStyle(.plain)
-        .foregroundStyle(ToasttyDesignTokens.amberText)
+        .foregroundStyle(ToasttyDesignTokens.mutedText)
         .accessibilityLabel("Settings")
         .accessibilityIdentifier("toastty-mobile-settings-button")
     }
