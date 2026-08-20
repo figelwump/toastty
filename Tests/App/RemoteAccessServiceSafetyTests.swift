@@ -244,6 +244,143 @@ struct RemoteAccessServiceSafetyTests {
         #expect(correlator.conversationIDs.isEmpty)
     }
 
+    @MainActor
+    @Test func activationMintsIdentityBeforeListeningAndDisableRemovesLiveTracking() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let selection = try #require(store.state.selectedWorkspaceSelection())
+        let panelID = try #require(selection.workspace.focusedPanelID)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.startSession(
+            sessionID: "remote-lifecycle-session",
+            agent: .codex,
+            panelID: panelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Date(timeIntervalSince1970: 1_786_000_000)
+        )
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        let server = RemoteAccessGatewayServerSpy()
+        let runtimeHome = "/tmp/toastty-remote-access-lifecycle-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
+        let service = RemoteAccessService(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            runtimePaths: runtimePaths,
+            port: 42_999,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in server }
+        )
+
+        #expect(service.activationState == .off)
+        #expect(terminalRuntimeRegistry.localInputObserver == nil)
+        #expect(Self.remoteConversationID(panelID: panelID, in: store) == nil)
+        #expect(server.startCallCount == 0)
+
+        service.setEnabled(true, persist: false)
+
+        let conversationID = try #require(Self.remoteConversationID(panelID: panelID, in: store))
+        #expect(service.activationState == .starting)
+        #expect(service.isEnabled)
+        #expect(service.isReady == false)
+        #expect(service.listeningPort == nil)
+        #expect(terminalRuntimeRegistry.localInputObserver != nil)
+        #expect(server.startedPorts == [42_999])
+        service.issuePairingCode()
+        #expect(service.currentPairingCode == nil)
+        #expect(service.facadeConversationEvents(
+            for: conversationID,
+            after: nil,
+            limit: 10
+        ) != .conversationNotFound)
+
+        server.reportReady(port: 42_999)
+
+        #expect(service.activationState == .ready(port: 42_999))
+        #expect(service.isReady)
+        #expect(service.listeningPort == 42_999)
+
+        service.setEnabled(false, persist: false)
+
+        #expect(service.activationState == .off)
+        #expect(service.isEnabled == false)
+        #expect(terminalRuntimeRegistry.localInputObserver == nil)
+        #expect(server.stopCallCount == 1)
+        #expect(Self.remoteConversationID(panelID: panelID, in: store) == conversationID)
+        #expect(service.facadeConversationEvents(
+            for: conversationID,
+            after: nil,
+            limit: 10
+        ) == .conversationNotFound)
+
+        // A delayed callback from a cancelled listener cannot reopen access.
+        server.reportReady(port: 42_999)
+        #expect(service.activationState == .off)
+        #expect(server.stopCallCount == 2)
+
+        server.reportFailure()
+        #expect(service.activationState == .off)
+        #expect(server.stopCallCount == 2)
+    }
+
+    @MainActor
+    @Test func listenerFailureReturnsToNonPairableStateAndRemovesObservers() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        let server = RemoteAccessGatewayServerSpy()
+        let runtimeHome = "/tmp/toastty-remote-access-failure-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
+        let service = RemoteAccessService(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            runtimePaths: ToasttyRuntimePaths.resolve(
+                homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+                environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+            ),
+            port: 42_998,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in server }
+        )
+
+        service.setEnabled(true, persist: false)
+        #expect(service.activationState == .starting)
+        #expect(terminalRuntimeRegistry.localInputObserver != nil)
+
+        server.reportFailure()
+
+        #expect(service.isEnabled == false)
+        #expect(service.isReady == false)
+        #expect(service.startupError != nil)
+        #expect(terminalRuntimeRegistry.localInputObserver == nil)
+        #expect(server.stopCallCount == 1)
+
+        service.setEnabled(true, persist: false)
+        #expect(service.activationState == .starting)
+        #expect(terminalRuntimeRegistry.localInputObserver != nil)
+        #expect(server.startCallCount == 2)
+
+        server.reportReady(port: 42_998)
+        #expect(service.activationState == .ready(port: 42_998))
+        service.setEnabled(false, persist: false)
+    }
+
+    @MainActor
+    private static func remoteConversationID(panelID: UUID, in store: AppStore) -> RemoteConversationID? {
+        for workspace in store.state.workspacesByID.values {
+            guard case .terminal(let terminalState) = workspace.panels[panelID] else { continue }
+            return terminalState.remoteConversationID
+        }
+        return nil
+    }
+
     private static func request(
         conversationID: RemoteConversationID,
         clientRequestID: String,
@@ -278,5 +415,40 @@ struct RemoteAccessServiceSafetyTests {
             return nil
         }
         return payload
+    }
+}
+
+@MainActor
+private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
+    var onWebSocketCountChanged: ((Int) -> Void)?
+    var onDeviceRevoked: ((UUID) -> Void)?
+    var onListenerReady: ((UInt16) -> Void)?
+    var onListenerFailed: (() -> Void)?
+
+    private(set) var startedPorts: [UInt16] = []
+    private(set) var stopCallCount = 0
+
+    var startCallCount: Int {
+        startedPorts.count
+    }
+
+    func start(port: UInt16) throws {
+        startedPorts.append(port)
+    }
+
+    func stop() {
+        stopCallCount += 1
+    }
+
+    func disconnectWebSockets(for _: UUID) {}
+    func disconnectAllWebSockets() {}
+    func broadcast(_: RemoteGatewayStreamMessage) {}
+
+    func reportReady(port: UInt16) {
+        onListenerReady?(port)
+    }
+
+    func reportFailure() {
+        onListenerFailed?()
     }
 }

@@ -3,6 +3,20 @@ import CoreState
 import Foundation
 import Network
 
+@MainActor
+protocol RemoteAccessGatewayServing: AnyObject {
+    var onWebSocketCountChanged: ((Int) -> Void)? { get set }
+    var onDeviceRevoked: ((UUID) -> Void)? { get set }
+    var onListenerReady: ((UInt16) -> Void)? { get set }
+    var onListenerFailed: (() -> Void)? { get set }
+
+    func start(port: UInt16) throws
+    func stop()
+    func disconnectWebSockets(for deviceID: UUID)
+    func disconnectAllWebSockets()
+    func broadcast(_ message: RemoteGatewayStreamMessage)
+}
+
 /// Loopback-only TCP listener for the remote-access gateway.
 ///
 /// The server owns bytes and connection lifecycle; every routing,
@@ -11,7 +25,7 @@ import Network
 /// this listener — it never binds a non-loopback address, and the trusted
 /// local automation socket is a different server entirely.
 @MainActor
-final class RemoteAccessGatewayServer {
+final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
     enum ServerError: Error {
         case invalidPort
     }

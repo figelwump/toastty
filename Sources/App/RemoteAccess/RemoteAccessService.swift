@@ -242,11 +242,32 @@ struct RemotePendingSendCorrelator: Sendable {
 /// audit log, request handler, loopback listener, the session-registry
 /// adapter, and — for Codex conversations — the live transcript projection
 /// fed by rollout-file tailers.
+enum RemoteAccessActivationState: Equatable, Sendable {
+    case off
+    case starting
+    case ready(port: UInt16)
+    case failed(message: String)
+
+    var isEnabled: Bool {
+        switch self {
+        case .starting, .ready:
+            true
+        case .off, .failed:
+            false
+        }
+    }
+
+    var isReady: Bool {
+        if case .ready = self {
+            return true
+        }
+        return false
+    }
+}
+
 @MainActor
 final class RemoteAccessService: ObservableObject {
-    @Published private(set) var isEnabled: Bool = false
-    @Published private(set) var listeningPort: UInt16?
-    @Published private(set) var startupError: String?
+    @Published private(set) var activationState: RemoteAccessActivationState = .off
     @Published private(set) var deviceManagementError: String?
     @Published private(set) var currentPairingCode: RemotePairingCode?
     @Published private(set) var currentNativePairingOffer: RemoteNativePairingOffer?
@@ -279,9 +300,11 @@ final class RemoteAccessService: ObservableObject {
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
     private var coordinator = RemoteInputCoordinator()
     private let handler: RemoteGatewayRequestHandler
-    private let server: RemoteAccessGatewayServer
+    private let server: any RemoteAccessGatewayServing
     private let port: UInt16
-    private var cancellables: Set<AnyCancellable> = []
+    private var conversationTrackingCancellables: Set<AnyCancellable> = []
+    private var storeActionObserverToken: UUID?
+    private var conversationTrackingGeneration: UInt64 = 0
     private var sessionListBroadcastTask: Task<Void, Never>?
 
     private var tailersByConversationID: [RemoteConversationID: RemoteTranscriptTailer] = [:]
@@ -292,18 +315,40 @@ final class RemoteAccessService: ObservableObject {
     /// projection, oldest first, keyed by conversation.
     private var pendingSendCorrelator = RemotePendingSendCorrelator()
 
+    var isEnabled: Bool {
+        activationState.isEnabled
+    }
+
+    var isReady: Bool {
+        activationState.isReady
+    }
+
+    var listeningPort: UInt16? {
+        guard case .ready(let port) = activationState else { return nil }
+        return port
+    }
+
+    var startupError: String? {
+        guard case .failed(let message) = activationState else { return nil }
+        return message
+    }
+
     init(
         store: AppStore,
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
-        runtimePaths: ToasttyRuntimePaths
+        runtimePaths: ToasttyRuntimePaths,
+        port: UInt16 = RemoteAccessPreferences.loadPort(),
+        initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
+        gatewayServerFactory: (RemoteGatewayRequestHandler) -> any RemoteAccessGatewayServing = {
+            RemoteAccessGatewayServer(handler: $0)
+        }
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
-        self.port = RemoteAccessPreferences.loadPort()
+        self.port = port
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
-        RemoteAccessPreferences.discardLegacyWriteEnabledConversations()
         self.deviceStore = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
         self.auditLog = RemoteAccessAuditLog(fileURL: runtimePaths.remoteAccessAuditFileURL)
         self.handler = RemoteGatewayRequestHandler(
@@ -318,7 +363,7 @@ final class RemoteAccessService: ObservableObject {
                 readAcknowledgementBridge.acknowledge(request, device: device)
             }
         )
-        self.server = RemoteAccessGatewayServer(handler: handler)
+        self.server = gatewayServerFactory(handler)
         self.devices = deviceStore.devices
         facadeBridge.service = self
         sendBridge.service = self
@@ -337,11 +382,6 @@ final class RemoteAccessService: ObservableObject {
             self.refreshDevices()
         }
 
-        // Observe local keyboard/paste input to invalidate open remote epochs.
-        terminalRuntimeRegistry.localInputObserver = { [weak self] panelID in
-            self?.noteLocalInput(panelID: panelID)
-        }
-
         server.onWebSocketCountChanged = { [weak self] count in
             guard let self else { return }
             let previousCount = self.connectedClientCount
@@ -353,48 +393,30 @@ final class RemoteAccessService: ObservableObject {
             }
         }
         server.onListenerReady = { [weak self] port in
-            guard let self, self.isEnabled else { return }
-            self.listeningPort = port
-            self.startupError = nil
+            guard let self else { return }
+            guard case .starting = self.activationState else {
+                // A cancelled startup must never leave a late listener alive.
+                // The concrete server also rejects stale listener identities;
+                // this keeps the service contract fail-closed for any server.
+                if self.isEnabled == false {
+                    self.server.stop()
+                }
+                return
+            }
+            self.activationState = .ready(port: port)
+            self.auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessEnabled))
         }
         server.onListenerFailed = { [weak self] in
-            guard let self else { return }
-            self.server.stop()
-            self.sessionListBroadcastTask?.cancel()
-            self.sessionListBroadcastTask = nil
-            self.isEnabled = false
-            self.listeningPort = nil
-            self.invalidatePairingCode()
-            self.cancelNativePairingOffer()
-            self.startupError = "Could not start the local Remote Access listener. Try again."
+            guard let self, self.isEnabled else { return }
+            self.failActivation()
         }
         server.onDeviceRevoked = { [weak self] _ in
             self?.deviceManagementError = nil
             self?.refreshDevices()
         }
 
-        sessionRuntimeStore.$sessionRegistry
-            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.syncConversations()
-            }
-            .store(in: &cancellables)
-
-        // Resume-record and conversation-identity changes mutate panel state
-        // without touching the session registry; without this observer a
-        // rollout-path change would never restart the transcript tailer.
-        store.addActionAppliedObserver { [weak self] action, _, _ in
-            switch action {
-            case .updateTerminalPanelResumeRecord, .updateTerminalPanelRemoteConversationID:
-                self?.syncConversations()
-            default:
-                break
-            }
-        }
-
         refreshHandlerConfiguration()
-        syncConversations(broadcast: false)
-        if RemoteAccessPreferences.loadEnabled() {
+        if initiallyEnabled {
             setEnabled(true, persist: false)
         }
     }
@@ -405,38 +427,117 @@ final class RemoteAccessService: ObservableObject {
         if persist {
             RemoteAccessPreferences.persistEnabled(enabled)
         }
-        startupError = nil
         if enabled {
+            guard isEnabled == false else { return }
+            activationState = .starting
+            RemoteAccessPreferences.discardLegacyWriteEnabledConversations()
+            beginConversationTracking()
             syncConversations(broadcast: false)
-            listeningPort = nil
             do {
                 try server.start(port: port)
-                isEnabled = true
-                auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessEnabled))
             } catch {
-                isEnabled = false
-                listeningPort = nil
-                startupError = "Could not start the local Remote Access listener. Try again."
+                failActivation()
                 ToasttyLog.error(
                     "Remote access gateway failed to start",
                     category: .automation
                 )
             }
         } else {
+            let shouldAudit = activationState != .off
+            activationState = .off
             sessionListBroadcastTask?.cancel()
             sessionListBroadcastTask = nil
             server.stop()
-            isEnabled = false
-            listeningPort = nil
             invalidatePairingCode()
             cancelNativePairingOffer()
-            auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessDisabled))
+            endConversationTracking()
+            connectedClientCount = 0
+            if shouldAudit {
+                auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessDisabled))
+            }
         }
+    }
+
+    private func failActivation() {
+        guard activationState != .off else { return }
+        activationState = .failed(
+            message: "Could not start the local Remote Access listener. Try again."
+        )
+        sessionListBroadcastTask?.cancel()
+        sessionListBroadcastTask = nil
+        server.stop()
+        invalidatePairingCode()
+        cancelNativePairingOffer()
+        endConversationTracking()
+        connectedClientCount = 0
+    }
+
+    private func beginConversationTracking() {
+        guard storeActionObserverToken == nil, conversationTrackingCancellables.isEmpty else { return }
+        conversationTrackingGeneration &+= 1
+        let generation = conversationTrackingGeneration
+
+        // Observe local keyboard/paste input to invalidate open remote epochs.
+        terminalRuntimeRegistry.localInputObserver = { [weak self] panelID in
+            guard let self, self.conversationTrackingGeneration == generation else { return }
+            self.noteLocalInput(panelID: panelID)
+        }
+
+        sessionRuntimeStore.$sessionRegistry
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation else { return }
+                self.syncConversations()
+            }
+            .store(in: &conversationTrackingCancellables)
+
+        // Resume-record and conversation-identity changes mutate panel state
+        // without touching the session registry; without this observer a
+        // rollout-path change would never restart the transcript tailer.
+        storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, _, _ in
+            guard let self,
+                  self.isEnabled,
+                  self.conversationTrackingGeneration == generation else { return }
+            switch action {
+            case .updateTerminalPanelResumeRecord, .updateTerminalPanelRemoteConversationID:
+                self.syncConversations()
+            default:
+                break
+            }
+        }
+    }
+
+    private func endConversationTracking() {
+        conversationTrackingCancellables.removeAll()
+        if let storeActionObserverToken {
+            store.removeActionAppliedObserver(storeActionObserverToken)
+            self.storeActionObserverToken = nil
+        }
+        terminalRuntimeRegistry.localInputObserver = nil
+
+        let trackedConversationIDs = Set(tailersByConversationID.keys)
+            .union(activeSessionIDByConversationID.keys)
+            .union(panelIDByConversationID.keys)
+            .union(pendingSendCorrelator.conversationIDs)
+            .union(projectionStore.registeredConversationIDs)
+        for conversationID in trackedConversationIDs {
+            removeConversationState(conversationID)
+        }
+        tailersByConversationID.removeAll()
+        activeSessionIDByConversationID.removeAll()
+        panelIDByConversationID.removeAll()
+        conversationIDByPanelID.removeAll()
+        pendingSendCorrelator = RemotePendingSendCorrelator()
+        coordinator = RemoteInputCoordinator()
+        writeControllableSessions = []
     }
 
     // MARK: - Pairing and devices
 
     func issuePairingCode() {
+        guard isReady else { return }
         let code = deviceStore.issuePairingCode(at: Date())
         currentPairingCode = code
         auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .pairingCodeIssued))
@@ -448,6 +549,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     func issueNativePairingOffer(at date: Date = Date()) {
+        guard isReady else { return }
         guard let gatewayURL = publicGatewayURL else {
             currentNativePairingOffer = nil
             currentNativePairingQRCode = nil
@@ -492,6 +594,11 @@ final class RemoteAccessService: ObservableObject {
     }
 
     func refreshNativePairingOffer(at date: Date = Date()) {
+        guard isReady else {
+            currentNativePairingOffer = nil
+            currentNativePairingQRCode = nil
+            return
+        }
         guard let offer = deviceStore.activeNativePairingOffer(at: date),
               let payload = try? offer.qrPayload.encodedString(),
               let qrCode = RemoteAccessPairingQRCode.image(payload: payload) else {
@@ -598,6 +705,7 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteConversationReadAcknowledgementRequest,
         device _: RemoteDeviceRecord
     ) -> RemoteConversationReadAcknowledgementResult {
+        guard isReady else { return .conversationNotFound }
         guard let projector = projectionStore.projectorState(for: request.conversationID),
               let mappedPanelID = panelIDByConversationID[request.conversationID],
               let candidate = scanConversationCandidates(mintingIDs: false).first(where: {
@@ -671,6 +779,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func syncConversations(broadcast: Bool = true) {
+        guard isEnabled else { return }
         let candidates = scanConversationCandidates(mintingIDs: true)
         var seenConversationIDs: Set<RemoteConversationID> = []
         var listChanged = false
@@ -1123,6 +1232,7 @@ final class RemoteAccessService: ObservableObject {
         // constructing it so historical same-text input cannot confirm a send
         // accepted against the previous file/tailer lifetime.
         pendingSendCorrelator.discard(for: conversationID)
+        let generation = conversationTrackingGeneration
         let tailer = RemoteTranscriptTailer(
             conversationID: conversationID,
             fileURL: URL(filePath: path),
@@ -1131,13 +1241,21 @@ final class RemoteAccessService: ObservableObject {
                 ProviderTranscriptSupport.makeParser(for: provider) ?? CodexRolloutTranscriptParser()
             }
         ) { [weak self] conversationID, event in
-            self?.handleTailerEvent(conversationID, event)
+            self?.handleTailerEvent(conversationID, event, generation: generation)
         }
         tailersByConversationID[conversationID] = tailer
         tailer.start()
     }
 
-    private func handleTailerEvent(_ conversationID: RemoteConversationID, _ event: RemoteTranscriptTailer.Event) {
+    private func handleTailerEvent(
+        _ conversationID: RemoteConversationID,
+        _ event: RemoteTranscriptTailer.Event,
+        generation: UInt64
+    ) {
+        // A detached tailer can deliver one final callback after cancellation.
+        // Once the kill switch is off — or a later activation has begun — it
+        // must not rebuild projection state from the previous transcript.
+        guard isEnabled, generation == conversationTrackingGeneration else { return }
         switch event {
         case .observations(let observations):
             // Stamp the confirming user message for any pending remote send
@@ -1203,6 +1321,9 @@ final class RemoteAccessService: ObservableObject {
     /// and terminal delivery share this one call, so no epoch can change
     /// between `evaluate` and `markDelivered`.
     func performRemoteSend(_ request: RemoteMessageSendRequest, device: RemoteDeviceRecord) -> RemoteMessageSendResult {
+        guard isReady else {
+            return .rejected(reason: .notBound)
+        }
         let conversationID = request.conversationID
         guard let panelID = panelIDByConversationID[conversationID] else {
             return .rejected(reason: .notBound)

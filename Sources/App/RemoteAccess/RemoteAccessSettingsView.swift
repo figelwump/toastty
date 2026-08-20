@@ -24,7 +24,7 @@ struct RemoteAccessSettingsView: View {
     var body: some View {
         Form {
             gatewaySection
-            if service.isEnabled {
+            if service.isReady {
                 pairingSection
             }
             devicesSection
@@ -56,7 +56,13 @@ struct RemoteAccessSettingsView: View {
                 set: { service.setEnabled($0) }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Enable Remote Access")
+                    HStack(spacing: 6) {
+                        Text("Enable Remote Access")
+                        if case .starting = service.activationState {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+                    }
                     Text(gatewayStatusText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -121,10 +127,14 @@ struct RemoteAccessSettingsView: View {
     }
 
     private var gatewayStatusText: String {
-        if let port = service.listeningPort {
+        switch service.activationState {
+        case .off, .failed:
+            return "Off — phones cannot connect and all remote reads stop immediately."
+        case .starting:
+            return "Starting — preparing conversations before phones can connect."
+        case .ready(let port):
             return "Listening on 127.0.0.1:\(String(port)) · \(service.connectedClientCount) connected"
         }
-        return "Off — phones cannot connect and all remote reads stop immediately."
     }
 
     @MainActor
