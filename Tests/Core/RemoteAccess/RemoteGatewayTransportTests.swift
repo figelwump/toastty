@@ -1027,7 +1027,7 @@ struct RemoteGatewayRequestHandlerTests {
             ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="),
             ("sec-websocket-version", "13"),
         ]
-        guard case .upgradeToWebSocket(let deviceID, _) = handler.handle(
+        guard case .upgradeToWebSocket(let deviceID, let authKind, _) = handler.handle(
             Self.request("GET", "/api/subscribe", headerFields: webSocketHeaders),
             at: Self.now.addingTimeInterval(2)
         ) else {
@@ -1035,6 +1035,7 @@ struct RemoteGatewayRequestHandlerTests {
             return
         }
         #expect(deviceID == native.device.id)
+        #expect(authKind == .native)
 
         #expect(try store.setScopes([.read], forDevice: native.device.id))
         guard case .respond(let sendDenied) = handler.handle(
@@ -1339,11 +1340,12 @@ struct RemoteGatewayRequestHandlerTests {
             ),
             at: Self.now
         )
-        guard case .upgradeToWebSocket(let deviceID, let upgradeData) = outcome else {
+        guard case .upgradeToWebSocket(let deviceID, let authKind, let upgradeData) = outcome else {
             Issue.record("Expected upgrade, got \(outcome)")
             return
         }
         #expect(store.devices.first?.id == deviceID)
+        #expect(authKind == .browser)
         let upgradeText = try #require(String(data: upgradeData, encoding: .utf8))
         #expect(upgradeText.contains("101 Switching Protocols"))
         #expect(upgradeText.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="))

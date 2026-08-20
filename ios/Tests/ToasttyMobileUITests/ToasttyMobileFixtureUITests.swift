@@ -98,7 +98,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(notice.waitForExistence(timeout: 10))
         XCTAssertEqual(
             notice.label,
-            "Reconnecting. Reconnecting to your Mac. Showing the last available update."
+            "Reconnecting. Toastty can't reach your Mac. Make sure the Mac is awake, Toastty is running, and Remote Access is enabled. If those are already true, restart Toastty. Toastty will keep trying automatically."
         )
         XCTAssertEqual(notice.value as? String, "In progress")
         attachScreenshot(named: "fixture-reconnecting-progress", of: app)

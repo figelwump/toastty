@@ -275,6 +275,7 @@ final class RemoteAccessService: ObservableObject {
     @Published private(set) var nativePairingError: String?
     @Published private(set) var devices: [RemoteDeviceRecord] = []
     @Published private(set) var connectedClientCount: Int = 0
+    @Published private(set) var connectedNativeClientCount: Int = 0
     /// Active-conversation exceptions to the default-on remote-write policy.
     @Published private var sessionWritePolicy = RemoteSessionWritePolicy()
     /// Supported conversations shown by the per-session write controls.
@@ -382,11 +383,12 @@ final class RemoteAccessService: ObservableObject {
             self.refreshDevices()
         }
 
-        server.onWebSocketCountChanged = { [weak self] count in
+        server.onWebSocketCountsChanged = { [weak self] counts in
             guard let self else { return }
             let previousCount = self.connectedClientCount
-            self.connectedClientCount = count
-            if count > previousCount {
+            self.connectedClientCount = counts.total
+            self.connectedNativeClientCount = counts.native
+            if counts.total > previousCount {
                 // A fresh subscriber gets the current snapshot immediately
                 // instead of waiting for the next registry change.
                 self.broadcastSessionList()
@@ -452,6 +454,7 @@ final class RemoteAccessService: ObservableObject {
             cancelNativePairingOffer()
             endConversationTracking()
             connectedClientCount = 0
+            connectedNativeClientCount = 0
             if shouldAudit {
                 auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessDisabled))
             }
@@ -470,6 +473,7 @@ final class RemoteAccessService: ObservableObject {
         cancelNativePairingOffer()
         endConversationTracking()
         connectedClientCount = 0
+        connectedNativeClientCount = 0
     }
 
     private func beginConversationTracking() {

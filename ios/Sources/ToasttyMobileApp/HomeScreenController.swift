@@ -111,17 +111,17 @@ final class HomeScreenController {
 
         let detail = switch latestTransportFailure {
         case .offline:
-            "This iPhone appears to be offline."
+            "This iPhone appears to be offline. Check its internet connection and make sure Tailscale is connected."
         case .dns:
-            "Toastty couldn't find your Mac. Check Tailscale and the Mac hostname."
+            "Toastty couldn't find your Mac. Make sure Tailscale is connected on both devices and both are using the same tailnet."
         case .tls:
-            "Toastty couldn't establish a secure connection to your Mac. Check its hostname and certificate."
+            "Toastty couldn't establish a secure connection to your Mac. Check Tailscale and confirm the Tailnet hostname in Toastty's Remote Access settings."
         case .cannotConnect, .timedOut, .connectionLost:
-            "The Toastty gateway on your Mac is unreachable."
+            "Toastty can't reach your Mac. Make sure the Mac is awake, Toastty is running, and Remote Access is enabled. If those are already true, restart Toastty."
         case .other:
-            "Toastty couldn't connect to your Mac."
+            "Toastty couldn't connect to your Mac. Check Tailscale on both devices, then make sure Toastty is running with Remote Access enabled. If so, restart Toastty."
         }
-        return "\(detail) Showing the last available update."
+        return "\(detail) Toastty will keep trying automatically."
     }
 
     private func selectConversation(_ conversationID: UUID?) {

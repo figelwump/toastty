@@ -306,10 +306,16 @@ struct RemoteAccessServiceSafetyTests {
         #expect(service.isReady)
         #expect(service.listeningPort == 42_999)
 
+        server.reportWebSocketCounts(total: 2, native: 1)
+        #expect(service.connectedClientCount == 2)
+        #expect(service.connectedNativeClientCount == 1)
+
         service.setEnabled(false, persist: false)
 
         #expect(service.activationState == .off)
         #expect(service.isEnabled == false)
+        #expect(service.connectedClientCount == 0)
+        #expect(service.connectedNativeClientCount == 0)
         #expect(terminalRuntimeRegistry.localInputObserver == nil)
         #expect(server.stopCallCount == 1)
         #expect(Self.remoteConversationID(panelID: panelID, in: store) == conversationID)
@@ -369,7 +375,13 @@ struct RemoteAccessServiceSafetyTests {
 
         server.reportReady(port: 42_998)
         #expect(service.activationState == .ready(port: 42_998))
-        service.setEnabled(false, persist: false)
+
+        server.reportFailure()
+        #expect(service.isEnabled == false)
+        #expect(service.isReady == false)
+        #expect(service.startupError != nil)
+        #expect(terminalRuntimeRegistry.localInputObserver == nil)
+        #expect(server.stopCallCount == 2)
     }
 
     @MainActor
@@ -420,7 +432,7 @@ struct RemoteAccessServiceSafetyTests {
 
 @MainActor
 private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
-    var onWebSocketCountChanged: ((Int) -> Void)?
+    var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)?
     var onDeviceRevoked: ((UUID) -> Void)?
     var onListenerReady: ((UInt16) -> Void)?
     var onListenerFailed: (() -> Void)?
@@ -450,5 +462,9 @@ private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
 
     func reportFailure() {
         onListenerFailed?()
+    }
+
+    func reportWebSocketCounts(total: Int, native: Int) {
+        onWebSocketCountsChanged?(RemoteAccessWebSocketCounts(total: total, native: native))
     }
 }

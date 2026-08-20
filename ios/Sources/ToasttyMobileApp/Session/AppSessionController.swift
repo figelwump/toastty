@@ -82,6 +82,7 @@ final class AppSessionController {
         initialPairedDevice: PairedDevicePresentation? = nil,
         initialSnapshot: MobileHomeSnapshot,
         initialConnectionState: MobileConnectionState,
+        initialTransportFailure: NativeTransportFailure? = nil,
         initialConnectTimeout: Duration = .seconds(10),
         onDiagnosticEvent: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in },
         liveSessionsFactory: @escaping AppLiveSessionsFactory = AppSessionController.makeLiveSessionsController
@@ -100,7 +101,8 @@ final class AppSessionController {
         homeController = HomeScreenController(
             runtimeMode: runtimeMode,
             snapshot: initialSnapshot,
-            connectionState: initialConnectionState
+            connectionState: initialConnectionState,
+            latestTransportFailure: initialTransportFailure
         )
     }
 

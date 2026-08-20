@@ -79,16 +79,16 @@ final class HomeScreenControllerTests: XCTestCase {
 
         XCTAssertEqual(
             controller.connectionNoticeMessage,
-            "This iPhone appears to be offline. Showing the last available update."
+            "This iPhone appears to be offline. Check its internet connection and make sure Tailscale is connected. Toastty will keep trying automatically."
         )
 
         let expectedFragments: [(NativeTransportFailure, String)] = [
-            (.dns, "couldn't find your Mac"),
-            (.tls, "secure connection"),
-            (.cannotConnect, "gateway on your Mac is unreachable"),
-            (.timedOut, "gateway on your Mac is unreachable"),
-            (.connectionLost, "gateway on your Mac is unreachable"),
-            (.other, "couldn't connect to your Mac"),
+            (.dns, "Tailscale is connected on both devices"),
+            (.tls, "Tailnet hostname in Toastty's Remote Access settings"),
+            (.cannotConnect, "Toastty is running, and Remote Access is enabled"),
+            (.timedOut, "If those are already true, restart Toastty"),
+            (.connectionLost, "If those are already true, restart Toastty"),
+            (.other, "Check Tailscale on both devices"),
         ]
         for (failure, fragment) in expectedFragments {
             controller.update(
@@ -98,6 +98,11 @@ final class HomeScreenControllerTests: XCTestCase {
                 latestTransportFailure: failure
             )
             XCTAssertTrue(controller.connectionNoticeMessage?.contains(fragment) == true)
+            XCTAssertTrue(
+                controller.connectionNoticeMessage?.hasSuffix(
+                    "Toastty will keep trying automatically."
+                ) == true
+            )
         }
     }
 

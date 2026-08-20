@@ -3,6 +3,69 @@ import CoreState
 import Foundation
 import SwiftUI
 
+struct RemoteAccessConnectionStatusPresentation: Equatable {
+    enum Indicator: Equatable {
+        case off
+        case progress
+        case ready
+        case failure
+    }
+
+    var indicator: Indicator
+    var title: String
+    var detail: String
+
+    static func make(
+        activationState: RemoteAccessActivationState,
+        connectedNativeClientCount: Int,
+        hasPairedNativeDevice: Bool
+    ) -> Self {
+        switch activationState {
+        case .off:
+            return Self(
+                indicator: .off,
+                title: "Remote Access is off",
+                detail: "Phones cannot connect and all remote reads are stopped."
+            )
+        case .starting:
+            return Self(
+                indicator: .progress,
+                title: "Starting Remote Access…",
+                detail: "Preparing conversations before phones can connect."
+            )
+        case .failed(let message):
+            return Self(
+                indicator: .failure,
+                title: "Remote Access could not start",
+                detail: message
+            )
+        case .ready:
+            if connectedNativeClientCount > 0 {
+                let clientLabel = connectedNativeClientCount == 1
+                    ? "1 Toastty Mobile client is connected."
+                    : "\(connectedNativeClientCount) Toastty Mobile clients are connected."
+                return Self(
+                    indicator: .ready,
+                    title: "Toastty Mobile is connected",
+                    detail: "\(clientLabel) Current sessions are available on connected devices."
+                )
+            }
+            if hasPairedNativeDevice {
+                return Self(
+                    indicator: .progress,
+                    title: "Waiting for Toastty Mobile to reconnect…",
+                    detail: "Remote Access is ready on this Mac. Open Toastty on your iPhone to connect; if it's already open, it will keep retrying automatically."
+                )
+            }
+            return Self(
+                indicator: .ready,
+                title: "Remote Access is ready",
+                detail: "Pair a phone below to connect Toastty Mobile."
+            )
+        }
+    }
+}
+
 /// Management window for the remote-access gateway: kill switch, pairing,
 /// paired devices with revocation, tailnet origin, and the local audit trail.
 struct RemoteAccessSettingsView: View {
@@ -55,26 +118,11 @@ struct RemoteAccessSettingsView: View {
                 get: { service.isEnabled },
                 set: { service.setEnabled($0) }
             )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("Enable Remote Access")
-                        if case .starting = service.activationState {
-                            ProgressView()
-                                .controlSize(.mini)
-                        }
-                    }
-                    Text(gatewayStatusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Enable Remote Access")
             }
             .toggleStyle(.switch)
 
-            if let startupError = service.startupError {
-                Text(startupError)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-            }
+            connectionStatus
 
             LabeledContent("Tailnet origin") {
                 VStack(alignment: .leading, spacing: 4) {
@@ -126,14 +174,49 @@ struct RemoteAccessSettingsView: View {
         }
     }
 
-    private var gatewayStatusText: String {
-        switch service.activationState {
-        case .off, .failed:
-            return "Off — phones cannot connect and all remote reads stop immediately."
-        case .starting:
-            return "Starting — preparing conversations before phones can connect."
-        case .ready(let port):
-            return "Listening on 127.0.0.1:\(String(port)) · \(service.connectedClientCount) connected"
+    private var connectionStatus: some View {
+        let presentation = RemoteAccessConnectionStatusPresentation.make(
+            activationState: service.activationState,
+            connectedNativeClientCount: service.connectedNativeClientCount,
+            hasPairedNativeDevice: service.devices.contains(where: {
+                $0.authKind == .native && $0.isRevoked == false
+            })
+        )
+        return HStack(alignment: .top, spacing: 8) {
+            connectionStatusIndicator(presentation.indicator)
+                .frame(width: 16, height: 16)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(presentation.title)
+                    .font(.callout.weight(.medium))
+                Text(presentation.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("toastty-remote-access-connection-status")
+    }
+
+    @ViewBuilder
+    private func connectionStatusIndicator(
+        _ indicator: RemoteAccessConnectionStatusPresentation.Indicator
+    ) -> some View {
+        switch indicator {
+        case .off:
+            Image(systemName: "power.circle")
+                .foregroundStyle(.secondary)
+        case .progress:
+            ProgressView()
+                .controlSize(.small)
+        case .ready:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .failure:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
         }
     }
 

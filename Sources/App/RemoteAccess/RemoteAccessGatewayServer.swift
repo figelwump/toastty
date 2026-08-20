@@ -3,9 +3,14 @@ import CoreState
 import Foundation
 import Network
 
+struct RemoteAccessWebSocketCounts: Equatable, Sendable {
+    var total: Int
+    var native: Int
+}
+
 @MainActor
 protocol RemoteAccessGatewayServing: AnyObject {
-    var onWebSocketCountChanged: ((Int) -> Void)? { get set }
+    var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)? { get set }
     var onDeviceRevoked: ((UUID) -> Void)? { get set }
     var onListenerReady: ((UInt16) -> Void)? { get set }
     var onListenerFailed: (() -> Void)? { get set }
@@ -36,6 +41,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
         var buffer = Data()
         var isWebSocket = false
         var deviceID: UUID?
+        var authKind: RemoteDeviceAuthKind?
         var requestTimeoutTask: Task<Void, Never>?
         var closeFallbackTask: Task<Void, Never>?
         var isClosing = false
@@ -62,7 +68,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
     private var connections: [UUID: GatewayConnection] = [:]
     private(set) var listeningPort: UInt16?
 
-    var onWebSocketCountChanged: ((Int) -> Void)?
+    var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)?
     var onDeviceRevoked: ((UUID) -> Void)?
     var onListenerReady: ((UInt16) -> Void)?
     var onListenerFailed: (() -> Void)?
@@ -90,6 +96,19 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
 
     var webSocketClientCount: Int {
         connections.values.filter { $0.isWebSocket && $0.isClosing == false }.count
+    }
+
+    var nativeWebSocketClientCount: Int {
+        connections.values.filter {
+            $0.isWebSocket && $0.isClosing == false && $0.authKind == .native
+        }.count
+    }
+
+    private var webSocketCounts: RemoteAccessWebSocketCounts {
+        RemoteAccessWebSocketCounts(
+            total: webSocketClientCount,
+            native: nativeWebSocketClientCount
+        )
     }
 
     var connectionCountForTesting: Int {
@@ -320,13 +339,14 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     }
                 })
 
-            case .upgradeToWebSocket(let deviceID, let upgradeResponseData):
+            case .upgradeToWebSocket(let deviceID, let authKind, let upgradeResponseData):
                 connection.requestTimeoutTask?.cancel()
                 connection.requestTimeoutTask = nil
                 connection.deviceID = deviceID
+                connection.authKind = authKind
                 connection.isWebSocket = true
                 connection.connection.send(content: upgradeResponseData, completion: .contentProcessed { _ in })
-                onWebSocketCountChanged?(webSocketClientCount)
+                onWebSocketCountsChanged?(webSocketCounts)
             }
         }
     }
@@ -393,7 +413,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
         connection.isClosing = true
         connection.requestTimeoutTask?.cancel()
         connection.requestTimeoutTask = nil
-        onWebSocketCountChanged?(webSocketClientCount)
+        onWebSocketCountsChanged?(webSocketCounts)
 
         let connectionID = connection.id
         connection.closeFallbackTask = Task { [weak self] in
@@ -428,7 +448,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
         let wasAlreadyRemovedFromCount = connection.isClosing
         connection.connection.cancel()
         if wasWebSocket && wasAlreadyRemovedFromCount == false {
-            onWebSocketCountChanged?(webSocketClientCount)
+            onWebSocketCountsChanged?(webSocketCounts)
         }
     }
 }

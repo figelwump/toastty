@@ -254,6 +254,7 @@ struct RemoteAccessGatewayServerTests {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         #expect(harness.server.webSocketClientCount == 1)
+        #expect(harness.server.nativeWebSocketClientCount == 0)
         harness.server.broadcast(.sessionList(Self.makeSnapshot()))
 
         let message = try await socket.receive()
@@ -305,6 +306,7 @@ struct RemoteAccessGatewayServerTests {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         #expect(harness.server.webSocketClientCount == 1)
+        #expect(harness.server.nativeWebSocketClientCount == 1)
         harness.server.broadcast(.sessionList(Self.makeSnapshot()))
         guard case .string = try await socket.receive() else {
             Issue.record("Expected native Bearer WebSocket stream")

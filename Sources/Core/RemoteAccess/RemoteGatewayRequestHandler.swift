@@ -34,7 +34,11 @@ public struct RemoteGatewayConfiguration: Sendable {
 public final class RemoteGatewayRequestHandler {
     public enum Outcome: Equatable {
         case respond(RemoteGatewayHTTPResponse)
-        case upgradeToWebSocket(deviceID: UUID, upgradeResponseData: Data)
+        case upgradeToWebSocket(
+            deviceID: UUID,
+            authKind: RemoteDeviceAuthKind,
+            upgradeResponseData: Data
+        )
     }
 
     public typealias SendHandler = (RemoteMessageSendRequest, RemoteDeviceRecord) -> RemoteMessageSendResult
@@ -499,6 +503,7 @@ public final class RemoteGatewayRequestHandler {
         auditLog.record(RemoteAccessAuditEntry(at: date, action: .sessionSubscribed, deviceID: device.id))
         return .upgradeToWebSocket(
             deviceID: device.id,
+            authKind: device.authKind,
             upgradeResponseData: RemoteGatewayWebSocketHandshake.upgradeResponseData(forClientKey: clientKeys[0])
         )
     }
