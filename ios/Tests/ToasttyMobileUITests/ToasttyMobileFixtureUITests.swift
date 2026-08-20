@@ -89,7 +89,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-connecting-loading", of: app)
     }
 
-    func testReconnectingNoticeShowsActivity() {
+    func testReconnectingNoticeShowsGuidanceAndRetry() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting"]
         )
@@ -98,9 +98,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(notice.waitForExistence(timeout: 10))
         XCTAssertEqual(
             notice.label,
-            "Reconnecting. Toastty can't reach your Mac. Make sure the Mac is awake, Toastty is running, and Remote Access is enabled. If those are already true, restart Toastty. Toastty will keep trying automatically."
+            "Reconnecting. Toastty is still trying to connect to your Mac. Make sure the Mac is awake, Toastty is running with Remote Access enabled, and Tailscale is connected on both devices. If those are already true, restart Toastty. After making changes, tap Retry or wait for Toastty to try automatically."
         )
         XCTAssertEqual(notice.value as? String, "In progress")
+
+        let retry = app.buttons["toastty-mobile-connection-retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        XCTAssertEqual(retry.label, "Retry connection")
+        XCTAssertTrue(retry.isHittable)
+        retry.tap()
+        XCTAssertTrue(notice.exists)
         attachScreenshot(named: "fixture-reconnecting-progress", of: app)
     }
 

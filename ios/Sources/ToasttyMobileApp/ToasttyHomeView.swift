@@ -21,6 +21,7 @@ struct ToasttyHomeView: View {
     let onSettings: () -> Void
 
     @AppStorage private var storedListMode: String
+    @State private var isRetryingConnection = false
 
     init(
         controller: HomeScreenController,
@@ -209,21 +210,42 @@ struct ToasttyHomeView: View {
     @ViewBuilder
     private var connectionNotice: some View {
         if let message = controller.connectionNoticeMessage {
-            HStack(alignment: .top, spacing: 9) {
-                connectionNoticeIndicator
-                Text(message)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 9) {
+                    connectionNoticeIndicator
+                    Text(message)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
+                .accessibilityValue(showsProgressIndicator ? "In progress" : "")
+                .accessibilityIdentifier("toastty-mobile-connection-notice")
+
+                if controller.freshness == .reconnecting {
+                    Button("Retry", action: retryConnection)
+                        .buttonStyle(.bordered)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .disabled(isRetryingConnection)
+                        .accessibilityLabel("Retry connection")
+                        .accessibilityIdentifier("toastty-mobile-connection-retry")
+                }
             }
             .font(.caption)
             .foregroundStyle(controller.freshness == .unreachable
                 ? ToasttyDesignTokens.red
                 : ToasttyDesignTokens.amberText)
             .toasttyCard()
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
-            .accessibilityValue(showsProgressIndicator ? "In progress" : "")
-            .accessibilityIdentifier("toastty-mobile-connection-notice")
+        }
+    }
+
+    private func retryConnection() {
+        guard isRetryingConnection == false else { return }
+        isRetryingConnection = true
+        Task { @MainActor in
+            await refresh()
+            isRetryingConnection = false
         }
     }
 

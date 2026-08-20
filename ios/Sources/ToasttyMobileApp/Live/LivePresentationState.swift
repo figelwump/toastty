@@ -17,7 +17,7 @@ enum LiveProjectionFreshness: Equatable, Sendable {
         case .connecting:
             "Connecting to your Mac…"
         case .reconnecting:
-            "Reconnecting to your Mac. Showing the last available update."
+            "Toastty is still trying to connect to your Mac. Make sure the Mac is awake, Toastty is running with Remote Access enabled, and Tailscale is connected on both devices. If those are already true, restart Toastty. After making changes, tap Retry or wait for Toastty to try automatically."
         case .stale:
             "Updates are paused. Showing the last available update."
         case .unreachable:

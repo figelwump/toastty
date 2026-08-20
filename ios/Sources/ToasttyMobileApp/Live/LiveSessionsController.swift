@@ -129,10 +129,13 @@ final class LiveSessionsController {
     private let hostName: String
     private let onFreshness: @MainActor (LiveProjectionFreshness) -> Void
     private let onTerminal: @MainActor (LiveConnectionTerminal) -> Void
+    private let manualRefreshPresentationDelay: Duration
     private var coordinatorTask: Task<Void, Never>?
     private var sessionsTask: Task<Void, Never>?
     private var coordinatorState = ConnectionCoordinator.State()
     private var sessionsState = SessionsRuntime.State()
+    private var manualRefreshPresentationTask: Task<Void, Never>?
+    private var suppressesManualRefreshDowngrade = false
     private var desiredConversationID: UUID?
     private var conversationRequestID = UUID()
     private var conversationOpenOperations: [UUID: ConversationOpenOperation] = [:]
@@ -143,13 +146,15 @@ final class LiveSessionsController {
         hostName: String,
         homeController: HomeScreenController,
         onTerminal: @escaping @MainActor (LiveConnectionTerminal) -> Void = { _ in },
-        onFreshness: @escaping @MainActor (LiveProjectionFreshness) -> Void = { _ in }
+        onFreshness: @escaping @MainActor (LiveProjectionFreshness) -> Void = { _ in },
+        manualRefreshPresentationDelay: Duration = .milliseconds(750)
     ) {
         self.runtime = runtime
         self.hostName = hostName
         self.homeController = homeController
         self.onFreshness = onFreshness
         self.onTerminal = onTerminal
+        self.manualRefreshPresentationDelay = manualRefreshPresentationDelay
         homeController.installConversationLifecycle(
             onOpen: { [weak self] conversationID in
                 Task { @MainActor [weak self] in
@@ -197,10 +202,16 @@ final class LiveSessionsController {
 
     func refresh() async {
         startObservingIfNeeded()
+        if homeController.freshness == .live {
+            beginManualRefreshPresentationGracePeriod()
+        } else {
+            endManualRefreshPresentationGracePeriod()
+        }
         await runtime.restart()
     }
 
     func background() async {
+        endManualRefreshPresentationGracePeriod()
         await tearDownActiveConversation(clearDesiredConversation: false)
         await runtime.suspend()
         applyPresentation(freshnessOverride: .stale)
@@ -307,6 +318,7 @@ final class LiveSessionsController {
     }
 
     func stopObserving() {
+        endManualRefreshPresentationGracePeriod()
         coordinatorTask?.cancel()
         sessionsTask?.cancel()
         coordinatorTask = nil
@@ -353,6 +365,7 @@ final class LiveSessionsController {
 
     func consumeCoordinatorState(_ state: ConnectionCoordinator.State) {
         coordinatorState = state
+        finishManualRefreshIfNeeded(for: state.phase)
         activeConversationController?.consumeConnectionPhase(state.phase)
         applyPresentation()
         // Terminal admission/authorization state must be the final callback.
@@ -388,6 +401,12 @@ final class LiveSessionsController {
 
     private func applyPresentation(freshnessOverride: LiveProjectionFreshness? = nil) {
         let freshness = freshnessOverride ?? resolvedFreshness
+        if freshnessOverride == nil,
+           suppressesManualRefreshDowngrade,
+           homeController.freshness == .live,
+           freshness != .live {
+            return
+        }
         let connectionState: MobileConnectionState = switch freshness {
         case .live: .live
         case .connecting, .reconnecting: .reconnecting
@@ -403,6 +422,40 @@ final class LiveSessionsController {
             latestTransportFailure: coordinatorState.latestTransportFailure
         )
         onFreshness(freshness)
+    }
+
+    private func finishManualRefreshIfNeeded(for phase: ConnectionCoordinatorPhase) {
+        guard suppressesManualRefreshDowngrade else { return }
+        switch phase {
+        case .idle, .connecting, .awaitingFreshSessionSnapshot:
+            break
+        case .live, .reconnecting, .suspended, .requiresAuthentication,
+             .authorizationDenied, .incompatibleProtocol, .failed:
+            endManualRefreshPresentationGracePeriod()
+        }
+    }
+
+    private func beginManualRefreshPresentationGracePeriod() {
+        manualRefreshPresentationTask?.cancel()
+        suppressesManualRefreshDowngrade = true
+        manualRefreshPresentationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(for: manualRefreshPresentationDelay)
+            } catch {
+                return
+            }
+            guard Task.isCancelled == false else { return }
+            suppressesManualRefreshDowngrade = false
+            manualRefreshPresentationTask = nil
+            applyPresentation()
+        }
+    }
+
+    private func endManualRefreshPresentationGracePeriod() {
+        suppressesManualRefreshDowngrade = false
+        manualRefreshPresentationTask?.cancel()
+        manualRefreshPresentationTask = nil
     }
 
     private func tearDownActiveConversation(

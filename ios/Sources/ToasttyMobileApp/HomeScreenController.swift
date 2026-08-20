@@ -121,7 +121,7 @@ final class HomeScreenController {
         case .other:
             "Toastty couldn't connect to your Mac. Check Tailscale on both devices, then make sure Toastty is running with Remote Access enabled. If so, restart Toastty."
         }
-        return "\(detail) Toastty will keep trying automatically."
+        return "\(detail) After making changes, tap Retry or wait for Toastty to try automatically."
     }
 
     private func selectConversation(_ conversationID: UUID?) {

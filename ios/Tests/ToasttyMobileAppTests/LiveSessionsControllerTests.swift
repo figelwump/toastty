@@ -177,6 +177,45 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.stopObserving()
     }
 
+    func testSlowRefreshStopsSuppressingConnectionStateAfterGracePeriod() async throws {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home,
+            manualRefreshPresentationDelay: .milliseconds(1)
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7,
+            snapshot: snapshot(titles: ["Before refresh"]),
+            phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7,
+            phase: .live
+        ))
+
+        await subject.refresh()
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 9,
+            phase: .connecting
+        ))
+        XCTAssertEqual(home.freshness, .live)
+
+        for _ in 0..<100 where home.freshness == .live {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+
+        XCTAssertNotEqual(home.freshness, .live)
+        XCTAssertNotNil(home.connectionNoticeMessage)
+        subject.stopObserving()
+    }
+
     func testRefreshRestartsLiveRuntime() async {
         let runtime = LiveRuntimeSpy()
         let home = HomeScreenController(
@@ -194,6 +233,96 @@ final class LiveSessionsControllerTests: XCTestCase {
 
         let restartCount = await runtime.restartCount()
         XCTAssertEqual(restartCount, 1)
+        subject.stopObserving()
+    }
+
+    func testRefreshKeepsLivePresentationUntilRestartSucceeds() async {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home,
+            manualRefreshPresentationDelay: .seconds(30)
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7,
+            snapshot: snapshot(titles: ["Before refresh"]),
+            phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7,
+            phase: .live
+        ))
+
+        await subject.refresh()
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 9,
+            snapshot: snapshot(titles: ["Before refresh"]),
+            phase: .seedingREST
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 9,
+            phase: .connecting
+        ))
+
+        XCTAssertEqual(home.freshness, .live)
+        XCTAssertNil(home.connectionNoticeMessage)
+
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 9,
+            snapshot: snapshot(titles: ["After refresh"]),
+            phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 9,
+            phase: .live
+        ))
+
+        XCTAssertEqual(home.freshness, .live)
+        XCTAssertEqual(
+            home.snapshot.workspaces.first?.conversations.first?.title,
+            "After refresh"
+        )
+        subject.stopObserving()
+    }
+
+    func testRefreshShowsReconnectGuidanceWhenRestartFails() async {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home,
+            manualRefreshPresentationDelay: .seconds(30)
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7,
+            snapshot: snapshot(titles: ["Before refresh"]),
+            phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7,
+            phase: .live
+        ))
+
+        await subject.refresh()
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 9,
+            phase: .reconnecting(failureCount: 1, showsBanner: false),
+            consecutiveFailureCount: 1
+        ))
+
+        XCTAssertEqual(home.freshness, .reconnecting)
+        XCTAssertTrue(home.connectionNoticeMessage?.contains("Remote Access enabled") == true)
         subject.stopObserving()
     }
 

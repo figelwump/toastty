@@ -133,8 +133,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 initialState: usesPairedFixture ? .paired(pairedPresentation) : .unpaired,
                 initialPairedDevice: initialCredential.map(PairedDevicePresentation.init),
                 initialSnapshot: initialSnapshot,
-                initialConnectionState: initialConnectionState,
-                initialTransportFailure: fixtureScenario == .reconnecting ? .cannotConnect : nil
+                initialConnectionState: initialConnectionState
             )
             if fixtureScenario == .pairingPrivacy {
                 controller.beginPairing()

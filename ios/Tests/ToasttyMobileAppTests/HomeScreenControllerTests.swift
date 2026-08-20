@@ -79,7 +79,7 @@ final class HomeScreenControllerTests: XCTestCase {
 
         XCTAssertEqual(
             controller.connectionNoticeMessage,
-            "This iPhone appears to be offline. Check its internet connection and make sure Tailscale is connected. Toastty will keep trying automatically."
+            "This iPhone appears to be offline. Check its internet connection and make sure Tailscale is connected. After making changes, tap Retry or wait for Toastty to try automatically."
         )
 
         let expectedFragments: [(NativeTransportFailure, String)] = [
@@ -100,10 +100,24 @@ final class HomeScreenControllerTests: XCTestCase {
             XCTAssertTrue(controller.connectionNoticeMessage?.contains(fragment) == true)
             XCTAssertTrue(
                 controller.connectionNoticeMessage?.hasSuffix(
-                    "Toastty will keep trying automatically."
+                    "After making changes, tap Retry or wait for Toastty to try automatically."
                 ) == true
             )
         }
+    }
+
+    func testReconnectingWithoutTransportFailureExplainsRecoverySteps() {
+        let controller = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .reconnecting,
+            freshness: .reconnecting
+        )
+
+        XCTAssertEqual(
+            controller.connectionNoticeMessage,
+            "Toastty is still trying to connect to your Mac. Make sure the Mac is awake, Toastty is running with Remote Access enabled, and Tailscale is connected on both devices. If those are already true, restart Toastty. After making changes, tap Retry or wait for Toastty to try automatically."
+        )
     }
 
     func testInputReasonUsesExactOpenPromptAndPendingFallbackCopy() {
