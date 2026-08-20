@@ -5,11 +5,8 @@ import Foundation
 @MainActor
 protocol TerminalCommandRouting: AnyObject {
     @discardableResult
-    func sendText(_ text: String, submit: Bool, panelID: UUID) -> Bool
-    @discardableResult
-    func sendText(
-        _ text: String,
-        submit: Bool,
+    func sendManagedAgentCommand(
+        _ commandLine: String,
         panelID: UUID,
         focusPolicy: TerminalInputFocusPolicy
     ) -> Bool
@@ -343,9 +340,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             initialCommands: preparation.initialCommands
         )
 
-        guard terminalCommandRouter.sendText(
+        guard terminalCommandRouter.sendManagedAgentCommand(
             commandLine,
-            submit: true,
             panelID: preparation.target.panelID,
             focusPolicy: preparation.focusPolicy
         ) else {

@@ -458,11 +458,33 @@ final class TerminalRuntimeRegistry: ObservableObject {
         panelID: UUID,
         focusPolicy: TerminalInputFocusPolicy
     ) -> Bool {
-        // Every non-remote programmatic input source participates in the same
-        // local-draft gate as keyboard and paste. Notify before delivery so a
-        // remote request cannot observe the old open epoch.
+        // General-purpose non-remote programmatic input participates in the
+        // same local-draft gate as keyboard and paste. Managed lifecycle
+        // commands use the narrowly named path below. Notify before delivery
+        // so a remote request cannot observe the old open epoch.
         noteLocalInput(panelID: panelID)
-        return automationSendText(text, submit: submit, panelID: panelID, focusPolicy: focusPolicy)
+        return deliverTextWithoutLocalDraftTracking(
+            text,
+            submit: submit,
+            panelID: panelID,
+            focusPolicy: focusPolicy
+        )
+    }
+
+    /// Delivers Toastty's own managed-agent launch or resume command. This is
+    /// lifecycle control input, not a user draft, so it must not close remote
+    /// prompt authority for the session the command is starting.
+    func sendManagedAgentCommand(
+        _ commandLine: String,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> Bool {
+        deliverTextWithoutLocalDraftTracking(
+            commandLine,
+            submit: true,
+            panelID: panelID,
+            focusPolicy: focusPolicy
+        )
     }
 
     /// Remote delivery bypasses the local-input observer because the caller
@@ -500,11 +522,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         #endif
     }
 
-    func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
-        automationSendText(text, submit: submit, panelID: panelID, focusPolicy: .focusTarget)
-    }
-
-    func automationSendText(
+    private func deliverTextWithoutLocalDraftTracking(
         _ text: String,
         submit: Bool,
         panelID: UUID,
@@ -1904,7 +1922,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         if let restoredManagedLaunchSubmitterForTesting {
             return restoredManagedLaunchSubmitterForTesting(commandLine, true, panelID)
         }
-        return sendText(commandLine, submit: true, panelID: panelID)
+        return sendManagedAgentCommand(
+            commandLine,
+            panelID: panelID,
+            focusPolicy: .focusTarget
+        )
     }
 
     func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {

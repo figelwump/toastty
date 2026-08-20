@@ -277,10 +277,12 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID[managedSessionID]
     }
 
-    /// Records raw keyboard, paste, menu, or other non-remote terminal input
-    /// against the exact active session binding. Because this happens on the
-    /// same actor as `startSession`, a later debounced projection sync cannot
-    /// accidentally move the input before its safety baseline.
+    /// Records user- or automation-authored terminal input against the exact
+    /// active session binding. Toastty's own managed launch/resume command is
+    /// lifecycle control input and deliberately bypasses this path. Because
+    /// this happens on the same actor as `startSession`, a later debounced
+    /// projection sync cannot accidentally move the input before its safety
+    /// baseline.
     func noteLocalInputForActiveSession(panelID: UUID) {
         guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
         nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
