@@ -461,7 +461,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         // Every non-remote programmatic input source participates in the same
         // local-draft gate as keyboard and paste. Notify before delivery so a
         // remote request cannot observe the old open epoch.
-        localInputObserver?(panelID)
+        noteLocalInput(panelID: panelID)
         return automationSendText(text, submit: submit, panelID: panelID, focusPolicy: focusPolicy)
     }
 
@@ -858,7 +858,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
         // A file drop inserts a shell-escaped path into the terminal and is a
         // local draft just like keyboard or paste input.
-        localInputObserver?(drop.targetPanelID)
+        noteLocalInput(panelID: drop.targetPanelID)
         let handled = targetController.handleFileDrop(drop.fileURLs)
         let focusActionApplied = handled
             ? focusPanelForFileDropIfPossible(drop.targetPanelID)
@@ -1106,6 +1106,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     }
 
     func handleLocalInput(for panelID: UUID) {
+        noteLocalInput(panelID: panelID)
+    }
+
+    private func noteLocalInput(panelID: UUID) {
+        sessionLifecycleTracker?.noteLocalInputForActiveSession(panelID: panelID)
         localInputObserver?(panelID)
     }
 

@@ -138,7 +138,7 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     }
 
     var placeholder: String {
-        gate.allowsInput ? "Message \(agentDisplayName)…" : "Draft saved on this iPhone"
+        "Message \(agentDisplayName)…"
     }
 
     func canSubmit(draft: String) -> Bool {

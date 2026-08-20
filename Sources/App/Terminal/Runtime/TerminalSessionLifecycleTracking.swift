@@ -40,6 +40,7 @@ enum ManagedSessionStopReason: Equatable, Sendable {
 @MainActor
 protocol TerminalSessionLifecycleTracking: AnyObject {
     func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool
+    func noteLocalInputForActiveSession(panelID: UUID)
     @discardableResult
     func refreshManagedSessionStatusFromVisibleTextIfNeeded(
         panelID: UUID,

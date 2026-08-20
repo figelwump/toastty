@@ -245,6 +245,92 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func persistedResumeRecordStaysLockedUntilCurrentLaunchOwnershipIsConfirmed() throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+
+        #expect(fixture.summary.inputAvailability ==
+            .unavailable(reason: .unknownProviderState))
+
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected current-launch Codex ownership to open the resumed prompt")
+            return
+        }
+        #expect(epoch.counter == 1)
+
+        // Re-publishing the same ownership fact must not mint a second epoch.
+        #expect(fixture.publishResumeRecord(
+            capturedAt: fixture.confirmedAt.addingTimeInterval(1)
+        ))
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: epoch))
+    }
+
+    @MainActor
+    @Test func localInputBeforeCurrentLaunchConfirmationPreventsPromptBootstrap() throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+
+        fixture.terminalRuntimeRegistry.localInputObserver?(fixture.panelID)
+        #expect(fixture.confirmCurrentLaunchBinding())
+
+        #expect(fixture.summary.inputAvailability ==
+            .unavailable(reason: .unknownProviderState))
+    }
+
+    @MainActor
+    @Test func currentLaunchConfirmationDoesNotBootstrapWorkingOrClaudeSessions() throws {
+        let workingFixture = try RemoteBootstrapFixture(statusKind: .working)
+        defer { workingFixture.removeRuntimeFiles() }
+        #expect(workingFixture.confirmCurrentLaunchBinding())
+        #expect(workingFixture.summary.inputAvailability ==
+            .unavailable(reason: .unknownProviderState))
+
+        let claudeFixture = try RemoteBootstrapFixture(agent: .claude)
+        defer { claudeFixture.removeRuntimeFiles() }
+        #expect(claudeFixture.confirmCurrentLaunchBinding() == false)
+        #expect(claudeFixture.currentResumeRecord?.capturedAt == claudeFixture.confirmedAt)
+        #expect(claudeFixture.summary.inputAvailability ==
+            .unavailable(reason: .unknownProviderState))
+    }
+
+    @MainActor
+    @Test func bootstrappedPromptClosesWhenDesktopStartsWorking() async throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed Codex prompt")
+            return
+        }
+
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: fixture.sessionID,
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: fixture.confirmedAt.addingTimeInterval(1)
+        )
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(fixture.summary.state == .working)
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+
+        let result = fixture.service.performRemoteSend(
+            RemoteMessageSendRequest(
+                conversationID: fixture.conversationID,
+                clientRequestID: "status-race",
+                expectedInputEpoch: epoch,
+                text: "Do not deliver"
+            ),
+            device: RemoteDeviceRecord(
+                name: "Test iPhone",
+                scopes: [.read, .send],
+                createdAt: fixture.confirmedAt
+            )
+        )
+
+        #expect(result == .rejected(reason: .surfaceUnavailable))
+    }
+
+    @MainActor
     @Test func activationMintsIdentityBeforeListeningAndDisableRemovesLiveTracking() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -428,6 +514,138 @@ struct RemoteAccessServiceSafetyTests {
         }
         return payload
     }
+}
+
+@MainActor
+private final class RemoteBootstrapFixture {
+    let store: AppStore
+    let sessionRuntimeStore: SessionRuntimeStore
+    let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let server: RemoteAccessGatewayServerSpy
+    let service: RemoteAccessService
+    let panelID: UUID
+    let sessionID: String
+    let conversationID: RemoteConversationID
+    let resumeRecord: ManagedAgentResumeRecord
+    let confirmedAt: Date
+    let runtimeHome: String
+
+    init(
+        agent: AgentKind = .codex,
+        statusKind: SessionStatusKind = .idle
+    ) throws {
+        store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let selection = try #require(store.state.selectedWorkspaceSelection())
+        panelID = try #require(selection.workspace.focusedPanelID)
+        sessionID = "remote-bootstrap-\(UUID().uuidString)"
+        confirmedAt = Date(timeIntervalSince1970: 1_786_000_000)
+        runtimeHome = "/tmp/toastty-remote-bootstrap-\(UUID().uuidString)"
+        let transcriptURL = URL(filePath: runtimeHome + "-transcript.jsonl")
+        try Data().write(to: transcriptURL)
+        resumeRecord = ManagedAgentResumeRecord(
+            agent: agent,
+            nativeSessionID: "native-\(UUID().uuidString)",
+            sessionFilePath: transcriptURL.path,
+            cwd: "/repo",
+            capturedAt: confirmedAt
+        )
+
+        sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.startSession(
+            sessionID: sessionID,
+            agent: agent,
+            panelID: panelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: confirmedAt
+        )
+        sessionRuntimeStore.updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: statusKind, summary: String(describing: statusKind)),
+            at: confirmedAt
+        )
+        terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        let gatewayServer = RemoteAccessGatewayServerSpy()
+        server = gatewayServer
+        service = RemoteAccessService(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            runtimePaths: ToasttyRuntimePaths.resolve(
+                homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+                environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+            ),
+            port: 42_997,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in gatewayServer }
+        )
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_997)
+        conversationID = try #require(Self.remoteConversationID(panelID: panelID, in: store))
+        guard publishResumeRecord(
+            capturedAt: confirmedAt.addingTimeInterval(-60)
+        ) else {
+            throw RemoteBootstrapFixtureError.couldNotPublishResumeRecord
+        }
+    }
+
+    var summary: RemoteConversationSummary {
+        service.facadeSessionList(at: confirmedAt).conversations.first {
+            $0.conversationID == conversationID
+        }!
+    }
+
+    func confirmCurrentLaunchBinding() -> Bool {
+        let confirmed = sessionRuntimeStore.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: resumeRecord
+        )
+        let published = publishResumeRecord()
+        return confirmed && published
+    }
+
+    var currentResumeRecord: ManagedAgentResumeRecord? {
+        for workspace in store.state.workspacesByID.values {
+            guard case .terminal(let terminalState) = workspace.panels[panelID] else { continue }
+            return terminalState.resumeRecord
+        }
+        return nil
+    }
+
+    func publishResumeRecord(capturedAt: Date? = nil) -> Bool {
+        var record = resumeRecord
+        if let capturedAt {
+            record.capturedAt = capturedAt
+        }
+        return store.send(.updateTerminalPanelResumeRecord(
+            panelID: panelID,
+            resumeRecord: record
+        ))
+    }
+
+    func removeRuntimeFiles() {
+        service.setEnabled(false, persist: false)
+        try? FileManager.default.removeItem(atPath: runtimeHome)
+        try? FileManager.default.removeItem(atPath: resumeRecord.sessionFilePath)
+    }
+
+    private static func remoteConversationID(
+        panelID: UUID,
+        in store: AppStore
+    ) -> RemoteConversationID? {
+        for workspace in store.state.workspacesByID.values {
+            guard case .terminal(let terminalState) = workspace.panels[panelID] else { continue }
+            return terminalState.remoteConversationID
+        }
+        return nil
+    }
+}
+
+private enum RemoteBootstrapFixtureError: Error {
+    case couldNotPublishResumeRecord
 }
 
 @MainActor

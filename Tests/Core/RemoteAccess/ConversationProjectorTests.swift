@@ -162,6 +162,46 @@ struct ConversationProjectorTests {
         #expect(epoch.bindingID == Self.resumedBindingID)
     }
 
+    @Test func confirmedRuntimeBootstrapOpensOnlyTheFirstUnknownPromptPerBinding() {
+        var projector = Self.makeProjector()
+        _ = projector.noteBinding(
+            reason: .runtimeResumed,
+            providerSessionFilePath: "/tmp/resumed-rollout.jsonl",
+            bindingID: Self.resumedBindingID,
+            at: Self.restoredBindingDate
+        )
+        #expect(projector.inputAvailability == .unavailable(reason: .unknownProviderState))
+
+        let emitted = projector.bootstrapConfirmedOpenPrompt(
+            at: Self.restoredBindingDate.addingTimeInterval(1)
+        )
+        guard case .openPrompt(let epoch) = projector.inputAvailability else {
+            Issue.record("Expected confirmed runtime bootstrap to open the prompt")
+            return
+        }
+        #expect(epoch.bindingID == Self.resumedBindingID)
+        #expect(epoch.counter == 1)
+        #expect(emitted.contains { $0.kind == .statusChanged })
+
+        #expect(projector.bootstrapConfirmedOpenPrompt(
+            at: Self.restoredBindingDate.addingTimeInterval(2)
+        ).isEmpty)
+        #expect(projector.inputAvailability == .openPrompt(epoch: epoch))
+
+        let invalidated = projector.invalidateConfirmedOpenPrompt(
+            expectedEpoch: epoch,
+            state: .working,
+            reason: .working,
+            at: Self.restoredBindingDate.addingTimeInterval(3)
+        )
+        #expect(invalidated.contains { $0.kind == .statusChanged })
+        #expect(projector.state == .working)
+        #expect(projector.inputAvailability == .unavailable(reason: .working))
+        #expect(projector.bootstrapConfirmedOpenPrompt(
+            at: Self.restoredBindingDate.addingTimeInterval(4)
+        ).isEmpty)
+    }
+
     @Test func clearingTranscriptBindingInvalidatesPromptAndFileAuthority() {
         var projector = Self.makeProjector()
         _ = projector.noteBinding(

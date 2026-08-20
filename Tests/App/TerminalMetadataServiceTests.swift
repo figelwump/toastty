@@ -2511,6 +2511,10 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         panelsUsingStatusNotifications.contains(panelID)
     }
 
+    func noteLocalInputForActiveSession(panelID: UUID) {
+        _ = panelID
+    }
+
     func refreshManagedSessionStatusFromVisibleTextIfNeeded(
         panelID: UUID,
         visibleText: String,

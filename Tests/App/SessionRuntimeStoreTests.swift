@@ -7,6 +7,72 @@ import Testing
 @MainActor
 struct SessionRuntimeStoreTests {
     @Test
+    func nativeSessionBindingConfirmationIsCurrentLaunchAndActiveSessionScoped() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let sessionID = "sess-native-confirmation"
+        let confirmedAt = Date(timeIntervalSince1970: 1_786_000_000)
+        let record = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/current-rollout.jsonl",
+            cwd: "/repo",
+            capturedAt: confirmedAt
+        )
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: confirmedAt
+        )
+
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: UUID(),
+            record: record
+        ) == false)
+        #expect(store.nativeSessionBindingConfirmation(for: sessionID) == nil)
+
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: record
+        ))
+        let confirmation = store.nativeSessionBindingConfirmation(for: sessionID)
+        #expect(confirmation?.managedSessionID == sessionID)
+        #expect(confirmation?.agent == .codex)
+        #expect(confirmation?.panelID == panelID)
+        #expect(confirmation?.nativeSessionID == record.nativeSessionID)
+        #expect(confirmation?.sessionFilePath == record.sessionFilePath)
+        #expect(confirmation?.confirmedAt == confirmedAt)
+        if let confirmation {
+            #expect(store.isNativeSessionBindingInputClean(confirmation))
+        }
+
+        var repeatedRecord = record
+        repeatedRecord.capturedAt = confirmedAt.addingTimeInterval(1)
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: repeatedRecord
+        ))
+        #expect(store.nativeSessionBindingConfirmation(for: sessionID) == confirmation)
+
+        store.noteLocalInputForActiveSession(panelID: panelID)
+        if let confirmation {
+            #expect(store.isNativeSessionBindingInputClean(confirmation) == false)
+        }
+
+        store.stopSession(sessionID: sessionID, at: confirmedAt.addingTimeInterval(1))
+        #expect(store.nativeSessionBindingConfirmation(for: sessionID) == nil)
+    }
+
+    @Test
     func scopeMutationUpdatesWorkspaceStatusProjection() {
         let store = SessionRuntimeStore()
         let panelID = UUID()

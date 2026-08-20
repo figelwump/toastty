@@ -11,6 +11,21 @@ enum CodexSubagentRolloutObservation: Equatable, Sendable {
     case streamReset
 }
 
+/// Process-local proof that the current managed session owns a provider-native
+/// session and transcript path observed during this Toastty launch.
+///
+/// Persisted resume records deliberately do not carry this authority: a fresh
+/// app process must reconfirm ownership before remote input can bootstrap.
+struct ManagedNativeSessionBindingConfirmation: Equatable, Sendable {
+    let managedSessionID: String
+    let bindingID: UUID
+    let agent: AgentKind
+    let panelID: UUID
+    let nativeSessionID: String
+    let sessionFilePath: String
+    let confirmedAt: Date
+}
+
 @MainActor
 final class SessionRuntimeStore: ObservableObject {
     typealias SessionStatusNotificationHandler = @Sendable (
@@ -36,6 +51,11 @@ final class SessionRuntimeStore: ObservableObject {
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
     private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
+    private var nativeBindingConfirmationBySessionID: [
+        String: ManagedNativeSessionBindingConfirmation
+    ] = [:]
+    private var nativeBindingIDBySessionID: [String: UUID] = [:]
+    private var nativeBindingSessionIDsWithLocalInput: Set<String> = []
     private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
     private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
     private var pendingPanelParentSessionIDs: [UUID: PendingPanelParentSessionID] = [:]
@@ -183,6 +203,9 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID = [:]
         codexSessionReconciliationBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
+        nativeBindingConfirmationBySessionID = [:]
+        nativeBindingIDBySessionID = [:]
+        nativeBindingSessionIDsWithLocalInput = []
         backgroundActivityFinishTombstonesBySessionID = [:]
         codexSubagentReconcilerBySessionID = [:]
         pendingPanelParentSessionIDs = [:]
@@ -208,6 +231,77 @@ final class SessionRuntimeStore: ObservableObject {
 
     func hasPendingCodexHookApprovalForTesting(sessionID: String) -> Bool {
         pendingCodexHookApprovalBySessionID[sessionID] != nil
+    }
+
+    @discardableResult
+    func confirmNativeSessionBinding(
+        managedSessionID: String,
+        panelID: UUID,
+        record: ManagedAgentResumeRecord
+    ) -> Bool {
+        guard let activeSession = sessionRegistry.activeSession(sessionID: managedSessionID),
+              record.agent == .codex,
+              activeSession.panelID == panelID,
+              activeSession.agent == record.agent,
+              let bindingID = nativeBindingIDBySessionID[managedSessionID] else {
+            return false
+        }
+
+        let candidate = ManagedNativeSessionBindingConfirmation(
+            managedSessionID: managedSessionID,
+            bindingID: bindingID,
+            agent: record.agent,
+            panelID: panelID,
+            nativeSessionID: record.nativeSessionID,
+            sessionFilePath: record.sessionFilePath,
+            confirmedAt: record.capturedAt
+        )
+        if let existing = nativeBindingConfirmationBySessionID[managedSessionID],
+           existing.bindingID == candidate.bindingID,
+           existing.agent == candidate.agent,
+           existing.panelID == candidate.panelID,
+           existing.nativeSessionID == candidate.nativeSessionID,
+           existing.sessionFilePath == candidate.sessionFilePath {
+            // A repeated observation of the same current binding refreshes
+            // persisted resume metadata but must not revoke send authority
+            // merely because its capture timestamp changed.
+            return true
+        }
+        nativeBindingConfirmationBySessionID[managedSessionID] = candidate
+        return true
+    }
+
+    func nativeSessionBindingConfirmation(
+        for managedSessionID: String
+    ) -> ManagedNativeSessionBindingConfirmation? {
+        nativeBindingConfirmationBySessionID[managedSessionID]
+    }
+
+    /// Records raw keyboard, paste, menu, or other non-remote terminal input
+    /// against the exact active session binding. Because this happens on the
+    /// same actor as `startSession`, a later debounced projection sync cannot
+    /// accidentally move the input before its safety baseline.
+    func noteLocalInputForActiveSession(panelID: UUID) {
+        guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
+        nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
+    }
+
+    func isNativeSessionBindingInputClean(
+        _ confirmation: ManagedNativeSessionBindingConfirmation
+    ) -> Bool {
+        guard confirmation.agent == .codex,
+              nativeBindingConfirmationBySessionID[confirmation.managedSessionID] == confirmation,
+              nativeBindingIDBySessionID[confirmation.managedSessionID] == confirmation.bindingID,
+              let activeSession = sessionRegistry.activeSession(
+                sessionID: confirmation.managedSessionID
+              ),
+              activeSession.agent == confirmation.agent,
+              activeSession.panelID == confirmation.panelID else {
+            return false
+        }
+        return nativeBindingSessionIDsWithLocalInput.contains(
+            confirmation.managedSessionID
+        ) == false
     }
 
     func startSession(
@@ -239,6 +333,9 @@ final class SessionRuntimeStore: ObservableObject {
         }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
+        nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
+        nativeBindingIDBySessionID[sessionID] = UUID()
+        nativeBindingSessionIDsWithLocalInput.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
@@ -1752,6 +1849,9 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+        nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
+        nativeBindingIDBySessionID.removeValue(forKey: sessionID)
+        nativeBindingSessionIDsWithLocalInput.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)

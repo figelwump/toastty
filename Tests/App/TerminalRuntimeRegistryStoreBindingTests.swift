@@ -49,6 +49,20 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
     }
 
+    func testRawLocalInputReachesSessionLifecycleTrackerWithoutRemoteObserver() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+        let tracker = SessionLifecycleTrackerSpy()
+        registry.bind(sessionLifecycleTracker: tracker)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+
+        registry.handleLocalInput(for: panelID)
+
+        XCTAssertEqual(tracker.localInputPanelIDs, [panelID])
+        XCTAssertNil(registry.localInputObserver)
+    }
+
     func testSurfaceLaunchConfigurationUsesProfileBindingAndRestoreReason() throws {
         let workspaceID = UUID()
         let panelID = UUID()
@@ -2067,10 +2081,15 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
     }
 
     private(set) var stopActiveCalls: [StopActiveCall] = []
+    private(set) var localInputPanelIDs: [UUID] = []
 
     func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool {
         _ = panelID
         return false
+    }
+
+    func noteLocalInputForActiveSession(panelID: UUID) {
+        localInputPanelIDs.append(panelID)
     }
 
     func refreshManagedSessionStatusFromVisibleTextIfNeeded(

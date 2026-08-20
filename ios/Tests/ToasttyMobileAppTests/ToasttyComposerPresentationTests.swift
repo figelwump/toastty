@@ -113,6 +113,19 @@ final class ToasttyComposerPresentationTests: XCTestCase {
         XCTAssertTrue(working.gateMessage.contains("working"))
     }
 
+    func testComposerPlaceholderDoesNotMislabelEveryDisabledStateAsALocalDraft() {
+        let enabled = presentation(enabledAuthority)
+        let localDraft = presentation(authority(
+            availability: .localDraft(epoch: stamp.inputEpoch),
+            failure: .inputUnavailable
+        ))
+        let catchingUp = presentation(authority(failure: .transcriptNotCaughtUp))
+
+        XCTAssertEqual(enabled.placeholder, "Message Codex…")
+        XCTAssertEqual(localDraft.placeholder, "Message Codex…")
+        XCTAssertEqual(catchingUp.placeholder, "Message Codex…")
+    }
+
     func testDraftValidationRejectsWhitespaceButDoesNotInventATextLimit() {
         let subject = presentation(enabledAuthority)
 

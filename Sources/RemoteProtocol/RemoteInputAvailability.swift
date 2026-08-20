@@ -51,9 +51,11 @@ public enum RemoteInputUnavailableReason: String, Codable, Equatable, Sendable {
 /// Whether a conversation can accept remote input right now, and under which
 /// prompt generation.
 ///
-/// Display status never authorizes input: `openPrompt` may be published only
-/// from an authoritative provider lifecycle signal for the root session, never
-/// inferred from presentation status like "idle" or "ready".
+/// Display status alone never authorizes input. `openPrompt` normally comes
+/// from an authoritative provider lifecycle signal for the root session. A
+/// host may also bootstrap it from current-process native-session ownership
+/// when the exact managed binding is positively idle/ready and has recorded no
+/// local input; persisted status or presentation state remains insufficient.
 public enum RemoteInputAvailability: Equatable, Sendable {
     case unavailable(reason: RemoteInputUnavailableReason)
     /// The root prompt is open, no local draft exists, and a remote send that

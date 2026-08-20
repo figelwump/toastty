@@ -312,6 +312,9 @@ final class RemoteAccessService: ObservableObject {
     private var activeSessionIDByConversationID: [RemoteConversationID: String] = [:]
     private var panelIDByConversationID: [RemoteConversationID: UUID] = [:]
     private var conversationIDByPanelID: [UUID: RemoteConversationID] = [:]
+    private var bootstrappedPromptAuthorityByConversationID: [
+        RemoteConversationID: BootstrappedPromptAuthority
+    ] = [:]
     /// Pending remote sends awaiting their confirming user message in the
     /// projection, oldest first, keyed by conversation.
     private var pendingSendCorrelator = RemotePendingSendCorrelator()
@@ -533,6 +536,7 @@ final class RemoteAccessService: ObservableObject {
         activeSessionIDByConversationID.removeAll()
         panelIDByConversationID.removeAll()
         conversationIDByPanelID.removeAll()
+        bootstrappedPromptAuthorityByConversationID.removeAll()
         pendingSendCorrelator = RemotePendingSendCorrelator()
         coordinator = RemoteInputCoordinator()
         writeControllableSessions = []
@@ -780,6 +784,13 @@ final class RemoteAccessService: ObservableObject {
         var statusDetail: String?
         var updatedAt: Date
         var transcriptPath: String?
+        var nativeBindingConfirmation: ManagedNativeSessionBindingConfirmation?
+    }
+
+    private struct BootstrappedPromptAuthority {
+        var managedSessionID: String
+        var confirmation: ManagedNativeSessionBindingConfirmation
+        var inputEpoch: RemoteInputEpoch
     }
 
     private func syncConversations(broadcast: Bool = true) {
@@ -837,6 +848,11 @@ final class RemoteAccessService: ObservableObject {
             }
 
             let previousActiveSessionID = activeSessionIDByConversationID[candidate.conversationID]
+            if previousActiveSessionID != candidate.activeSessionID {
+                bootstrappedPromptAuthorityByConversationID.removeValue(
+                    forKey: candidate.conversationID
+                )
+            }
             if let activeSessionID = candidate.activeSessionID {
                 if previousActiveSessionID != activeSessionID {
                     if isNewRegistration, candidate.transcriptPath == nil {
@@ -918,6 +934,57 @@ final class RemoteAccessService: ObservableObject {
                 panelIDByConversationID[candidate.conversationID] = candidate.panelID
                 conversationIDByPanelID[candidate.panelID] = candidate.conversationID
             }
+
+            if let authority = bootstrappedPromptAuthorityByConversationID[
+                candidate.conversationID
+            ],
+               let unavailableReason = Self.bootstrapInvalidationReason(
+                for: candidate.registryState
+               ) {
+                let emitted = projectionStore.invalidateConfirmedOpenPrompt(
+                    for: candidate.conversationID,
+                    expectedEpoch: authority.inputEpoch,
+                    state: candidate.registryState,
+                    reason: unavailableReason,
+                    at: candidate.updatedAt
+                )
+                if emitted.isEmpty == false {
+                    // Close the provisional prompt as soon as the native
+                    // runtime reports a non-ready state; send-time checks
+                    // remain a final race guard rather than the primary UI.
+                    syncCoordinatorAvailability(for: candidate.conversationID)
+                    broadcastEvents(emitted, for: candidate.conversationID)
+                    listChanged = true
+                }
+            }
+
+            if let activeSessionID = candidate.activeSessionID,
+               let confirmation = candidate.nativeBindingConfirmation,
+               candidate.provider == .codex,
+               candidate.registryState == .ready,
+               confirmation.managedSessionID == activeSessionID,
+               sessionRuntimeStore.isNativeSessionBindingInputClean(confirmation) {
+                let emitted = projectionStore.bootstrapConfirmedOpenPrompt(
+                    for: candidate.conversationID,
+                    at: confirmation.confirmedAt
+                )
+                if emitted.isEmpty == false,
+                   let projector = projectionStore.projectorState(for: candidate.conversationID),
+                   case .openPrompt(let epoch) = projector.inputAvailability {
+                    bootstrappedPromptAuthorityByConversationID[candidate.conversationID] =
+                        BootstrappedPromptAuthority(
+                            managedSessionID: activeSessionID,
+                            confirmation: confirmation,
+                            inputEpoch: epoch
+                        )
+                    // Publish coordinator authority before clients receive the
+                    // status event that exposes this prompt epoch.
+                    syncCoordinatorAvailability(for: candidate.conversationID)
+                    broadcastEvents(emitted, for: candidate.conversationID)
+                    listChanged = true
+                }
+            }
+
             // Keep the coordinator's authoritative availability in step with
             // the projection so the session list and send gate agree.
             syncCoordinatorAvailability(for: candidate.conversationID)
@@ -955,6 +1022,20 @@ final class RemoteAccessService: ObservableObject {
     /// this is safe to call on every sync.
     private func syncCoordinatorAvailability(for conversationID: RemoteConversationID) {
         guard let projector = projectionStore.projectorState(for: conversationID) else { return }
+        if let authority = bootstrappedPromptAuthorityByConversationID[conversationID] {
+            guard case .openPrompt(let epoch) = projector.inputAvailability,
+                  epoch == authority.inputEpoch else {
+                bootstrappedPromptAuthorityByConversationID.removeValue(forKey: conversationID)
+                let previous = coordinator.availability(for: conversationID)
+                coordinator.setProviderAvailability(projector.inputAvailability, for: conversationID)
+                logCoordinatorAvailabilityTransition(
+                    for: conversationID,
+                    source: "provider_projection",
+                    previous: previous
+                )
+                return
+            }
+        }
         let previous = coordinator.availability(for: conversationID)
         coordinator.setProviderAvailability(projector.inputAvailability, for: conversationID)
         logCoordinatorAvailabilityTransition(
@@ -1049,6 +1130,22 @@ final class RemoteAccessService: ObservableObject {
                     && terminalState.resumeRecord?.agent == provider
                     ? terminalState.resumeRecord?.sessionFilePath
                     : nil
+                let nativeBindingConfirmation: ManagedNativeSessionBindingConfirmation? =
+                    activeRecord.flatMap { record in
+                        guard record.agent == .codex,
+                              let transcriptPath,
+                              let confirmation = sessionRuntimeStore.nativeSessionBindingConfirmation(
+                                  for: record.sessionID
+                              ),
+                              confirmation.agent == .codex,
+                              confirmation.panelID == panelID,
+                              confirmation.nativeSessionID ==
+                                terminalState.resumeRecord?.nativeSessionID,
+                              confirmation.sessionFilePath == transcriptPath else {
+                            return nil
+                        }
+                        return confirmation
+                    }
 
                 candidates.append(ConversationCandidate(
                     conversationID: conversationID,
@@ -1068,7 +1165,8 @@ final class RemoteAccessService: ObservableObject {
                     },
                     statusDetail: Self.remoteStatusDetail(from: panelStatus?.status.detail),
                     updatedAt: activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? Date(),
-                    transcriptPath: transcriptPath
+                    transcriptPath: transcriptPath,
+                    nativeBindingConfirmation: nativeBindingConfirmation
                 ))
             }
         }
@@ -1087,6 +1185,7 @@ final class RemoteAccessService: ObservableObject {
         projectionStore.removeConversation(conversationID)
         coordinator.removeConversation(conversationID)
         activeSessionIDByConversationID.removeValue(forKey: conversationID)
+        bootstrappedPromptAuthorityByConversationID.removeValue(forKey: conversationID)
         pendingSendCorrelator.discard(for: conversationID)
         if let panelID = panelIDByConversationID.removeValue(forKey: conversationID),
            conversationIDByPanelID[panelID] == conversationID {
@@ -1161,6 +1260,29 @@ final class RemoteAccessService: ObservableObject {
             return .awaitingInput
         case .error:
             return .error
+        }
+    }
+
+    private static func bootstrapInvalidationReason(
+        for state: RemoteSessionState
+    ) -> RemoteInputUnavailableReason? {
+        switch state {
+        case .ready:
+            nil
+        case .starting:
+            .starting
+        case .working:
+            .working
+        case .awaitingInput:
+            .unknownProviderState
+        case .interrupted:
+            .interrupted
+        case .ended:
+            .ended
+        case .error:
+            .error
+        case .offline:
+            .offline
         }
     }
 
@@ -1332,6 +1454,12 @@ final class RemoteAccessService: ObservableObject {
         guard let panelID = panelIDByConversationID[conversationID] else {
             return .rejected(reason: .notBound)
         }
+        if let rejection = bootstrappedAuthorityRejection(
+            for: request,
+            panelID: panelID
+        ) {
+            return .rejected(reason: rejection)
+        }
         let sessionWritesEnabled = sessionWritePolicy.isEnabled(for: conversationID)
         let isBound = activeSessionIDByConversationID[conversationID] != nil
         let promptState = terminalRuntimeRegistry.promptState(panelID: panelID)
@@ -1395,11 +1523,55 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
+    /// Transcript observations normally provide send authority. A prompt
+    /// opened from current-launch native ownership needs its own last-moment
+    /// checks because the desktop may have changed after the phone rendered
+    /// the epoch but before this request reached the host.
+    private func bootstrappedAuthorityRejection(
+        for request: RemoteMessageSendRequest,
+        panelID: UUID
+    ) -> RemoteMessageRejectionReason? {
+        let conversationID = request.conversationID
+        guard let authority = bootstrappedPromptAuthorityByConversationID[conversationID],
+              authority.inputEpoch == request.expectedInputEpoch else {
+            return nil
+        }
+        guard activeSessionIDByConversationID[conversationID] == authority.managedSessionID,
+              let activeSession = sessionRuntimeStore.sessionRegistry.activeSession(
+                  sessionID: authority.managedSessionID
+              ),
+              activeSession.panelID == panelID,
+              activeSession.agent == .codex,
+              sessionRuntimeStore.nativeSessionBindingConfirmation(
+                  for: authority.managedSessionID
+              ) == authority.confirmation else {
+            return .notBound
+        }
+        guard let statusKind = activeSession.status?.kind,
+              statusKind == .idle || statusKind == .ready else {
+            return .promptNotOpen
+        }
+        guard sessionRuntimeStore.isNativeSessionBindingInputClean(
+            authority.confirmation
+        ) else {
+            return .localDraftPresent
+        }
+        guard let projector = projectionStore.projectorState(for: conversationID),
+              projector.inputAvailability == .openPrompt(epoch: authority.inputEpoch) else {
+            return .promptNotOpen
+        }
+        return nil
+    }
+
     /// Records a local keyboard/paste/menu event on a panel so the coordinator
     /// invalidates any open remote epoch synchronously. The resulting network
     /// update is coalesced onto a later main-actor turn so summary construction
     /// and JSON encoding never run inside the terminal input call stack.
     func noteLocalInput(panelID: UUID) {
+        // Production terminal input already records this through the session
+        // lifecycle tracker. Repeat it here so direct test/adapter callbacks
+        // share the same fail-closed contract; the store uses an idempotent set.
+        sessionRuntimeStore.noteLocalInputForActiveSession(panelID: panelID)
         guard let conversationID = conversationIDByPanelID[panelID] else { return }
         let previous = coordinator.availability(for: conversationID)
         coordinator.noteLocalInput(for: conversationID)

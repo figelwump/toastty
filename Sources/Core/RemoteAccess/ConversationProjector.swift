@@ -35,6 +35,11 @@ public struct ConversationProjector: Sendable {
     private(set) var providerAuthorityEstablishedAt: Date?
 
     private var currentEpoch: RemoteInputEpoch
+    /// A confirmed managed-runtime bootstrap may authorize the first prompt
+    /// before the resumed provider emits a new transcript observation. Keep
+    /// that escape hatch one-shot for each runtime binding so repeated host
+    /// synchronization cannot churn epochs or supersede local input.
+    private var didBootstrapConfirmedPromptForCurrentBinding: Bool
     private var seenFingerprints: Set<String>
     private var seenFingerprintOrder: [String]
     private var runtimeEventCounter: UInt64
@@ -69,6 +74,7 @@ public struct ConversationProjector: Sendable {
         self.providerSessionFilePath = nil
         self.updatedAt = date
         self.currentEpoch = RemoteInputEpoch(bindingID: bindingID, counter: 0)
+        self.didBootstrapConfirmedPromptForCurrentBinding = false
         self.seenFingerprints = []
         self.seenFingerprintOrder = []
         self.runtimeEventCounter = 0
@@ -172,6 +178,12 @@ public struct ConversationProjector: Sendable {
         at date: Date
     ) -> [ConversationEvent] {
         currentEpoch = RemoteInputEpoch(bindingID: bindingID, counter: 0)
+        switch reason {
+        case .runtimeBound, .runtimeResumed, .runtimeEnded:
+            didBootstrapConfirmedPromptForCurrentBinding = false
+        case .projectionRebuilt:
+            break
+        }
         if let providerSessionID {
             self.providerSessionID = providerSessionID
         }
@@ -206,6 +218,62 @@ public struct ConversationProjector: Sendable {
             break
         }
 
+        updatedAt = max(updatedAt, date)
+        return emitted
+    }
+
+    /// Opens the initial prompt for a managed runtime whose provider process
+    /// was confirmed during this app launch, but whose resumed transcript has
+    /// not emitted a new lifecycle observation yet.
+    ///
+    /// Callers must independently prove current-launch ownership and that no
+    /// local terminal input occurred since this runtime was bound. Transcript
+    /// observations remain authoritative after this one bootstrap transition.
+    @discardableResult
+    public mutating func bootstrapConfirmedOpenPrompt(at date: Date) -> [ConversationEvent] {
+        guard isRuntimeBound,
+              didBootstrapConfirmedPromptForCurrentBinding == false,
+              case .unavailable(reason: .unknownProviderState) = inputAvailability else {
+            return []
+        }
+
+        didBootstrapConfirmedPromptForCurrentBinding = true
+        currentEpoch = currentEpoch.next()
+        var emitted: [ConversationEvent] = []
+        transition(
+            to: .awaitingInput,
+            availability: .openPrompt(epoch: currentEpoch),
+            at: date,
+            emitting: &emitted
+        )
+        updatedAt = max(updatedAt, date)
+        return emitted
+    }
+
+    /// Revokes only the synthetic prompt opened by
+    /// `bootstrapConfirmedOpenPrompt`. A host-side status change can therefore
+    /// close provisional authority without overwriting a newer prompt opened
+    /// by a provider transcript observation.
+    @discardableResult
+    public mutating func invalidateConfirmedOpenPrompt(
+        expectedEpoch: RemoteInputEpoch,
+        state: RemoteSessionState,
+        reason: RemoteInputUnavailableReason,
+        at date: Date
+    ) -> [ConversationEvent] {
+        guard didBootstrapConfirmedPromptForCurrentBinding,
+              inputAvailability == .openPrompt(epoch: expectedEpoch) else {
+            return []
+        }
+
+        currentEpoch = currentEpoch.next()
+        var emitted: [ConversationEvent] = []
+        transition(
+            to: state,
+            availability: .unavailable(reason: reason),
+            at: date,
+            emitting: &emitted
+        )
         updatedAt = max(updatedAt, date)
         return emitted
     }

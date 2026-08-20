@@ -215,6 +215,14 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
                 ) else {
                     return
                 }
+                _ = sessionRuntimeStore?.confirmNativeSessionBinding(
+                    managedSessionID: managedSessionID,
+                    panelID: panelID,
+                    record: scopedRecord
+                )
+                // Resume metadata remains useful even when the current
+                // managed-session lifecycle cannot grant remote authority.
+                // Publication and authorization are intentionally separate.
                 _ = store?.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: scopedRecord))
             }
         )

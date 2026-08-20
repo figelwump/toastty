@@ -502,7 +502,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(optimistic.waitForExistence(timeout: 5))
         XCTAssertTrue(optimistic.label.contains("Use build 413"))
         XCTAssertTrue(optimistic.label.contains("Sending"))
-        XCTAssertEqual(input.value as? String, "Draft saved on this iPhone")
+        XCTAssertEqual(input.value as? String, "Message Codex…")
         XCTAssertFalse(input.isEnabled)
         XCTAssertFalse(send.isEnabled)
         let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
