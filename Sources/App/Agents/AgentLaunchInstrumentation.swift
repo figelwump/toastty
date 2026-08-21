@@ -771,7 +771,7 @@ private extension AgentLaunchInstrumentation {
         let initialRootSessionLiteral = jsonStringLiteral(initialRootSessionID ?? "")
 
         return """
-        export async function ToasttyOpenCodeFamilyStatusPlugin() {
+        export async function ToasttyOpenCodeFamilyStatusPlugin(pluginInput) {
           const cliPath = \(cliLiteral);
           const source = \(sourceLiteral);
           const launchWorkingDirectory = \(workingDirectoryLiteral);
@@ -780,6 +780,7 @@ private extension AgentLaunchInstrumentation {
           let rootNativeSessionID = \(initialRootSessionLiteral);
           let rootSessionIdentityObserved = false;
           const isMiMoCode = source === "mimocode-plugin";
+          const providerClient = objectValue(pluginInput).client;
           let queue = Promise.resolve();
           let lastFinalText = "";
           let lastCompletedTextCandidate = "";
@@ -805,6 +806,12 @@ private extension AgentLaunchInstrumentation {
           const recognizedReasoningEfforts = new Set([
             "off", "none", "minimal", "low", "medium", "high", "xhigh", "max",
           ]);
+          let conversationSnapshotCounter = 0;
+          let currentConversationSnapshotID = "";
+          let currentTurnID = "";
+          let promptOpenEmittedForTurn = false;
+          let conversationRecordCounter = 0;
+          const forwardedConversationSnapshotKeys = new Set();
 
           function envValue(name) {
             const value = process.env[name];
@@ -826,6 +833,159 @@ private extension AgentLaunchInstrumentation {
             if (!collapsed) return "";
             if (!limit || collapsed.length <= limit) return collapsed;
             return `${collapsed.slice(0, Math.max(0, limit - 3))}...`;
+          }
+
+          function transcriptText(value, limit = 32768) {
+            if (typeof value !== "string") return "";
+            const trimmed = value.trim();
+            return trimmed.slice(0, limit);
+          }
+
+          function partsText(parts) {
+            if (!Array.isArray(parts)) return "";
+            return transcriptText(parts
+              .filter((part) => {
+                const type = stringValue(objectValue(part).type, 40).toLowerCase();
+                return type === "text" || type === "output_text";
+              })
+              .map((part) => transcriptText(objectValue(part).text))
+              .filter(Boolean)
+              .join("\\n"));
+          }
+
+          function recordID(prefix, value) {
+            const stable = stringValue(value, 500);
+            if (stable) return `${prefix}:${stable}`;
+            conversationRecordCounter += 1;
+            return `${prefix}:${conversationRecordCounter}`;
+          }
+
+          function conversationBatch(records, options = {}) {
+            if (!rootNativeSessionID) return;
+            if (!currentConversationSnapshotID) {
+              conversationSnapshotCounter += 1;
+              currentConversationSnapshotID = `${source}:${rootNativeSessionID}:${conversationSnapshotCounter}`;
+            }
+            return {
+              type: "toastty.conversation.batch",
+              properties: {
+                nativeSessionID: rootNativeSessionID,
+                snapshotID: currentConversationSnapshotID,
+                reset: options.reset === true,
+                timestamp: new Date().toISOString(),
+                records: Array.isArray(records) ? records : [],
+              },
+            };
+          }
+
+          function enqueueConversation(records, options) {
+            const event = conversationBatch(records, options);
+            if (!event) return queue;
+            queue = queue
+              .then(() => forward(event))
+              .catch((error) => appendFailure("conversation_forward_exception", event.type, errorText(error)));
+            return queue;
+          }
+
+          async function forwardConversationRecords(records, reset) {
+            const chunks = [];
+            let chunk = [];
+            let size = 0;
+            for (const record of records) {
+              const recordSize = JSON.stringify(record).length;
+              if (chunk.length && (chunk.length >= 256 || size + recordSize > 45000)) {
+                chunks.push(chunk);
+                chunk = [];
+                size = 0;
+              }
+              chunk.push(record);
+              size += recordSize;
+            }
+            if (chunk.length || chunks.length === 0) chunks.push(chunk);
+            for (let index = 0; index < chunks.length; index += 1) {
+              const event = conversationBatch(chunks[index], { reset: reset && index === 0 });
+              if (event) await forward(event);
+            }
+          }
+
+          function messageRecords(infoValue, partsValue, live) {
+            const info = objectValue(infoValue);
+            const role = stringValue(info.role, 40).toLowerCase();
+            const messageID = stringValue(info.id, 500)
+              || stringValue(info.messageID, 500)
+              || stringValue(info.messageId, 500);
+            const text = partsText(partsValue) || transcriptText(info.text) || transcriptText(info.content);
+            if (!text || (role !== "user" && role !== "assistant")) return [];
+            const timestamp = objectValue(info.time).created || info.createdAt || new Date().toISOString();
+            return [{
+              kind: role === "user" ? "user_message" : "assistant_message",
+              eventID: recordID(`${role}-message`, messageID || stableHashHex(text, 2166136261)),
+              timestamp,
+              turnID: currentTurnID || undefined,
+              text,
+              phase: role === "assistant" ? "final" : undefined,
+              live,
+            }];
+          }
+
+          async function forwardConversationSnapshot(key) {
+            if (forwardedConversationSnapshotKeys.has(key)) return;
+            forwardedConversationSnapshotKeys.add(key);
+            conversationSnapshotCounter += 1;
+            currentConversationSnapshotID = `${source}:${rootNativeSessionID}:${conversationSnapshotCounter}`;
+            let records = [];
+            try {
+              if (providerClient && providerClient.session && typeof providerClient.session.messages === "function") {
+                const response = await providerClient.session.messages({
+                  path: { id: rootNativeSessionID },
+                  query: launchWorkingDirectory ? { directory: launchWorkingDirectory } : {},
+                });
+                const messages = Array.isArray(objectValue(response).data)
+                  ? objectValue(response).data
+                  : (Array.isArray(response) ? response : []);
+                for (const message of messages) {
+                  const object = objectValue(message);
+                  records.push(...messageRecords(object.info || object.message, object.parts, false));
+                }
+              }
+            } catch (error) {
+              await appendFailure("conversation_snapshot_exception", "toastty.conversation.batch", errorText(error));
+            }
+            await forwardConversationRecords(records, true);
+          }
+
+          function startConversationTurn(input, output) {
+            const outputObject = objectValue(output);
+            const inputObject = objectValue(input);
+            const info = objectValue(outputObject.message || outputObject.info || inputObject.message || inputObject.info);
+            const messageID = stringValue(info.id, 500) || stringValue(inputObject.messageID, 500);
+            currentTurnID = messageID || recordID("turn", "");
+            promptOpenEmittedForTurn = false;
+            const records = [{
+              kind: "turn_started",
+              eventID: recordID("turn-start", currentTurnID),
+              timestamp: new Date().toISOString(),
+              turnID: currentTurnID,
+              live: true,
+            }];
+            records.push(...messageRecords(
+              { ...info, role: stringValue(info.role, 40) || "user" },
+              outputObject.parts || inputObject.parts,
+              true
+            ));
+            enqueueConversation(records);
+          }
+
+          function finishConversationTurn(outcome = "completed") {
+            if (promptOpenEmittedForTurn) return;
+            promptOpenEmittedForTurn = true;
+            enqueueConversation([{
+              kind: outcome === "completed" ? "prompt_open" : (outcome === "aborted" ? "turn_aborted" : "turn_failed"),
+              eventID: recordID("turn-end", currentTurnID || nowMilliseconds()),
+              timestamp: new Date().toISOString(),
+              turnID: currentTurnID || undefined,
+              live: true,
+            }]);
           }
 
           function normalizeProviderEvent(input) {
@@ -1398,6 +1558,89 @@ private extension AgentLaunchInstrumentation {
               || stringValue(inputObject.text, 240);
           }
 
+          function transcriptFromMessageValue(value) {
+            const object = objectValue(value);
+            const message = objectValue(object.message);
+            return partsText(object.parts)
+              || partsText(message.parts)
+              || transcriptText(object.content)
+              || transcriptText(object.text)
+              || transcriptText(object.finalText)
+              || transcriptText(message.content)
+              || transcriptText(message.text);
+          }
+
+          function assistantTranscriptFrom(input, output) {
+            const inputObject = objectValue(input);
+            const outputObject = objectValue(output);
+            const direct = transcriptText(outputObject.text)
+              || transcriptText(outputObject.finalText)
+              || transcriptText(inputObject.finalText);
+            if (direct) return direct;
+
+            for (const container of [outputObject, inputObject]) {
+              for (const key of ["trajectory", "messages"]) {
+                const records = Array.isArray(container[key]) ? container[key] : [];
+                for (let index = records.length - 1; index >= 0; index -= 1) {
+                  const record = objectValue(records[index]);
+                  const info = objectValue(record.info || record.message);
+                  const role = stringValue(record.role, 40).toLowerCase()
+                    || stringValue(record.type, 40).toLowerCase()
+                    || stringValue(info.role, 40).toLowerCase();
+                  if (role !== "assistant" && role !== "model") continue;
+                  const text = transcriptFromMessageValue(record)
+                    || transcriptFromMessageValue(info);
+                  if (text) return text;
+                }
+              }
+            }
+            return "";
+          }
+
+          function enqueueAssistantTranscript(input, output) {
+            const transcript = assistantTranscriptFrom(input, output);
+            if (!transcript) return "";
+            const inputObject = objectValue(input);
+            const outputObject = objectValue(output);
+            const messageID = stringValue(outputObject.messageID, 500)
+              || stringValue(outputObject.messageId, 500)
+              || stringValue(inputObject.messageID, 500)
+              || stringValue(inputObject.messageId, 500)
+              || stableHashHex(transcript, 2166136261);
+            enqueueConversation([{
+              kind: "assistant_message",
+              eventID: recordID("assistant-message", messageID),
+              timestamp: new Date().toISOString(),
+              turnID: currentTurnID || undefined,
+              text: transcript,
+              phase: "final",
+              live: true,
+            }]);
+            return transcript;
+          }
+
+          function enqueueUserTranscript(input) {
+            const object = objectValue(input);
+            const message = objectValue(object.message);
+            const text = transcriptText(object.query)
+              || transcriptText(object.prompt)
+              || transcriptText(object.userQuery)
+              || transcriptFromMessageValue(message);
+            if (!text) return;
+            const messageID = stringValue(object.messageID, 500)
+              || stringValue(object.messageId, 500)
+              || stringValue(message.id, 500)
+              || stableHashHex(text, 2166136261);
+            enqueueConversation([{
+              kind: "user_message",
+              eventID: recordID("user-message", messageID),
+              timestamp: new Date().toISOString(),
+              turnID: currentTurnID || undefined,
+              text,
+              live: true,
+            }]);
+          }
+
           function statusFromProviderEvent(event) {
             if (!event) return;
             const properties = objectValue(event.properties);
@@ -1553,7 +1796,10 @@ private extension AgentLaunchInstrumentation {
               .then(async () => {
                 const markerEvent = await writeNativeSessionMarker(event);
                 const forwarded = await forward(markerEvent);
-                if (forwarded) forwardedNativeSessionKeys.add(key);
+                if (forwarded) {
+                  forwardedNativeSessionKeys.add(key);
+                  await forwardConversationSnapshot(key);
+                }
               })
               .catch((error) => appendFailure("native_session_exception", event.type, errorText(error)))
               .finally(() => {
@@ -1630,15 +1876,19 @@ private extension AgentLaunchInstrumentation {
                 recordNativeSession(input);
                 if (terminalEvent) finishAllChildren();
                 fire(statusFromProviderEvent(providerEvent));
+                if (terminalEvent) {
+                  finishConversationTurn(providerEvent.type === "session.error" ? "failed" : "completed");
+                }
               } catch (error) {
                 hookFailure("event", error);
               }
             },
 
-            "chat.message"(input) {
+            "chat.message"(input, output) {
               try {
                 claimRootSessionID(input);
                 recordNativeSession(input);
+                if (isRootInput(input)) startConversationTurn(input, output);
               } catch (error) {
                 hookFailure("chat.message", error);
               }
@@ -1650,6 +1900,20 @@ private extension AgentLaunchInstrumentation {
                 if (!isRootInput(input)) return;
                 recordNativeSession(input);
                 fire(toasttyStatus("needs_approval", "Needs approval", permissionDetail(objectValue(input))));
+                const properties = objectValue(input);
+                const approvalID = stringValue(properties.id, 500)
+                  || stringValue(properties.permissionID, 500)
+                  || stringValue(properties.permissionId, 500);
+                enqueueConversation([{
+                  kind: "interaction_presented",
+                  eventID: recordID("interaction", approvalID),
+                  timestamp: new Date().toISOString(),
+                  turnID: currentTurnID || undefined,
+                  interactionKind: "permission",
+                  providerApprovalID: approvalID || undefined,
+                  prompt: permissionDetail(properties),
+                  live: true,
+                }]);
               } catch (error) {
                 hookFailure("permission.ask", error);
               }
@@ -1664,6 +1928,20 @@ private extension AgentLaunchInstrumentation {
                 fire(isQuestionToolName(toolName)
                   ? questionApprovalStatus()
                   : toasttyStatus("working", "Working", `Using ${displayToolName(toolName)}`));
+                const inputObject = objectValue(input);
+                const callID = stringValue(inputObject.callID, 500)
+                  || stringValue(inputObject.callId, 500)
+                  || recordID("tool-call", "");
+                enqueueConversation([{
+                  kind: "tool_started",
+                  eventID: recordID("tool-start", callID),
+                  timestamp: new Date().toISOString(),
+                  turnID: currentTurnID || undefined,
+                  callID,
+                  toolName: toolName || "Tool",
+                  detail: commandPreview(inputObject) || undefined,
+                  live: true,
+                }]);
               } catch (error) {
                 hookFailure("tool.execute.before", error);
               }
@@ -1677,6 +1955,25 @@ private extension AgentLaunchInstrumentation {
                 fire(isQuestionToolName(toolNameFromInput(input))
                   ? questionResolvedStatus()
                   : toasttyStatus("working", "Working", toolAfterDetail(input, output)));
+                const inputObject = objectValue(input);
+                const outputObject = objectValue(output);
+                const callID = stringValue(inputObject.callID, 500)
+                  || stringValue(inputObject.callId, 500)
+                  || stringValue(outputObject.callID, 500)
+                  || stringValue(outputObject.callId, 500);
+                if (callID) {
+                  enqueueConversation([{
+                    kind: "tool_finished",
+                    eventID: recordID("tool-finish", callID),
+                    timestamp: new Date().toISOString(),
+                    turnID: currentTurnID || undefined,
+                    callID,
+                    toolName: toolNameFromInput(input) || undefined,
+                    outcome: outputObject.error ? "failed" : "succeeded",
+                    detail: toolAfterDetail(input, output),
+                    live: true,
+                  }]);
+                }
               } catch (error) {
                 hookFailure("tool.execute.after", error);
               }
@@ -1687,7 +1984,8 @@ private extension AgentLaunchInstrumentation {
                 claimRootSessionID(input);
                 if (!isRootInput(input)) return;
                 recordNativeSession(input);
-                const text = rememberFinalTextCandidate(input, output);
+                rememberFinalTextCandidate(input, output);
+                enqueueAssistantTranscript(input, output);
                 if (!isMiMoCode) return;
               } catch (error) {
                 hookFailure("experimental.text.complete", error);
@@ -1703,6 +2001,15 @@ private extension AgentLaunchInstrumentation {
                 if (!isRootInput(input)) return;
                 recordNativeSession(input);
                 resetTurnState();
+                currentTurnID = recordID("mimo-turn", "");
+                promptOpenEmittedForTurn = false;
+                enqueueConversation([{
+                  kind: "turn_started",
+                  eventID: recordID("turn-start", currentTurnID),
+                  timestamp: new Date().toISOString(),
+                  turnID: currentTurnID,
+                  live: true,
+                }]);
                 fire(toasttyStatus("working", "Working", "Starting"));
               } catch (error) {
                 hookFailure("session.pre", error);
@@ -1715,6 +2022,7 @@ private extension AgentLaunchInstrumentation {
                 if (!isRootInput(input)) return;
                 recordNativeSession(input);
                 resetTurnState();
+                enqueueUserTranscript(input);
                 fire(toasttyStatus("working", "Working", "Running query"));
               } catch (error) {
                 hookFailure("session.userQuery.pre", error);
@@ -1727,8 +2035,10 @@ private extension AgentLaunchInstrumentation {
                 recordNativeSession(input);
                 const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
                 if (detail) {
+                  finishConversationTurn("failed");
                   return flush(toasttyStatus("error", "Error", detail), { suppressFollowingWorking: true });
                 }
+                enqueueAssistantTranscript(input, output);
                 const text = rememberFinalTextCandidate(input, output);
                 if (text) {
                   return flush(toasttyFinal(text), { suppressFollowingWorking: true });
@@ -1745,8 +2055,11 @@ private extension AgentLaunchInstrumentation {
                 finishAllChildren();
                 const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
                 if (detail) {
+                  finishConversationTurn("failed");
                   return flush(toasttyStatus("error", "Error", detail), { suppressFollowingWorking: true });
                 }
+                enqueueAssistantTranscript(input, output);
+                finishConversationTurn(stringValue(objectValue(input).outcome, 40) === "cancelled" ? "aborted" : "completed");
                 return flush(toasttyFinal(finalTextFrom(input, output) || lastCompletedTextCandidate), { suppressFollowingWorking: true });
               } catch (error) {
                 hookFailure("session.post", error);

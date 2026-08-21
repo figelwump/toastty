@@ -28,8 +28,20 @@ public enum ProviderTranscriptSupport {
         }
     }
 
-    public static func isSupported(_ provider: AgentKind) -> Bool {
+    /// Providers whose native resume path is itself a line-oriented transcript.
+    public static func hasFileTranscript(_ provider: AgentKind) -> Bool {
         provider == .codex || provider == .claude
+    }
+
+    /// Managed providers that can participate in the remote conversation
+    /// projection. Providers without native transcript files publish bounded
+    /// observations through their launch-scoped instrumentation instead.
+    public static func isManagedProvider(_ provider: AgentKind) -> Bool {
+        provider == .codex
+            || provider == .claude
+            || provider == .opencode
+            || provider == .mimocode
+            || provider == .pi
     }
 }
 
@@ -42,7 +54,7 @@ public enum ConversationTurnEndReason: String, Codable, Equatable, Sendable {
 /// A modal interaction observed in provider output, before the host has bound
 /// it to an input epoch. The projector converts this into a
 /// `RemotePendingInteraction` using the conversation's current epoch.
-public struct ProviderInteractionObservation: Equatable, Sendable {
+public struct ProviderInteractionObservation: Codable, Equatable, Sendable {
     public var kind: RemotePendingInteraction.Kind
     public var providerCallID: String?
     public var providerApprovalID: String?
@@ -94,24 +106,134 @@ public enum ProviderObservationPayload: Equatable, Sendable {
 /// are stable only when parsing restarts from the start of the same provider
 /// file with a fresh parser (or continues from a checkpoint of the same
 /// parser value).
-public struct ProviderTranscriptObservation: Equatable, Sendable {
+public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
     public var timestamp: Date
     public var turnID: String?
     public var providerIdentity: String?
     public var fingerprint: String
     public var payload: ProviderObservationPayload
+    /// Historical provider snapshots are readable but must never reopen a live
+    /// prompt. Only launch-bound lifecycle observations set this to true.
+    public var mayAuthorizeCurrentRuntime: Bool
 
     public init(
         timestamp: Date,
         turnID: String? = nil,
         providerIdentity: String? = nil,
         fingerprint: String,
-        payload: ProviderObservationPayload
+        payload: ProviderObservationPayload,
+        mayAuthorizeCurrentRuntime: Bool = true
     ) {
         self.timestamp = timestamp
         self.turnID = turnID
         self.providerIdentity = providerIdentity
         self.fingerprint = fingerprint
         self.payload = payload
+        self.mayAuthorizeCurrentRuntime = mayAuthorizeCurrentRuntime
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case timestamp
+        case turnID
+        case providerIdentity
+        case fingerprint
+        case payloadKind
+        case payload
+        case mayAuthorizeCurrentRuntime
+    }
+
+    private enum PayloadKind: String, Codable {
+        case transcript
+        case interactionPresented
+        case turnStarted
+        case turnEnded
+        case providerSessionObserved
+        case contextCompacted
+    }
+
+    private struct TurnPayload: Codable {
+        var turnID: String?
+        var reason: ConversationTurnEndReason?
+    }
+
+    private struct ProviderSessionPayload: Codable {
+        var providerSessionID: String
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        turnID = try container.decodeIfPresent(String.self, forKey: .turnID)
+        providerIdentity = try container.decodeIfPresent(String.self, forKey: .providerIdentity)
+        fingerprint = try container.decode(String.self, forKey: .fingerprint)
+        mayAuthorizeCurrentRuntime = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .mayAuthorizeCurrentRuntime
+        ) ?? true
+
+        switch try container.decode(PayloadKind.self, forKey: .payloadKind) {
+        case .transcript:
+            payload = .transcript(try container.decode(ConversationEventPayload.self, forKey: .payload))
+        case .interactionPresented:
+            payload = .interactionPresented(
+                try container.decode(ProviderInteractionObservation.self, forKey: .payload)
+            )
+        case .turnStarted:
+            payload = .turnStarted(
+                turnID: try container.decode(TurnPayload.self, forKey: .payload).turnID
+            )
+        case .turnEnded:
+            let value = try container.decode(TurnPayload.self, forKey: .payload)
+            guard let reason = value.reason else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .payload,
+                    in: container,
+                    debugDescription: "turnEnded payload is missing a reason"
+                )
+            }
+            payload = .turnEnded(turnID: value.turnID, reason: reason)
+        case .providerSessionObserved:
+            payload = .providerSessionObserved(
+                providerSessionID: try container.decode(
+                    ProviderSessionPayload.self,
+                    forKey: .payload
+                ).providerSessionID
+            )
+        case .contextCompacted:
+            payload = .contextCompacted
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(turnID, forKey: .turnID)
+        try container.encodeIfPresent(providerIdentity, forKey: .providerIdentity)
+        try container.encode(fingerprint, forKey: .fingerprint)
+        try container.encode(mayAuthorizeCurrentRuntime, forKey: .mayAuthorizeCurrentRuntime)
+
+        switch payload {
+        case .transcript(let value):
+            try container.encode(PayloadKind.transcript, forKey: .payloadKind)
+            try container.encode(value, forKey: .payload)
+        case .interactionPresented(let value):
+            try container.encode(PayloadKind.interactionPresented, forKey: .payloadKind)
+            try container.encode(value, forKey: .payload)
+        case .turnStarted(let turnID):
+            try container.encode(PayloadKind.turnStarted, forKey: .payloadKind)
+            try container.encode(TurnPayload(turnID: turnID), forKey: .payload)
+        case .turnEnded(let turnID, let reason):
+            try container.encode(PayloadKind.turnEnded, forKey: .payloadKind)
+            try container.encode(TurnPayload(turnID: turnID, reason: reason), forKey: .payload)
+        case .providerSessionObserved(let providerSessionID):
+            try container.encode(PayloadKind.providerSessionObserved, forKey: .payloadKind)
+            try container.encode(
+                ProviderSessionPayload(providerSessionID: providerSessionID),
+                forKey: .payload
+            )
+        case .contextCompacted:
+            try container.encode(PayloadKind.contextCompacted, forKey: .payloadKind)
+            try container.encodeNil(forKey: .payload)
+        }
     }
 }

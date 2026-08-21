@@ -1248,6 +1248,86 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.provider_conversation.reset":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let activeSession = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            let provider = try providerConversationAgent(
+                from: event.payload,
+                activeSession: activeSession
+            )
+            let nativeSessionID = try requiredProviderConversationText(
+                "nativeSessionID",
+                from: event.payload
+            )
+            let snapshotID = try requiredProviderConversationText(
+                "snapshotID",
+                from: event.payload
+            )
+            let didMutate = sessionRuntimeStore.resetProviderConversationFeed(
+                managedSessionID: sessionID,
+                provider: provider,
+                nativeSessionID: nativeSessionID,
+                snapshotID: snapshotID,
+                at: now
+            )
+            if didMutate { stateVersion += 1 }
+            return [
+                "eventType": .string(event.eventType),
+                "accepted": .bool(didMutate),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.provider_conversation.observation":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let activeSession = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            let provider = try providerConversationAgent(
+                from: event.payload,
+                activeSession: activeSession
+            )
+            let nativeSessionID = try requiredProviderConversationText(
+                "nativeSessionID",
+                from: event.payload
+            )
+            let snapshotID = try requiredProviderConversationText(
+                "snapshotID",
+                from: event.payload
+            )
+            let observationJSON = try requiredProviderConversationText(
+                "observationJSON",
+                from: event.payload
+            )
+            guard let observationData = observationJSON.data(using: .utf8),
+                  let observation = try? JSONDecoder().decode(
+                    ProviderTranscriptObservation.self,
+                    from: observationData
+                  ),
+                  observation.fingerprint.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("observationJSON is invalid")
+            }
+            let didMutate = sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: sessionID,
+                provider: provider,
+                nativeSessionID: nativeSessionID,
+                snapshotID: snapshotID,
+                observation: observation
+            )
+            if didMutate { stateVersion += 1 }
+            return [
+                "eventType": .string(event.eventType),
+                "accepted": .bool(didMutate),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.stop":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
@@ -2271,6 +2351,11 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     ) -> Bool {
         var scopedResumeRecord = resumeRecord
         scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        _ = sessionRuntimeStore.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: activeSession.panelID,
+            record: scopedResumeRecord
+        )
         if let currentResumeRecord = managedAgentResumeRecord(panelID: activeSession.panelID),
            currentResumeRecord.capturedAt >= activeSession.startedAt,
            currentResumeRecord.agent == scopedResumeRecord.agent,
@@ -2306,6 +2391,31 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             ]
         )
         return didMutate
+    }
+
+    private func providerConversationAgent(
+        from payload: [String: AutomationJSONValue],
+        activeSession: SessionRecord
+    ) throws -> AgentKind {
+        guard let rawProvider = normalizedOptionalText(payload.string("provider")),
+              let provider = AgentKind(rawValue: rawProvider),
+              ProviderTranscriptSupport.isManagedProvider(provider) else {
+            throw AutomationSocketError.invalidPayload("provider is not a managed agent")
+        }
+        guard provider == activeSession.agent else {
+            throw AutomationSocketError.invalidPayload("provider does not match active session")
+        }
+        return provider
+    }
+
+    private func requiredProviderConversationText(
+        _ key: String,
+        from payload: [String: AutomationJSONValue]
+    ) throws -> String {
+        guard let value = normalizedOptionalText(payload.string(key)) else {
+            throw AutomationSocketError.invalidPayload("\(key) is required")
+        }
+        return value
     }
 
     @MainActor

@@ -209,7 +209,7 @@ public struct ConversationSessionBindingChangedPayload: Codable, Equatable, Send
 
 /// Typed payload for one conversation event. The wire discriminator is
 /// `ConversationEventKind`.
-public enum ConversationEventPayload: Equatable, Sendable {
+public enum ConversationEventPayload: Codable, Equatable, Sendable {
     case userMessage(ConversationUserMessagePayload)
     case assistantMessage(ConversationAssistantMessagePayload)
     case toolStarted(ConversationToolStartedPayload)
@@ -231,6 +231,51 @@ public enum ConversationEventPayload: Equatable, Sendable {
         case .interactionResolved: return .interactionResolved
         case .subagentSummary: return .subagentSummary
         case .sessionBindingChanged: return .sessionBindingChanged
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case payload
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(ConversationEventKind.self, forKey: .kind) {
+        case .userMessage:
+            self = .userMessage(try container.decode(ConversationUserMessagePayload.self, forKey: .payload))
+        case .assistantMessage:
+            self = .assistantMessage(try container.decode(ConversationAssistantMessagePayload.self, forKey: .payload))
+        case .toolStarted:
+            self = .toolStarted(try container.decode(ConversationToolStartedPayload.self, forKey: .payload))
+        case .toolFinished:
+            self = .toolFinished(try container.decode(ConversationToolFinishedPayload.self, forKey: .payload))
+        case .statusChanged:
+            self = .statusChanged(try container.decode(ConversationStatusChangedPayload.self, forKey: .payload))
+        case .interactionPresented:
+            self = .interactionPresented(try container.decode(RemotePendingInteraction.self, forKey: .payload))
+        case .interactionResolved:
+            self = .interactionResolved(try container.decode(ConversationInteractionResolvedPayload.self, forKey: .payload))
+        case .subagentSummary:
+            self = .subagentSummary(try container.decode(ConversationSubagentSummaryPayload.self, forKey: .payload))
+        case .sessionBindingChanged:
+            self = .sessionBindingChanged(try container.decode(ConversationSessionBindingChangedPayload.self, forKey: .payload))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        switch self {
+        case .userMessage(let value): try container.encode(value, forKey: .payload)
+        case .assistantMessage(let value): try container.encode(value, forKey: .payload)
+        case .toolStarted(let value): try container.encode(value, forKey: .payload)
+        case .toolFinished(let value): try container.encode(value, forKey: .payload)
+        case .statusChanged(let value): try container.encode(value, forKey: .payload)
+        case .interactionPresented(let value): try container.encode(value, forKey: .payload)
+        case .interactionResolved(let value): try container.encode(value, forKey: .payload)
+        case .subagentSummary(let value): try container.encode(value, forKey: .payload)
+        case .sessionBindingChanged(let value): try container.encode(value, forKey: .payload)
         }
     }
 }

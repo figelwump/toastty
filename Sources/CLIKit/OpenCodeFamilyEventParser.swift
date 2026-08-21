@@ -137,6 +137,15 @@ private extension OpenCodeFamilyEventParser {
                 properties: properties
             )
 
+        case "toastty.conversation.batch":
+            guard let provider = agentKind(for: source) else { return [] }
+            return ProviderConversationBatchParser.commands(
+                provider: provider,
+                sessionID: sessionID,
+                panelID: panelID,
+                object: properties
+            )
+
         case "toastty.background_activity":
             return backgroundActivityCommands(
                 sessionID: sessionID,

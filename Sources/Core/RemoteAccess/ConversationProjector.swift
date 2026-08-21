@@ -288,7 +288,9 @@ public struct ConversationProjector: Sendable {
     // MARK: - Internals
 
     private func observationAuthorizesCurrentRuntime(_ observation: ProviderTranscriptObservation) -> Bool {
-        guard isRuntimeBound, let providerAuthorityEstablishedAt else { return false }
+        guard observation.mayAuthorizeCurrentRuntime,
+              isRuntimeBound,
+              let providerAuthorityEstablishedAt else { return false }
         return observation.timestamp >= providerAuthorityEstablishedAt
     }
 

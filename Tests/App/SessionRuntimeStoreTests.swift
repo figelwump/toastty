@@ -7,6 +7,77 @@ import Testing
 @MainActor
 struct SessionRuntimeStoreTests {
     @Test
+    func managedProviderConversationFeedRequiresConfirmedBindingAndDeduplicates() throws {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let sessionID = "sess-opencode-feed"
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+        let record = ManagedAgentResumeRecord(
+            agent: .opencode,
+            nativeSessionID: "native-opencode",
+            sessionFilePath: "/tmp/opencode-marker.json",
+            cwd: "/repo",
+            capturedAt: date
+        )
+        store.startSession(
+            sessionID: sessionID,
+            agent: .opencode,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: date
+        )
+
+        #expect(store.resetProviderConversationFeed(
+            managedSessionID: sessionID,
+            provider: .opencode,
+            nativeSessionID: record.nativeSessionID,
+            snapshotID: "snapshot-1",
+            at: date
+        ) == false)
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: record
+        ))
+        #expect(store.resetProviderConversationFeed(
+            managedSessionID: sessionID,
+            provider: .opencode,
+            nativeSessionID: record.nativeSessionID,
+            snapshotID: "snapshot-1",
+            at: date
+        ))
+
+        let observation = ProviderTranscriptObservation(
+            timestamp: date.addingTimeInterval(1),
+            fingerprint: "managed:opencode:message-1",
+            payload: .transcript(.assistantMessage(.init(text: "Done"))),
+            mayAuthorizeCurrentRuntime: false
+        )
+        #expect(store.ingestProviderConversationObservation(
+            managedSessionID: sessionID,
+            provider: .opencode,
+            nativeSessionID: record.nativeSessionID,
+            snapshotID: "snapshot-1",
+            observation: observation
+        ))
+        #expect(store.ingestProviderConversationObservation(
+            managedSessionID: sessionID,
+            provider: .opencode,
+            nativeSessionID: record.nativeSessionID,
+            snapshotID: "snapshot-1",
+            observation: observation
+        ) == false)
+
+        let feed = try #require(store.providerConversationFeed(managedSessionID: sessionID))
+        #expect(feed.provider == .opencode)
+        #expect(feed.observations.count == 2)
+        #expect(feed.observations.last == observation)
+    }
+
+    @Test
     func nativeSessionBindingConfirmationIsCurrentLaunchAndActiveSessionScoped() {
         let store = SessionRuntimeStore()
         let panelID = UUID()

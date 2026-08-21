@@ -82,6 +82,22 @@ enum CLICommand: Equatable {
     case sessionCodexNotifyCompletion(sessionID: String, panelID: UUID?, completion: CodexNotifyCompletion)
     case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
     case sessionUpdateResumeRecord(sessionID: String, panelID: UUID?, agent: AgentKind, nativeSessionID: String, sessionFilePath: String, cwd: String?)
+    case sessionProviderConversationReset(
+        sessionID: String,
+        panelID: UUID?,
+        provider: AgentKind,
+        nativeSessionID: String,
+        snapshotID: String,
+        at: Date
+    )
+    case sessionProviderConversationObservation(
+        sessionID: String,
+        panelID: UUID?,
+        provider: AgentKind,
+        nativeSessionID: String,
+        snapshotID: String,
+        observation: ProviderTranscriptObservation
+    )
     case sessionIngestAgentEvent(sessionID: String, panelID: UUID?, source: AgentEventSource)
     case sessionStop(sessionID: String, panelID: UUID?, reason: String?)
     case sessionScopeShow(sessionID: String)
@@ -95,7 +111,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -417,6 +433,52 @@ enum CLICommand: Equatable {
                 payload: payload
             )
 
+        case .sessionProviderConversationReset(
+            let sessionID,
+            let panelID,
+            let provider,
+            let nativeSessionID,
+            let snapshotID,
+            let date
+        ):
+            return AutomationEventEnvelope(
+                eventType: "session.provider_conversation.reset",
+                sessionID: sessionID,
+                panelID: panelID?.uuidString,
+                timestamp: ISO8601DateFormatter().string(from: date),
+                requestID: requestID,
+                payload: [
+                    "provider": .string(provider.rawValue),
+                    "nativeSessionID": .string(nativeSessionID),
+                    "snapshotID": .string(snapshotID),
+                ]
+            )
+
+        case .sessionProviderConversationObservation(
+            let sessionID,
+            let panelID,
+            let provider,
+            let nativeSessionID,
+            let snapshotID,
+            let observation
+        ):
+            guard let data = try? JSONEncoder().encode(observation),
+                  let observationJSON = String(data: data, encoding: .utf8) else {
+                preconditionFailure("provider conversation observations must be JSON encodable")
+            }
+            return AutomationEventEnvelope(
+                eventType: "session.provider_conversation.observation",
+                sessionID: sessionID,
+                panelID: panelID?.uuidString,
+                requestID: requestID,
+                payload: [
+                    "provider": .string(provider.rawValue),
+                    "nativeSessionID": .string(nativeSessionID),
+                    "snapshotID": .string(snapshotID),
+                    "observationJSON": .string(observationJSON),
+                ]
+            )
+
         case .sessionIngestAgentEvent:
             preconditionFailure("session ingest agent events are handled locally")
 
@@ -477,6 +539,10 @@ enum CLICommand: Equatable {
             return "queued \(queuedFiles) files for \(sessionID)"
         case .sessionUpdateResumeRecord(let sessionID, _, _, _, _, _):
             return "updated resume record for \(sessionID)"
+        case .sessionProviderConversationReset(let sessionID, _, _, _, _, _):
+            return "reset provider conversation for \(sessionID)"
+        case .sessionProviderConversationObservation(let sessionID, _, _, _, _, _):
+            return "processed provider conversation event for \(sessionID)"
         case .sessionIngestAgentEvent(_, _, let source):
             return "processed \(source.rawValue) event"
         case .sessionStop(let sessionID, _, _):

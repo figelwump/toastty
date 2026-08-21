@@ -279,19 +279,22 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
-    @Test func currentLaunchConfirmationDoesNotBootstrapWorkingOrClaudeSessions() throws {
+    @Test func currentLaunchConfirmationBootstrapsEveryReadyManagedProviderButNotWorking() throws {
         let workingFixture = try RemoteBootstrapFixture(statusKind: .working)
         defer { workingFixture.removeRuntimeFiles() }
         #expect(workingFixture.confirmCurrentLaunchBinding())
         #expect(workingFixture.summary.inputAvailability ==
             .unavailable(reason: .unknownProviderState))
 
-        let claudeFixture = try RemoteBootstrapFixture(agent: .claude)
-        defer { claudeFixture.removeRuntimeFiles() }
-        #expect(claudeFixture.confirmCurrentLaunchBinding() == false)
-        #expect(claudeFixture.currentResumeRecord?.capturedAt == claudeFixture.confirmedAt)
-        #expect(claudeFixture.summary.inputAvailability ==
-            .unavailable(reason: .unknownProviderState))
+        for provider in [AgentKind.claude, .opencode, .mimocode, .pi] {
+            let fixture = try RemoteBootstrapFixture(agent: provider)
+            defer { fixture.removeRuntimeFiles() }
+            #expect(fixture.confirmCurrentLaunchBinding(), "\(provider.rawValue)")
+            guard case .openPrompt = fixture.summary.inputAvailability else {
+                Issue.record("Expected current-launch \(provider.rawValue) prompt")
+                continue
+            }
+        }
     }
 
     @MainActor
@@ -328,6 +331,49 @@ struct RemoteAccessServiceSafetyTests {
         )
 
         #expect(result == .rejected(reason: .surfaceUnavailable))
+    }
+
+    @MainActor
+    @Test func providerFeedProjectsPiConversationContentWithoutGrantingHistoricalAuthority() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .pi)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID,
+            provider: .pi,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "pi-snapshot-1",
+            at: fixture.confirmedAt
+        ))
+        #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+            managedSessionID: fixture.sessionID,
+            provider: .pi,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "pi-snapshot-1",
+            observation: ProviderTranscriptObservation(
+                timestamp: fixture.confirmedAt.addingTimeInterval(1),
+                fingerprint: "managed:pi:assistant-1",
+                payload: .transcript(.assistantMessage(.init(text: "Pi finished the work"))),
+                mayAuthorizeCurrentRuntime: false
+            )
+        ))
+
+        guard case .page(let page) = fixture.service.facadeConversationEvents(
+            for: fixture.conversationID,
+            after: nil,
+            limit: 100
+        ) else {
+            Issue.record("Expected Pi conversation event page")
+            return
+        }
+        #expect(page.events.contains { event in
+            guard case .assistantMessage(let payload) = event.payload else { return false }
+            return payload.text == "Pi finished the work"
+        })
+        guard case .openPrompt = fixture.summary.inputAvailability else {
+            Issue.record("Historical feed replay closed the confirmed current prompt")
+            return
+        }
     }
 
     @MainActor

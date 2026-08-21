@@ -46,6 +46,41 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func claudeUserPromptSubmitPublishesBoundLiveTurnStart() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hook_event_name":"UserPromptSubmit","session_id":"claude-root","turn_id":"turn-7","prompt":"Continue"}"#.utf8
+            )
+        )
+
+        #expect(commands.count == 2)
+        guard case .sessionProviderConversationObservation(
+            let observedSessionID,
+            let observedPanelID,
+            let provider,
+            let nativeSessionID,
+            let snapshotID,
+            let observation
+        ) = commands[1], case .turnStarted(let turnID) = observation.payload else {
+            Issue.record("Expected bound Claude turn start")
+            return
+        }
+        #expect(observedSessionID == "sess-123")
+        #expect(observedPanelID == panelID)
+        #expect(provider == .claude)
+        #expect(nativeSessionID == "claude-root")
+        #expect(snapshotID == "claude:claude-root")
+        #expect(turnID == "turn-7")
+        #expect(observation.turnID == "turn-7")
+        #expect(observation.fingerprint == "managed:claude:turn-start:turn-7")
+        #expect(observation.mayAuthorizeCurrentRuntime)
+    }
+
+    @Test
     func claudeStopMapsToReadyStatusWithAssistantSummary() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,
@@ -65,6 +100,41 @@ struct AgentEventParsersTests {
                 detail: "Updated the sidebar and validated the tests."
             )
         ])
+    }
+
+    @Test
+    func claudeStopPublishesBoundLivePromptOpen() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hook_event_name":"Stop","session_id":"claude-root","turn_id":"turn-7","stop_hook_active":false,"last_assistant_message":"Done"}"#.utf8
+            )
+        )
+
+        #expect(commands.count == 2)
+        guard case .sessionProviderConversationObservation(
+            let observedSessionID,
+            let observedPanelID,
+            let provider,
+            let nativeSessionID,
+            let snapshotID,
+            let observation
+        ) = commands[1], case .turnEnded(let turnID, let reason) = observation.payload else {
+            Issue.record("Expected bound Claude prompt open")
+            return
+        }
+        #expect(observedSessionID == "sess-123")
+        #expect(observedPanelID == panelID)
+        #expect(provider == .claude)
+        #expect(nativeSessionID == "claude-root")
+        #expect(snapshotID == "claude:claude-root")
+        #expect(turnID == "turn-7")
+        #expect(reason == .completed)
+        #expect(observation.fingerprint == "managed:claude:prompt-open:turn-7")
+        #expect(observation.mayAuthorizeCurrentRuntime)
     }
 
     @Test
@@ -578,7 +648,8 @@ struct AgentEventParsersTests {
             )
         )
 
-        #expect(commands == [
+        #expect(commands.count == 2)
+        #expect(commands.first ==
             .sessionUpdateResumeRecord(
                 sessionID: "sess-123",
                 panelID: panelID,
@@ -586,8 +657,25 @@ struct AgentEventParsersTests {
                 nativeSessionID: "claude-root",
                 sessionFilePath: "/tmp/claude/session.jsonl",
                 cwd: "/tmp/repo"
-            ),
-        ])
+            )
+        )
+        let resetCommand = try #require(commands.last)
+        guard case .sessionProviderConversationReset(
+            let resetSessionID,
+            let resetPanelID,
+            let resetProvider,
+            let resetNativeSessionID,
+            let resetSnapshotID,
+            _
+        ) = resetCommand else {
+            Issue.record("Expected Claude conversation reset")
+            return
+        }
+        #expect(resetSessionID == "sess-123")
+        #expect(resetPanelID == panelID)
+        #expect(resetProvider == .claude)
+        #expect(resetNativeSessionID == "claude-root")
+        #expect(resetSnapshotID == "claude:claude-root")
     }
 
     @Test
@@ -602,7 +690,8 @@ struct AgentEventParsersTests {
             )
         )
 
-        #expect(commands == [
+        #expect(commands.count == 2)
+        #expect(commands.first ==
             .sessionUpdateResumeRecord(
                 sessionID: "sess-123",
                 panelID: panelID,
@@ -610,8 +699,8 @@ struct AgentEventParsersTests {
                 nativeSessionID: "claude-root",
                 sessionFilePath: "/tmp/claude/session.jsonl",
                 cwd: nil
-            ),
-        ])
+            )
+        )
     }
 
     @Test
@@ -1023,6 +1112,111 @@ struct AgentEventParsersTests {
                 cwd: "/tmp/repo with spaces"
             ),
         ])
+    }
+
+    @Test
+    func openCodeConversationBatchMapsHistoricalAndLiveObservations() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"type":"toastty.conversation.batch","properties":{"nativeSessionID":"native-1","snapshotID":"snapshot-1","reset":true,"timestamp":"2026-08-21T12:00:00Z","records":[{"kind":"assistant_message","eventID":"message-1","timestamp":"2026-08-21T12:00:01Z","text":"Historical answer","phase":"final","live":false},{"kind":"prompt_open","eventID":"turn-end-1","timestamp":"2026-08-21T12:00:02Z","turnID":"turn-1","live":true}]}}"#.utf8
+            )
+        )
+
+        #expect(commands.count == 3)
+        guard case .sessionProviderConversationReset(
+            let resetSessionID,
+            let resetPanelID,
+            let resetProvider,
+            let resetNativeSessionID,
+            let resetSnapshotID,
+            _
+        ) = commands[0] else {
+            Issue.record("Expected provider reset")
+            return
+        }
+        #expect(resetSessionID == "sess-123")
+        #expect(resetPanelID == panelID)
+        #expect(resetProvider == .opencode)
+        #expect(resetNativeSessionID == "native-1")
+        #expect(resetSnapshotID == "snapshot-1")
+        guard case .sessionProviderConversationObservation(_, _, _, _, _, let historical) = commands[1],
+              case .transcript(.assistantMessage(let message)) = historical.payload else {
+            Issue.record("Expected historical assistant message")
+            return
+        }
+        #expect(message.text == "Historical answer")
+        #expect(historical.mayAuthorizeCurrentRuntime == false)
+        guard case .sessionProviderConversationObservation(_, _, _, _, _, let live) = commands[2],
+              case .turnEnded(let turnID, let reason) = live.payload else {
+            Issue.record("Expected live completed turn")
+            return
+        }
+        #expect(turnID == "turn-1")
+        #expect(reason == .completed)
+        #expect(live.mayAuthorizeCurrentRuntime)
+
+        let envelope = commands[2].makeEventEnvelope(requestID: "request-1")
+        let json = try #require(envelope.payload.string("observationJSON"))
+        let decoded = try JSONDecoder().decode(
+            ProviderTranscriptObservation.self,
+            from: Data(json.utf8)
+        )
+        #expect(decoded == live)
+    }
+
+    @Test
+    func providerConversationBatchRejectsMoreThanMaximumRecordCount() throws {
+        let records: [[String: Any]] = (0..<257).map { index in
+            [
+                "kind": "assistant_message",
+                "eventID": "message-\(index)",
+                "text": "Reply \(index)",
+                "live": false,
+            ]
+        }
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "type": "toastty.conversation.batch",
+            "properties": [
+                "nativeSessionID": "native-1",
+                "snapshotID": "snapshot-1",
+                "reset": true,
+                "records": records,
+            ],
+        ])
+
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: payload
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func piConversationBatchUsesSharedNormalization() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"conversation_batch","nativeSessionID":"pi-native","snapshotID":"pi-snapshot","reset":true,"records":[{"kind":"user_message","eventID":"user-1","text":"Continue","live":false}]}"#.utf8
+            )
+        )
+
+        #expect(commands.count == 2)
+        guard case .sessionProviderConversationObservation(_, _, .pi, _, _, let observation) = commands[1],
+              case .transcript(.userMessage(let message)) = observation.payload else {
+            Issue.record("Expected normalized Pi user message")
+            return
+        }
+        #expect(message.text == "Continue")
+        #expect(observation.mayAuthorizeCurrentRuntime == false)
     }
 
     @Test

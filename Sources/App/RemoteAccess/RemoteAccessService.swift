@@ -312,6 +312,17 @@ final class RemoteAccessService: ObservableObject {
     private var activeSessionIDByConversationID: [RemoteConversationID: String] = [:]
     private var panelIDByConversationID: [RemoteConversationID: UUID] = [:]
     private var conversationIDByPanelID: [UUID: RemoteConversationID] = [:]
+    private struct ProviderFeedIdentity: Equatable {
+        var provider: AgentKind
+        var nativeSessionID: String
+        var snapshotID: String
+    }
+    private var providerFeedIdentityByConversationID: [
+        RemoteConversationID: ProviderFeedIdentity
+    ] = [:]
+    private var providerFeedLastFingerprintByConversationID: [
+        RemoteConversationID: String
+    ] = [:]
     private var bootstrappedPromptAuthorityByConversationID: [
         RemoteConversationID: BootstrappedPromptAuthority
     ] = [:]
@@ -500,6 +511,16 @@ final class RemoteAccessService: ObservableObject {
             }
             .store(in: &conversationTrackingCancellables)
 
+        sessionRuntimeStore.$providerConversationRevision
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation else { return }
+                self.syncConversations()
+            }
+            .store(in: &conversationTrackingCancellables)
+
         // Resume-record and conversation-identity changes mutate panel state
         // without touching the session registry; without this observer a
         // rollout-path change would never restart the transcript tailer.
@@ -536,6 +557,8 @@ final class RemoteAccessService: ObservableObject {
         activeSessionIDByConversationID.removeAll()
         panelIDByConversationID.removeAll()
         conversationIDByPanelID.removeAll()
+        providerFeedIdentityByConversationID.removeAll()
+        providerFeedLastFingerprintByConversationID.removeAll()
         bootstrappedPromptAuthorityByConversationID.removeAll()
         pendingSendCorrelator = RemotePendingSendCorrelator()
         coordinator = RemoteInputCoordinator()
@@ -784,6 +807,7 @@ final class RemoteAccessService: ObservableObject {
         var statusDetail: String?
         var updatedAt: Date
         var transcriptPath: String?
+        var providerFeed: ManagedProviderConversationFeedSnapshot?
         var nativeBindingConfirmation: ManagedNativeSessionBindingConfirmation?
     }
 
@@ -800,8 +824,7 @@ final class RemoteAccessService: ObservableObject {
         var listChanged = false
 
         for candidate in candidates {
-            guard ProviderTranscriptSupport.isSupported(candidate.provider) else {
-                // Providers without a transcript parser stay registry-derived.
+            guard ProviderTranscriptSupport.isManagedProvider(candidate.provider) else {
                 continue
             }
             seenConversationIDs.insert(candidate.conversationID)
@@ -855,29 +878,21 @@ final class RemoteAccessService: ObservableObject {
             }
             if let activeSessionID = candidate.activeSessionID {
                 if previousActiveSessionID != activeSessionID {
-                    if isNewRegistration, candidate.transcriptPath == nil {
-                        // Registration already initialized this empty
-                        // projector as runtime-bound. Track the live surface
-                        // immediately so send/lifecycle decisions do not wait
-                        // for the provider to publish its transcript path.
-                        activeSessionIDByConversationID[candidate.conversationID] = activeSessionID
-                    } else {
-                        let reason: ConversationBindingChangeReason =
-                            previousActiveSessionID == nil && isNewRegistration
-                                ? .runtimeBound
-                                : .runtimeResumed
-                        let emitted = projectionStore.noteBinding(
-                            for: candidate.conversationID,
-                            reason: reason,
-                            providerSessionFilePath: candidate.transcriptPath,
-                            clearsProviderSessionFilePath: candidate.transcriptPath == nil,
-                            bindingID: UUID(),
-                            at: candidate.runtimeBindingStartedAt ?? Date()
-                        )
-                        broadcastEvents(emitted, for: candidate.conversationID)
-                        activeSessionIDByConversationID[candidate.conversationID] = activeSessionID
-                        listChanged = true
-                    }
+                    let reason: ConversationBindingChangeReason =
+                        previousActiveSessionID == nil && isNewRegistration
+                            ? .runtimeBound
+                            : .runtimeResumed
+                    let emitted = projectionStore.noteBinding(
+                        for: candidate.conversationID,
+                        reason: reason,
+                        providerSessionFilePath: candidate.transcriptPath,
+                        clearsProviderSessionFilePath: candidate.transcriptPath == nil,
+                        bindingID: UUID(),
+                        at: candidate.runtimeBindingStartedAt ?? Date()
+                    )
+                    broadcastEvents(emitted, for: candidate.conversationID)
+                    activeSessionIDByConversationID[candidate.conversationID] = activeSessionID
+                    listChanged = true
                 } else if let rolloutPath = candidate.transcriptPath,
                           let projector = projectionStore.projectorState(for: candidate.conversationID),
                           projector.providerSessionFilePath != rolloutPath {
@@ -915,6 +930,10 @@ final class RemoteAccessService: ObservableObject {
                 for: candidate.conversationID,
                 runtimeBound: candidate.activeSessionID != nil
             ) {
+                listChanged = true
+            }
+
+            if syncProviderFeed(candidate) {
                 listChanged = true
             }
 
@@ -960,7 +979,6 @@ final class RemoteAccessService: ObservableObject {
 
             if let activeSessionID = candidate.activeSessionID,
                let confirmation = candidate.nativeBindingConfirmation,
-               candidate.provider == .codex,
                candidate.registryState == .ready,
                confirmation.managedSessionID == activeSessionID,
                sessionRuntimeStore.isNativeSessionBindingInputClean(confirmation) {
@@ -1006,7 +1024,7 @@ final class RemoteAccessService: ObservableObject {
         }
 
         let controllableSessions = buildConversationSummaries().filter {
-            ProviderTranscriptSupport.isSupported($0.provider)
+            ProviderTranscriptSupport.isManagedProvider($0.provider)
         }
         if writeControllableSessions != controllableSessions {
             writeControllableSessions = controllableSessions
@@ -1095,8 +1113,17 @@ final class RemoteAccessService: ObservableObject {
                 let panelStatus = sessionRuntimeStore.panelStatus(for: panelID)
                 let hasLiveAgent = activeRecord.map { $0.isActive && $0.agent != .processWatch } ?? false
                 let restorableProvider = terminalState.resumeRecord?.agent
+                let restorableFeed = terminalState.resumeRecord.flatMap { resumeRecord in
+                    sessionRuntimeStore.providerConversationFeed(
+                        provider: resumeRecord.agent,
+                        nativeSessionID: resumeRecord.nativeSessionID
+                    )
+                }
                 let hasRestorableTranscript = terminalState.remoteConversationID != nil
-                    && restorableProvider.map(ProviderTranscriptSupport.isSupported) == true
+                    && (
+                        restorableProvider.map(ProviderTranscriptSupport.hasFileTranscript) == true
+                            || restorableFeed != nil
+                    )
                 guard hasLiveAgent || hasRestorableTranscript else { continue }
                 guard seenPanelIDs.insert(panelID).inserted else { continue }
 
@@ -1126,22 +1153,24 @@ final class RemoteAccessService: ObservableObject {
                 }
                 // Both Codex rollout files and Claude transcript files are
                 // recorded as the resume record's sessionFilePath.
-                let transcriptPath = ProviderTranscriptSupport.isSupported(provider)
+                let transcriptPath = ProviderTranscriptSupport.hasFileTranscript(provider)
                     && terminalState.resumeRecord?.agent == provider
                     ? terminalState.resumeRecord?.sessionFilePath
                     : nil
+                let providerFeed = activeSessionID.flatMap {
+                    sessionRuntimeStore.providerConversationFeed(managedSessionID: $0)
+                } ?? restorableFeed
                 let nativeBindingConfirmation: ManagedNativeSessionBindingConfirmation? =
                     activeRecord.flatMap { record in
-                        guard record.agent == .codex,
-                              let transcriptPath,
+                        guard ProviderTranscriptSupport.isManagedProvider(record.agent),
+                              let resumeRecord = terminalState.resumeRecord,
                               let confirmation = sessionRuntimeStore.nativeSessionBindingConfirmation(
                                   for: record.sessionID
                               ),
-                              confirmation.agent == .codex,
+                              confirmation.agent == record.agent,
                               confirmation.panelID == panelID,
-                              confirmation.nativeSessionID ==
-                                terminalState.resumeRecord?.nativeSessionID,
-                              confirmation.sessionFilePath == transcriptPath else {
+                              confirmation.nativeSessionID == resumeRecord.nativeSessionID,
+                              confirmation.sessionFilePath == resumeRecord.sessionFilePath else {
                             return nil
                         }
                         return confirmation
@@ -1164,8 +1193,12 @@ final class RemoteAccessService: ObservableObject {
                         Self.remotePresentationStatus(for: $0.status.kind)
                     },
                     statusDetail: Self.remoteStatusDetail(from: panelStatus?.status.detail),
-                    updatedAt: activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? Date(),
+                    updatedAt: max(
+                        activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? .distantPast,
+                        providerFeed?.updatedAt ?? .distantPast
+                    ),
                     transcriptPath: transcriptPath,
+                    providerFeed: providerFeed,
                     nativeBindingConfirmation: nativeBindingConfirmation
                 ))
             }
@@ -1186,6 +1219,8 @@ final class RemoteAccessService: ObservableObject {
         coordinator.removeConversation(conversationID)
         activeSessionIDByConversationID.removeValue(forKey: conversationID)
         bootstrappedPromptAuthorityByConversationID.removeValue(forKey: conversationID)
+        providerFeedIdentityByConversationID.removeValue(forKey: conversationID)
+        providerFeedLastFingerprintByConversationID.removeValue(forKey: conversationID)
         pendingSendCorrelator.discard(for: conversationID)
         if let panelID = panelIDByConversationID.removeValue(forKey: conversationID),
            conversationIDByPanelID[panelID] == conversationID {
@@ -1312,6 +1347,80 @@ final class RemoteAccessService: ObservableObject {
 
     // MARK: - Transcript tailers
 
+    /// Replays a bounded launch-scoped provider snapshot into the same
+    /// projector used by native transcript files. A new snapshot ID denotes
+    /// an unreconcilable branch/rewrite and therefore starts a new generation.
+    @discardableResult
+    private func syncProviderFeed(_ candidate: ConversationCandidate) -> Bool {
+        guard let feed = candidate.providerFeed,
+              feed.provider == candidate.provider else {
+            providerFeedIdentityByConversationID.removeValue(forKey: candidate.conversationID)
+            providerFeedLastFingerprintByConversationID.removeValue(forKey: candidate.conversationID)
+            return false
+        }
+        let identity = ProviderFeedIdentity(
+            provider: feed.provider,
+            nativeSessionID: feed.nativeSessionID,
+            snapshotID: feed.snapshotID
+        )
+        let previousIdentity = providerFeedIdentityByConversationID[candidate.conversationID]
+        let previousFingerprint = providerFeedLastFingerprintByConversationID[candidate.conversationID]
+        let previousObservationIndex = previousFingerprint.flatMap { fingerprint in
+            feed.observations.lastIndex { $0.fingerprint == fingerprint }
+        }
+        let feedWasRewritten = previousIdentity == identity
+            && previousFingerprint != nil
+            && previousObservationIndex == nil
+        var changed = false
+        if let previousIdentity, previousIdentity != identity || feedWasRewritten {
+            pendingSendCorrelator.discard(for: candidate.conversationID)
+            projectionStore.forceResnapshot(
+                for: candidate.conversationID,
+                bindingID: UUID(),
+                at: feed.updatedAt
+            )
+            server.broadcast(.resnapshotRequired(conversationID: candidate.conversationID))
+            if let tailer = tailersByConversationID.removeValue(forKey: candidate.conversationID) {
+                let path = tailer.fileURL.path
+                let provider = tailer.provider
+                tailer.stop()
+                startTailer(for: candidate.conversationID, provider: provider, path: path)
+            }
+            changed = true
+        }
+        providerFeedIdentityByConversationID[candidate.conversationID] = identity
+
+        let bindingIsAuthoritative = candidate.activeSessionID != nil
+            && candidate.nativeBindingConfirmation?.nativeSessionID == feed.nativeSessionID
+            && candidate.nativeBindingConfirmation?.agent == feed.provider
+        let observationsToIngest: ArraySlice<ProviderTranscriptObservation>
+        if previousIdentity == identity,
+           feedWasRewritten == false,
+           let previousObservationIndex {
+            observationsToIngest = feed.observations.suffix(from: previousObservationIndex + 1)
+        } else {
+            observationsToIngest = feed.observations[...]
+        }
+        let observations = observationsToIngest.map { observation in
+            guard observation.mayAuthorizeCurrentRuntime && bindingIsAuthoritative == false else {
+                return observation
+            }
+            var historical = observation
+            historical.mayAuthorizeCurrentRuntime = false
+            return historical
+        }
+        let stamped = stampPendingSends(observations, for: candidate.conversationID)
+        let emitted = projectionStore.ingest(stamped, for: candidate.conversationID)
+        syncCoordinatorAvailability(for: candidate.conversationID)
+        broadcastEvents(emitted, for: candidate.conversationID)
+        if let lastFingerprint = feed.observations.last?.fingerprint {
+            providerFeedLastFingerprintByConversationID[candidate.conversationID] = lastFingerprint
+        } else {
+            providerFeedLastFingerprintByConversationID.removeValue(forKey: candidate.conversationID)
+        }
+        return changed || emitted.isEmpty == false
+    }
+
     private func ensureTailer(for conversationID: RemoteConversationID, provider: AgentKind, path: String) {
         if let existing = tailersByConversationID[conversationID] {
             if existing.fileURL.path == path {
@@ -1354,6 +1463,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func startTailer(for conversationID: RemoteConversationID, provider: AgentKind, path: String) {
+        guard ProviderTranscriptSupport.hasFileTranscript(provider) else { return }
         // Every fresh tailer replays from byte zero. Discard correlation before
         // constructing it so historical same-text input cannot confirm a send
         // accepted against the previous file/tailer lifetime.
@@ -1364,7 +1474,10 @@ final class RemoteAccessService: ObservableObject {
             fileURL: URL(filePath: path),
             provider: provider,
             makeParser: {
-                ProviderTranscriptSupport.makeParser(for: provider) ?? CodexRolloutTranscriptParser()
+                guard let parser = ProviderTranscriptSupport.makeParser(for: provider) else {
+                    preconditionFailure("file transcript provider is missing a parser")
+                }
+                return parser
             }
         ) { [weak self] conversationID, event in
             self?.handleTailerEvent(conversationID, event, generation: generation)
@@ -1541,7 +1654,7 @@ final class RemoteAccessService: ObservableObject {
                   sessionID: authority.managedSessionID
               ),
               activeSession.panelID == panelID,
-              activeSession.agent == .codex,
+              activeSession.agent == authority.confirmation.agent,
               sessionRuntimeStore.nativeSessionBindingConfirmation(
                   for: authority.managedSessionID
               ) == authority.confirmation else {

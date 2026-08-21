@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 enum ClaudeHookEventParser {
     static func parse(
@@ -14,7 +15,7 @@ enum ClaudeHookEventParser {
 
         switch eventName {
         case "UserPromptSubmit":
-            return [
+            var commands: [CLICommand] = [
                 .sessionStatus(
                     sessionID: sessionID,
                     panelID: panelID,
@@ -23,9 +24,19 @@ enum ClaudeHookEventParser {
                     detail: submittedPromptDetail(from: object) ?? "Responding to your prompt"
                 ),
             ]
+            if let command = lifecycleObservationCommand(
+                sessionID: sessionID,
+                panelID: panelID,
+                object: object,
+                eventID: "turn-start:\(normalizedString(object["turn_id"]) ?? UUID().uuidString)",
+                payload: .turnStarted(turnID: normalizedString(object["turn_id"]))
+            ) {
+                commands.append(command)
+            }
+            return commands
 
         case "PermissionRequest":
-            return [
+            var commands: [CLICommand] = [
                 .sessionStatus(
                     sessionID: sessionID,
                     panelID: panelID,
@@ -34,6 +45,24 @@ enum ClaudeHookEventParser {
                     detail: approvalDetail(from: object) ?? "Claude Code is waiting for approval"
                 ),
             ]
+            let callID = normalizedString(object["tool_use_id"])
+            if let command = lifecycleObservationCommand(
+                sessionID: sessionID,
+                panelID: panelID,
+                object: object,
+                eventID: "interaction:\(callID ?? UUID().uuidString)",
+                payload: .interactionPresented(
+                    ProviderInteractionObservation(
+                        kind: .permission,
+                        providerCallID: callID,
+                        providerApprovalID: nil,
+                        prompt: approvalDetail(from: object) ?? "Claude Code is waiting for approval"
+                    )
+                )
+            ) {
+                commands.append(command)
+            }
+            return commands
 
         case "PreToolUse":
             return [
@@ -72,6 +101,19 @@ enum ClaudeHookEventParser {
                     detail: normalizedSummaryText(object["last_assistant_message"]) ?? "Turn complete"
                 )
             )
+            if object["stop_hook_active"] as? Bool != true,
+               let command = lifecycleObservationCommand(
+                sessionID: sessionID,
+                panelID: panelID,
+                object: object,
+                eventID: "prompt-open:\(normalizedString(object["turn_id"]) ?? UUID().uuidString)",
+                payload: .turnEnded(
+                    turnID: normalizedString(object["turn_id"]),
+                    reason: .completed
+                )
+               ) {
+                commands.append(command)
+            }
             return commands
 
         case "SubagentStart":
@@ -148,7 +190,43 @@ enum ClaudeHookEventParser {
                 sessionFilePath: sessionFilePath,
                 cwd: normalizedPathString(object["cwd"])
             ),
+            .sessionProviderConversationReset(
+                sessionID: sessionID,
+                panelID: panelID,
+                provider: .claude,
+                nativeSessionID: nativeSessionID,
+                snapshotID: "claude:\(nativeSessionID)",
+                at: Date()
+            ),
         ]
+    }
+
+    private static func lifecycleObservationCommand(
+        sessionID: String,
+        panelID: UUID?,
+        object: [String: Any],
+        eventID: String,
+        payload: ProviderObservationPayload
+    ) -> CLICommand? {
+        // Claude's lifecycle hook contract carries `session_id`. Without that
+        // exact provider identity the status update remains useful, but the
+        // event must not participate in remote send authorization.
+        guard let nativeSessionID = normalizedString(object["session_id"]) else { return nil }
+        return .sessionProviderConversationObservation(
+            sessionID: sessionID,
+            panelID: panelID,
+            provider: .claude,
+            nativeSessionID: nativeSessionID,
+            snapshotID: "claude:\(nativeSessionID)",
+            observation: ProviderTranscriptObservation(
+                timestamp: Date(),
+                turnID: normalizedString(object["turn_id"]),
+                providerIdentity: nativeSessionID,
+                fingerprint: "managed:claude:\(eventID)",
+                payload: payload,
+                mayAuthorizeCurrentRuntime: true
+            )
+        )
     }
 
     private static func postToolUseCommands(

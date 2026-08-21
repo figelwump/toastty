@@ -162,6 +162,20 @@ struct ConversationProjectorTests {
         #expect(epoch.bindingID == Self.resumedBindingID)
     }
 
+    @Test func displayOnlySnapshotCannotAuthorizeEvenWhenTimestampIsCurrent() {
+        var projector = Self.makeProjector()
+        let emitted = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(10),
+            fingerprint: "managed:pi:historical-turn-end",
+            payload: .turnEnded(turnID: "turn-1", reason: .completed),
+            mayAuthorizeCurrentRuntime: false
+        ))
+
+        #expect(emitted.isEmpty)
+        #expect(projector.state == .starting)
+        #expect(projector.inputAvailability == .unavailable(reason: .starting))
+    }
+
     @Test func confirmedRuntimeBootstrapOpensOnlyTheFirstUnknownPromptPerBinding() {
         var projector = Self.makeProjector()
         _ = projector.noteBinding(

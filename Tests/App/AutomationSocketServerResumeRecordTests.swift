@@ -609,4 +609,94 @@ struct AutomationSocketServerResumeRecordTests: AutomationSocketServerTestSuppor
         #expect(response.error?.message == "panelID must be a UUID")
     }
 
+    @Test
+    func providerConversationEventsRequireAndUseConfirmedNativeBinding() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run { try makeServer(socketPath: socketPath) }
+        defer { withExtendedLifetime(server.server) {} }
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-opencode-conversation"
+        let nativeSessionID = "native-opencode"
+        #expect(try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.opencode.rawValue),
+                    "cwd": .string("/tmp/repo"),
+                ]
+            ),
+            socketPath: socketPath
+        ).ok)
+        #expect(try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.update_resume_record",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.opencode.rawValue),
+                    "nativeSessionID": .string(nativeSessionID),
+                    "sessionFilePath": .string("/tmp/opencode-marker.json"),
+                    "cwd": .string("/tmp/repo"),
+                ]
+            ),
+            socketPath: socketPath
+        ).ok)
+
+        let reset = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.provider_conversation.reset",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "provider": .string(AgentKind.opencode.rawValue),
+                    "nativeSessionID": .string(nativeSessionID),
+                    "snapshotID": .string("snapshot-1"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(reset.ok)
+        #expect(reset.result?.bool("accepted") == true)
+
+        let observation = ProviderTranscriptObservation(
+            timestamp: Date(timeIntervalSince1970: 1_786_000_000),
+            fingerprint: "managed:opencode:assistant-1",
+            payload: .transcript(.assistantMessage(.init(text: "Finished"))),
+            mayAuthorizeCurrentRuntime: false
+        )
+        let observationJSON = String(
+            decoding: try JSONEncoder().encode(observation),
+            as: UTF8.self
+        )
+        let ingest = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.provider_conversation.observation",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "provider": .string(AgentKind.opencode.rawValue),
+                    "nativeSessionID": .string(nativeSessionID),
+                    "snapshotID": .string("snapshot-1"),
+                    "observationJSON": .string(observationJSON),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(ingest.ok)
+        #expect(ingest.result?.bool("accepted") == true)
+
+        let feed = await MainActor.run {
+            server.sessionRuntimeStore.providerConversationFeed(managedSessionID: sessionID)
+        }
+        #expect(feed?.nativeSessionID == nativeSessionID)
+        #expect(feed?.observations.last == observation)
+    }
+
 }

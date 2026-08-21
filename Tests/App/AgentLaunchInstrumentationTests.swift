@@ -615,7 +615,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
         let pluginURL = try XCTUnwrap(URL(string: pluginSpec))
         let plugin = try String(contentsOf: pluginURL, encoding: .utf8)
-        XCTAssertTrue(plugin.contains("export async function ToasttyOpenCodeFamilyStatusPlugin()"))
+        XCTAssertTrue(plugin.contains("export async function ToasttyOpenCodeFamilyStatusPlugin(pluginInput)"))
         XCTAssertTrue(plugin.contains("const cliPath = "))
         XCTAssertTrue(plugin.contains("Applications"))
         XCTAssertTrue(plugin.contains("Toastty.app"))
@@ -626,6 +626,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains(#"const resumeDirectoryPath = "#))
         XCTAssertTrue(plugin.contains(#"managed-agent-resume"#))
         XCTAssertTrue(plugin.contains(#""toastty.native_session""#))
+        XCTAssertTrue(plugin.contains(#""toastty.conversation.batch""#))
+        XCTAssertTrue(plugin.contains(#"providerClient.session.messages"#))
         XCTAssertTrue(plugin.contains(#""permission.replied""#))
         XCTAssertTrue(plugin.contains(#""tool.execute.after""#))
         XCTAssertTrue(plugin.contains(#""experimental.text.complete""#))
@@ -685,6 +687,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains(#""tool.execute.after""#))
         XCTAssertTrue(plugin.contains(#"resetTurnState();"#))
         XCTAssertTrue(plugin.contains(#"rememberFinalTextCandidate(input, output);"#))
+        XCTAssertTrue(plugin.contains(#"assistantTranscriptFrom(input, output)"#))
+        XCTAssertTrue(plugin.contains(#"enqueueUserTranscript(input);"#))
         XCTAssertTrue(plugin.contains(#"return flush(toasttyFinal(text), { suppressFollowingWorking: true });"#))
         XCTAssertTrue(plugin.contains(#"return flush(toasttyFinal(finalTextFrom(input, output) || lastCompletedTextCandidate), { suppressFollowingWorking: true });"#))
 
@@ -968,6 +972,112 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             XCTAssertEqual(statusProperties["kind"] as? String, "working", scenario.commandName)
             XCTAssertEqual(statusProperties["detail"] as? String, "Indexing", scenario.commandName)
         }
+    }
+
+    func testOpenCodeFamilyPluginPublishesSnapshotMessagesAndLivePromptLifecycle() throws {
+        let result = try runOpenCodeFamilyPluginScenarioResult(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            runnerBody: """
+            hooks["chat.message"]?.(
+              { sessionID: "root-session", parts: [{ type: "text", text: "Please continue" }] },
+              { message: { id: "user-message-1", role: "user" }, parts: [{ type: "text", text: "Please continue" }] }
+            );
+            hooks["experimental.text.complete"]?.(
+              { sessionID: "root-session" },
+              { messageID: "assistant-message-1", text: "Implemented the change" }
+            );
+            hooks.event?.({
+              type: "session.idle",
+              properties: { sessionID: "root-session" },
+            });
+            """
+        )
+
+        XCTAssertTrue(result.conversationEvents.contains {
+            (($0["properties"] as? [String: Any])?["reset"] as? Bool) == true
+        })
+        let records = result.conversationEvents.flatMap { event -> [[String: Any]] in
+            let properties = event["properties"] as? [String: Any]
+            return properties?["records"] as? [[String: Any]] ?? []
+        }
+        XCTAssertTrue(records.contains {
+            $0["kind"] as? String == "user_message" && $0["text"] as? String == "Please continue"
+        })
+        XCTAssertTrue(records.contains {
+            $0["kind"] as? String == "assistant_message"
+                && $0["text"] as? String == "Implemented the change"
+        })
+        XCTAssertTrue(records.contains {
+            $0["kind"] as? String == "prompt_open" && $0["live"] as? Bool == true
+        })
+    }
+
+    func testOpenCodeFamilyPluginChunksLargeSnapshotsWithinParserRecordLimit() throws {
+        let snapshotMessages: [[String: Any]] = (0..<300).map { index in
+            [
+                "info": ["id": "assistant-\(index)", "role": "assistant"],
+                "parts": [["type": "text", "text": "Reply \(index)"]],
+            ]
+        }
+        let result = try runOpenCodeFamilyPluginScenarioResult(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            snapshotMessages: snapshotMessages,
+            runnerBody: ""
+        )
+
+        let batches = result.conversationEvents.compactMap { event in
+            event["properties"] as? [String: Any]
+        }
+        XCTAssertTrue(batches.contains { $0["reset"] as? Bool == true })
+        XCTAssertTrue(batches.allSatisfy {
+            (($0["records"] as? [[String: Any]])?.count ?? 0) <= 256
+        })
+        let assistantRecords = batches.flatMap {
+            $0["records"] as? [[String: Any]] ?? []
+        }.filter {
+            $0["kind"] as? String == "assistant_message"
+        }
+        XCTAssertEqual(assistantRecords.count, 300)
+    }
+
+    func testMiMoCodePluginPublishesUserQueryAndTrajectoryAssistantReply() throws {
+        let result = try runOpenCodeFamilyPluginScenarioResult(
+            agent: .mimocode,
+            commandName: "mimo",
+            configContentEnvironmentKey: "MIMOCODE_CONFIG_CONTENT",
+            runnerBody: """
+            hooks["session.pre"]?.({ sessionID: "root-session" });
+            hooks["session.userQuery.pre"]?.({
+              sessionID: "root-session",
+              userQuery: "Implement the requested change",
+            });
+            hooks["session.userQuery.post"]?.(
+              { sessionID: "root-session" },
+              { trajectory: [{ role: "assistant", content: "Implemented from trajectory" }] }
+            );
+            hooks["session.post"]?.({ sessionID: "root-session", outcome: "completed" }, {});
+            """
+        )
+
+        let records = result.conversationEvents.flatMap { event -> [[String: Any]] in
+            let properties = event["properties"] as? [String: Any]
+            return properties?["records"] as? [[String: Any]] ?? []
+        }
+        XCTAssertTrue(records.contains {
+            $0["kind"] as? String == "user_message"
+                && $0["text"] as? String == "Implement the requested change"
+        })
+        XCTAssertTrue(records.contains {
+            $0["kind"] as? String == "assistant_message"
+                && $0["text"] as? String == "Implemented from trajectory"
+        })
+        XCTAssertTrue(records.contains {
+            $0["kind"] as? String == "prompt_open" && $0["live"] as? Bool == true
+        })
     }
 
     func testOpenCodeFamilyPluginTracksOnlyDirectChildrenAndKeepsChildStatusOffRoot() throws {
@@ -1630,6 +1740,90 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertFalse(events.contains { $0["activityID"] as? String == "pi-subagent:chain-call:1" })
     }
 
+    func testPiExtensionChunksLargeSnapshotsAndKeepsConversationContentOutOfTelemetry() throws {
+        let fileManager = FileManager.default
+        guard let nodeURL = nodeExecutableURLForTests(fileManager: fileManager) else {
+            throw XCTSkip("node is unavailable")
+        }
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-pi-conversation-test-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directoryURL) }
+
+        let extensionURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/App/Resources/AgentExtensions/toastty-pi-extension.js")
+        let extensionLiteral = String(decoding: try JSONEncoder().encode(extensionURL.path), as: UTF8.self)
+        let runnerURL = directoryURL.appendingPathComponent("runner.cjs")
+        let telemetryURL = directoryURL.appendingPathComponent("telemetry.ndjson")
+        let captureURL = directoryURL.appendingPathComponent("capture.ndjson")
+        let cliURL = directoryURL.appendingPathComponent("toastty-test-cli")
+        let quotedCapturePath = captureURL.path.replacingOccurrences(of: "'", with: "'\"'\"'")
+        let fakeCLI = """
+        #!/bin/sh
+        cat >> '\(quotedCapturePath)'
+        printf '\\n' >> '\(quotedCapturePath)'
+        """
+        try Data(fakeCLI.appending("\n").utf8).write(to: cliURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cliURL.path)
+
+        let runner = """
+        (async () => {
+          const handlers = new Map();
+          const extension = require(\(extensionLiteral));
+          extension({ on(name, handler) { handlers.set(name, handler); } });
+          const branch = Array.from({ length: 300 }, (_, index) => ({
+            id: `entry-${index}`,
+            timestamp: "2026-08-21T12:00:00Z",
+            message: { role: "assistant", content: `Reply ${index}` },
+          }));
+          const sessionManager = {
+            getSessionId: () => "pi-native",
+            getSessionFile: () => "/tmp/pi-session.jsonl",
+            getCwd: () => "/tmp/repo",
+            getLeafId: () => "leaf-1",
+            getBranch: () => branch,
+          };
+          handlers.get("session_start")?.({}, { sessionManager });
+          await new Promise((resolve) => setTimeout(resolve, 750));
+        })();
+        """
+        try Data(runner.utf8).write(to: runnerURL)
+
+        let result = try runScript(
+            at: nodeURL,
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-pi",
+                "TOASTTY_PANEL_ID": "11111111-1111-1111-1111-111111111111",
+                "TOASTTY_SOCKET_PATH": "/tmp/toastty-test.sock",
+                "TOASTTY_CLI_PATH": cliURL.path,
+                "TOASTTY_PI_TELEMETRY_LOG_PATH": telemetryURL.path,
+            ],
+            arguments: [runnerURL.path]
+        )
+        XCTAssertEqual(result.exitCode, 0, result.stderr)
+
+        let captured = try String(contentsOf: captureURL, encoding: .utf8)
+            .split(separator: "\n")
+            .compactMap { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        let conversationBatches = captured.filter { $0["event"] as? String == "conversation_batch" }
+        XCTAssertTrue(conversationBatches.allSatisfy {
+            (($0["records"] as? [[String: Any]])?.count ?? 0) <= 256
+        })
+        let assistantRecords = conversationBatches.flatMap {
+            $0["records"] as? [[String: Any]] ?? []
+        }.filter {
+            $0["kind"] as? String == "assistant_message"
+        }
+        XCTAssertEqual(assistantRecords.count, 300)
+
+        let telemetry = try String(contentsOf: telemetryURL, encoding: .utf8)
+        XCTAssertFalse(telemetry.contains("conversation_batch"))
+        XCTAssertFalse(telemetry.contains("Reply 299"))
+    }
+
     func testPreparePiLaunchSkipsToasttyExtensionForNoExtensionsBeforeTerminator() throws {
         AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
 
@@ -2057,6 +2251,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
     private struct OpenCodeFamilyPluginScenarioResult {
         let events: [[String: Any]]
+        let conversationEvents: [[String: Any]]
         let markerContentsByPath: [String: String]
     }
 
@@ -2068,6 +2263,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         rootSessionID: String = "root-session",
         claimRootSession: Bool = true,
         enrichProviderEventsWithRootSessionID: Bool = true,
+        snapshotMessages: [[String: Any]] = [],
         runnerBody: String
     ) throws -> OpenCodeFamilyPluginScenarioResult {
         let fileManager = FileManager.default
@@ -2125,6 +2321,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let configObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any])
         let plugins = try XCTUnwrap(configObject["plugin"] as? [String])
         let pluginSpec = try XCTUnwrap(plugins.first)
+        let snapshotMessagesData = try JSONSerialization.data(withJSONObject: snapshotMessages)
+        let snapshotMessagesLiteral = String(decoding: snapshotMessagesData, as: UTF8.self)
         let rootClaimScript = claimRootSession
             ? #"await hooks["chat.message"]?.({ sessionID: "\#(rootSessionID)" }, {});"#
             : ""
@@ -2153,7 +2351,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         process.env.TOASTTY_PANEL_ID = "11111111-1111-1111-1111-111111111111";
         process.env.TOASTTY_SOCKET_PATH = "/tmp/toastty-test.sock";
 
-        const hooks = await ToasttyOpenCodeFamilyStatusPlugin();
+        const hooks = await ToasttyOpenCodeFamilyStatusPlugin({
+          client: { session: { messages: async () => ({ data: \(snapshotMessagesLiteral) }) } },
+        });
         \(rootClaimScript)
         \(providerEventWrapperScript)
         \(runnerBody)
@@ -2185,7 +2385,10 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             }
         )
         return OpenCodeFamilyPluginScenarioResult(
-            events: events,
+            events: events.filter { ($0["type"] as? String) != "toastty.conversation.batch" },
+            conversationEvents: events.filter {
+                ($0["type"] as? String) == "toastty.conversation.batch"
+            },
             markerContentsByPath: markerContentsByPath
         )
     }

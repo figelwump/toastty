@@ -164,13 +164,24 @@ timeouts, and launch failures to its structured local log. See
   reconciliation state is memory-only and discarded with its owning session or
   watcher. Child-agent display names can appear in Toastty's structured local
   logs. Toastty does not modify the Codex rollout files.
-- For managed Claude, OpenCode, MiMo Code, and Pi sessions, Toastty's injected
-  local hooks or extensions may read provider lifecycle events to retain a
-  bounded direct-child identity, display name, and provider-reported model or
-  effort metadata for the live sidebar. Toastty omits unavailable fields and
-  does not derive them from child prompts or tool output. This activity state is
-  held in memory and discarded when the owning session stops; helper failure
-  logs do not include full provider event payloads.
+- For managed Claude sessions, Toastty's injected hooks report live prompt and
+  interaction transitions, and Toastty reads the local Claude transcript file
+  associated with the exact provider-native session to project normalized
+  conversation history for Remote Access. Toastty does not modify that file.
+- For managed OpenCode, MiMo Code, and Pi sessions, Toastty's injected local
+  plugin or extension reads the provider's current message snapshot and live
+  lifecycle events to publish normalized conversation observations. Toastty
+  retains at most 20,000 observations per managed session in process memory;
+  they are not written as a separate transcript and are discarded when the
+  Toastty app process exits. Pi's compact `pi-telemetry.jsonl` continues to
+  exclude the full conversation batches.
+- For managed Claude, OpenCode, MiMo Code, and Pi sessions, the same injected
+  local hooks or extensions may retain a bounded direct-child identity, display
+  name, and provider-reported model or effort metadata for the live sidebar.
+  Toastty omits unavailable fields and does not derive them from child prompts
+  or tool output. This activity state is held in memory and discarded when the
+  owning session stops; helper failure logs do not include full provider event
+  payloads.
 - During Codex skill preparation, Toastty invokes the resolved local Codex CLI
   against a throwaway Codex home to produce the canonical plugin cache bytes,
   and once per legacy install to deregister the retired marketplace mechanism.

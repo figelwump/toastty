@@ -26,6 +26,18 @@ struct ManagedNativeSessionBindingConfirmation: Equatable, Sendable {
     let confirmedAt: Date
 }
 
+/// Bounded, process-local provider history published by launch-scoped hooks,
+/// plugins, and extensions. It supplements native Codex/Claude transcript
+/// files without creating another durable transcript on disk.
+struct ManagedProviderConversationFeedSnapshot: Equatable, Sendable {
+    let managedSessionID: String
+    let provider: AgentKind
+    let nativeSessionID: String
+    let snapshotID: String
+    let observations: [ProviderTranscriptObservation]
+    let updatedAt: Date
+}
+
 @MainActor
 final class SessionRuntimeStore: ObservableObject {
     typealias SessionStatusNotificationHandler = @Sendable (
@@ -38,6 +50,7 @@ final class SessionRuntimeStore: ObservableObject {
     typealias ApplicationActiveHandler = @MainActor () -> Bool
 
     @Published private(set) var sessionRegistry = SessionRegistry()
+    @Published private(set) var providerConversationRevision: UInt64 = 0
 
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
@@ -56,6 +69,14 @@ final class SessionRuntimeStore: ObservableObject {
     ] = [:]
     private var nativeBindingIDBySessionID: [String: UUID] = [:]
     private var nativeBindingSessionIDsWithLocalInput: Set<String> = []
+    private struct ManagedProviderConversationFeedState {
+        var snapshot: ManagedProviderConversationFeedSnapshot
+        var seenFingerprints: Set<String>
+    }
+    private var providerConversationFeedsBySessionID: [
+        String: ManagedProviderConversationFeedState
+    ] = [:]
+    private static let maximumProviderConversationObservationCount = 20_000
     private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
     private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
     private var pendingPanelParentSessionIDs: [UUID: PendingPanelParentSessionID] = [:]
@@ -206,6 +227,8 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID = [:]
         nativeBindingIDBySessionID = [:]
         nativeBindingSessionIDsWithLocalInput = []
+        providerConversationFeedsBySessionID = [:]
+        providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
         codexSubagentReconcilerBySessionID = [:]
         pendingPanelParentSessionIDs = [:]
@@ -240,7 +263,7 @@ final class SessionRuntimeStore: ObservableObject {
         record: ManagedAgentResumeRecord
     ) -> Bool {
         guard let activeSession = sessionRegistry.activeSession(sessionID: managedSessionID),
-              record.agent == .codex,
+              ProviderTranscriptSupport.isManagedProvider(record.agent),
               activeSession.panelID == panelID,
               activeSession.agent == record.agent,
               let bindingID = nativeBindingIDBySessionID[managedSessionID] else {
@@ -291,7 +314,7 @@ final class SessionRuntimeStore: ObservableObject {
     func isNativeSessionBindingInputClean(
         _ confirmation: ManagedNativeSessionBindingConfirmation
     ) -> Bool {
-        guard confirmation.agent == .codex,
+        guard ProviderTranscriptSupport.isManagedProvider(confirmation.agent),
               nativeBindingConfirmationBySessionID[confirmation.managedSessionID] == confirmation,
               nativeBindingIDBySessionID[confirmation.managedSessionID] == confirmation.bindingID,
               let activeSession = sessionRegistry.activeSession(
@@ -304,6 +327,106 @@ final class SessionRuntimeStore: ObservableObject {
         return nativeBindingSessionIDsWithLocalInput.contains(
             confirmation.managedSessionID
         ) == false
+    }
+
+    @discardableResult
+    func resetProviderConversationFeed(
+        managedSessionID: String,
+        provider: AgentKind,
+        nativeSessionID: String,
+        snapshotID: String,
+        at date: Date
+    ) -> Bool {
+        guard let activeSession = sessionRegistry.activeSession(sessionID: managedSessionID),
+              activeSession.agent == provider,
+              ProviderTranscriptSupport.isManagedProvider(provider),
+              let confirmation = nativeBindingConfirmationBySessionID[managedSessionID],
+              confirmation.panelID == activeSession.panelID,
+              confirmation.agent == provider,
+              confirmation.nativeSessionID == nativeSessionID,
+              nativeSessionID.isEmpty == false,
+              snapshotID.isEmpty == false else {
+            return false
+        }
+
+        let sessionObservation = ProviderTranscriptObservation(
+            timestamp: date,
+            providerIdentity: nativeSessionID,
+            fingerprint: "managed-session:\(nativeSessionID)",
+            payload: .providerSessionObserved(providerSessionID: nativeSessionID),
+            mayAuthorizeCurrentRuntime: false
+        )
+        providerConversationFeedsBySessionID[managedSessionID] =
+            ManagedProviderConversationFeedState(
+                snapshot: ManagedProviderConversationFeedSnapshot(
+                    managedSessionID: managedSessionID,
+                    provider: provider,
+                    nativeSessionID: nativeSessionID,
+                    snapshotID: snapshotID,
+                    observations: [sessionObservation],
+                    updatedAt: date
+                ),
+                seenFingerprints: [sessionObservation.fingerprint]
+            )
+        providerConversationRevision &+= 1
+        return true
+    }
+
+    @discardableResult
+    func ingestProviderConversationObservation(
+        managedSessionID: String,
+        provider: AgentKind,
+        nativeSessionID: String,
+        snapshotID: String,
+        observation: ProviderTranscriptObservation
+    ) -> Bool {
+        guard let activeSession = sessionRegistry.activeSession(sessionID: managedSessionID),
+              activeSession.agent == provider,
+              var feed = providerConversationFeedsBySessionID[managedSessionID],
+              feed.snapshot.provider == provider,
+              feed.snapshot.nativeSessionID == nativeSessionID,
+              feed.snapshot.snapshotID == snapshotID,
+              feed.seenFingerprints.insert(observation.fingerprint).inserted else {
+            return false
+        }
+
+        var observations = feed.snapshot.observations
+        observations.append(observation)
+        if observations.count > Self.maximumProviderConversationObservationCount {
+            let overflow = observations.count - Self.maximumProviderConversationObservationCount
+            for dropped in observations.prefix(overflow) {
+                feed.seenFingerprints.remove(dropped.fingerprint)
+            }
+            observations.removeFirst(overflow)
+        }
+        feed.snapshot = ManagedProviderConversationFeedSnapshot(
+            managedSessionID: managedSessionID,
+            provider: provider,
+            nativeSessionID: nativeSessionID,
+            snapshotID: snapshotID,
+            observations: observations,
+            updatedAt: max(feed.snapshot.updatedAt, observation.timestamp)
+        )
+        providerConversationFeedsBySessionID[managedSessionID] = feed
+        providerConversationRevision &+= 1
+        return true
+    }
+
+    func providerConversationFeed(
+        managedSessionID: String
+    ) -> ManagedProviderConversationFeedSnapshot? {
+        providerConversationFeedsBySessionID[managedSessionID]?.snapshot
+    }
+
+    func providerConversationFeed(
+        provider: AgentKind,
+        nativeSessionID: String
+    ) -> ManagedProviderConversationFeedSnapshot? {
+        providerConversationFeedsBySessionID.values
+            .lazy
+            .map(\.snapshot)
+            .filter { $0.provider == provider && $0.nativeSessionID == nativeSessionID }
+            .max { $0.updatedAt < $1.updatedAt }
     }
 
     func startSession(
@@ -338,6 +461,9 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID[sessionID] = UUID()
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
+        if providerConversationFeedsBySessionID.removeValue(forKey: sessionID) != nil {
+            providerConversationRevision &+= 1
+        }
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)

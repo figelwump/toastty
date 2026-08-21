@@ -12,6 +12,13 @@ function cleanString(value, limit = MAX_FIELD_LENGTH) {
   return collapsed.length > limit ? `${collapsed.slice(0, Math.max(0, limit - 3))}...` : collapsed;
 }
 
+function transcriptText(value, limit = 32768) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.slice(0, limit);
+}
+
 function cleanPath(value, limit = 1000) {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -196,6 +203,10 @@ module.exports = function toasttyPiExtension(pi) {
   let activeIngest = false;
   let currentPrompt;
   let lastAssistantSummary;
+  let nativeSessionID;
+  let conversationSnapshotID;
+  let currentTurnID;
+  let conversationEventCounter = 0;
   const subagentTools = new Map();
 
   function cliEnvironment() {
@@ -255,11 +266,111 @@ module.exports = function toasttyPiExtension(pi) {
     enqueueIngest(line);
   }
 
+  function nextConversationEventID(prefix, stableValue) {
+    const stable = cleanString(stableValue, 500);
+    if (stable) return `${prefix}:${stable}`;
+    conversationEventCounter += 1;
+    return `${prefix}:${conversationEventCounter}`;
+  }
+
+  function emitConversationBatch(records, options = {}) {
+    if (!nativeSessionID || !conversationSnapshotID) return;
+    const record = {
+      source: "pi-extension",
+      version: 1,
+      toasttySessionID: sessionID,
+      event: "conversation_batch",
+      timestamp: new Date().toISOString(),
+      nativeSessionID,
+      snapshotID: conversationSnapshotID,
+      reset: options.reset === true,
+      records: Array.isArray(records) ? records : [],
+    };
+    // Conversation content is process-local remote-access state, not compact
+    // telemetry. Forward it without appending it to the Pi telemetry log.
+    enqueueIngest(`${JSON.stringify(record)}\n`);
+  }
+
+  function messageTranscriptText(message) {
+    if (!message || typeof message !== "object") return undefined;
+    const chunks = collectAssistantText(message.content !== undefined ? message.content : message);
+    return transcriptText(chunks.join("\n"));
+  }
+
+  function messageRecords(message, entryID, timestamp, live) {
+    if (!message || typeof message !== "object") return [];
+    const role = cleanString(message.role, 40);
+    const text = messageTranscriptText(message);
+    if ((role === "user" || role === "assistant") && text) {
+      return [{
+        kind: role === "user" ? "user_message" : "assistant_message",
+        eventID: nextConversationEventID(`${role}-message`, entryID),
+        timestamp: timestamp || new Date().toISOString(),
+        turnID: currentTurnID,
+        text,
+        phase: role === "assistant" ? "final" : undefined,
+        live,
+      }];
+    }
+    if (role === "toolResult" || role === "tool_result") {
+      const callID = cleanString(message.toolCallId || message.toolCallID, 500);
+      if (!callID) return [];
+      return [{
+        kind: "tool_finished",
+        eventID: nextConversationEventID("tool-finish", entryID || callID),
+        timestamp: timestamp || new Date().toISOString(),
+        turnID: currentTurnID,
+        callID,
+        toolName: cleanString(message.toolName, 200),
+        outcome: message.isError ? "failed" : "succeeded",
+        live,
+      }];
+    }
+    return [];
+  }
+
+  function emitConversationSnapshot(context) {
+    const sessionManager = context && context.sessionManager;
+    if (!sessionManager || !nativeSessionID) return;
+    const leafID = cleanString(
+      typeof sessionManager.getLeafId === "function" ? sessionManager.getLeafId() : undefined,
+      300
+    );
+    conversationSnapshotID = `pi:${nativeSessionID}:${leafID || "root"}`;
+    const branch = typeof sessionManager.getBranch === "function" ? sessionManager.getBranch() : [];
+    const records = [];
+    if (Array.isArray(branch)) {
+      for (const branchValue of branch) {
+        const entry = branchValue && branchValue.entry ? branchValue.entry : branchValue;
+        if (!entry || typeof entry !== "object") continue;
+        const message = entry.message || (entry.type === "message" ? entry : undefined);
+        records.push(...messageRecords(message, entry.id, entry.timestamp, false));
+      }
+    }
+    const chunks = [];
+    let chunk = [];
+    let size = 0;
+    for (const record of records) {
+      const recordSize = JSON.stringify(record).length;
+      if (chunk.length && (chunk.length >= 256 || size + recordSize > 45000)) {
+        chunks.push(chunk);
+        chunk = [];
+        size = 0;
+      }
+      chunk.push(record);
+      size += recordSize;
+    }
+    if (chunk.length || chunks.length === 0) chunks.push(chunk);
+    chunks.forEach((recordsChunk, index) => {
+      emitConversationBatch(recordsChunk, { reset: index === 0 });
+    });
+  }
+
   function emitNativeSession(event, context) {
     const sessionManager = context && context.sessionManager;
     if (!sessionManager) return;
 
-    const nativeSessionID = cleanString(
+    const observedNativeSessionID = cleanString(
       typeof sessionManager.getSessionId === "function" ? sessionManager.getSessionId() : undefined,
       160
     );
@@ -270,9 +381,10 @@ module.exports = function toasttyPiExtension(pi) {
       typeof sessionManager.getCwd === "function" ? sessionManager.getCwd() : undefined
     );
 
-    if (!nativeSessionID || !sessionFilePath || !cwd) return;
+    if (!observedNativeSessionID || !sessionFilePath || !cwd) return;
+    nativeSessionID = observedNativeSessionID;
     emit("native_session", {
-      nativeSessionID,
+      nativeSessionID: observedNativeSessionID,
       sessionFilePath,
       cwd,
       reason: cleanString(event && event.reason, 80),
@@ -393,12 +505,49 @@ module.exports = function toasttyPiExtension(pi) {
   pi.on("session_start", (event, context) => {
     emitNativeSession(event, context);
     emit("session_start", { reason: cleanString(event && event.reason) });
+    emitConversationSnapshot(context);
+    emitConversationBatch([{
+      kind: "prompt_open",
+      eventID: nextConversationEventID("session-ready", conversationSnapshotID),
+      timestamp: new Date().toISOString(),
+      live: true,
+    }]);
+  });
+
+  pi.on("session_tree", (_event, context) => {
+    emitConversationSnapshot(context);
+    emitConversationBatch([{
+      kind: "prompt_open",
+      eventID: nextConversationEventID("tree-ready", conversationSnapshotID),
+      timestamp: new Date().toISOString(),
+      live: true,
+    }]);
   });
 
   pi.on("before_agent_start", (event) => {
     currentPrompt = cleanString(event && event.prompt, 160);
+    const prompt = transcriptText(event && event.prompt);
+    currentTurnID = nextConversationEventID("turn", undefined);
     lastAssistantSummary = undefined;
     emit("before_agent_start", { prompt: currentPrompt });
+    const records = [{
+      kind: "turn_started",
+      eventID: nextConversationEventID("turn-start", currentTurnID),
+      timestamp: new Date().toISOString(),
+      turnID: currentTurnID,
+      live: true,
+    }];
+    if (prompt) {
+      records.push({
+        kind: "user_message",
+        eventID: nextConversationEventID("user-message", currentTurnID),
+        timestamp: new Date().toISOString(),
+        turnID: currentTurnID,
+        text: prompt,
+        live: true,
+      });
+    }
+    emitConversationBatch(records);
   });
 
   pi.on("agent_start", () => {
@@ -407,8 +556,15 @@ module.exports = function toasttyPiExtension(pi) {
   });
 
   pi.on("message_end", (event) => {
-    const summary = assistantSummaryFromMessage(event && event.message);
+    const message = event && event.message;
+    const summary = assistantSummaryFromMessage(message);
     if (summary) lastAssistantSummary = summary;
+    emitConversationBatch(messageRecords(
+      message,
+      event && (event.messageId || event.messageID),
+      event && event.timestamp,
+      true
+    ));
   });
 
   pi.on("tool_call", (event) => {
@@ -420,6 +576,19 @@ module.exports = function toasttyPiExtension(pi) {
       detail: toolDetail(event && event.toolName, input),
       files: uniqueStrings(collectPaths(input)),
     });
+    const callID = cleanString(event && (event.toolCallId || event.toolCallID), 500);
+    if (callID) {
+      emitConversationBatch([{
+        kind: "tool_started",
+        eventID: nextConversationEventID("tool-start", callID),
+        timestamp: new Date().toISOString(),
+        turnID: currentTurnID,
+        callID,
+        toolName: cleanString(event && event.toolName, 200) || "Tool",
+        detail: toolDetail(event && event.toolName, input),
+        live: true,
+      }]);
+    }
   });
 
   pi.on("tool_result", (event) => {
@@ -433,6 +602,19 @@ module.exports = function toasttyPiExtension(pi) {
         ...collectPaths(event && event.details),
       ]),
     });
+    const callID = cleanString(event && (event.toolCallId || event.toolCallID), 500);
+    if (callID) {
+      emitConversationBatch([{
+        kind: "tool_finished",
+        eventID: nextConversationEventID("tool-finish", callID),
+        timestamp: new Date().toISOString(),
+        turnID: currentTurnID,
+        callID,
+        toolName: cleanString(event && event.toolName, 200),
+        outcome: event && event.isError ? "failed" : "succeeded",
+        live: true,
+      }]);
+    }
   });
 
   pi.on("tool_execution_start", (event) => {
@@ -452,6 +634,16 @@ module.exports = function toasttyPiExtension(pi) {
     finishAllSubagents();
     const summary = latestAssistantSummary(event && event.messages) || lastAssistantSummary;
     emit("agent_end", { summary });
+    const messages = Array.isArray(event && event.messages) ? event.messages : [];
+    const latestAssistant = [...messages].reverse().find((message) => message && message.role === "assistant");
+    const stopReason = cleanString(latestAssistant && latestAssistant.stopReason, 80);
+    emitConversationBatch([{
+      kind: stopReason === "aborted" ? "turn_aborted" : "prompt_open",
+      eventID: nextConversationEventID("turn-end", currentTurnID),
+      timestamp: new Date().toISOString(),
+      turnID: currentTurnID,
+      live: true,
+    }]);
     currentPrompt = undefined;
     lastAssistantSummary = undefined;
   });

@@ -59,11 +59,20 @@ must retain the credential.
 
 ## Reading and replying
 
-A newly paired device can read supported agent conversations and send replies.
-Remote replies are enabled by default for active sessions. You can turn off
-**Send** for a paired device persistently, turn off replies for an individual
-active session until Toastty restarts, revoke one device, revoke all devices,
-or disable the gateway immediately.
+A newly paired device can read managed Codex, Claude Code, OpenCode, MiMo Code,
+and Pi conversations and send replies to their active sessions. Codex and
+Claude Code can replay history from their local provider transcript files.
+OpenCode, MiMo Code, and Pi publish a bounded launch-scoped conversation feed
+through Toastty's injected instrumentation; that history remains available
+only while the current Toastty app process retains it and is rebuilt from the
+provider when a managed launch or resume exposes a snapshot.
+
+Remote replies are enabled by default for active sessions. For every supported
+provider, Toastty requires an exact match between the active managed session,
+panel, provider, and provider-native session before it enables replies. You can
+turn off **Send** for a paired device persistently, turn off replies for an
+individual active session until Toastty restarts, revoke one device, revoke all
+devices, or disable the gateway immediately.
 
 Remote input is fail-closed. A send succeeds only while Toastty can prove that
 the root prompt shown to the phone is still open and untouched. Local typing,

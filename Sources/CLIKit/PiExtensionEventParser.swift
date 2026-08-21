@@ -25,6 +25,14 @@ enum PiExtensionEventParser {
 
         var commands: [CLICommand] = []
         switch event {
+        case "conversation_batch":
+            commands.append(contentsOf: ProviderConversationBatchParser.commands(
+                provider: .pi,
+                sessionID: sessionID,
+                panelID: panelID,
+                object: object
+            ))
+
         case "native_session":
             guard let panelID,
                   let nativeSessionID = normalizedString(object["nativeSessionID"], limit: 160),
