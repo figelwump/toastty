@@ -27,7 +27,8 @@ struct ToasttyWorkspaceView: View {
     }
 
     private func workspaceList(_ workspace: MobileWorkspace) -> some View {
-        ScrollView {
+        let sortedConversations = workspace.sortedConversations
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 Text(sessionCountLabel(workspace.conversations.count))
                     .font(.caption2.monospaced())
@@ -35,7 +36,7 @@ struct ToasttyWorkspaceView: View {
                     .padding(.horizontal, 6)
                     .accessibilityIdentifier("toastty-mobile-workspace-context")
 
-                ForEach(workspace.sortedConversations) { conversation in
+                ForEach(sortedConversations) { conversation in
                     ToasttySessionCard(
                         conversation: conversation,
                         showsWorkspace: false,
@@ -50,6 +51,9 @@ struct ToasttyWorkspaceView: View {
             .padding(.bottom, 40)
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
+            // Reorders happen only on status-bucket transitions; animate so
+            // the moving card stays trackable.
+            .animation(.default, value: sortedConversations.map(\.id))
         }
         .scrollIndicators(.hidden)
         .background(ToasttyDesignTokens.background)

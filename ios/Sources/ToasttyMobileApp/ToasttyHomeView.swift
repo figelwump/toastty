@@ -47,6 +47,10 @@ struct ToasttyHomeView: View {
                 homeContent
             }
             .id(selectedListMode)
+            // Reorders now happen only on status-bucket transitions, so
+            // animating them keeps a moving card trackable instead of
+            // teleporting. Mode switches skip this via the .id reset above.
+            .animation(.default, value: orderedRowIDs)
             .padding(.horizontal, 14)
             .padding(.top, 8)
             .padding(.bottom, 40)
@@ -99,6 +103,17 @@ struct ToasttyHomeView: View {
 
     private var selectedListMode: ToasttyHomeListMode {
         ToasttyHomeListMode(rawValue: storedListMode) ?? .defaultMode
+    }
+
+    private var orderedRowIDs: [UUID] {
+        switch selectedListMode {
+        case .activity:
+            controller.snapshot.activitySessions.map(\.id)
+        case .workspaces:
+            controller.snapshot.rankedWorkspaces.flatMap { workspace in
+                [workspace.id] + workspace.conversations.map(\.id)
+            }
+        }
     }
 
     private var listModeSelection: Binding<ToasttyHomeListMode> {

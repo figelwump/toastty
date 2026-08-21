@@ -134,6 +134,9 @@ final class LiveSessionsController {
     private var sessionsTask: Task<Void, Never>?
     private var coordinatorState = ConnectionCoordinator.State()
     private var sessionsState = SessionsRuntime.State()
+    /// Carries per-session bucket-entry anchors across snapshots so home
+    /// lists reorder only on status transitions, not on streamed activity.
+    private var stateTransitions = MobileStateTransitionTracker()
     private var manualRefreshPresentationTask: Task<Void, Never>?
     private var suppressesManualRefreshDowngrade = false
     private var desiredConversationID: UUID?
@@ -413,8 +416,10 @@ final class LiveSessionsController {
         case .stale, .unreachable: .offline
         }
 
-        let snapshot = sessionsState.snapshot?.presentation(hostName: hostName)
-            ?? homeController.snapshot
+        let snapshot = sessionsState.snapshot?.presentation(
+            hostName: hostName,
+            stateTransitions: &stateTransitions
+        ) ?? homeController.snapshot
         homeController.update(
             snapshot: snapshot,
             connectionState: connectionState,

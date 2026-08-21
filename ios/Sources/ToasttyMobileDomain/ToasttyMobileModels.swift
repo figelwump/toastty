@@ -194,6 +194,10 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let inputAvailability: MobileInputAvailability
     private let fixedAge: String
     public let activityAge: MobileActivityAge?
+    /// When the conversation entered its current status bucket. Live snapshot
+    /// mapping stamps this via `MobileStateTransitionTracker`; ordering falls
+    /// back to `activityAge` when it is absent.
+    public let stateEnteredAge: MobileActivityAge?
     public let lastActivity: String
 
     public var age: String {
@@ -237,6 +241,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         inputAvailability: MobileInputAvailability,
         age: String,
         activityAge: MobileActivityAge? = nil,
+        stateEnteredAge: MobileActivityAge? = nil,
         lastActivity: String
     ) {
         self.id = id
@@ -249,6 +254,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         self.inputAvailability = inputAvailability
         fixedAge = age
         self.activityAge = activityAge
+        self.stateEnteredAge = stateEnteredAge
         self.lastActivity = lastActivity
     }
 
@@ -263,6 +269,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         inputAvailability: MobileInputAvailability,
         age: String,
         activityAge: MobileActivityAge? = nil,
+        stateEnteredAge: MobileActivityAge? = nil,
         lastActivity: String
     ) {
         self.init(
@@ -276,6 +283,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             inputAvailability: inputAvailability,
             age: age,
             activityAge: activityAge,
+            stateEnteredAge: stateEnteredAge,
             lastActivity: lastActivity
         )
     }
@@ -303,9 +311,16 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         return trimmed
     }
 
-    /// Most recent activity first; conversations without a live activity age
-    /// sort last. Title and id tie-breaks keep the order stable across
-    /// snapshots (and deterministic for fixtures, which carry no live age).
+    /// Anchor used for recency ordering. Preferring the bucket-entry moment
+    /// over raw activity keeps working sessions from reshuffling on every
+    /// streamed event: a conversation moves only when its status bucket
+    /// changes, which is exactly when it needs attention.
+    private var recencyAnchor: MobileActivityAge? { stateEnteredAge ?? activityAge }
+
+    /// Most recent bucket entry first (falling back to activity age);
+    /// conversations without either sort last. Title and id tie-breaks keep
+    /// the order stable across snapshots (and deterministic for fixtures,
+    /// which carry no live age).
     static func isMoreRecent(_ lhs: MobileConversation, _ rhs: MobileConversation) -> Bool {
         if let comparison = compareRecency(lhs, rhs) { return comparison }
         if let titleOrder = deterministicStringOrder(lhs.title, rhs.title) { return titleOrder }
@@ -328,7 +343,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         _ lhs: MobileConversation,
         _ rhs: MobileConversation
     ) -> Bool? {
-        switch (lhs.activityAge, rhs.activityAge) {
+        switch (lhs.recencyAnchor, rhs.recencyAnchor) {
         case (let left?, let right?) where left.recencyRank != right.recencyRank:
             return left.recencyRank < right.recencyRank
         case (.some, .none):
@@ -359,6 +374,54 @@ private func deterministicStringOrder(_ lhs: String, _ rhs: String) -> Bool? {
     if leftFolded != rightFolded { return leftFolded < rightFolded }
     if lhs != rhs { return lhs < rhs }
     return nil
+}
+
+/// Remembers when each conversation entered its current status bucket so
+/// streamed activity alone cannot reorder lists. Owned by whoever presents a
+/// live snapshot stream and threaded through successive presentations; a
+/// fresh tracker seeds every anchor from server-reported activity, so
+/// one-shot presentations keep plain recency ordering.
+public struct MobileStateTransitionTracker: Equatable, Sendable {
+    private struct Entry: Equatable, Sendable {
+        var bucketOrder: Int
+        var enteredAge: MobileActivityAge
+    }
+
+    private var entries: [UUID: Entry] = [:]
+
+    public init() {}
+
+    /// The age at which `id` entered its current bucket. First observation
+    /// seeds from the server-reported activity age; a bucket change
+    /// re-stamps the anchor to now; otherwise the stored anchor is returned
+    /// unchanged so intra-bucket order stays stable across snapshots.
+    public mutating func stateEnteredAge(
+        for id: UUID,
+        state: MobileSessionStatus,
+        activityAge: MobileActivityAge,
+        receivedAtMonotonicTime: TimeInterval
+    ) -> MobileActivityAge {
+        let bucketOrder = state.activitySortOrder
+        if let entry = entries[id], entry.bucketOrder == bucketOrder {
+            return entry.enteredAge
+        }
+        let enteredAge = entries[id] == nil
+            ? activityAge
+            : MobileActivityAge(
+                secondsAtReceipt: 0,
+                receivedAtMonotonicTime: receivedAtMonotonicTime
+            )
+        entries[id] = Entry(bucketOrder: bucketOrder, enteredAge: enteredAge)
+        return enteredAge
+    }
+
+    /// Drops sessions absent from the latest snapshot so a later
+    /// reappearance re-seeds from server-reported activity instead of a
+    /// stale anchor.
+    public mutating func retain(_ ids: some Sequence<UUID>) {
+        let keep = Set(ids)
+        entries = entries.filter { keep.contains($0.key) }
+    }
 }
 
 public struct MobileWorkspace: Identifiable, Equatable, Sendable {

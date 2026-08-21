@@ -131,6 +131,31 @@ final class ToasttyMobileModelsTests: XCTestCase {
         )
     }
 
+    func testOrderingPrefersBucketEntryAnchorOverStreamedActivity() {
+        let steadyWorker = conversation(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            title: "Steady worker",
+            state: .working,
+            activityAge: MobileActivityAge(secondsAtReceipt: 1, receivedAtMonotonicTime: 1_000),
+            stateEnteredAge: MobileActivityAge(secondsAtReceipt: 600, receivedAtMonotonicTime: 1_000)
+        )
+        let recentArrival = conversation(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            title: "Recent arrival",
+            state: .working,
+            activityAge: MobileActivityAge(secondsAtReceipt: 240, receivedAtMonotonicTime: 1_000),
+            stateEnteredAge: MobileActivityAge(secondsAtReceipt: 30, receivedAtMonotonicTime: 1_000)
+        )
+
+        let sorted = MobileWorkspace(
+            id: UUID(),
+            title: "Workspace",
+            conversations: [steadyWorker, recentArrival]
+        ).sortedConversations
+
+        XCTAssertEqual(sorted.map(\.title), ["Recent arrival", "Steady worker"])
+    }
+
     func testActivityOrderingUsesTitleThenIdentifierForDeterministicTies() {
         let zulu = conversation(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
@@ -303,6 +328,7 @@ final class ToasttyMobileModelsTests: XCTestCase {
         cwd: String? = "/repos/workspace",
         age: String = "now",
         activityAge: MobileActivityAge? = nil,
+        stateEnteredAge: MobileActivityAge? = nil,
         lastActivity: String = "Conversation readable"
     ) -> MobileConversation {
         MobileConversation(
@@ -316,6 +342,7 @@ final class ToasttyMobileModelsTests: XCTestCase {
             inputAvailability: .unavailable(reason: "test"),
             age: age,
             activityAge: activityAge,
+            stateEnteredAge: stateEnteredAge,
             lastActivity: lastActivity
         )
     }

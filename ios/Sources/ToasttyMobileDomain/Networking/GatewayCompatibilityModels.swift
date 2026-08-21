@@ -126,6 +126,22 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
         hostName: String = "Toastty Mac",
         receivedAtMonotonicTime: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) -> MobileHomeSnapshot {
+        var stateTransitions = MobileStateTransitionTracker()
+        return presentation(
+            hostName: hostName,
+            receivedAtMonotonicTime: receivedAtMonotonicTime,
+            stateTransitions: &stateTransitions
+        )
+    }
+
+    /// Presents the snapshot while `stateTransitions` carries bucket-entry
+    /// anchors across successive snapshots, keeping list order stable while
+    /// agents stream activity within an unchanged status bucket.
+    public func presentation(
+        hostName: String = "Toastty Mac",
+        receivedAtMonotonicTime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        stateTransitions: inout MobileStateTransitionTracker
+    ) -> MobileHomeSnapshot {
         let mobileConversations = conversations.map { summary in
             let workspaceID = summary.placement.workspaceID ?? Self.ungroupedWorkspaceID
             let workspaceTitle = summary.placement.workspaceTitle ?? "Ungrouped"
@@ -137,6 +153,13 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                     for: summary.state,
                     inputAvailability: summary.inputAvailability
                 )
+            let activityAge = MobileActivityAge(
+                secondsAtReceipt: Self.relativeAgeSeconds(
+                    from: summary.updatedAt,
+                    receivedAt: generatedAt
+                ),
+                receivedAtMonotonicTime: receivedAtMonotonicTime
+            )
             return MobileConversation(
                 id: summary.conversationID.rawValue,
                 workspaceID: workspaceID,
@@ -147,11 +170,11 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 state: status,
                 inputAvailability: availability,
                 age: Self.relativeAge(from: summary.updatedAt, receivedAt: generatedAt),
-                activityAge: MobileActivityAge(
-                    secondsAtReceipt: Self.relativeAgeSeconds(
-                        from: summary.updatedAt,
-                        receivedAt: generatedAt
-                    ),
+                activityAge: activityAge,
+                stateEnteredAge: stateTransitions.stateEnteredAge(
+                    for: summary.conversationID.rawValue,
+                    state: status,
+                    activityAge: activityAge,
                     receivedAtMonotonicTime: receivedAtMonotonicTime
                 ),
                 lastActivity: Self.lastActivity(
@@ -161,6 +184,7 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 )
             )
         }
+        stateTransitions.retain(mobileConversations.map(\.id))
         let grouped = Dictionary(grouping: mobileConversations, by: \.workspaceID)
         let workspaces: [MobileWorkspace] = grouped.values.map { conversations in
             let first = conversations[0]

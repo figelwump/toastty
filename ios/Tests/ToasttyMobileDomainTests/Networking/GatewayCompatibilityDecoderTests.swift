@@ -544,6 +544,51 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         ])
     }
 
+    func testStreamedActivityDoesNotReorderSessionsUntilStatusTransition() {
+        var transitions = MobileStateTransitionTracker()
+        let base = Date(timeIntervalSince1970: 1_786_200_000)
+        let alpha = UUID(uuidString: "00000000-0000-0000-0000-00000000000A")!
+        let beta = UUID(uuidString: "00000000-0000-0000-0000-00000000000B")!
+
+        // First observation seeds order from reported activity: Alpha newer.
+        let seeded = listSnapshot(
+            generatedAt: base,
+            conversations: [
+                statusSummary(id: alpha, title: "Alpha", status: .working, updatedAt: base.addingTimeInterval(-10)),
+                statusSummary(id: beta, title: "Beta", status: .working, updatedAt: base.addingTimeInterval(-120)),
+            ]
+        ).presentation(receivedAtMonotonicTime: 1_000, stateTransitions: &transitions)
+        XCTAssertEqual(seeded.activitySessions.map(\.title), ["Alpha", "Beta"])
+
+        // Beta streams newer activity while both stay working: order holds.
+        let streamed = listSnapshot(
+            generatedAt: base.addingTimeInterval(30),
+            conversations: [
+                statusSummary(id: alpha, title: "Alpha", status: .working, updatedAt: base.addingTimeInterval(-10)),
+                statusSummary(id: beta, title: "Beta", status: .working, updatedAt: base.addingTimeInterval(29)),
+            ]
+        ).presentation(receivedAtMonotonicTime: 1_030, stateTransitions: &transitions)
+        XCTAssertEqual(streamed.activitySessions.map(\.title), ["Alpha", "Beta"])
+
+        // Alpha then Beta transition to ready: the later transition ranks
+        // first within the ready bucket regardless of raw activity.
+        _ = listSnapshot(
+            generatedAt: base.addingTimeInterval(60),
+            conversations: [
+                statusSummary(id: alpha, title: "Alpha", status: .ready, updatedAt: base.addingTimeInterval(59)),
+                statusSummary(id: beta, title: "Beta", status: .working, updatedAt: base.addingTimeInterval(29)),
+            ]
+        ).presentation(receivedAtMonotonicTime: 1_060, stateTransitions: &transitions)
+        let transitioned = listSnapshot(
+            generatedAt: base.addingTimeInterval(90),
+            conversations: [
+                statusSummary(id: alpha, title: "Alpha", status: .ready, updatedAt: base.addingTimeInterval(59)),
+                statusSummary(id: beta, title: "Beta", status: .ready, updatedAt: base.addingTimeInterval(89)),
+            ]
+        ).presentation(receivedAtMonotonicTime: 1_090, stateTransitions: &transitions)
+        XCTAssertEqual(transitioned.activitySessions.map(\.title), ["Beta", "Alpha"])
+    }
+
     func testUnknownSendStatusAndRejectionReasonFailOnlySendDecode() throws {
         XCTAssertThrowsError(try decoder.decodeSendResult(CompatibilityFixture.data("send-unknown-status"))) { error in
             XCTAssertEqual(error as? GatewayCompatibilityError, .unsupportedSendStatus("scheduled_for_future"))
@@ -596,6 +641,43 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
                 "conversations": [conversation],
             ],
         ], options: [.sortedKeys])
+    }
+
+    private func listSnapshot(
+        generatedAt: Date,
+        conversations: [CompatibleConversationSummary]
+    ) -> CompatibleSessionListSnapshot {
+        CompatibleSessionListSnapshot(
+            projectionRunID: RemoteProjectionRunID(
+                rawValue: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+            ),
+            conversations: conversations,
+            generatedAt: generatedAt
+        )
+    }
+
+    private func statusSummary(
+        id: UUID,
+        title: String,
+        status: RemoteSessionPresentationStatus,
+        updatedAt: Date
+    ) -> CompatibleConversationSummary {
+        CompatibleConversationSummary(
+            conversationID: RemoteConversationID(rawValue: id),
+            provider: .codex,
+            title: title,
+            placement: RemoteConversationPlacement(
+                workspaceID: UUID(uuidString: "99999999-9999-9999-9999-999999999999")!,
+                workspaceTitle: "Workspace"
+            ),
+            cwd: nil,
+            state: .working,
+            presentationStatus: .known(status),
+            inputAvailability: .unavailable(reason: .known(.ended)),
+            projectionGeneration: 1,
+            latestSequence: 1,
+            updatedAt: updatedAt
+        )
     }
 
     private func compatibleSummary(conversation: String, workspace: String) -> CompatibleConversationSummary {
