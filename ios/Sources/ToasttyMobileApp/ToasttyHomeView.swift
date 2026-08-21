@@ -5,6 +5,8 @@ enum ToasttyHomeListMode: String, CaseIterable {
     case activity
     case workspaces
 
+    static let defaultMode = ToasttyHomeListMode.workspaces
+
     var title: String {
         switch self {
         case .activity: "Activity"
@@ -33,7 +35,7 @@ struct ToasttyHomeView: View {
         self.refresh = refresh
         self.onSettings = onSettings
         _storedListMode = AppStorage(
-            wrappedValue: ToasttyHomeListMode.activity.rawValue,
+            wrappedValue: ToasttyHomeListMode.defaultMode.rawValue,
             Self.listModePreferenceKey,
             store: defaults
         )
@@ -80,7 +82,7 @@ struct ToasttyHomeView: View {
         }
         .onAppear {
             if ToasttyHomeListMode(rawValue: storedListMode) == nil {
-                storedListMode = ToasttyHomeListMode.activity.rawValue
+                storedListMode = ToasttyHomeListMode.defaultMode.rawValue
             }
         }
     }
@@ -96,7 +98,7 @@ struct ToasttyHomeView: View {
     }
 
     private var selectedListMode: ToasttyHomeListMode {
-        ToasttyHomeListMode(rawValue: storedListMode) ?? .activity
+        ToasttyHomeListMode(rawValue: storedListMode) ?? .defaultMode
     }
 
     private var listModeSelection: Binding<ToasttyHomeListMode> {

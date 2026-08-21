@@ -2,6 +2,12 @@ import XCTest
 @testable import ToasttyMobileApp
 @testable import ToasttyMobileDomain
 
+final class ToasttyHomeListModeTests: XCTestCase {
+    func testWorkspacesIsTheDefaultMode() {
+        XCTAssertEqual(ToasttyHomeListMode.defaultMode, .workspaces)
+    }
+}
+
 @MainActor
 final class HomeScreenControllerTests: XCTestCase {
     func testOpenAndDismissOwnConversationPresentationState() throws {
