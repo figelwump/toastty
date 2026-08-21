@@ -15,6 +15,63 @@ DEFAULT_ENDPOINT = "https://toastty-diagnostics.giantthings.workers.dev"
 REPORT_ID_RE = re.compile(r"^TT-[0-9]{8}-[A-Z2-9]{16}$")
 LOG_MATCH_RE = re.compile(r"\b(error|warn|warning|failed|failure|exception|fatal)\b", re.IGNORECASE)
 DEFAULT_AUTOMATION_DISPLAY_LIMIT = 20
+DEFAULT_LIFECYCLE_DISPLAY_LIMIT = 60
+LIFECYCLE_MESSAGES = {
+    "Restored workspace layout state",
+    "Launching without persisted layout state",
+    "Workspace display configuration changed",
+    "Workspace layout termination summary",
+}
+LIFECYCLE_METADATA_KEYS = (
+    "running_short_version",
+    "running_build",
+    "updater_event",
+    "starting_updater",
+    "can_check_for_updates",
+    "session_in_progress",
+    "automatically_checks_for_updates",
+    "automatically_downloads_updates",
+    "update_check_interval_seconds",
+    "last_update_check_at_ms",
+    "check_type",
+    "target_short_version",
+    "target_build",
+    "choice",
+    "stage",
+    "user_initiated",
+    "reason_code",
+    "error_domain",
+    "error_code",
+    "requested_profile_id",
+    "resolved_profile_id",
+    "profile_id",
+    "profile_updated_at_ms",
+    "profile_window_count",
+    "profile_workspace_count",
+    "profile_tab_count",
+    "profile_panel_count",
+    "profile_fingerprint",
+    "profile_candidate_id",
+    "profile_source",
+    "display_count",
+    "display_configuration",
+    "profile_display",
+    "previous_profile_candidate_id",
+    "previous_profile_source",
+    "previous_display_count",
+    "previous_display_configuration",
+    "previous_profile_display",
+    "current_profile_candidate_id",
+    "current_profile_source",
+    "current_display_count",
+    "current_display_configuration",
+    "current_profile_display",
+    "persistence_profile_id",
+    "profile_candidate_changed",
+    "profile_candidate_matches_persistence_profile",
+    "write_needed",
+    "write_status",
+)
 
 
 def main() -> int:
@@ -144,6 +201,8 @@ def print_summary(envelope: dict[str, Any], source: str, log_match_limit: int, a
     logs = record(bundle.get("logs"))
     current_log = record(logs.get("current"))
     previous_log = record(logs.get("previous"))
+    workspace_layouts = record(bundle.get("workspaceLayouts"))
+    workspace_profiles = list_value(workspace_layouts.get("profiles"))
     automation = record(bundle.get("automation"))
     recent_requests = list_value(automation.get("recentRequests"))
     socket = record(bundle.get("socket"))
@@ -175,6 +234,11 @@ def print_summary(envelope: dict[str, Any], source: str, log_match_limit: int, a
         f"{' truncated' if previous_log.get('truncated') else ''}"
     )
     print(f"- Automation audit: {len(recent_requests)} recent calls recorded")
+    print(
+        "- Workspace layouts: "
+        f"{len(workspace_profiles)} profiles; "
+        f"status={availability_status(workspace_layouts.get('status'))}"
+    )
 
     note = text(bundle.get("note")) or text(summary.get("notePreview"))
     if note:
@@ -189,6 +253,28 @@ def print_summary(envelope: dict[str, Any], source: str, log_match_limit: int, a
         for item in displayed_requests:
             print(f"- {describe_automation_call(record(item))}")
     else:
+        print("- None recorded")
+
+    print("")
+    print("Workspace layout profiles")
+    if workspace_profiles:
+        for value in workspace_profiles:
+            print(f"- {describe_workspace_profile(record(value))}")
+    else:
+        print("- None recorded")
+
+    lifecycle_lines = lifecycle_log_lines(
+        [
+            text(previous_log.get("content")) or "",
+            text(current_log.get("content")) or "",
+        ],
+        DEFAULT_LIFECYCLE_DISPLAY_LIMIT
+    )
+    print("")
+    print("Workspace/updater lifecycle")
+    for line in lifecycle_lines:
+        print(f"- {line}")
+    if not lifecycle_lines:
         print("- None recorded")
 
     log_matches = matching_log_lines(text(current_log.get("content")) or "", log_match_limit)
@@ -260,6 +346,50 @@ def describe_automation_call(item: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
+def describe_workspace_profile(profile: dict[str, Any]) -> str:
+    counts = (
+        f"windows={first_present(profile.get('windowCount'), '?')}, "
+        f"workspaces={first_present(profile.get('workspaceCount'), '?')}, "
+        f"tabs={first_present(profile.get('tabCount'), '?')}, "
+        f"panels={first_present(profile.get('panelCount'), '?')}"
+    )
+    fingerprint = text(profile.get("fingerprint"))
+    return (
+        f"{text(profile.get('profileID')) or '?'} | updated={format_ms(profile.get('updatedAtMs'))} "
+        f"| {counts} | fingerprint={fingerprint[:16] if fingerprint else '?'} "
+        f"| validation={availability_status(profile.get('validationStatus'))}"
+    )
+
+
+def lifecycle_log_lines(contents: list[str], limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    matches: list[str] = []
+    for content in contents:
+        for line in content.splitlines():
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            item = record(payload)
+            message = text(item.get("message"))
+            metadata = record(item.get("metadata"))
+            if not message or not (
+                message in LIFECYCLE_MESSAGES
+                or message.startswith("Sparkle update")
+                or message.startswith("Sparkle updater")
+            ):
+                continue
+            parts = [text(item.get("timestamp")) or "?", message]
+            parts.extend(
+                f"{key}={collapse(str(metadata[key]), 120)}"
+                for key in LIFECYCLE_METADATA_KEYS
+                if key in metadata
+            )
+            matches.append(" | ".join(parts))
+    return matches[-limit:]
+
+
 def matching_log_lines(content: str, limit: int) -> list[str]:
     if limit <= 0 or not content:
         return []
@@ -280,6 +410,13 @@ def list_value(value: Any) -> list[Any]:
 
 def text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def availability_status(value: Any) -> str:
+    status = record(value)
+    label = text(status.get("status")) or "unknown"
+    detail = text(status.get("detail"))
+    return f"{label} ({collapse(detail, 120)})" if detail else label
 
 
 def first_present(*values: Any) -> Any:

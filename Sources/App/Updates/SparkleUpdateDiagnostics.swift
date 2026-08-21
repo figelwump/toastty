@@ -40,6 +40,25 @@ struct SparkleUpdatePreflight {
         case malformedFeed(feedURL: String, reason: String)
         case emptyFeed(feedURL: String)
 
+        var diagnosticCode: String {
+            switch self {
+            case .missingFeedURL:
+                return "missing_feed_url"
+            case .invalidFeedURL:
+                return "invalid_feed_url"
+            case .insecureFeedURL:
+                return "insecure_feed_url"
+            case .missingPublicEDKey:
+                return "missing_public_ed_key"
+            case .feedRequestFailed:
+                return "feed_request_failed"
+            case .malformedFeed:
+                return "malformed_feed"
+            case .emptyFeed:
+                return "empty_feed"
+            }
+        }
+
         var messageText: String {
             switch self {
             case .missingFeedURL, .invalidFeedURL, .insecureFeedURL, .missingPublicEDKey:

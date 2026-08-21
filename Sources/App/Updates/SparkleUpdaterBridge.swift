@@ -9,6 +9,7 @@ final class SparkleUpdaterBridge: ObservableObject {
     @Published private(set) var canCheckForUpdates: Bool
 
     private let updaterController: SPUStandardUpdaterController
+    private let updaterDiagnosticsLogger: SparkleUpdaterDiagnosticsLogger
     private let updatePreflight: SparkleUpdatePreflight?
     private let presentDiagnosticAlert: DiagnosticAlertPresenter
     private var canCheckForUpdatesObservation: NSKeyValueObservation?
@@ -22,9 +23,11 @@ final class SparkleUpdaterBridge: ObservableObject {
             SparkleUpdateDiagnosticsPresenter.present(issue: issue)
         }
     ) {
+        let updaterDiagnosticsLogger = SparkleUpdaterDiagnosticsLogger(bundle: bundle)
+        self.updaterDiagnosticsLogger = updaterDiagnosticsLogger
         updaterController = SPUStandardUpdaterController(
             startingUpdater: startingUpdater,
-            updaterDelegate: nil,
+            updaterDelegate: updaterDiagnosticsLogger,
             userDriverDelegate: nil
         )
         updatePreflight = enableDetailedDiagnostics
@@ -32,6 +35,10 @@ final class SparkleUpdaterBridge: ObservableObject {
             : nil
         self.presentDiagnosticAlert = presentDiagnosticAlert
         canCheckForUpdates = updaterController.updater.canCheckForUpdates
+        updaterDiagnosticsLogger.recordInitialized(
+            updater: updaterController.updater,
+            startingUpdater: startingUpdater
+        )
         canCheckForUpdatesObservation = updaterController.updater.observe(
             \.canCheckForUpdates,
             options: [.initial, .new]
@@ -44,6 +51,7 @@ final class SparkleUpdaterBridge: ObservableObject {
     }
 
     func checkForUpdates() {
+        updaterDiagnosticsLogger.recordManualCheckRequested()
         guard let updatePreflight else {
             updaterController.checkForUpdates(nil)
             return
@@ -53,6 +61,7 @@ final class SparkleUpdaterBridge: ObservableObject {
             guard let self else { return }
 
             if let issue = await updatePreflight.validate() {
+                self.updaterDiagnosticsLogger.recordPreflightFailure(issue)
                 self.presentDiagnosticAlert(issue)
                 return
             }

@@ -195,6 +195,74 @@ struct WorkspaceLayoutPersistenceStoreTests {
     }
 
     @Test
+    func topologyFingerprintIsDeterministicAndContentFree() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let firstWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        #expect(
+            reducer.send(
+                .createWorkspace(windowID: windowID, title: "Private second workspace", activate: false),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: firstWorkspaceID, seed: nil), state: &state))
+        let layout = WorkspaceLayoutSnapshot(state: state)
+        let original = WorkspaceLayoutPersistenceStore.diagnosticsSummary(
+            for: layout,
+            profileID: "desktop"
+        )
+
+        var reordered = layout
+        reordered.workspacesByID = Dictionary(
+            uniqueKeysWithValues: layout.workspacesByID
+                .sorted { $0.key.uuidString > $1.key.uuidString }
+        )
+        for workspaceID in reordered.workspacesByID.keys {
+            guard var workspace = reordered.workspacesByID[workspaceID] else { continue }
+            workspace.tabsByID = Dictionary(
+                uniqueKeysWithValues: workspace.tabsByID
+                    .sorted { $0.key.uuidString > $1.key.uuidString }
+            )
+            reordered.workspacesByID[workspaceID] = workspace
+        }
+        let reorderedSummary = WorkspaceLayoutPersistenceStore.diagnosticsSummary(
+            for: reordered,
+            profileID: "desktop"
+        )
+        #expect(reorderedSummary.fingerprint == original.fingerprint)
+
+        let roundTripped = try JSONDecoder().decode(
+            WorkspaceLayoutSnapshot.self,
+            from: JSONEncoder().encode(layout)
+        )
+        let roundTrippedSummary = WorkspaceLayoutPersistenceStore.diagnosticsSummary(
+            for: roundTripped,
+            profileID: "desktop"
+        )
+        #expect(roundTrippedSummary.fingerprint == original.fingerprint)
+
+        var contentChanged = layout
+        var workspace = try #require(contentChanged.workspacesByID[firstWorkspaceID])
+        workspace.title = "Different private title"
+        workspace.annotations = ["customer": WorkspaceAnnotation(text: "Different secret")]
+        contentChanged.workspacesByID[firstWorkspaceID] = workspace
+        let contentChangedSummary = WorkspaceLayoutPersistenceStore.diagnosticsSummary(
+            for: contentChanged,
+            profileID: "desktop"
+        )
+        #expect(contentChangedSummary.fingerprint == original.fingerprint)
+
+        var topologyChanged = layout
+        topologyChanged.windows[0].workspaceIDs.reverse()
+        let topologyChangedSummary = WorkspaceLayoutPersistenceStore.diagnosticsSummary(
+            for: topologyChanged,
+            profileID: "desktop"
+        )
+        #expect(topologyChangedSummary.fingerprint != original.fingerprint)
+    }
+
+    @Test
     func loadsLegacySingleTabWorkspaceLayoutPayloadFromDisk() throws {
         let fileURL = try makeTempStoreURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }

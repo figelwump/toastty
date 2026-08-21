@@ -32,7 +32,7 @@ sv exec -- .agents/skills/toastty-diagnostics/scripts/fetch-diagnostics-report.p
 .agents/skills/toastty-diagnostics/scripts/fetch-diagnostics-report.py --file artifacts/diagnostics/TT-YYYYMMDD-ABCDEFGHJKLMNPQR.json
 ```
 
-5. Use the helper's printed summary for the first read: app/runtime, socket state, redaction state, log sizes, warning/error-like log lines, and recent automation calls.
+5. Use the helper's printed summary for the first read: app/runtime, socket state, redaction state, log sizes, workspace profile summaries, updater/layout lifecycle events, warning/error-like log lines, and recent automation calls.
 6. For deeper analysis, read the saved JSON file and inspect only the relevant sections. Prefer targeted excerpts over raw dumps.
 
 ## Access Rules
@@ -51,6 +51,8 @@ Start with the report summary, then inspect likely root-cause areas:
 - `summary` and `bundle.socket` for app/runtime and automation socket health.
 - `bundle.automation.recentRequests` for recent app-control calls, focus-changing actions, caller agent, selector IDs, flags, outcome, and duration.
 - `bundle.logs.current.content` for focused warning/error lines near the reported symptom.
+- `bundle.workspaceLayouts.profiles` for content-free profile IDs, update times, object counts, validation state, and fingerprints. Compare these with the filtered workspace lifecycle events from current and previous logs to identify profile selection, display changes, and overwrite timing.
+- The filtered Sparkle lifecycle events in current and previous logs for running/offered/downloaded/installing versions, check type, user choice, updater settings, and domain/code-only failures.
 - `bundle.redaction` and `summary.secretScanFindings` for privacy state before quoting any content.
 - `bundle.probe`, `bundle.shell`, and `bundle.system` only when the issue plausibly depends on shell setup, CLI shims, PATH, or host environment.
 

@@ -6,6 +6,7 @@ export type DiagnosticsBundle = {
   note?: string;
   app?: Record<string, unknown>;
   logs?: Record<string, unknown>;
+  workspaceLayouts?: Record<string, unknown>;
   shell?: Record<string, unknown>;
   socket?: Record<string, unknown>;
   automation?: Record<string, unknown>;
@@ -25,6 +26,8 @@ export type DiagnosticsSummary = {
   currentLogTruncated?: boolean;
   previousLogSizeBytes?: number;
   previousLogTruncated?: boolean;
+  workspaceLayoutProfileCount?: number;
+  workspaceLayoutInvalidProfileCount?: number;
   redactionRulesVersion: number;
   redactedKeyCount: number;
   notePreview?: string;
@@ -81,6 +84,7 @@ export function validateDiagnosticsBundle(value: unknown, minimumRedactionRulesV
       note: stringValue(object.note),
       app: asRecord(object.app) ?? undefined,
       logs: asRecord(object.logs) ?? undefined,
+      workspaceLayouts: asRecord(object.workspaceLayouts) ?? undefined,
       shell: asRecord(object.shell) ?? undefined,
       socket: asRecord(object.socket) ?? undefined,
       automation: asRecord(object.automation) ?? undefined,
@@ -102,7 +106,9 @@ export function buildDiagnosticsSummary(
   const logs = bundle.logs;
   const system = bundle.system;
   const socket = bundle.socket;
+  const workspaceLayouts = bundle.workspaceLayouts;
   const redaction = bundle.redaction;
+  const workspaceProfiles = listProperty(workspaceLayouts, "profiles");
 
   return {
     appVersion: stringProperty(app, "shortVersion"),
@@ -113,6 +119,12 @@ export function buildDiagnosticsSummary(
     currentLogTruncated: logBool(logs, "current", "truncated"),
     previousLogSizeBytes: logNumber(logs, "previous", "sizeBytes"),
     previousLogTruncated: logBool(logs, "previous", "truncated"),
+    workspaceLayoutProfileCount: workspaceProfiles?.length,
+    workspaceLayoutInvalidProfileCount: workspaceProfiles?.filter((value) => {
+      const profile = asRecord(value);
+      const validationStatus = profile ? asRecord(profile.validationStatus) : undefined;
+      return stringProperty(validationStatus, "status") !== "available";
+    }).length,
     redactionRulesVersion: redaction?.rulesVersion ?? 0,
     redactedKeyCount: redaction?.redactedKeyCount ?? 0,
     notePreview: preview(bundle.note),
@@ -144,6 +156,11 @@ function stringValue(value: unknown): string | undefined {
 
 function stringProperty(object: Record<string, unknown> | undefined, key: string): string | undefined {
   return object ? stringValue(object[key]) : undefined;
+}
+
+function listProperty(object: Record<string, unknown> | undefined, key: string): unknown[] | undefined {
+  const value = object?.[key];
+  return Array.isArray(value) ? value : undefined;
 }
 
 function logNumber(logs: Record<string, unknown> | undefined, logKey: string, property: string): number | undefined {

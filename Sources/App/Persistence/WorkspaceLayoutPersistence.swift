@@ -6,17 +6,37 @@ struct WorkspaceLayoutPersistenceContext {
     let profileID: String
     let fileURL: URL
     let shouldMigrateLegacyStore: Bool
+    let launchProfileResolution: WorkspaceLayoutProfileResolution?
+
+    init(
+        profileID: String,
+        fileURL: URL,
+        shouldMigrateLegacyStore: Bool,
+        launchProfileResolution: WorkspaceLayoutProfileResolution? = nil
+    ) {
+        self.profileID = profileID
+        self.fileURL = fileURL
+        self.shouldMigrateLegacyStore = shouldMigrateLegacyStore
+        self.launchProfileResolution = launchProfileResolution
+    }
 
     static func resolve(processInfo: ProcessInfo = .processInfo) -> WorkspaceLayoutPersistenceContext {
         let runtimePaths = ToasttyRuntimePaths.resolve(environment: processInfo.environment)
+        let profileResolution = WorkspaceLayoutProfileResolver.resolution(processInfo: processInfo)
         return WorkspaceLayoutPersistenceContext(
-            profileID: WorkspaceLayoutProfileResolver.resolve(processInfo: processInfo),
+            profileID: profileResolution.profileID,
             fileURL: WorkspaceLayoutPersistenceLocation.fileURL(environment: processInfo.environment),
-            shouldMigrateLegacyStore: runtimePaths.isRuntimeHomeEnabled == false
+            shouldMigrateLegacyStore: runtimePaths.isRuntimeHomeEnabled == false,
+            launchProfileResolution: profileResolution
         )
     }
 
-    func loadState() -> (state: AppState, layout: WorkspaceLayoutSnapshot, resolvedProfileID: String)? {
+    func loadState() -> (
+        state: AppState,
+        layout: WorkspaceLayoutSnapshot,
+        resolvedProfileID: String,
+        profileSummary: WorkspaceLayoutPersistenceProfileSummary
+    )? {
         migrateLegacyStoreIfNeeded()
         let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
         guard let loadResult = store.loadLayout(
@@ -25,7 +45,12 @@ struct WorkspaceLayoutPersistenceContext {
         ) else {
             return nil
         }
-        return (loadResult.layout.makeAppState(), loadResult.layout, loadResult.resolvedProfileID)
+        return (
+            loadResult.layout.makeAppState(),
+            loadResult.layout,
+            loadResult.resolvedProfileID,
+            loadResult.profileSummary
+        )
     }
 
     private func migrateLegacyStoreIfNeeded() {
@@ -65,11 +90,13 @@ struct WorkspaceLayoutPersistenceContext {
 @MainActor
 final class WorkspaceLayoutPersistenceCoordinator {
     private static let persistDebounceNanoseconds: UInt64 = 250_000_000
+    typealias ProfileResolutionProvider = @MainActor () -> WorkspaceLayoutProfileResolution
 
     private let context: WorkspaceLayoutPersistenceContext
     private let store: WorkspaceLayoutPersistenceStore
     private let persistDropAuditLogger: @MainActor ([String: String]) -> Void
     private let layoutLifecycleLogger: @MainActor (String, [String: String]) -> Void
+    private let profileResolutionProvider: ProfileResolutionProvider
     private var pendingPersistTask: Task<Void, Never>?
     private var lastPersistedLayout: WorkspaceLayoutSnapshot?
     private var pendingPersistBaselineLayout: WorkspaceLayoutSnapshot?
@@ -90,11 +117,15 @@ final class WorkspaceLayoutPersistenceCoordinator {
                 category: .state,
                 metadata: metadata
             )
+        },
+        profileResolutionProvider: @escaping ProfileResolutionProvider = {
+            WorkspaceLayoutProfileResolver.resolution()
         }
     ) {
         self.context = context
         self.persistDropAuditLogger = persistDropAuditLogger
         self.layoutLifecycleLogger = layoutLifecycleLogger
+        self.profileResolutionProvider = profileResolutionProvider
         store = WorkspaceLayoutPersistenceStore(fileURL: context.fileURL)
     }
 
@@ -131,12 +162,29 @@ final class WorkspaceLayoutPersistenceCoordinator {
         let dropTrigger = pendingPersistDropTrigger
         pendingPersistBaselineLayout = nil
         pendingPersistDropTrigger = nil
+        let layout = WorkspaceLayoutSnapshot(state: state)
+        let writeNeeded = layout != lastPersistedLayout
         persistNow(
-            layout: WorkspaceLayoutSnapshot(state: state),
+            layout: layout,
             reason: reason,
             baselineLayout: baselineLayout,
             dropTrigger: dropTrigger
         )
+        if reason == "application_will_terminate" {
+            let writeStatus: String
+            if writeNeeded == false {
+                writeStatus = "not_needed"
+            } else if lastPersistedLayout == layout {
+                writeStatus = "succeeded"
+            } else {
+                writeStatus = "failed"
+            }
+            logTerminationSummary(
+                layout: layout,
+                writeNeeded: writeNeeded,
+                writeStatus: writeStatus
+            )
+        }
     }
 
     private func schedulePersist(
@@ -515,6 +563,34 @@ final class WorkspaceLayoutPersistenceCoordinator {
         Set(lhs).union(Set(rhs)).sorted { $0.uuidString < $1.uuidString }
     }
 
+    private func logTerminationSummary(
+        layout: WorkspaceLayoutSnapshot,
+        writeNeeded: Bool,
+        writeStatus: String
+    ) {
+        let summary = WorkspaceLayoutPersistenceStore.diagnosticsSummary(
+            for: layout,
+            profileID: context.profileID
+        )
+        let currentResolution = profileResolutionProvider()
+        var metadata = currentResolution.logMetadata(prefix: "current_")
+        metadata.merge([
+            "persistence_profile_id": context.profileID,
+            "path": context.fileURL.path,
+            "write_needed": writeNeeded ? "true" : "false",
+            "write_status": writeStatus,
+            "profile_candidate_matches_persistence_profile": currentResolution.profileID == context.profileID
+                ? "true"
+                : "false",
+            "profile_window_count": String(summary.windowCount),
+            "profile_workspace_count": String(summary.workspaceCount),
+            "profile_tab_count": String(summary.tabCount),
+            "profile_panel_count": String(summary.panelCount),
+            "profile_fingerprint": summary.fingerprint ?? "unavailable",
+        ]) { current, _ in current }
+        layoutLifecycleLogger("Workspace layout termination summary", metadata)
+    }
+
     private func persistDropMetadata(
         previousLayout: WorkspaceLayoutSnapshot,
         nextLayout: WorkspaceLayoutSnapshot,
@@ -553,23 +629,123 @@ enum WorkspaceLayoutPersistenceLocation {
     }
 }
 
+struct WorkspaceLayoutDisplayDescriptor: Equatable, Sendable {
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let scale: Double
+    let isMain: Bool
+
+    var compactDescription: String {
+        let scaleLabel = WorkspaceLayoutProfileResolver.formattedScale(scale)
+        return "\(pixelWidth)x\(pixelHeight)@\(scaleLabel)x" + (isMain ? ":main" : "")
+    }
+}
+
+struct WorkspaceLayoutDisplayConfiguration: Equatable, Sendable {
+    let displays: [WorkspaceLayoutDisplayDescriptor]
+    let profileDisplay: WorkspaceLayoutDisplayDescriptor?
+
+    static func current() -> WorkspaceLayoutDisplayConfiguration {
+        let screens = NSScreen.screens
+        let mainScreen = NSScreen.main
+        let descriptors = screens.map { screen in
+            descriptor(for: screen, isMain: screen === mainScreen)
+        }
+        let selectedScreen = mainScreen ?? screens.first
+        return WorkspaceLayoutDisplayConfiguration(
+            displays: descriptors,
+            profileDisplay: selectedScreen.map { screen in
+                descriptor(for: screen, isMain: screen === mainScreen)
+            }
+        )
+    }
+
+    func logMetadata(prefix: String = "") -> [String: String] {
+        [
+            "\(prefix)display_count": String(displays.count),
+            "\(prefix)display_configuration": displays.enumerated()
+                .map { "\($0.offset):\($0.element.compactDescription)" }
+                .joined(separator: ","),
+            "\(prefix)profile_display": profileDisplay?.compactDescription ?? "none",
+        ]
+    }
+
+    private static func descriptor(
+        for screen: NSScreen,
+        isMain: Bool
+    ) -> WorkspaceLayoutDisplayDescriptor {
+        WorkspaceLayoutDisplayDescriptor(
+            pixelWidth: max(1, Int((screen.frame.width * screen.backingScaleFactor).rounded())),
+            pixelHeight: max(1, Int((screen.frame.height * screen.backingScaleFactor).rounded())),
+            scale: screen.backingScaleFactor,
+            isMain: isMain
+        )
+    }
+}
+
+struct WorkspaceLayoutProfileResolution: Equatable, Sendable {
+    enum Source: String, Equatable, Sendable {
+        case override
+        case mainDisplay = "main_display"
+        case fallback
+    }
+
+    let profileID: String
+    let source: Source
+    let displayConfiguration: WorkspaceLayoutDisplayConfiguration
+
+    func logMetadata(prefix: String = "") -> [String: String] {
+        var metadata = displayConfiguration.logMetadata(prefix: prefix)
+        metadata["\(prefix)profile_candidate_id"] = profileID
+        metadata["\(prefix)profile_source"] = source.rawValue
+        return metadata
+    }
+}
+
 enum WorkspaceLayoutProfileResolver {
     static let fallbackProfileID = "default"
     private static let profileOverrideEnvironmentKey = "TOASTTY_LAYOUT_PROFILE"
 
     static func resolve(processInfo: ProcessInfo = .processInfo) -> String {
-        if let override = normalizedOverride(from: processInfo.environment[profileOverrideEnvironmentKey]) {
-            return override
+        resolution(processInfo: processInfo).profileID
+    }
+
+    static func resolution(
+        processInfo: ProcessInfo = .processInfo,
+        displayConfiguration: WorkspaceLayoutDisplayConfiguration = .current()
+    ) -> WorkspaceLayoutProfileResolution {
+        resolution(
+            environment: processInfo.environment,
+            displayConfiguration: displayConfiguration
+        )
+    }
+
+    static func resolution(
+        environment: [String: String],
+        displayConfiguration: WorkspaceLayoutDisplayConfiguration
+    ) -> WorkspaceLayoutProfileResolution {
+        if let override = normalizedOverride(from: environment[profileOverrideEnvironmentKey]) {
+            return WorkspaceLayoutProfileResolution(
+                profileID: override,
+                source: .override,
+                displayConfiguration: displayConfiguration
+            )
         }
 
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
-            return fallbackProfileID
+        guard let display = displayConfiguration.profileDisplay else {
+            return WorkspaceLayoutProfileResolution(
+                profileID: fallbackProfileID,
+                source: .fallback,
+                displayConfiguration: displayConfiguration
+            )
         }
 
-        let pixelWidth = max(1, Int((screen.frame.width * screen.backingScaleFactor).rounded()))
-        let pixelHeight = max(1, Int((screen.frame.height * screen.backingScaleFactor).rounded()))
-        let scaleLabel = formattedScale(screen.backingScaleFactor)
-        return "display-\(pixelWidth)x\(pixelHeight)@\(scaleLabel)x"
+        let scaleLabel = formattedScale(display.scale)
+        return WorkspaceLayoutProfileResolution(
+            profileID: "display-\(display.pixelWidth)x\(display.pixelHeight)@\(scaleLabel)x",
+            source: .mainDisplay,
+            displayConfiguration: displayConfiguration
+        )
     }
 
     private static func normalizedOverride(from rawValue: String?) -> String? {
@@ -597,11 +773,72 @@ enum WorkspaceLayoutProfileResolver {
         return String(collapsed.prefix(80))
     }
 
-    private static func formattedScale(_ value: Double) -> String {
+    static func formattedScale(_ value: Double) -> String {
         let rounded = value.rounded()
         if abs(rounded - value) < 0.0001 {
             return String(Int(rounded))
         }
         return String(format: "%.2f", value)
+    }
+}
+
+@MainActor
+final class WorkspaceLayoutDisplayDiagnosticsObserver {
+    typealias ResolutionProvider = @MainActor () -> WorkspaceLayoutProfileResolution
+    typealias Logger = @MainActor (_ message: String, _ metadata: [String: String]) -> Void
+
+    private let persistenceProfileID: String
+    private let notificationCenter: NotificationCenter
+    private let resolutionProvider: ResolutionProvider
+    private let logger: Logger
+    private var lastResolution: WorkspaceLayoutProfileResolution
+
+    init(
+        persistenceProfileID: String,
+        notificationCenter: NotificationCenter = .default,
+        resolutionProvider: @escaping ResolutionProvider = {
+            WorkspaceLayoutProfileResolver.resolution()
+        },
+        logger: @escaping Logger = { message, metadata in
+            ToasttyLog.info(message, category: .state, metadata: metadata)
+        }
+    ) {
+        self.persistenceProfileID = persistenceProfileID
+        self.notificationCenter = notificationCenter
+        self.resolutionProvider = resolutionProvider
+        self.logger = logger
+        lastResolution = resolutionProvider()
+        notificationCenter.addObserver(
+            self,
+            selector: #selector(handleDisplayConfigurationChange),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        notificationCenter.removeObserver(self)
+    }
+
+    @objc
+    private func handleDisplayConfigurationChange(_ notification: Notification) {
+        _ = notification
+        recordDisplayChangeIfNeeded()
+    }
+
+    func recordDisplayChangeIfNeeded() {
+        let nextResolution = resolutionProvider()
+        guard nextResolution.displayConfiguration != lastResolution.displayConfiguration else {
+            return
+        }
+
+        var metadata = lastResolution.logMetadata(prefix: "previous_")
+        metadata.merge(nextResolution.logMetadata(prefix: "current_")) { _, next in next }
+        metadata["persistence_profile_id"] = persistenceProfileID
+        metadata["profile_candidate_changed"] = lastResolution.profileID == nextResolution.profileID
+            ? "false"
+            : "true"
+        lastResolution = nextResolution
+        logger("Workspace display configuration changed", metadata)
     }
 }

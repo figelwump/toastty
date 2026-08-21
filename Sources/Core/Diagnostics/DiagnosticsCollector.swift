@@ -34,6 +34,10 @@ public enum DiagnosticsCollector {
                 instance: instance.manifest,
                 fileManager: fileManager
             ),
+            workspaceLayouts: DiagnosticsWorkspaceLayoutsCollector.collect(
+                runtimePaths: runtimePaths,
+                fileManager: fileManager
+            ),
             shell: DiagnosticsShellCollector.collect(
                 runtimePaths: runtimePaths,
                 environment: environment,
@@ -48,6 +52,67 @@ public enum DiagnosticsCollector {
                 fileManager: fileManager
             )
         )
+    }
+}
+
+private enum DiagnosticsWorkspaceLayoutsCollector {
+    static func collect(
+        runtimePaths: ToasttyRuntimePaths,
+        fileManager: FileManager
+    ) -> DiagnosticsWorkspaceLayoutsSection {
+        let fileURL = runtimePaths.workspaceLayoutsFileURL
+        let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path)
+        let sizeBytes = (attributes?[.size] as? NSNumber)?.uint64Value
+        let modifiedAtMs = (attributes?[.modificationDate] as? Date).map(millisecondsSinceEpoch)
+
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return DiagnosticsWorkspaceLayoutsSection(
+                path: fileURL.path,
+                exists: false,
+                sizeBytes: sizeBytes,
+                modifiedAtMs: modifiedAtMs,
+                formatVersion: nil,
+                profiles: [],
+                status: .unavailable("workspace layout file not found")
+            )
+        }
+
+        do {
+            let summary = try WorkspaceLayoutPersistenceStore(fileURL: fileURL).diagnosticsSummary()
+            return DiagnosticsWorkspaceLayoutsSection(
+                path: fileURL.path,
+                exists: true,
+                sizeBytes: sizeBytes,
+                modifiedAtMs: modifiedAtMs,
+                formatVersion: summary.formatVersion,
+                profiles: summary.profiles.map { profile in
+                    DiagnosticsWorkspaceLayoutProfile(
+                        profileID: profile.profileID,
+                        updatedAtMs: millisecondsSinceEpoch(profile.updatedAt),
+                        windowCount: profile.windowCount,
+                        workspaceCount: profile.workspaceCount,
+                        tabCount: profile.tabCount,
+                        panelCount: profile.panelCount,
+                        fingerprint: profile.fingerprint,
+                        validationStatus: profile.validationError.map(DiagnosticsAvailability.unavailable)
+                            ?? .available
+                    )
+                },
+                status: .available
+            )
+        } catch {
+            return DiagnosticsWorkspaceLayoutsSection(
+                path: fileURL.path,
+                exists: true,
+                sizeBytes: sizeBytes,
+                modifiedAtMs: modifiedAtMs,
+                formatVersion: nil,
+                profiles: [],
+                status: .unavailable(
+                    "failed to read workspace layout file: \(error.localizedDescription)"
+                )
+            )
+        }
     }
 }
 

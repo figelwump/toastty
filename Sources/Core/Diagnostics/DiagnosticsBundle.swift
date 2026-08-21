@@ -8,6 +8,7 @@ public struct DiagnosticsBundle: Codable, Equatable, Sendable {
     public var note: String?
     public var app: DiagnosticsAppSection
     public var logs: DiagnosticsLogsSection
+    public var workspaceLayouts: DiagnosticsWorkspaceLayoutsSection?
     public var shell: DiagnosticsShellSection
     public var system: DiagnosticsSystemSection
     public var socket: DiagnosticsSocketProbeResult
@@ -21,6 +22,7 @@ public struct DiagnosticsBundle: Codable, Equatable, Sendable {
         note: String?,
         app: DiagnosticsAppSection,
         logs: DiagnosticsLogsSection,
+        workspaceLayouts: DiagnosticsWorkspaceLayoutsSection? = nil,
         shell: DiagnosticsShellSection,
         system: DiagnosticsSystemSection,
         socket: DiagnosticsSocketProbeResult,
@@ -33,12 +35,72 @@ public struct DiagnosticsBundle: Codable, Equatable, Sendable {
         self.note = note
         self.app = app
         self.logs = logs
+        self.workspaceLayouts = workspaceLayouts
         self.shell = shell
         self.system = system
         self.socket = socket
         self.automation = automation
         self.probe = probe
         self.redaction = redaction
+    }
+}
+
+public struct DiagnosticsWorkspaceLayoutsSection: Codable, Equatable, Sendable {
+    public var path: String
+    public var exists: Bool
+    public var sizeBytes: UInt64?
+    public var modifiedAtMs: Int64?
+    public var formatVersion: Int?
+    public var profiles: [DiagnosticsWorkspaceLayoutProfile]
+    public var status: DiagnosticsAvailability
+
+    public init(
+        path: String,
+        exists: Bool,
+        sizeBytes: UInt64?,
+        modifiedAtMs: Int64?,
+        formatVersion: Int?,
+        profiles: [DiagnosticsWorkspaceLayoutProfile],
+        status: DiagnosticsAvailability
+    ) {
+        self.path = path
+        self.exists = exists
+        self.sizeBytes = sizeBytes
+        self.modifiedAtMs = modifiedAtMs
+        self.formatVersion = formatVersion
+        self.profiles = profiles
+        self.status = status
+    }
+}
+
+public struct DiagnosticsWorkspaceLayoutProfile: Codable, Equatable, Sendable {
+    public var profileID: String
+    public var updatedAtMs: Int64
+    public var windowCount: Int
+    public var workspaceCount: Int
+    public var tabCount: Int
+    public var panelCount: Int
+    public var fingerprint: String?
+    public var validationStatus: DiagnosticsAvailability
+
+    public init(
+        profileID: String,
+        updatedAtMs: Int64,
+        windowCount: Int,
+        workspaceCount: Int,
+        tabCount: Int,
+        panelCount: Int,
+        fingerprint: String?,
+        validationStatus: DiagnosticsAvailability
+    ) {
+        self.profileID = profileID
+        self.updatedAtMs = updatedAtMs
+        self.windowCount = windowCount
+        self.workspaceCount = workspaceCount
+        self.tabCount = tabCount
+        self.panelCount = panelCount
+        self.fingerprint = fingerprint
+        self.validationStatus = validationStatus
     }
 }
 

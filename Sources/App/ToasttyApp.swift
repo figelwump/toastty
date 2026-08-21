@@ -674,6 +674,7 @@ struct ToasttyApp: App {
     private let codexProcessPathStore: CodexProcessPathStore
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
+    private let workspaceLayoutDisplayDiagnosticsObserver: WorkspaceLayoutDisplayDiagnosticsObserver?
     private let appTerminationObserver: AppTerminationObserver?
     private let scratchpadSessionLinkCleanupCoordinator: ScratchpadSessionLinkCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
@@ -1195,6 +1196,9 @@ struct ToasttyApp: App {
                 )
             }
             workspaceLayoutPersistenceCoordinator = coordinator
+            workspaceLayoutDisplayDiagnosticsObserver = WorkspaceLayoutDisplayDiagnosticsObserver(
+                persistenceProfileID: layoutPersistenceContext.profileID
+            )
             appTerminationObserver = AppTerminationObserver { [weak store, weak coordinator] in
                 guard let store, let coordinator else { return }
                 coordinator.flushCurrentState(store.state, reason: "application_will_terminate")
@@ -1202,6 +1206,7 @@ struct ToasttyApp: App {
         } else {
             workspaceLayoutPersistenceCoordinator = nil
             workspaceLayoutPersistenceObserverToken = nil
+            workspaceLayoutDisplayDiagnosticsObserver = nil
             appTerminationObserver = nil
         }
 

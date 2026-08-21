@@ -206,6 +206,104 @@ struct DiagnosticsCollectorTests {
         #expect(bundle.shell.otherEnvironmentNames.contains("OPENAI_API_KEY"))
         #expect(bundle.shell.environment.contains(where: { $0.name == "OPENAI_API_KEY" }) == false)
     }
+
+    @Test
+    func collectsContentFreeWorkspaceLayoutSummaryWithoutMutatingStore() throws {
+        let root = try makeTemporaryDirectory(prefix: "diag-layout")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let runtimeHome = root.appendingPathComponent("runtime-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: runtimeHome, withIntermediateDirectories: true)
+        let fileURL = runtimeHome.appendingPathComponent(
+            "workspace-layout-profiles.json",
+            isDirectory: false
+        )
+        var state = AppState.bootstrap()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        workspace.title = "Private project name"
+        workspace.annotations = ["customer": WorkspaceAnnotation(text: "Secret account")]
+        let panelID = try #require(workspace.focusedPanelID)
+        guard case .terminal(var terminal) = workspace.panels[panelID] else {
+            Issue.record("Expected bootstrap terminal panel")
+            return
+        }
+        terminal.cwd = "/Users/example/private-project"
+        workspace.panels[panelID] = .terminal(terminal)
+        state.workspacesByID[workspaceID] = workspace
+        #expect(
+            WorkspaceLayoutPersistenceStore(fileURL: fileURL).persistLayout(
+                WorkspaceLayoutSnapshot(state: state),
+                for: "display-3456x2234@2x"
+            )
+        )
+        let originalData = try Data(contentsOf: fileURL)
+        let originalModifiedAt = try #require(
+            FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate] as? Date
+        )
+
+        let bundle = DiagnosticsCollector.collect(
+            generatedAtMs: 1,
+            note: nil,
+            shellProbeFilePath: nil,
+            socket: noSocketResult(),
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome.path],
+            homeDirectoryPath: root.path
+        )
+
+        let layouts = try #require(bundle.workspaceLayouts)
+        #expect(layouts.exists)
+        #expect(layouts.status == .available)
+        #expect(layouts.formatVersion == WorkspaceLayoutPersistenceStore.currentFormatVersion)
+        let profile = try #require(layouts.profiles.first)
+        #expect(profile.profileID == "display-3456x2234@2x")
+        #expect(profile.windowCount == 1)
+        #expect(profile.workspaceCount == 1)
+        #expect(profile.tabCount == 1)
+        #expect(profile.panelCount == 1)
+        #expect(profile.fingerprint?.count == 64)
+        #expect(profile.validationStatus == .available)
+
+        let encodedSummary = String(decoding: try JSONEncoder().encode(layouts), as: UTF8.self)
+        #expect(encodedSummary.contains("Private project name") == false)
+        #expect(encodedSummary.contains("Secret account") == false)
+        #expect(encodedSummary.contains("private-project") == false)
+        #expect(try Data(contentsOf: fileURL) == originalData)
+        let modifiedAtAfterCollection = try #require(
+            FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate] as? Date
+        )
+        #expect(modifiedAtAfterCollection == originalModifiedAt)
+    }
+
+    @Test
+    func recordsCorruptWorkspaceLayoutStoreAsUnavailable() throws {
+        let root = try makeTemporaryDirectory(prefix: "diag-layout-corrupt")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let runtimeHome = root.appendingPathComponent("runtime-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: runtimeHome, withIntermediateDirectories: true)
+        try Data("not-json".utf8).write(
+            to: runtimeHome.appendingPathComponent(
+                "workspace-layout-profiles.json",
+                isDirectory: false
+            )
+        )
+
+        let bundle = DiagnosticsCollector.collect(
+            generatedAtMs: 1,
+            note: nil,
+            shellProbeFilePath: nil,
+            socket: noSocketResult(),
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome.path],
+            homeDirectoryPath: root.path
+        )
+
+        let layouts = try #require(bundle.workspaceLayouts)
+        #expect(layouts.exists)
+        #expect(layouts.status.status == "unavailable")
+        #expect(layouts.status.detail?.contains("failed to read workspace layout file") == true)
+        #expect(layouts.profiles.isEmpty)
+    }
 }
 
 private func noSocketResult() -> DiagnosticsSocketProbeResult {

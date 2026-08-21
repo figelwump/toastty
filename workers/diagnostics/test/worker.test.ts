@@ -35,14 +35,26 @@ describe("diagnostics worker", () => {
     expect(retrieved.status).toBe(200);
     const envelope = await retrieved.json() as {
       reportID: string;
-      summary: { socketState?: string; redactionRulesVersion: number };
-      bundle: { schemaVersion: number; automation?: { recentRequests?: unknown[] } };
+      summary: {
+        socketState?: string;
+        redactionRulesVersion: number;
+        workspaceLayoutProfileCount?: number;
+        workspaceLayoutInvalidProfileCount?: number;
+      };
+      bundle: {
+        schemaVersion: number;
+        automation?: { recentRequests?: unknown[] };
+        workspaceLayouts?: { profiles?: unknown[] };
+      };
     };
     expect(envelope.reportID).toBe(submitted.reportID);
     expect(envelope.summary.socketState).toBe("healthy");
     expect(envelope.summary.redactionRulesVersion).toBe(1);
+    expect(envelope.summary.workspaceLayoutProfileCount).toBe(1);
+    expect(envelope.summary.workspaceLayoutInvalidProfileCount).toBe(0);
     expect(envelope.bundle.schemaVersion).toBe(1);
     expect(envelope.bundle.automation?.recentRequests).toHaveLength(1);
+    expect(envelope.bundle.workspaceLayouts?.profiles).toHaveLength(1);
   });
 
   it("lists recent reports by admin key without returning bundles", async () => {
@@ -145,9 +157,10 @@ describe("diagnostics worker", () => {
     expect(admin.status).toBe(401);
   });
 
-  it("accepts older bundles without automation diagnostics", async () => {
+  it("accepts older bundles without optional diagnostics sections", async () => {
     const bundle = makeBundle();
     delete (bundle as { automation?: unknown }).automation;
+    delete (bundle as { workspaceLayouts?: unknown }).workspaceLayouts;
 
     const response = await SELF.fetch("https://diagnostics.test/v1/diagnostics", {
       method: "POST",
@@ -162,8 +175,11 @@ describe("diagnostics worker", () => {
       headers: adminHeaders
     });
     expect(retrieved.status).toBe(200);
-    const envelope = await retrieved.json() as { bundle: { automation?: unknown } };
+    const envelope = await retrieved.json() as {
+      bundle: { automation?: unknown; workspaceLayouts?: unknown };
+    };
     expect(envelope.bundle.automation).toBeUndefined();
+    expect(envelope.bundle.workspaceLayouts).toBeUndefined();
   });
 
   it("rejects oversized streamed bodies before JSON parsing", async () => {
@@ -381,6 +397,26 @@ function makeBundle(overrides: { note?: string; runtimeLabel?: string } = {}) {
         truncated: false
       },
       configSummary: {}
+    },
+    workspaceLayouts: {
+      path: "/Users/vishal/.toastty/workspace-layout-profiles.json",
+      exists: true,
+      sizeBytes: 1024,
+      modifiedAtMs: 1_800_000_000_000,
+      formatVersion: 2,
+      profiles: [
+        {
+          profileID: "display-3456x2234@2x",
+          updatedAtMs: 1_800_000_000_000,
+          windowCount: 1,
+          workspaceCount: 3,
+          tabCount: 4,
+          panelCount: 5,
+          fingerprint: "0123456789abcdef",
+          validationStatus: { status: "available" }
+        }
+      ],
+      status: { status: "available" }
     },
     shell: {
       detectedShells: [],

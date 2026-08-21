@@ -156,6 +156,7 @@ enum DiagnosticsCollectCommand {
         let shellExistingCount = bundle.shell.detectedShells.filter(\.exists).count
         let currentLogLine = logSummary("Current log", bundle.logs.current)
         let previousLogLine = logSummary("Previous log", bundle.logs.previous)
+        let workspaceLayoutsLine = workspaceLayoutsSummary(bundle.workspaceLayouts)
         let automationLine = automationSummary(bundle.automation)
         let checkReport = DiagnosticsCheckEvaluator.evaluate(bundle)
 
@@ -169,6 +170,7 @@ enum DiagnosticsCollectCommand {
             "Socket: \(bundle.socket.state.rawValue) (\(bundle.socket.socketPath))",
             "Shell integration: \(shellInstalledCount)/\(shellExistingCount) existing init files reference Toastty",
             "Shim directory: \(bundle.shell.shimDirectory.path) (\(bundle.shell.shimDirectory.entries.count) entries)",
+            workspaceLayoutsLine,
             currentLogLine,
             previousLogLine,
             automationLine,
@@ -190,6 +192,22 @@ enum DiagnosticsCollectCommand {
             return "\(label): included recent \(embeddedSize) from \(sourceSize) at \(log.path) (truncated)"
         }
         return "\(label): included \(embeddedSize) from \(log.path)"
+    }
+
+    private static func workspaceLayoutsSummary(
+        _ workspaceLayouts: DiagnosticsWorkspaceLayoutsSection?
+    ) -> String {
+        guard let workspaceLayouts else {
+            return "Workspace layouts: unavailable"
+        }
+        guard workspaceLayouts.status.status == "available" else {
+            return "Workspace layouts: unavailable (\(workspaceLayouts.status.detail ?? "unknown"))"
+        }
+        let invalidCount = workspaceLayouts.profiles.filter {
+            $0.validationStatus.status != "available"
+        }.count
+        return "Workspace layouts: included \(workspaceLayouts.profiles.count) profiles"
+            + (invalidCount > 0 ? " (\(invalidCount) invalid)" : "")
     }
 
     private static func automationSummary(_ automation: DiagnosticsAutomationSection?) -> String {

@@ -54,7 +54,7 @@ enum DiagnosticsSnippetGenerator {
         - diagnostics collection exit code and the summary it printed
         - top-level diagnostics sections
         - redaction rules version and redaction count
-        - log sizes, automation audit count, socket state, and any obvious warnings
+        - log sizes, workspace layout profile summary, updater/layout lifecycle events, automation audit count, socket state, and any obvious warnings
         - a short privacy summary of what remains in cleartext
 
         Base the privacy summary on the diagnostics structure, redaction metadata, and printed summary. Do not run broad heuristic grep/token scans over the raw JSON unless a warning, failure, or secret-scan result suggests a problem.

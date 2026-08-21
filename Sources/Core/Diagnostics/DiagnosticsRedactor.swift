@@ -12,6 +12,7 @@ public struct DiagnosticsRedactor: Sendable {
         redacted.note = redacted.note.map { state.redactFreeformText($0) }
         redacted.app = state.redactApp(redacted.app)
         redacted.logs = state.redactLogs(redacted.logs)
+        redacted.workspaceLayouts = redacted.workspaceLayouts.map { state.redactWorkspaceLayouts($0) }
         redacted.shell = state.redactShell(redacted.shell)
         redacted.socket = state.redactSocket(redacted.socket)
         redacted.automation = redacted.automation.map { state.redactAutomation($0) }
@@ -55,6 +56,20 @@ private struct RedactionState {
         logs.previous.readError = logs.previous.readError.map { redactFreeformText($0) }
         logs.configSummary = redactDictionary(logs.configSummary)
         return logs
+    }
+
+    mutating func redactWorkspaceLayouts(
+        _ workspaceLayouts: DiagnosticsWorkspaceLayoutsSection
+    ) -> DiagnosticsWorkspaceLayoutsSection {
+        var workspaceLayouts = workspaceLayouts
+        workspaceLayouts.status = redactAvailability(workspaceLayouts.status)
+        workspaceLayouts.profiles = workspaceLayouts.profiles.map { profile in
+            var profile = profile
+            profile.profileID = redactFreeformText(profile.profileID)
+            profile.validationStatus = redactAvailability(profile.validationStatus)
+            return profile
+        }
+        return workspaceLayouts
     }
 
     mutating func redactShell(_ shell: DiagnosticsShellSection) -> DiagnosticsShellSection {

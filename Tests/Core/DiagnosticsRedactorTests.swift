@@ -17,6 +17,26 @@ struct DiagnosticsRedactorTests {
         git=https://user:password@example.com/repo.git
         """
         bundle.automation = .unavailable("failed with token sk-test_abcdefghijklmnopqrstuvwxyz")
+        bundle.workspaceLayouts = DiagnosticsWorkspaceLayoutsSection(
+            path: "/Users/vishal/.toastty/workspace-layout-profiles.json",
+            exists: true,
+            sizeBytes: 100,
+            modifiedAtMs: 1,
+            formatVersion: 2,
+            profiles: [
+                DiagnosticsWorkspaceLayoutProfile(
+                    profileID: "profile-sk-test_abcdefghijklmnopqrstuvwxyz",
+                    updatedAtMs: 1,
+                    windowCount: 1,
+                    workspaceCount: 1,
+                    tabCount: 1,
+                    panelCount: 1,
+                    fingerprint: "0123456789abcdef",
+                    validationStatus: .unavailable("token sk-test_abcdefghijklmnopqrstuvwxyz")
+                ),
+            ],
+            status: .available
+        )
         bundle.shell.environment = [
             DiagnosticsEnvironmentEntry(name: "PATH", value: "/Users/vishal/.toastty/bin:/usr/bin"),
             DiagnosticsEnvironmentEntry(name: "TOASTTY_SOCKET_PATH", value: "/tmp/toastty-501/events-v1.sock"),
@@ -31,6 +51,8 @@ struct DiagnosticsRedactorTests {
         #expect(encoded.contains("secret-value") == false)
         #expect(encoded.contains("password@example.com") == false)
         #expect(redacted.automation?.status.detail?.contains("sk-test_abcdefghijklmnopqrstuvwxyz") == false)
+        #expect(redacted.workspaceLayouts?.profiles.first?.profileID.contains("sk-test_abcdefghijklmnopqrstuvwxyz") == false)
+        #expect(redacted.workspaceLayouts?.profiles.first?.validationStatus.detail?.contains("sk-test_abcdefghijklmnopqrstuvwxyz") == false)
         #expect(redacted.note?.contains("/Users/vishal/repo") == true)
         #expect(redacted.logs.current.content?.contains("/Users/vishal/repo") == true)
         #expect(redacted.socket.socketPath == "/tmp/toastty-501/events-v1.sock")

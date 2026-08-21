@@ -42,18 +42,30 @@ enum AppBootstrap {
                     restored.resolvedProfileID,
                 ]
                 let restoredStateLayout = WorkspaceLayoutSnapshot(state: state)
+                var restoreMetadata = [
+                    "requested_profile_id": layoutPersistenceContext.profileID,
+                    "resolved_profile_id": restored.resolvedProfileID,
+                    "path": layoutPersistenceContext.fileURL.path,
+                    "profile_updated_at_ms": String(
+                        Int64((restored.profileSummary.updatedAt.timeIntervalSince1970 * 1000).rounded())
+                    ),
+                    "profile_window_count": String(restored.profileSummary.windowCount),
+                    "profile_workspace_count": String(restored.profileSummary.workspaceCount),
+                    "profile_tab_count": String(restored.profileSummary.tabCount),
+                    "profile_panel_count": String(restored.profileSummary.panelCount),
+                    "profile_fingerprint": restored.profileSummary.fingerprint ?? "unavailable",
+                    "persisted_managed_agent_resume_record_count": String(restored.layout.managedAgentResumeRecordCount),
+                    "persisted_managed_agent_resume_records": restored.layout.managedAgentResumeRecordSummary(),
+                    "restored_managed_agent_resume_record_count": String(restoredStateLayout.managedAgentResumeRecordCount),
+                    "restored_managed_agent_resume_records": restoredStateLayout.managedAgentResumeRecordSummary(),
+                ]
+                if let launchProfileResolution = layoutPersistenceContext.launchProfileResolution {
+                    restoreMetadata.merge(launchProfileResolution.logMetadata()) { current, _ in current }
+                }
                 ToasttyLog.info(
                     "Restored workspace layout state",
                     category: .bootstrap,
-                    metadata: [
-                        "requested_profile_id": layoutPersistenceContext.profileID,
-                        "resolved_profile_id": restored.resolvedProfileID,
-                        "path": layoutPersistenceContext.fileURL.path,
-                        "persisted_managed_agent_resume_record_count": String(restored.layout.managedAgentResumeRecordCount),
-                        "persisted_managed_agent_resume_records": restored.layout.managedAgentResumeRecordSummary(),
-                        "restored_managed_agent_resume_record_count": String(restoredStateLayout.managedAgentResumeRecordCount),
-                        "restored_managed_agent_resume_records": restoredStateLayout.managedAgentResumeRecordSummary(),
-                    ]
+                    metadata: restoreMetadata
                 )
                 for entry in restoredStateLayout.managedAgentResumeRecordLogEntries {
                     var metadata = entry.metadata
@@ -71,13 +83,17 @@ enum AppBootstrap {
                 state = .bootstrap(defaultTerminalProfileID: defaultTerminalProfileID)
                 restoredTerminalPanelIDs = []
                 layoutProfileIDsRepresentedByState = [layoutPersistenceContext.profileID]
+                var launchMetadata = [
+                    "profile_id": layoutPersistenceContext.profileID,
+                    "path": layoutPersistenceContext.fileURL.path,
+                ]
+                if let launchProfileResolution = layoutPersistenceContext.launchProfileResolution {
+                    launchMetadata.merge(launchProfileResolution.logMetadata()) { current, _ in current }
+                }
                 ToasttyLog.info(
                     "Launching without persisted layout state",
                     category: .bootstrap,
-                    metadata: [
-                        "profile_id": layoutPersistenceContext.profileID,
-                        "path": layoutPersistenceContext.fileURL.path,
-                    ]
+                    metadata: launchMetadata
                 )
             }
             return AppBootstrapResult(
