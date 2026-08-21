@@ -1,12 +1,17 @@
 import Foundation
 
+public enum DiagnosticsSubmissionLimits {
+    public static let maximumBodyBytes = 15_000_000
+    public static let maximumCollectedBodyBytes = 14_500_000
+}
+
 public struct DiagnosticsSubmissionPreflightOptions: Equatable, Sendable {
     public var maxBodyBytes: Int
     public var minimumRedactionRulesVersion: Int
     public var allowSecretScanWarning: Bool
 
     public init(
-        maxBodyBytes: Int = 15_000_000,
+        maxBodyBytes: Int = DiagnosticsSubmissionLimits.maximumBodyBytes,
         minimumRedactionRulesVersion: Int = DiagnosticsRedactor.rulesVersion,
         allowSecretScanWarning: Bool = false
     ) {

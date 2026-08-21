@@ -4,6 +4,11 @@ import Testing
 
 struct DiagnosticsSubmissionPreflightTests {
     @Test
+    func collectionLimitReservesSubmissionHeadroom() {
+        #expect(DiagnosticsSubmissionLimits.maximumCollectedBodyBytes < DiagnosticsSubmissionLimits.maximumBodyBytes)
+    }
+
+    @Test
     func scannerMatchesSharedFixtures() throws {
         let fixtures = try loadSecretScanFixtures()
 

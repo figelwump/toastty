@@ -507,6 +507,78 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func diagnosticsCollectFitsOversizedLogsWithinSubmissionLimit() throws {
+        let root = try makeCLITemporaryDirectory(prefix: "toastty-cli-diag-size")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtimeHome = root.appendingPathComponent("runtime-home", isDirectory: true)
+        let logsDirectory = runtimeHome.appendingPathComponent("logs", isDirectory: true)
+        let temp = root.appendingPathComponent("tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+
+        let currentURL = logsDirectory.appendingPathComponent("toastty.log", isDirectory: false)
+        let previousURL = logsDirectory.appendingPathComponent("toastty.previous.log", isDirectory: false)
+        let outputURL = root.appendingPathComponent("diag.json", isDirectory: false)
+        let currentContent = String(repeating: "{\"message\":\"current layout issue\"}\n", count: 180_000)
+            + "current-latest-marker\n"
+        let previousContent = String(repeating: "{\"message\":\"previous layout issue\"}\n", count: 430_000)
+            + "previous-latest-marker\n"
+        try Data(currentContent.utf8).write(to: currentURL)
+        try Data(previousContent.utf8).write(to: previousURL)
+        let currentSize = try Data(contentsOf: currentURL).count
+        let previousSize = try Data(contentsOf: previousURL).count
+        #expect(currentSize + previousSize > DiagnosticsSubmissionLimits.maximumBodyBytes)
+
+        let exitCode = ToasttyCLI.run(
+            arguments: [
+                "diagnostics", "collect",
+                "--out", outputURL.path,
+            ],
+            environment: [
+                "HOME": root.path,
+                ToasttyRuntimePaths.environmentKey: runtimeHome.path,
+                "TMPDIR": temp.path + "/",
+            ]
+        )
+
+        #expect(exitCode == 0)
+        let data = try Data(contentsOf: outputURL)
+        #expect(data.count <= DiagnosticsSubmissionLimits.maximumCollectedBodyBytes)
+        let preflight = try DiagnosticsSubmissionPreflight.validate(jsonData: data)
+        #expect(preflight.sizeBytes == data.count)
+        #expect(preflight.bundle.logs.current.truncated == false)
+        #expect(preflight.bundle.logs.previous.truncated)
+        #expect(preflight.bundle.logs.current.sizeBytes == UInt64(currentSize))
+        #expect(preflight.bundle.logs.previous.sizeBytes == UInt64(previousSize))
+        #expect(preflight.bundle.logs.current.content?.contains("current-latest-marker") == true)
+        #expect(preflight.bundle.logs.previous.content?.contains("previous-latest-marker") == true)
+        #expect(try Data(contentsOf: currentURL).count == currentSize)
+        #expect(try Data(contentsOf: previousURL).count == previousSize)
+
+        let compacted = try DiagnosticsCollectCommand.preparedPayload(
+            preflight.bundle,
+            maximumBodyBytes: 2_500_000
+        )
+        #expect(compacted.data.count <= 2_500_000)
+        #expect(compacted.bundle.logs.current.truncated)
+        #expect(compacted.bundle.logs.previous.truncated)
+        #expect(compacted.bundle.logs.current.content?.contains("current-latest-marker") == true)
+        #expect(compacted.bundle.logs.previous.content?.contains("previous-latest-marker") == true)
+
+        var probeDominated = preflight.bundle
+        probeDominated.probe.rawShellProbe = String(repeating: "probe output\n", count: 300_000)
+        let probeCompacted = try DiagnosticsCollectCommand.preparedPayload(
+            probeDominated,
+            maximumBodyBytes: 2_500_000
+        )
+        #expect(probeCompacted.data.count <= 2_500_000)
+        #expect(probeCompacted.bundle.probe.rawShellProbe == nil)
+        #expect(probeCompacted.bundle.probe.readError?.contains("omitted") == true)
+        #expect((probeCompacted.bundle.logs.current.content?.utf8.count ?? 0) >= 900_000)
+        #expect((probeCompacted.bundle.logs.previous.content?.utf8.count ?? 0) >= 900_000)
+    }
+
+    @Test
     func sessionStartGeneratesSessionIDWhenOmitted() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(

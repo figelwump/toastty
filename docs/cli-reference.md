@@ -131,15 +131,19 @@ state and probes the Toastty socket; collection itself does not upload anything.
 toastty diagnostics collect [--shell-probe <file>] [--note <text>] [--out <file>]
 ```
 
-The JSON includes embedded redacted log contents, app/runtime metadata, shell
-integration status, system metadata, socket probe details, and a sanitized
+The JSON includes recent, complete-line tails of embedded redacted logs,
+app/runtime metadata, shell integration status, system metadata, socket probe
+details, and a sanitized
 in-memory audit of recent automation socket requests when the running app can
 provide it. The automation audit records command/action/query IDs, caller and
 selector IDs, safe boolean flags, outcome, and duration; it omits freeform
 payload text such as terminal input, pasted content, argv, environment values,
 file lists, and file contents. If `--out` is omitted, the CLI writes to a
 temporary path. The printed summary includes the same shared check counts used
-by `toastty doctor`.
+by `toastty doctor`, the final bundle size, and whether either embedded log was
+truncated. Collection preserves the original log files and automatically
+reduces embedded log tails when necessary so the reviewed JSON remains below
+the diagnostics upload limit.
 
 ### `diagnostics submit`
 

@@ -38,6 +38,98 @@ struct DiagnosticsCollectorTests {
     }
 
     @Test
+    func collectsRecentCompleteLinesFromOversizedLogWithoutMutatingSource() throws {
+        let root = try makeTemporaryDirectory(prefix: "diag-log-tail")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let runtimeHome = root.appendingPathComponent("runtime-home", isDirectory: true)
+        let logsDirectory = runtimeHome.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        let logURL = logsDirectory.appendingPathComponent("toastty.log", isDirectory: false)
+        let content = "first-marker\n"
+            + String(repeating: "{\"message\":\"layout diagnostics\"}\n", count: 260_000)
+            + "latest-marker\n"
+        try Data(content.utf8).write(to: logURL)
+        let originalData = try Data(contentsOf: logURL)
+        let originalModifiedAt = try #require(
+            FileManager.default.attributesOfItem(atPath: logURL.path)[.modificationDate] as? Date
+        )
+
+        let bundle = DiagnosticsCollector.collect(
+            generatedAtMs: 1,
+            note: nil,
+            shellProbeFilePath: nil,
+            socket: noSocketResult(),
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome.path],
+            homeDirectoryPath: root.path
+        )
+
+        let collected = try #require(bundle.logs.current.content)
+        #expect(bundle.logs.current.sizeBytes == UInt64(originalData.count))
+        #expect(bundle.logs.current.truncated)
+        #expect(collected.utf8.count < originalData.count)
+        #expect(collected.contains("latest-marker"))
+        #expect(collected.contains("first-marker") == false)
+        #expect(collected.hasPrefix("{\"message\":\"layout diagnostics\"}"))
+        #expect(try Data(contentsOf: logURL) == originalData)
+        let modifiedAtAfterCollection = try #require(
+            FileManager.default.attributesOfItem(atPath: logURL.path)[.modificationDate] as? Date
+        )
+        #expect(modifiedAtAfterCollection == originalModifiedAt)
+    }
+
+    @Test
+    func oversizedSingleLineLogIsSafelyOmitted() throws {
+        let root = try makeTemporaryDirectory(prefix: "diag-log-single-line")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let runtimeHome = root.appendingPathComponent("runtime-home", isDirectory: true)
+        let logsDirectory = runtimeHome.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        let logURL = logsDirectory.appendingPathComponent("toastty.log", isDirectory: false)
+        try Data(repeating: 0x61, count: 8_000_001).write(to: logURL)
+
+        let bundle = DiagnosticsCollector.collect(
+            generatedAtMs: 1,
+            note: nil,
+            shellProbeFilePath: nil,
+            socket: noSocketResult(),
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome.path],
+            homeDirectoryPath: root.path
+        )
+
+        #expect(bundle.logs.current.truncated)
+        #expect(bundle.logs.current.sizeBytes == 8_000_001)
+        #expect(bundle.logs.current.content == "")
+        #expect(bundle.logs.current.readError == nil)
+    }
+
+    @Test
+    func invalidUTF8LogBytesUseLossyDecoding() throws {
+        let root = try makeTemporaryDirectory(prefix: "diag-log-invalid-utf8")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let runtimeHome = root.appendingPathComponent("runtime-home", isDirectory: true)
+        let logsDirectory = runtimeHome.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        let logURL = logsDirectory.appendingPathComponent("toastty.log", isDirectory: false)
+        try Data([0xFF, 0x0A]).write(to: logURL)
+
+        let bundle = DiagnosticsCollector.collect(
+            generatedAtMs: 1,
+            note: nil,
+            shellProbeFilePath: nil,
+            socket: noSocketResult(),
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome.path],
+            homeDirectoryPath: root.path
+        )
+
+        #expect(bundle.logs.current.content == "�\n")
+        #expect(bundle.logs.current.readError == nil)
+        #expect(bundle.logs.current.truncated == false)
+    }
+
+    @Test
     func detectsSharedShellIntegrationMarker() throws {
         let root = try makeTemporaryDirectory(prefix: "diag-shell")
         defer { try? FileManager.default.removeItem(at: root) }

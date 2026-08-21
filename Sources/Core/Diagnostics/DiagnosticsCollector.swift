@@ -160,6 +160,10 @@ private enum DiagnosticsAppCollector {
 }
 
 private enum DiagnosticsLogCollector {
+    // Keep collection memory bounded before the command applies its final
+    // encoded-body budget. The final bundle may retain less from either log.
+    private static let maximumEmbeddedBytesPerLog = 8_000_000
+
     static func collect(
         runtimePaths: ToasttyRuntimePaths,
         instance: DiagnosticsRuntimeInstance.Manifest?,
@@ -196,14 +200,36 @@ private enum DiagnosticsLogCollector {
         }
 
         do {
-            let data = try Data(contentsOf: url)
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+
+            var fileStat = stat()
+            guard fstat(handle.fileDescriptor, &fileStat) == 0 else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            let snapshotSize = UInt64(max(fileStat.st_size, 0))
+            let shouldTruncate = snapshotSize > UInt64(maximumEmbeddedBytesPerLog)
+            let data: Data
+            if shouldTruncate {
+                let offset = snapshotSize - UInt64(maximumEmbeddedBytesPerLog)
+                try handle.seek(toOffset: offset)
+                let rawTail = try read(
+                    from: handle,
+                    upToCount: maximumEmbeddedBytesPerLog
+                )
+                data = tailAfterFirstNewline(rawTail)
+            } else {
+                data = try read(from: handle, upToCount: Int(snapshotSize))
+            }
+
             return DiagnosticsLogFile(
                 path: url.path,
                 exists: true,
-                sizeBytes: UInt64(data.count),
+                sizeBytes: snapshotSize,
                 modifiedAtMs: modifiedAtMs,
                 content: String(decoding: data, as: UTF8.self),
-                readError: nil
+                readError: nil,
+                truncated: shouldTruncate
             )
         } catch {
             return DiagnosticsLogFile(
@@ -215,6 +241,25 @@ private enum DiagnosticsLogCollector {
                 readError: error.localizedDescription
             )
         }
+    }
+
+    private static func tailAfterFirstNewline(_ data: Data) -> Data {
+        guard let newlineIndex = data.firstIndex(of: 0x0A) else {
+            return Data()
+        }
+        return data.suffix(from: data.index(after: newlineIndex))
+    }
+
+    private static func read(from handle: FileHandle, upToCount count: Int) throws -> Data {
+        var data = Data()
+        while data.count < count {
+            let remaining = count - data.count
+            guard let chunk = try handle.read(upToCount: remaining), chunk.isEmpty == false else {
+                break
+            }
+            data.append(chunk)
+        }
+        return data
     }
 }
 
