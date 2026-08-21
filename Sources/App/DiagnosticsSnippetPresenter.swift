@@ -68,7 +68,10 @@ enum DiagnosticsSnippetGenerator {
           Without contact: "<TOASTTY_CLI_RESOLVED>" diagnostics submit --file "<TOASTTY_DIAGNOSTICS_JSON>" --yes
         Omit --contact entirely if I did not provide contact info.
 
-        Do not wrap diagnostics submit in sv exec, sudo, or repo-local helper tooling; this is a user-side submit command and the installed Toastty CLI should carry its upload configuration. Do not rely on $TC or $DIAG still being set in a later shell. Do not re-run collection before submitting. If submit fails because endpoint or upload key is unavailable, show me the exact error and stop.
+        Do not wrap diagnostics submit in sv exec, sudo, or repo-local helper tooling; this is a user-side submit command and the installed Toastty CLI should carry its upload configuration. Do not rely on $TC or $DIAG still being set in a later shell. Do not re-run collection before submitting.
+        If submission fails because the endpoint or upload key is unavailable or not configured, show me the exact error and stop without retrying.
+        If submission fails before any request reaches the server specifically because the hostname cannot be resolved or the runtime denies network access, retry the exact same command with network access allowed for that command only. Do not use sudo, sv exec, or disable the sandbox, and do not change the command arguments, endpoint, diagnostics file, or contact text. Make at most one additional attempt in total; if it fails, or if scoped network access is denied or unavailable, show me the exact error and stop.
+        Do not retry HTTP, authentication, TLS, connection-timeout, or other errors that could occur after an upload began because the file may already have been received.
         """
     }
 

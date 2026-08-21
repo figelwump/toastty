@@ -2,7 +2,7 @@ import XCTest
 @testable import ToasttyApp
 
 final class DiagnosticsSnippetGeneratorTests: XCTestCase {
-    func testSnippetShellQuotesBakedCLIPath() {
+    func testSnippetShellQuotesBakedCLIPath() throws {
         let snippet = DiagnosticsSnippetGenerator.snippet(
             cliPath: "/Applications/Toastty Beta.app/Contents/Helpers/toastty"
         )
@@ -37,6 +37,17 @@ final class DiagnosticsSnippetGeneratorTests: XCTestCase {
         XCTAssertTrue(snippet.contains("Omit --contact entirely if I did not provide contact info."))
         XCTAssertTrue(snippet.contains("Do not wrap diagnostics submit in sv exec"))
         XCTAssertTrue(snippet.contains("Do not rely on $TC or $DIAG still being set in a later shell."))
+        XCTAssertTrue(snippet.contains("endpoint or upload key is unavailable or not configured"))
+        XCTAssertTrue(snippet.contains("hostname cannot be resolved or the runtime denies network access"))
+        XCTAssertTrue(snippet.contains("network access allowed for that command only"))
+        XCTAssertTrue(snippet.contains("Do not use sudo, sv exec, or disable the sandbox"))
+        XCTAssertTrue(snippet.contains("do not change the command arguments, endpoint, diagnostics file, or contact text"))
+        XCTAssertTrue(snippet.contains("at most one additional attempt in total"))
+        XCTAssertTrue(snippet.contains("Do not retry HTTP, authentication, TLS, connection-timeout"))
+        XCTAssertTrue(snippet.contains("stop without retrying"))
+        let approvalRange = try XCTUnwrap(snippet.range(of: "Nothing should be submitted until I explicitly approve."))
+        let retryRange = try XCTUnwrap(snippet.range(of: "hostname cannot be resolved or the runtime denies network access"))
+        XCTAssertLessThan(approvalRange.lowerBound, retryRange.lowerBound)
         XCTAssertFalse(snippet.contains("contents of the diagnostics JSON file"))
         XCTAssertFalse(snippet.contains("diagnostics submit --file \"$DIAG\" --yes"))
         XCTAssertTrue(snippet.contains("umask 077"))
