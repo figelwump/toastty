@@ -378,23 +378,61 @@ struct ToasttySessionCard: View {
         conversation.state.bucket == .idle
     }
 
+    @ViewBuilder
     private var idleContent: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(conversation.lastActivity)
-                .font(.subheadline)
-                .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            activityDestination
+        if let workspaceLabel {
+            HStack(spacing: 8) {
+                workspaceChip(workspaceLabel)
+                Spacer(minLength: 8)
+                activityDestination
+            }
+            idleActivityText
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                idleActivityText
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                activityDestination
+            }
         }
+    }
+
+    private var idleActivityText: some View {
+        Text(conversation.lastActivity)
+            .font(.subheadline)
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .lineLimit(2)
     }
 
     private var statusHeader: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            statusLabel
-            Spacer(minLength: 8)
+            if let workspaceLabel {
+                workspaceChip(workspaceLabel)
+                Spacer(minLength: 8)
+                // The status label never compresses; a long workspace name
+                // truncates inside the chip instead.
+                statusLabel
+                    .fixedSize()
+                    .layoutPriority(1)
+            } else {
+                statusLabel
+                Spacer(minLength: 8)
+            }
             activityDestination
         }
+    }
+
+    private func workspaceChip(_ title: String) -> some View {
+        Text(title)
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.primaryText)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(ToasttyDesignTokens.chipSurface, in: RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(ToasttyDesignTokens.chipBorder, lineWidth: 1)
+            }
     }
 
     private var statusLabel: some View {
@@ -428,28 +466,13 @@ struct ToasttySessionCard: View {
 
     private var metadata: some View {
         TimelineView(.periodic(from: .now, by: 60)) { _ in
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                if let workspaceLabel {
-                    Text(workspaceLabel)
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if !trailingMetadataLabel.isEmpty {
-                        Text("·")
-                            .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    }
-                }
-                if !trailingMetadataLabel.isEmpty {
-                    // Wins the width fight so a long workspace name squeezes
-                    // before cwd/agent/age disappear.
-                    Text(trailingMetadataLabel)
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .layoutPriority(1)
-                }
+            if !trailingMetadataLabel.isEmpty {
+                Text(trailingMetadataLabel)
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .font(.caption2.monospaced())
             }
-            .font(.caption2.monospaced())
         }
     }
 

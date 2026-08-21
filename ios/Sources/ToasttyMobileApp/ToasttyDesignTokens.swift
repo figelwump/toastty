@@ -13,6 +13,10 @@ enum ToasttyDesignTokens {
     // Muted text stays >= 4.5:1 against raisedSurface so caption-sized
     // metadata remains readable (WCAG AA).
     static let mutedText = Color(red: 146 / 255, green: 141 / 255, blue: 133 / 255)
+    // Translucent white so the chip reads on both raised and status-tinted
+    // card backgrounds.
+    static let chipSurface = Color.white.opacity(0.055)
+    static let chipBorder = Color.white.opacity(0.11)
     static let amber = Color(red: 232 / 255, green: 147 / 255, blue: 12 / 255)
     static let amberText = Color(red: 232 / 255, green: 180 / 255, blue: 106 / 255)
     /// Foreground for text and glyphs placed on the amber accent.
