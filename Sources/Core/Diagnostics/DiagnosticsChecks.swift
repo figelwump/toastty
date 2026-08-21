@@ -243,8 +243,8 @@ public enum DiagnosticsCheckEvaluator {
         }
 
         var evidence = [
-            "existing init files: \(existing.count)",
-            "Toastty source markers: \(installed.count)",
+            "standard init files found: \(existing.count)",
+            "direct Toastty references: \(installed.count)",
         ]
         if readErrors.isEmpty == false {
             evidence.append("read errors: \(limitedList(readErrors))")
@@ -253,29 +253,29 @@ public enum DiagnosticsCheckEvaluator {
         if existing.isEmpty {
             return DiagnosticsCheckResult(
                 id: "shell-integration",
-                title: "Shell integration",
+                title: "Optional shell integration",
                 status: .warn,
-                summary: "No supported zsh, bash, or fish init files were found.",
+                summary: "No standard zsh, bash, or fish init files were found. Custom startup files were not evaluated.",
                 evidence: evidence,
-                remediation: "Use Toastty > Install Shell Integration... after creating the shell init file you use."
+                remediation: "If you want this optional feature, ensure your custom startup chain loads Toastty's managed snippet or use Toastty > Install Shell Integration... after creating the standard init file you use."
             )
         }
 
         if installed.isEmpty {
             return DiagnosticsCheckResult(
                 id: "shell-integration",
-                title: "Shell integration",
+                title: "Optional shell integration",
                 status: .warn,
-                summary: "Existing shell init files do not source Toastty's managed shell integration.",
+                summary: "No direct Toastty reference was found in the standard init files checked. Custom startup files may still load it indirectly.",
                 evidence: evidence + existing.map { "\($0.name): \($0.rcPath)" },
-                remediation: "Use Toastty > Install Shell Integration..., then start a new terminal pane."
+                remediation: "If you want this optional feature and your startup chain does not already load it, use Toastty > Install Shell Integration..., then start a new terminal pane."
             )
         }
 
         if readErrors.isEmpty == false {
             return DiagnosticsCheckResult(
                 id: "shell-integration",
-                title: "Shell integration",
+                title: "Optional shell integration",
                 status: .warn,
                 summary: "Toastty shell integration is installed, but at least one init file could not be read.",
                 evidence: evidence,
@@ -285,9 +285,9 @@ public enum DiagnosticsCheckEvaluator {
 
         return DiagnosticsCheckResult(
             id: "shell-integration",
-            title: "Shell integration",
+            title: "Optional shell integration",
             status: .pass,
-            summary: "At least one existing shell init file sources Toastty's managed integration.",
+            summary: "At least one standard shell init file directly references Toastty's managed integration.",
             evidence: evidence + installed.map { "\($0.name): \($0.rcPath)" },
             remediation: nil
         )

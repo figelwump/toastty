@@ -59,6 +59,11 @@ struct DiagnosticsChecksTests {
         #expect(report.overallStatus == .warn)
         #expect(report.summary.fail == 0)
         #expect(shell.status == .warn)
+        #expect(shell.title == "Optional shell integration")
+        #expect(shell.summary.contains("No direct Toastty reference") == true)
+        #expect(shell.summary.contains("Custom startup files may still load it indirectly") == true)
+        #expect(shell.evidence.contains("direct Toastty references: 0"))
+        #expect(shell.remediation?.contains("does not already load it") == true)
         #expect(shell.remediation?.contains("Install Shell Integration") == true)
     }
 
