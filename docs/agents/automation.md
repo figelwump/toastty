@@ -71,9 +71,20 @@ sv exec -- ./scripts/remote/cleanup-remote-runs.sh --dry-run
 sv exec -- ./scripts/remote/cleanup-remote-runs.sh --apply
 sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
 sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
+sv exec -- ./scripts/remote/cleanup-simulator-app.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-simulator-app.sh --apply
 ```
 
 `cleanup-remote-runs.sh` requires exact root-child paths, immutable ownership, an expired retention window, no matching live owner or path-scoped process, and no `.keep` marker. It removes paired worktrees through `git worktree remove`, caps each apply to ten runs, and treats unowned, malformed, symlinked, live, or booted-simulator cases as retained/manual review. The simulator cleaner remains the legacy cleanup path for old `Plate Remote remote-test-*` and `Plate Remote remote-validate-*` devices.
+
+Run `cleanup-simulator-app.sh` last to close stale Simulator.app window shells
+that can survive after their CoreSimulator devices shut down or are deleted.
+It never changes device state. Apply mode terminates only an exact
+Xcode-provided Simulator.app process that is at least 15 minutes old, after
+repeated checks confirm that no device is booted and no live or path-active
+iOS remote test exists. Unexpected process identity or age, a booted device,
+a live iOS owner, or a state change during the recheck is retained for manual
+review.
 
 For changes under `Sources/RemoteProtocol/` or `Tests/RemoteProtocol/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
 
@@ -159,10 +170,12 @@ project to run a preview before applying the same policy:
 ./scripts/automation/cleanup-artifacts.sh --apply
 ```
 
-The dedicated remote validation Mac also needs a separate simulator cleanup.
-`scripts/remote/cleanup-simulators.sh` connects through the configured remote
-GUI/test environment and targets only the legacy `Plate Remote remote-test-*`
-and `Plate Remote remote-validate-*` devices created by earlier automation.
+The dedicated remote validation Mac also needs three separate cleanup passes.
+`scripts/remote/cleanup-remote-runs.sh` removes expired manifest-owned test
+runs and their exact shutdown simulator clones. Then
+`scripts/remote/cleanup-simulators.sh` targets only the legacy
+`Plate Remote remote-test-*` and `Plate Remote remote-validate-*` devices
+created by earlier automation.
 It considers a device eligible only when it is shut down and its last boot is
 more than 24 hours old. Booted devices, recent devices, ambiguous metadata,
 ordinary Xcode simulators, and current `Toastty Mobile *` dispatcher devices
@@ -170,18 +183,48 @@ are never deleted by this policy. Apply mode verifies the configured remote
 repository/validation-root tuple, takes a remote lock, and rechecks every
 candidate immediately before deletion.
 
+Finally, `scripts/remote/cleanup-simulator-app.sh` closes stale Simulator.app
+window shells without shutting down or deleting devices. It acts only when an
+exact Simulator.app process is at least 15 minutes old, no Simulator device is
+booted, and no live iOS remote run is present. It first sends a bounded
+graceful application-quit request, validates process identity again before a
+`TERM` fallback, and does not escalate to `KILL` if Simulator.app refuses to
+exit.
+
 Preview and apply that policy through the manifest-scoped environment:
 
 ```bash
+sv exec -- ./scripts/remote/cleanup-remote-runs.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-remote-runs.sh --apply
 sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
 sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
+sv exec -- ./scripts/remote/cleanup-simulator-app.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-simulator-app.sh --apply
 ```
 
 Use this scheduled-task prompt so local artifacts and remote simulators retain
 separate failure boundaries:
 
 ```text
-In /Users/vishal/GiantThings/repos/toastty, first run ./scripts/automation/cleanup-artifacts.sh --dry-run. If it succeeds, run ./scripts/automation/cleanup-artifacts.sh --apply. Then run sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run. If it succeeds, run sv exec -- ./scripts/remote/cleanup-simulators.sh --apply. Do not edit source, use --include-unowned, or manually shut down/delete booted simulators. Stop immediately if any command fails. Report all four summary lines and all manual-review counts.
+In /Users/vishal/GiantThings/repos/toastty, run these four cleanup groups independently. Within each group, run the dry-run first and run apply only when that dry-run succeeds. If a command fails, skip the rest of that group, record the failure, and continue to the next group.
+
+1. Local artifacts:
+./scripts/automation/cleanup-artifacts.sh --dry-run
+./scripts/automation/cleanup-artifacts.sh --apply
+
+2. Manifest-owned remote runs and their simulator clones:
+sv exec -- ./scripts/remote/cleanup-remote-runs.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-remote-runs.sh --apply
+
+3. Legacy remote simulators:
+sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
+
+4. Stale Simulator.app window shells:
+sv exec -- ./scripts/remote/cleanup-simulator-app.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-simulator-app.sh --apply
+
+Do not edit source, use --include-unowned, invoke simctl directly, or manually shut down/delete booted simulators. Report all eight summary lines, every manual-review count, and every skipped or failed group.
 ```
 
 The scheduled task must use the main local checkout, not an isolated worktree,

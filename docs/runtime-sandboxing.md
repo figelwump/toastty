@@ -156,12 +156,17 @@ Useful variants:
 ```
 
 The local artifact cleaner intentionally has no SSH side effects. Preview and
-apply cleanup for legacy automation-created simulators on the dedicated remote
-validation Mac separately:
+apply manifest-owned run cleanup, legacy simulator cleanup, and stale
+Simulator.app window cleanup on the dedicated remote validation Mac
+separately:
 
 ```bash
+sv exec -- ./scripts/remote/cleanup-remote-runs.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-remote-runs.sh --apply
 sv exec -- ./scripts/remote/cleanup-simulators.sh --dry-run
 sv exec -- ./scripts/remote/cleanup-simulators.sh --apply
+sv exec -- ./scripts/remote/cleanup-simulator-app.sh --dry-run
+sv exec -- ./scripts/remote/cleanup-simulator-app.sh --apply
 ```
 
 That remote policy is limited to shutdown `Plate Remote remote-test-*` and
@@ -171,6 +176,14 @@ verifies the configured remote repository/validation-root tuple, and rechecks
 each candidate before deletion. Do not manually shut down a simulator merely
 to make scheduled cleanup delete it; investigate stale booted devices reported
 for manual review first.
+
+The final Simulator.app cleanup is separate from device cleanup. It terminates
+only an exact Xcode Simulator.app process that is at least 15 minutes old,
+after repeatedly confirming that no Simulator device is booted and no live
+iOS remote test owns or references a run path. It does not shut down or delete
+devices, uses a bounded graceful application quit before its `TERM` fallback,
+never escalates to `KILL` for Simulator.app, and leaves unexpected or changing
+state for manual review.
 
 For dev runs, the cleanup helper reads `runtime-home/instance.json`, verifies
 directory ownership, and retains a sandbox when its PID is live or cannot be
