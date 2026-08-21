@@ -37,10 +37,16 @@ struct ToasttyToolBatchCard: View {
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
             .background(ToasttyDesignTokens.raisedSurface)
             .overlay {
-                RoundedRectangle(cornerRadius: 11)
-                    .stroke(ToasttyDesignTokens.border)
+                RoundedRectangle(
+                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                    style: .continuous
+                )
+                .stroke(ToasttyDesignTokens.border)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 11))
+            .clipShape(RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                style: .continuous
+            ))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -124,10 +130,16 @@ struct ToasttyToolActivitySheet: View {
         .padding(12)
         .background(ToasttyDesignTokens.raisedSurface)
         .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(ToasttyDesignTokens.border)
+            RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                style: .continuous
+            )
+            .stroke(ToasttyDesignTokens.border)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(
+            cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+            style: .continuous
+        ))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)")
     }

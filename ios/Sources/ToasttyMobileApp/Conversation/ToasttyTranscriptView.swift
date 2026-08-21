@@ -166,6 +166,7 @@ struct ToasttyTranscriptView: View {
                                 .padding(.vertical, 9)
                                 .background(ToasttyDesignTokens.amber, in: Capsule())
                                 .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
+                                .shadow(color: .black.opacity(0.45), radius: 7, y: 3)
                         }
                         .accessibilityIdentifier("toastty-mobile-transcript-jump-latest")
                         .padding(14)
@@ -291,7 +292,10 @@ struct ToasttyTranscriptView: View {
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 44)
                     .background(ToasttyDesignTokens.raisedSurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                        style: .continuous
+                    ))
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("toastty-mobile-transcript-load-older")
@@ -474,10 +478,10 @@ private struct ToasttySendTailItemView: View {
         .padding(12)
         .background(ToasttyDesignTokens.userBubbleSurface)
         .overlay {
-            RoundedRectangle(cornerRadius: 14)
+            ToasttyDesignTokens.userBubbleShape
                 .stroke(ToasttyDesignTokens.userBubbleBorder)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(ToasttyDesignTokens.userBubbleShape)
         .padding(.leading, 48)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .combine)
@@ -525,10 +529,16 @@ private struct ToasttySendTailItemView: View {
         .padding(12)
         .background(ToasttyDesignTokens.raisedSurface)
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(ToasttyDesignTokens.red.opacity(0.5))
+            RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+                style: .continuous
+            )
+            .stroke(ToasttyDesignTokens.red.opacity(0.5))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(
+            cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+            style: .continuous
+        ))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("toastty-mobile-send-receipt-\(item.clientRequestID)")
     }
@@ -625,10 +635,10 @@ private struct ToasttyTranscriptRowView: View {
                 .padding(12)
                 .background(ToasttyDesignTokens.userBubbleSurface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 14)
+                    ToasttyDesignTokens.userBubbleShape
                         .stroke(ToasttyDesignTokens.userBubbleBorder)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .clipShape(ToasttyDesignTokens.userBubbleShape)
                 .padding(.leading, 48)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .accessibilityElement(children: .combine)
@@ -765,7 +775,17 @@ struct ToasttyMarkdownText: View {
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(ToasttyDesignTokens.raisedSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                    style: .continuous
+                )
+                .stroke(ToasttyDesignTokens.border, lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                style: .continuous
+            ))
         }
     }
 
@@ -941,10 +961,16 @@ private struct ToasttyInteractionCard: View {
         .padding(14)
         .background(ToasttyDesignTokens.interactionSurface)
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(accentColor.opacity(0.35))
+            RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+                style: .continuous
+            )
+            .stroke(accentColor.opacity(0.35))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(
+            cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+            style: .continuous
+        ))
         .accessibilityElement(children: .combine)
     }
 
@@ -988,7 +1014,10 @@ private extension View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(ToasttyDesignTokens.raisedSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .clipShape(RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                style: .continuous
+            ))
             .accessibilityElement(children: .combine)
     }
 }

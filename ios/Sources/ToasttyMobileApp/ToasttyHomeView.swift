@@ -362,10 +362,16 @@ struct ToasttySessionCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(cardBackground)
             .overlay {
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(cardBorder, lineWidth: 1)
+                RoundedRectangle(
+                    cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+                    style: .continuous
+                )
+                .stroke(cardBorder, lineWidth: 1)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+                style: .continuous
+            ))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -428,10 +434,16 @@ struct ToasttySessionCard: View {
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(ToasttyDesignTokens.chipSurface, in: RoundedRectangle(cornerRadius: 7))
+            .background(ToasttyDesignTokens.chipSurface, in: RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.chipCornerRadius,
+                style: .continuous
+            ))
             .overlay {
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke(ToasttyDesignTokens.chipBorder, lineWidth: 1)
+                RoundedRectangle(
+                    cornerRadius: ToasttyDesignTokens.chipCornerRadius,
+                    style: .continuous
+                )
+                .stroke(ToasttyDesignTokens.chipBorder, lineWidth: 1)
             }
     }
 
@@ -466,8 +478,9 @@ struct ToasttySessionCard: View {
 
     private var metadata: some View {
         TimelineView(.periodic(from: .now, by: 60)) { _ in
-            if !trailingMetadataLabel.isEmpty {
-                Text(trailingMetadataLabel)
+            let label = trailingMetadataLabel
+            if !label.characters.isEmpty {
+                Text(label)
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -482,19 +495,43 @@ struct ToasttySessionCard: View {
         return title.isEmpty ? nil : title
     }
 
-    private var trailingMetadataLabel: String {
-        [conversation.abbreviatedCWD, conversation.agent.displayName, conversation.displayAge]
-            .compactMap { value in
-                guard let value, !value.isEmpty else { return nil }
-                return value
+    private var trailingMetadataLabel: AttributedString {
+        let segments: [(value: String?, color: Color?)] = [
+            (conversation.abbreviatedCWD, nil),
+            (conversation.agent.displayName, agentTint),
+            (conversation.displayAge, nil),
+        ]
+        var label = AttributedString()
+        for (value, color) in segments {
+            guard let value, !value.isEmpty else { continue }
+            if !label.characters.isEmpty {
+                label += AttributedString(" · ")
             }
-            .joined(separator: " · ")
+            var segment = AttributedString(value)
+            segment.foregroundColor = color
+            label += segment
+        }
+        return label
     }
 
+    // Known agents carry their brand color in metadata so Claude and Codex
+    // sessions are distinguishable at a glance; other agents stay muted.
+    private var agentTint: Color? {
+        if conversation.agent == .claude { return ToasttyDesignTokens.claude }
+        if conversation.agent == .codex { return ToasttyDesignTokens.codex }
+        return nil
+    }
+
+    // Tint strength tracks urgency: needs-approval reads loudest, error next,
+    // and ready stays calm so finished sessions don't compete for attention.
     private var cardBackground: Color {
         switch conversation.state.bucket {
-        case .error, .ready, .needsApproval:
-            ToasttyDesignTokens.color(for: conversation.state.bucket).opacity(0.13)
+        case .needsApproval:
+            ToasttyDesignTokens.color(for: .needsApproval).opacity(0.16)
+        case .error:
+            ToasttyDesignTokens.color(for: .error).opacity(0.14)
+        case .ready:
+            ToasttyDesignTokens.color(for: .ready).opacity(0.07)
         case .working, .idle:
             ToasttyDesignTokens.raisedSurface
         }
@@ -502,8 +539,12 @@ struct ToasttySessionCard: View {
 
     private var cardBorder: Color {
         switch conversation.state.bucket {
-        case .error, .ready, .needsApproval:
-            ToasttyDesignTokens.color(for: conversation.state.bucket).opacity(0.38)
+        case .needsApproval:
+            ToasttyDesignTokens.color(for: .needsApproval).opacity(0.55)
+        case .error:
+            ToasttyDesignTokens.color(for: .error).opacity(0.50)
+        case .ready:
+            ToasttyDesignTokens.color(for: .ready).opacity(0.28)
         case .working, .idle:
             ToasttyDesignTokens.border
         }

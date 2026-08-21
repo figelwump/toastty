@@ -195,12 +195,24 @@ struct ToasttyConversationScreen: View {
             .frame(minHeight: 44)
             .background(
                 ToasttyDesignTokens.raisedSurface,
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                in: RoundedRectangle(
+                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                    style: .continuous
+                )
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(ToasttyDesignTokens.border, lineWidth: 1)
+                RoundedRectangle(
+                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                    style: .continuous
+                )
+                .strokeBorder(
+                    isComposerFocused
+                        ? ToasttyDesignTokens.amber.opacity(0.55)
+                        : ToasttyDesignTokens.border,
+                    lineWidth: 1
+                )
             }
+            .animation(.easeOut(duration: 0.18), value: isComposerFocused)
             .disabled(presentation.gate.allowsInput == false)
             .accessibilityLabel("Message \(presentation.agentDisplayName)")
             .accessibilityHint(
@@ -230,7 +242,10 @@ struct ToasttyConversationScreen: View {
             }
             .font(.subheadline.weight(.bold))
             .frame(height: 44)
-            .background(ToasttyDesignTokens.amber, in: RoundedRectangle(cornerRadius: 11))
+            .background(ToasttyDesignTokens.amber, in: RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                style: .continuous
+            ))
             .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
         }
         .buttonStyle(.plain)

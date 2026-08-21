@@ -559,10 +559,16 @@ private struct RemovedConversationBanner: View {
         .padding(.leading, 14)
         .background(ToasttyDesignTokens.elevatedSurface)
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(ToasttyDesignTokens.border, lineWidth: 1)
+            RoundedRectangle(
+                cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+                style: .continuous
+            )
+            .stroke(ToasttyDesignTokens.border, lineWidth: 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(
+            cornerRadius: ToasttyDesignTokens.cardCornerRadius,
+            style: .continuous
+        ))
         .padding(.horizontal, 14)
         .frame(maxWidth: 560)
         .task {
