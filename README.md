@@ -420,7 +420,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 - [Agent Hooks](docs/agent-hooks.md) — one global hook script for normalized session lifecycle and status events
 - [Keyboard Shortcuts](docs/keyboard-shortcuts.md) — workspace, pane, tab, agent, and profile shortcuts
 - [CLI Reference](docs/cli-reference.md) — `toastty` CLI commands, flags, environment variables, and integration examples
-- [Building and Releasing](docs/building-and-releasing.md) — build from source, validation, signed DMGs, and GitHub release publishing
+- [Building and Releasing](docs/building-and-releasing.md) — build the macOS and iOS apps from source, validate changes, and publish signed releases
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity
 - [Environment and Launch Flags](docs/environment-and-build-flags.md) — build toggles, runtime env vars, automation args, and script-level inputs
 - [Terminal Profiles](docs/terminal-profiles.md) — `terminal-profiles.toml` schema, shortcuts, and example profile setups

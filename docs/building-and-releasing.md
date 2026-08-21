@@ -7,6 +7,7 @@ This guide covers building Toastty from source, running validation, and producin
 - macOS 14.0+
 - [Tuist](https://tuist.io) (build system)
 - Xcode 16+ with Swift 6.0
+- An iOS 18+ Simulator runtime (for the native iOS client)
 - [sv](https://github.com/figelwump/sv) (secret vault for development credentials)
 - Node.js/npm (web-panel tests and release-notice checks)
 - `jq` and ripgrep (required by the full validation gate)
@@ -76,7 +77,7 @@ To build without Ghostty:
 TUIST_DISABLE_GHOSTTY=1 ./scripts/dev/bootstrap-worktree.sh
 ```
 
-## Build
+## Build the macOS app
 
 ```bash
 ARCH="$(uname -m)"
@@ -87,6 +88,31 @@ xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp \
 ```
 
 Or open `toastty.xcworkspace` in Xcode and hit Run.
+
+## Build the native iOS app
+
+The iOS client is a separate Tuist graph under `ios/`. Its generated Xcode
+project and workspace are gitignored, so generate them in each fresh checkout
+or worktree:
+
+```bash
+node ios/scripts/toastty-ios.mjs generate
+open ios/ToasttyMobile.xcworkspace
+```
+
+The dispatcher runs `tuist install` and `tuist generate --no-open` from the
+`ios/` graph. In Xcode, use the `ToasttyMobileApp` scheme with an iOS 18 or
+newer Simulator. To generate and build or run all app tests from the command
+line, use:
+
+```bash
+node ios/scripts/toastty-ios.mjs build
+node ios/scripts/toastty-ios.mjs test
+```
+
+Both commands select a compatible iPhone Simulator automatically. Pass
+`--dry-run` to any dispatcher command to inspect its plan without invoking
+Tuist or Xcode.
 
 ## Validate
 
