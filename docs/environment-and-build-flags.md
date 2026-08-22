@@ -81,7 +81,7 @@ The `ToasttyMobileApp` scheme starts the real pairing flow with an empty home sn
 | `TOASTTY_GHOSTTY_PARSE_CLI_ARGS` | unset | If enabled, lets Ghostty parse Toastty's process arguments as Ghostty CLI args before config finalization. Off by default. |
 | `TOASTTY_GHOSTTY_SURFACE_DIAGNOSTICS` | unset | Debug-only diagnostic flag for Ghostty surface lifecycle issues. When truthy, Toastty logs Ghostty surface snapshot counts and visibility metadata during terminal workspace updates. |
 | `GHOSTTY_RESOURCES_DIR` | auto-detected | Advanced override for Ghostty shell-integration resources. If unset or invalid, Toastty tries to auto-detect a usable resources directory. |
-| `TOASTTY_LAYOUT_PROFILE` | display-derived profile ID | Overrides the workspace layout profile key used for saved layouts. Useful when you want deterministic layout persistence across machines or display changes. |
+| `TOASTTY_LAYOUT_PROFILE` | unset (canonical `default`) | Uses an explicit isolated workspace layout profile instead of the canonical `default` profile. Explicit profiles do not fall back to the canonical user layout. Useful for deterministic dev/test state or intentionally separate environments. |
 | `TOASTTY_TERMINAL_PROFILES_PATH` | unset | Overrides the terminal profile catalog path. Supports absolute paths and `~/`-prefixed paths. When set, Toastty reads profiles from that file instead of `<runtime-home>/terminal-profiles.toml` or `~/.toastty/terminal-profiles.toml`. For the generated local Release scheme, store the path under the manifest-facing `TUIST_TOASTTY_TERMINAL_PROFILES_PATH` key in `sv`; bootstrap maps it to this runtime variable while preserving worktree isolation for all other state. |
 
 ### Logging

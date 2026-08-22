@@ -132,6 +132,235 @@ struct WorkspaceLayoutPersistenceStoreTests {
     }
 
     @Test
+    func migratesNewestValidLegacyDisplayProfileToCanonicalState() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let oldDefault = makeLayout(title: "Old default", cwd: "/tmp/default")
+        let laptop = makeLayout(title: "Laptop", cwd: "/tmp/laptop")
+        let currentDesktop = makeLayout(title: "Current desktop", cwd: "/tmp/desktop")
+        let explicitOverride = makeLayout(title: "Explicit override", cwd: "/tmp/override")
+        let legacyDocument = TestWorkspaceLayoutPersistenceDocument(
+            version: 2,
+            profiles: [
+                "default": .init(
+                    updatedAt: Date(timeIntervalSince1970: 100),
+                    layout: oldDefault
+                ),
+                "display-3456x2234@2x": .init(
+                    updatedAt: Date(timeIntervalSince1970: 200),
+                    layout: laptop
+                ),
+                "display-5120x2880@2x": .init(
+                    updatedAt: Date(timeIntervalSince1970: 300),
+                    layout: currentDesktop
+                ),
+                "review-rig": .init(
+                    updatedAt: Date(timeIntervalSince1970: 400),
+                    layout: explicitOverride
+                ),
+            ]
+        )
+        try writeTestDocument(legacyDocument, to: fileURL)
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        let migrated = try #require(
+            store.loadCanonicalLayout(
+                isLegacyProfileID: { $0.hasPrefix("display-") }
+            )
+        )
+
+        #expect(migrated.resolvedProfileID == "default")
+        #expect(migrated.migrationSourceProfileID == "display-5120x2880@2x")
+        #expect(migrated.layout == currentDesktop)
+
+        let persistedDocument = try readTestDocument(from: fileURL)
+        #expect(persistedDocument.version == WorkspaceLayoutPersistenceStore.currentFormatVersion)
+        #expect(persistedDocument.canonicalProfileID == "default")
+        #expect(persistedDocument.profiles["default"]?.layout == currentDesktop)
+        #expect(persistedDocument.profiles["recovery-default-pre-v3"]?.layout == oldDefault)
+        #expect(persistedDocument.profiles["display-3456x2234@2x"]?.layout == laptop)
+        #expect(persistedDocument.profiles["display-5120x2880@2x"]?.layout == currentDesktop)
+        #expect(persistedDocument.profiles["review-rig"]?.layout == explicitOverride)
+
+        let secondLoad = try #require(
+            store.loadCanonicalLayout(
+                isLegacyProfileID: { $0.hasPrefix("display-") }
+            )
+        )
+        #expect(secondLoad.layout == currentDesktop)
+        #expect(secondLoad.migrationSourceProfileID == nil)
+    }
+
+    @Test
+    func canonicalMigrationSkipsInvalidNewestLegacyProfile() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let validLayout = makeLayout(title: "Valid recovery", cwd: "/tmp/recovery")
+        try writeTestDocument(
+            TestWorkspaceLayoutPersistenceDocument(
+                version: 2,
+                profiles: [
+                    "display-3456x2234@2x": .init(
+                        updatedAt: Date(timeIntervalSince1970: 100),
+                        layout: validLayout
+                    ),
+                    "display-5120x2880@2x": .init(
+                        updatedAt: Date(timeIntervalSince1970: 200),
+                        layout: makeInvalidLayout()
+                    ),
+                ]
+            ),
+            to: fileURL
+        )
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        let migrated = try #require(
+            store.loadCanonicalLayout(
+                isLegacyProfileID: { $0.hasPrefix("display-") }
+            )
+        )
+
+        #expect(migrated.layout == validLayout)
+        #expect(migrated.migrationSourceProfileID == "display-3456x2234@2x")
+        let persistedDocument = try readTestDocument(from: fileURL)
+        #expect(persistedDocument.profiles["default"]?.layout == validLayout)
+        #expect(persistedDocument.profiles["display-5120x2880@2x"]?.layout == makeInvalidLayout())
+    }
+
+    @Test
+    func canonicalMigrationKeepsNewestExistingDefault() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let currentDefault = makeLayout(title: "Current default", cwd: "/tmp/default")
+        let olderLegacy = makeLayout(title: "Older legacy", cwd: "/tmp/legacy")
+        try writeTestDocument(
+            TestWorkspaceLayoutPersistenceDocument(
+                version: 2,
+                profiles: [
+                    "default": .init(
+                        updatedAt: Date(timeIntervalSince1970: 200),
+                        layout: currentDefault
+                    ),
+                    "display-5120x2880@2x": .init(
+                        updatedAt: Date(timeIntervalSince1970: 100),
+                        layout: olderLegacy
+                    ),
+                ]
+            ),
+            to: fileURL
+        )
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        let migrated = try #require(
+            store.loadCanonicalLayout(isLegacyProfileID: { $0.hasPrefix("display-") })
+        )
+
+        #expect(migrated.layout == currentDefault)
+        #expect(migrated.migrationSourceProfileID == nil)
+        let persistedDocument = try readTestDocument(from: fileURL)
+        #expect(persistedDocument.canonicalProfileID == "default")
+        #expect(persistedDocument.profiles["default"]?.layout == currentDefault)
+        #expect(persistedDocument.profiles["recovery-default-pre-v3"] == nil)
+    }
+
+    @Test
+    func completedCanonicalMigrationNeverReadoptsLegacyProfile() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let invalidCanonical = makeInvalidLayout()
+        let validLegacy = makeLayout(title: "Stale legacy", cwd: "/tmp/legacy")
+        try writeTestDocument(
+            TestWorkspaceLayoutPersistenceDocument(
+                version: WorkspaceLayoutPersistenceStore.currentFormatVersion,
+                profiles: [
+                    "default": .init(
+                        updatedAt: Date(timeIntervalSince1970: 200),
+                        layout: invalidCanonical
+                    ),
+                    "display-5120x2880@2x": .init(
+                        updatedAt: Date(timeIntervalSince1970: 100),
+                        layout: validLegacy
+                    ),
+                ],
+                canonicalProfileID: "default"
+            ),
+            to: fileURL
+        )
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        #expect(
+            store.loadCanonicalLayout(isLegacyProfileID: { $0.hasPrefix("display-") }) == nil
+        )
+
+        let persistedDocument = try readTestDocument(from: fileURL)
+        #expect(persistedDocument.profiles["default"]?.layout == invalidCanonical)
+        #expect(persistedDocument.profiles["display-5120x2880@2x"]?.layout == validLegacy)
+    }
+
+    @Test
+    func exactProfileLoadDoesNotUseSingleProfileFallback() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        #expect(
+            store.persistLayout(
+                makeLayout(title: "Canonical", cwd: "/tmp/canonical"),
+                for: "default"
+            )
+        )
+
+        #expect(store.loadLayoutExactly(for: "review-rig") == nil)
+        #expect(store.loadLayout(for: "review-rig")?.resolvedProfileID == "default")
+    }
+
+    @Test
+    func profilePruningPreservesCanonicalAndLegacyRecoveryProfiles() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        for index in 0..<8 {
+            #expect(
+                store.persistLayout(
+                    makeLayout(title: "Display \(index)", cwd: "/tmp/display-\(index)"),
+                    for: "display-\(1000 + index)x800@2x",
+                    maxProfileCount: 8,
+                    updatedAt: Date(timeIntervalSince1970: TimeInterval(index))
+                )
+            )
+        }
+        #expect(
+            store.persistLayout(
+                makeLayout(title: "Pre-v3 default", cwd: "/tmp/pre-v3-default"),
+                for: "recovery-default-pre-v3",
+                maxProfileCount: 8,
+                updatedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+        #expect(
+            store.persistLayout(
+                makeLayout(title: "Canonical", cwd: "/tmp/canonical"),
+                for: "default",
+                maxProfileCount: 8,
+                updatedAt: Date(timeIntervalSince1970: 20)
+            )
+        )
+
+        let summary = try store.diagnosticsSummary()
+        #expect(summary.profiles.count == 10)
+        #expect(summary.profiles.contains { $0.profileID == "default" })
+        #expect(summary.profiles.contains { $0.profileID == "recovery-default-pre-v3" })
+        for index in 0..<8 {
+            #expect(summary.profiles.contains { $0.profileID == "display-\(1000 + index)x800@2x" })
+        }
+    }
+
+    @Test
     func rejectsInvalidLayoutBeforePersisting() throws {
         let fileURL = try makeTempStoreURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
@@ -363,6 +592,59 @@ struct WorkspaceLayoutPersistenceStoreTests {
 
         return WorkspaceLayoutSnapshot(state: state)
     }
+
+    private func makeInvalidLayout() -> WorkspaceLayoutSnapshot {
+        let orphanWorkspaceID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        return WorkspaceLayoutSnapshot(
+            windows: [
+                WindowState(
+                    id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [orphanWorkspaceID],
+                    selectedWorkspaceID: orphanWorkspaceID
+                ),
+            ],
+            selectedWindowID: nil,
+            workspacesByID: [:]
+        )
+    }
+
+    private func writeTestDocument(
+        _ document: TestWorkspaceLayoutPersistenceDocument,
+        to fileURL: URL
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(document).write(to: fileURL, options: .atomic)
+    }
+
+    private func readTestDocument(from fileURL: URL) throws -> TestWorkspaceLayoutPersistenceDocument {
+        try JSONDecoder().decode(
+            TestWorkspaceLayoutPersistenceDocument.self,
+            from: Data(contentsOf: fileURL)
+        )
+    }
+}
+
+private struct TestWorkspaceLayoutPersistenceDocument: Codable {
+    var version: Int
+    var profiles: [String: TestWorkspaceLayoutPersistedProfile]
+    var canonicalProfileID: String?
+
+    init(
+        version: Int,
+        profiles: [String: TestWorkspaceLayoutPersistedProfile],
+        canonicalProfileID: String? = nil
+    ) {
+        self.version = version
+        self.profiles = profiles
+        self.canonicalProfileID = canonicalProfileID
+    }
+}
+
+private struct TestWorkspaceLayoutPersistedProfile: Codable {
+    var updatedAt: Date
+    var layout: WorkspaceLayoutSnapshot
 }
 
 private struct LegacyWorkspaceLayoutPersistenceDocument: Codable {

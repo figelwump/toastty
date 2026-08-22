@@ -39,10 +39,21 @@ struct WorkspaceLayoutPersistenceContext {
     )? {
         migrateLegacyStoreIfNeeded()
         let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
-        guard let loadResult = store.loadLayout(
-            for: profileID,
-            fallbackProfileID: WorkspaceLayoutProfileResolver.fallbackProfileID
-        ) else {
+        let loadResult: WorkspaceLayoutPersistenceLoadResult?
+        if launchProfileResolution?.source == .override {
+            loadResult = store.loadLayoutExactly(for: profileID)
+        } else if profileID == WorkspaceLayoutProfileResolver.fallbackProfileID {
+            loadResult = store.loadCanonicalLayout(
+                for: profileID,
+                isLegacyProfileID: WorkspaceLayoutProfileResolver.isLegacyDisplayProfileID
+            )
+        } else {
+            loadResult = store.loadLayout(
+                for: profileID,
+                fallbackProfileID: WorkspaceLayoutProfileResolver.fallbackProfileID
+            )
+        }
+        guard let loadResult else {
             return nil
         }
         return (
@@ -686,8 +697,7 @@ struct WorkspaceLayoutDisplayConfiguration: Equatable, Sendable {
 struct WorkspaceLayoutProfileResolution: Equatable, Sendable {
     enum Source: String, Equatable, Sendable {
         case override
-        case mainDisplay = "main_display"
-        case fallback
+        case canonical
     }
 
     let profileID: String
@@ -703,7 +713,7 @@ struct WorkspaceLayoutProfileResolution: Equatable, Sendable {
 }
 
 enum WorkspaceLayoutProfileResolver {
-    static let fallbackProfileID = "default"
+    static let fallbackProfileID = WorkspaceLayoutPersistenceStore.canonicalProfileID
     private static let profileOverrideEnvironmentKey = "TOASTTY_LAYOUT_PROFILE"
 
     static func resolve(processInfo: ProcessInfo = .processInfo) -> String {
@@ -732,20 +742,38 @@ enum WorkspaceLayoutProfileResolver {
             )
         }
 
-        guard let display = displayConfiguration.profileDisplay else {
-            return WorkspaceLayoutProfileResolution(
-                profileID: fallbackProfileID,
-                source: .fallback,
-                displayConfiguration: displayConfiguration
-            )
-        }
-
-        let scaleLabel = formattedScale(display.scale)
         return WorkspaceLayoutProfileResolution(
-            profileID: "display-\(display.pixelWidth)x\(display.pixelHeight)@\(scaleLabel)x",
-            source: .mainDisplay,
+            profileID: fallbackProfileID,
+            source: .canonical,
             displayConfiguration: displayConfiguration
         )
+    }
+
+    static func isLegacyDisplayProfileID(_ profileID: String) -> Bool {
+        guard profileID.hasPrefix(WorkspaceLayoutPersistenceStore.legacyDisplayProfilePrefix),
+              profileID.hasSuffix("x") else {
+            return false
+        }
+
+        let start = profileID.index(
+            profileID.startIndex,
+            offsetBy: WorkspaceLayoutPersistenceStore.legacyDisplayProfilePrefix.count
+        )
+        let body = profileID[start...].dropLast()
+        let profileParts = body.split(separator: "@", omittingEmptySubsequences: false)
+        guard profileParts.count == 2 else { return false }
+
+        let dimensions = profileParts[0].split(separator: "x", omittingEmptySubsequences: false)
+        guard dimensions.count == 2,
+              let width = Int(dimensions[0]),
+              width > 0,
+              let height = Int(dimensions[1]),
+              height > 0,
+              let scale = Double(profileParts[1]),
+              scale > 0 else {
+            return false
+        }
+        return true
     }
 
     private static func normalizedOverride(from rawValue: String?) -> String? {

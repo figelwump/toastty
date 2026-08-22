@@ -5,15 +5,18 @@ public struct WorkspaceLayoutPersistenceLoadResult: Equatable, Sendable {
     public let layout: WorkspaceLayoutSnapshot
     public let resolvedProfileID: String
     public let profileSummary: WorkspaceLayoutPersistenceProfileSummary
+    public let migrationSourceProfileID: String?
 
     public init(
         layout: WorkspaceLayoutSnapshot,
         resolvedProfileID: String,
-        profileSummary: WorkspaceLayoutPersistenceProfileSummary
+        profileSummary: WorkspaceLayoutPersistenceProfileSummary,
+        migrationSourceProfileID: String? = nil
     ) {
         self.layout = layout
         self.resolvedProfileID = resolvedProfileID
         self.profileSummary = profileSummary
+        self.migrationSourceProfileID = migrationSourceProfileID
     }
 }
 
@@ -59,7 +62,10 @@ public struct WorkspaceLayoutPersistenceProfileSummary: Equatable, Sendable {
 }
 
 public struct WorkspaceLayoutPersistenceStore: Sendable {
-    public static let currentFormatVersion = 2
+    public static let currentFormatVersion = 3
+    public static let canonicalProfileID = "default"
+    public static let legacyDisplayProfilePrefix = "display-"
+    private static let legacyCanonicalRecoveryProfilePrefix = "recovery-default-pre-v3"
 
     public let fileURL: URL
 
@@ -82,29 +88,137 @@ public struct WorkspaceLayoutPersistenceStore: Sendable {
             guard let candidate = document.profiles[candidateProfileID] else {
                 continue
             }
+            if let result = validatedLoadResult(
+                profileID: candidateProfileID,
+                profile: candidate
+            ) {
+                return result
+            }
+        }
 
-            do {
-                let restoredState = candidate.layout.makeAppState()
-                try StateValidator.validate(restoredState)
-                return WorkspaceLayoutPersistenceLoadResult(
-                    layout: candidate.layout,
-                    resolvedProfileID: candidateProfileID,
-                    profileSummary: Self.profileSummary(
-                        profileID: candidateProfileID,
-                        profile: candidate
-                    )
-                )
-            } catch {
+        return nil
+    }
+
+    public func loadLayoutExactly(for profileID: String) -> WorkspaceLayoutPersistenceLoadResult? {
+        guard let document = loadDocument(),
+              let profile = document.profiles[profileID] else {
+            return nil
+        }
+        return validatedLoadResult(profileID: profileID, profile: profile)
+    }
+
+    /// Adopts one canonical layout for ordinary app launches while retaining
+    /// every legacy display profile as a recovery copy.
+    public func loadCanonicalLayout(
+        for canonicalProfileID: String = Self.canonicalProfileID,
+        isLegacyProfileID: (String) -> Bool
+    ) -> WorkspaceLayoutPersistenceLoadResult? {
+        guard var document = loadDocument() else {
+            return nil
+        }
+
+        if document.canonicalProfileID == canonicalProfileID {
+            guard let canonicalProfile = document.profiles[canonicalProfileID],
+                  let canonicalResult = validatedLoadResult(
+                      profileID: canonicalProfileID,
+                      profile: canonicalProfile
+                  ) else {
                 ToasttyLog.warning(
-                    "Persisted workspace layout profile is invalid",
+                    "Canonical workspace layout is unavailable; refusing legacy profile fallback",
                     category: .state,
                     metadata: [
                         "path": fileURL.path,
-                        "profile_id": candidateProfileID,
+                        "canonical_profile_id": canonicalProfileID,
+                    ]
+                )
+                return nil
+            }
+            return canonicalResult
+        }
+
+        let candidates = document.profiles
+            .filter { profileID, _ in
+                profileID == canonicalProfileID || isLegacyProfileID(profileID)
+            }
+            .sorted { lhs, rhs in
+                if lhs.value.updatedAt != rhs.value.updatedAt {
+                    return lhs.value.updatedAt > rhs.value.updatedAt
+                }
+                return lhs.key < rhs.key
+            }
+
+        for (sourceProfileID, sourceProfile) in candidates {
+            guard validatedLoadResult(
+                profileID: sourceProfileID,
+                profile: sourceProfile
+            ) != nil else {
+                continue
+            }
+
+            document.version = Self.currentFormatVersion
+            document.canonicalProfileID = canonicalProfileID
+            var preservedProfileID: String?
+            if sourceProfileID != canonicalProfileID,
+               let previousCanonicalProfile = document.profiles[canonicalProfileID] {
+                let recoveryProfileID = Self.nextLegacyCanonicalRecoveryProfileID(
+                    availableProfileIDs: Set(document.profiles.keys)
+                )
+                document.profiles[recoveryProfileID] = previousCanonicalProfile
+                preservedProfileID = recoveryProfileID
+            }
+            document.profiles[canonicalProfileID] = sourceProfile
+
+            let canonicalSummary = Self.profileSummary(
+                profileID: canonicalProfileID,
+                profile: sourceProfile
+            )
+            let migrationResult = WorkspaceLayoutPersistenceLoadResult(
+                layout: sourceProfile.layout,
+                resolvedProfileID: canonicalProfileID,
+                profileSummary: canonicalSummary,
+                migrationSourceProfileID: sourceProfileID == canonicalProfileID
+                    ? nil
+                    : sourceProfileID
+            )
+
+            do {
+                try writeDocument(document)
+            } catch {
+                ToasttyLog.warning(
+                    "Failed to migrate workspace layout to canonical profile",
+                    category: .state,
+                    metadata: [
+                        "path": fileURL.path,
+                        "source_profile_id": sourceProfileID,
+                        "canonical_profile_id": canonicalProfileID,
                         "error": error.localizedDescription,
                     ]
                 )
+                return migrationResult
             }
+
+            var migrationMetadata = [
+                "path": fileURL.path,
+                "source_profile_id": sourceProfileID,
+                "canonical_profile_id": canonicalProfileID,
+                "source_updated_at_ms": String(
+                    Int64((sourceProfile.updatedAt.timeIntervalSince1970 * 1000).rounded())
+                ),
+                "profile_window_count": String(canonicalSummary.windowCount),
+                "profile_workspace_count": String(canonicalSummary.workspaceCount),
+                "profile_tab_count": String(canonicalSummary.tabCount),
+                "profile_panel_count": String(canonicalSummary.panelCount),
+                "profile_fingerprint": canonicalSummary.fingerprint ?? "unavailable",
+            ]
+            if let preservedProfileID {
+                migrationMetadata["preserved_profile_id"] = preservedProfileID
+            }
+            ToasttyLog.info(
+                "Migrated workspace layout to canonical profile",
+                category: .state,
+                metadata: migrationMetadata
+            )
+            return migrationResult
         }
 
         return nil
@@ -168,7 +282,8 @@ public struct WorkspaceLayoutPersistenceStore: Sendable {
     public func persistLayout(
         _ layout: WorkspaceLayoutSnapshot,
         for profileID: String,
-        maxProfileCount: Int = 8
+        maxProfileCount: Int = 8,
+        updatedAt: Date = Date()
     ) -> Bool {
         do {
             try StateValidator.validate(layout.makeAppState())
@@ -187,8 +302,11 @@ public struct WorkspaceLayoutPersistenceStore: Sendable {
 
         var document = loadDocument() ?? WorkspaceLayoutPersistenceDocument(version: Self.currentFormatVersion, profiles: [:])
         document.version = Self.currentFormatVersion
+        if profileID == Self.canonicalProfileID {
+            document.canonicalProfileID = Self.canonicalProfileID
+        }
         document.profiles[profileID] = WorkspaceLayoutPersistedProfile(
-            updatedAt: Date(),
+            updatedAt: updatedAt,
             layout: layout
         )
 
@@ -197,21 +315,19 @@ public struct WorkspaceLayoutPersistenceStore: Sendable {
             let sortedByAge = document.profiles.sorted { lhs, rhs in
                 lhs.value.updatedAt < rhs.value.updatedAt
             }
-            let removals = sortedByAge.prefix(document.profiles.count - maxProfileCount)
+            let overflow = document.profiles.count - maxProfileCount
+            let removals = sortedByAge
+                .filter { entry in
+                    Self.isProtectedProfileID(entry.key, currentProfileID: profileID) == false
+                }
+                .prefix(overflow)
             for removal in removals {
                 document.profiles.removeValue(forKey: removal.key)
             }
         }
 
         do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(document)
-            try data.write(to: fileURL, options: .atomic)
+            try writeDocument(document)
             return true
         } catch {
             ToasttyLog.warning(
@@ -247,6 +363,71 @@ public struct WorkspaceLayoutPersistenceStore: Sendable {
             )
             return nil
         }
+    }
+
+    private func writeDocument(_ document: WorkspaceLayoutPersistenceDocument) throws {
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(document)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    private func validatedLoadResult(
+        profileID: String,
+        profile: WorkspaceLayoutPersistedProfile
+    ) -> WorkspaceLayoutPersistenceLoadResult? {
+        do {
+            let restoredState = profile.layout.makeAppState()
+            try StateValidator.validate(restoredState)
+            return WorkspaceLayoutPersistenceLoadResult(
+                layout: profile.layout,
+                resolvedProfileID: profileID,
+                profileSummary: Self.profileSummary(
+                    profileID: profileID,
+                    profile: profile
+                )
+            )
+        } catch {
+            ToasttyLog.warning(
+                "Persisted workspace layout profile is invalid",
+                category: .state,
+                metadata: [
+                    "path": fileURL.path,
+                    "profile_id": profileID,
+                    "error": error.localizedDescription,
+                ]
+            )
+            return nil
+        }
+    }
+
+    private static func isProtectedProfileID(
+        _ profileID: String,
+        currentProfileID: String
+    ) -> Bool {
+        profileID == currentProfileID
+            || profileID == canonicalProfileID
+            || profileID.hasPrefix(legacyDisplayProfilePrefix)
+            || profileID == legacyCanonicalRecoveryProfilePrefix
+            || profileID.hasPrefix("\(legacyCanonicalRecoveryProfilePrefix)-")
+    }
+
+    private static func nextLegacyCanonicalRecoveryProfileID(
+        availableProfileIDs: Set<String>
+    ) -> String {
+        if availableProfileIDs.contains(legacyCanonicalRecoveryProfilePrefix) == false {
+            return legacyCanonicalRecoveryProfilePrefix
+        }
+
+        var suffix = 2
+        while availableProfileIDs.contains("\(legacyCanonicalRecoveryProfilePrefix)-\(suffix)") {
+            suffix += 1
+        }
+        return "\(legacyCanonicalRecoveryProfilePrefix)-\(suffix)"
     }
 
     private func candidateProfileResolutionOrder(
@@ -482,6 +663,7 @@ private struct WorkspaceLayoutTopologyFingerprint {
 private struct WorkspaceLayoutPersistenceDocument: Codable, Sendable {
     var version: Int
     var profiles: [String: WorkspaceLayoutPersistedProfile]
+    var canonicalProfileID: String?
 }
 
 private struct WorkspaceLayoutPersistedProfile: Codable, Sendable {

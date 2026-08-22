@@ -28,6 +28,14 @@ Toastty is designed to run locally on your machine. The app itself does not send
     session file path or Toastty-owned marker path, working directory, capture
     timestamp, and any explicit workspace-scope identifiers needed to restore a
     scoped session after app restart.
+  - Ordinary launches read and write one canonical layout across display
+    changes. When Toastty first migrates an older display-specific store, it
+    copies the most recently updated valid display layout into the canonical
+    profile and retains the legacy display profiles as local recovery copies.
+    If that replaces an older `default` profile, the older profile is also
+    preserved under a recovery-only profile ID before migration completes.
+    Explicit `TOASTTY_LAYOUT_PROFILE` overrides remain isolated and do not fall
+    back to the canonical user layout.
 - `~/.toastty/annotation-styles.json`
   - The global annotation color map: one named or `#RRGGBB` color token per
     annotation key, shared across workspaces and layout profiles. First use

@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class WorkspaceLayoutDiagnosticsLoggingTests: XCTestCase {
-    func testProfileResolverUsesRecordedMainDisplayInputs() {
+    func testProfileResolverUsesCanonicalProfileAcrossDisplayInputs() {
         let configuration = displayConfiguration(
             displays: [
                 (1920, 1080, 1, false),
@@ -18,8 +18,8 @@ final class WorkspaceLayoutDiagnosticsLoggingTests: XCTestCase {
             displayConfiguration: configuration
         )
 
-        XCTAssertEqual(resolution.profileID, "display-3456x2234@2x")
-        XCTAssertEqual(resolution.source, .mainDisplay)
+        XCTAssertEqual(resolution.profileID, "default")
+        XCTAssertEqual(resolution.source, .canonical)
         XCTAssertEqual(resolution.logMetadata()["display_count"], "2")
         XCTAssertEqual(
             resolution.logMetadata()["display_configuration"],
@@ -27,18 +27,77 @@ final class WorkspaceLayoutDiagnosticsLoggingTests: XCTestCase {
         )
     }
 
+    func testProfileResolverKeepsExplicitOverrideIsolated() {
+        let resolution = WorkspaceLayoutProfileResolver.resolution(
+            environment: ["TOASTTY_LAYOUT_PROFILE": " Review Rig "],
+            displayConfiguration: displayConfiguration(
+                displays: [(5120, 2880, 2, true)],
+                profileDisplayIndex: 0
+            )
+        )
+
+        XCTAssertEqual(resolution.profileID, "review-rig")
+        XCTAssertEqual(resolution.source, .override)
+    }
+
+    func testExplicitOverrideDoesNotLoadCanonicalProfileAsFallback() throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("layout-override-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = directoryURL
+            .appendingPathComponent("workspace-layout-profiles.json", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        XCTAssertTrue(
+            store.persistLayout(
+                WorkspaceLayoutSnapshot(state: .bootstrap()),
+                for: WorkspaceLayoutPersistenceStore.canonicalProfileID
+            )
+        )
+        let resolution = WorkspaceLayoutProfileResolver.resolution(
+            environment: ["TOASTTY_LAYOUT_PROFILE": "review-rig"],
+            displayConfiguration: displayConfiguration(
+                displays: [(5120, 2880, 2, true)],
+                profileDisplayIndex: 0
+            )
+        )
+        let context = WorkspaceLayoutPersistenceContext(
+            profileID: resolution.profileID,
+            fileURL: fileURL,
+            shouldMigrateLegacyStore: false,
+            launchProfileResolution: resolution
+        )
+
+        XCTAssertNil(context.loadState())
+        XCTAssertNotNil(
+            store.loadLayoutExactly(for: WorkspaceLayoutPersistenceStore.canonicalProfileID)
+        )
+    }
+
+    func testLegacyDisplayProfileRecognitionIsExact() {
+        XCTAssertTrue(
+            WorkspaceLayoutProfileResolver.isLegacyDisplayProfileID("display-3456x2234@2x")
+        )
+        XCTAssertTrue(
+            WorkspaceLayoutProfileResolver.isLegacyDisplayProfileID("display-2560x1440@1.25x")
+        )
+        XCTAssertFalse(WorkspaceLayoutProfileResolver.isLegacyDisplayProfileID("display-review-rig"))
+        XCTAssertFalse(WorkspaceLayoutProfileResolver.isLegacyDisplayProfileID("display-0x1440@2x"))
+        XCTAssertFalse(WorkspaceLayoutProfileResolver.isLegacyDisplayProfileID("desktop-3456x2234@2x"))
+    }
+
     func testDisplayObserverLogsOnlyChangedConfigurations() {
         let initial = WorkspaceLayoutProfileResolution(
-            profileID: "display-3456x2234@2x",
-            source: .mainDisplay,
+            profileID: "default",
+            source: .canonical,
             displayConfiguration: displayConfiguration(
                 displays: [(3456, 2234, 2, true)],
                 profileDisplayIndex: 0
             )
         )
         let changed = WorkspaceLayoutProfileResolution(
-            profileID: "display-2560x1440@1x",
-            source: .mainDisplay,
+            profileID: "default",
+            source: .canonical,
             displayConfiguration: displayConfiguration(
                 displays: [
                     (3456, 2234, 2, false),
@@ -69,7 +128,7 @@ final class WorkspaceLayoutDiagnosticsLoggingTests: XCTestCase {
         XCTAssertEqual(logs[0].1["previous_display_count"], "1")
         XCTAssertEqual(logs[0].1["current_display_count"], "2")
         XCTAssertEqual(logs[0].1["current_profile_candidate_id"], changed.profileID)
-        XCTAssertEqual(logs[0].1["profile_candidate_changed"], "true")
+        XCTAssertEqual(logs[0].1["profile_candidate_changed"], "false")
     }
 
     func testTerminationSummaryIncludesSaveProfileAndCurrentDisplayCandidate() throws {
@@ -79,8 +138,8 @@ final class WorkspaceLayoutDiagnosticsLoggingTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
 
         let currentResolution = WorkspaceLayoutProfileResolution(
-            profileID: "display-2560x1440@1x",
-            source: .mainDisplay,
+            profileID: "default",
+            source: .canonical,
             displayConfiguration: displayConfiguration(
                 displays: [(2560, 1440, 1, true)],
                 profileDisplayIndex: 0
@@ -89,7 +148,7 @@ final class WorkspaceLayoutDiagnosticsLoggingTests: XCTestCase {
         var logs: [(String, [String: String])] = []
         let coordinator = WorkspaceLayoutPersistenceCoordinator(
             context: WorkspaceLayoutPersistenceContext(
-                profileID: "display-3456x2234@2x",
+                profileID: "default",
                 fileURL: fileURL,
                 shouldMigrateLegacyStore: false
             ),
@@ -100,9 +159,9 @@ final class WorkspaceLayoutDiagnosticsLoggingTests: XCTestCase {
         coordinator.flushCurrentState(.bootstrap(), reason: "application_will_terminate")
 
         let summary = try XCTUnwrap(logs.first { $0.0 == "Workspace layout termination summary" })
-        XCTAssertEqual(summary.1["persistence_profile_id"], "display-3456x2234@2x")
-        XCTAssertEqual(summary.1["current_profile_candidate_id"], "display-2560x1440@1x")
-        XCTAssertEqual(summary.1["profile_candidate_matches_persistence_profile"], "false")
+        XCTAssertEqual(summary.1["persistence_profile_id"], "default")
+        XCTAssertEqual(summary.1["current_profile_candidate_id"], "default")
+        XCTAssertEqual(summary.1["profile_candidate_matches_persistence_profile"], "true")
         XCTAssertEqual(summary.1["write_needed"], "true")
         XCTAssertEqual(summary.1["write_status"], "succeeded")
         XCTAssertEqual(summary.1["profile_workspace_count"], "1")
