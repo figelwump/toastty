@@ -1,11 +1,13 @@
 ---
 name: toastty-scratchpad
-description: Use this skill to show the user anything visual — design mockups, UI/UX wireframes, layout or option comparisons, architecture and data-flow diagrams, charts, tables, dashboards, timelines, state machines, or any content clearer laid out spatially than as prose. Prefer it over screenshotting an HTML file to /tmp, handing the user an image path, or sketching ASCII in chat; it renders the artifact directly in the user's Toastty workspace. Also use it to read, review, summarize, or update an existing Scratchpad panel.
+description: Use this skill to show the user anything visual — design mockups, UI/UX wireframes, layout or option comparisons, architecture and data-flow diagrams, charts, tables, dashboards, timelines, state machines, or any content clearer laid out spatially than as prose. Whenever you or another skill generates an HTML page for the user to view, present it in Toastty by default — publish it here instead of running `open` or launching an external browser — and prefer it over screenshotting an HTML file to /tmp, handing the user an image path, or sketching ASCII in chat; it renders the artifact directly in the user's Toastty workspace. Also use it to read, review, summarize, or update an existing Scratchpad panel.
 ---
 
 # Toastty Scratchpad
 
 **Reach for the Scratchpad whenever you have something visual to show the user — not only when asked for one.** If you produced a mockup, comparison, or diagram, present the result here rather than pointing the user at a file path. This includes artifacts you rendered and screenshotted with `agent-browser` to validate: the screenshot is for *your* verification, the Scratchpad is how the *user* sees it.
+
+The same default applies when another skill or workflow produces an HTML page for the user — an explainer, report, comparison, or demo. In a Toastty-managed session, do not run `open` on the generated file or launch an external browser. Publish self-contained HTML to the Scratchpad. If the page genuinely exceeds Scratchpad constraints (multi-file assets, remote scripts, content over roughly 1 MB), open it in a Toastty browser panel instead via `panel.create.browser` with a `file://` URL; the toastty-capabilities skill covers workspace targeting. Fall back to an external browser only when the user explicitly asks for one.
 
 Use Scratchpad when a visual surface will communicate better than terminal prose. If the user asks to read or review an existing Scratchpad, export the current session-linked Scratchpad and answer from that content without replacing it. If the user asks to create or update a visual artifact, open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots or exact targeted patches as the artifact takes shape, then publish the finished self-contained HTML artifact.
 
