@@ -234,6 +234,72 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func claudeStopWithOnlyArtifactMonitorDoesNotSyncPendingWork() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","last_assistant_message":"Watching for updates","background_tasks":[{"id":"sqoqfbe52","type":"monitor","status":"running","description":"live updates for artifact https://claude.ai/code/artifact/example (watch requested)"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 0,
+                preserveUnlistedActivities: false
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Watching for updates"
+            ),
+        ])
+    }
+
+    @Test
+    func claudeStopWithArtifactMonitorStillSyncsActiveBackgroundWork() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","last_assistant_message":"Background work continues","background_tasks":[{"id":"monitor-1","type":"monitor","status":"running","description":"live updates for artifact"},{"id":"shell-1","type":"shell","status":"running","description":"npm test"},{"id":"workflow-1","type":"workflow","status":"running","description":"Review the diff"},{"id":"subagent-1","type":"subagent","status":"running","description":"Check tests","agent_type":"reviewer"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [
+                    SessionBackgroundActivitySyncEntry(
+                        id: "subagent-1",
+                        displayName: "reviewer",
+                        command: "Check tests"
+                    ),
+                ],
+                pendingBackgroundTaskCount: 2,
+                preserveUnlistedActivities: true
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Background work continues"
+            ),
+        ])
+    }
+
+    @Test
     func claudeStopWithEmptyBackgroundTasksClearsSync() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,

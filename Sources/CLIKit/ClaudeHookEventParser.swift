@@ -279,6 +279,11 @@ enum ClaudeHookEventParser {
 
         for task in backgroundTasks {
             let taskType = normalizedString(task["type"])
+            if taskType == "monitor" {
+                // Claude Code 2.1.239 reports an Artifact watch as a running
+                // monitor after the root session has returned to its prompt.
+                continue
+            }
             if taskType == "subagent" {
                 guard let id = normalizedString(task["id"]) else { continue }
                 entries.append(
