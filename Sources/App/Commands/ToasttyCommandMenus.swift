@@ -397,8 +397,8 @@ struct ToasttyCommandMenus: Commands {
             }
             .disabled(canPasteToasttyDoctorCommand == false)
 
-            Button("Copy Diagnostics Collection Snippet…") {
-                DiagnosticsSnippetPresenter.present()
+            Button("Send Diagnostics…") {
+                DiagnosticsPresenter.present()
             }
 
             Divider()

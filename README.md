@@ -181,11 +181,11 @@ Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the c
 
 The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes five well-known IDs that receive first-party instrumentation:
 
-- **`codex`** — Automatically enables four Toastty skills only for managed sessions, and uses installed Codex status hooks when set up, with notify and session-recording fallback paths for compatibility. Typed `cdx` launches are treated as Codex too.
-- **`claude`** — Automatically adds the same four Toastty skills for the managed process and injects lifecycle hooks that report session state back to the sidebar
-- **`opencode`** — Automatically adds the same four Toastty skills and injects a temporary OpenCode-compatible status plugin through `OPENCODE_CONFIG_CONTENT`
-- **`mimocode`** — Automatically adds the same four Toastty skills and injects a temporary OpenCode-compatible status plugin through `MIMOCODE_CONFIG_CONTENT`; typed `mimo` launches are treated as MiMo Code too
-- **`pi`** — Automatically adds the same four Toastty skills and injects Toastty's bundled Pi extension for session, tool, and changed-file telemetry while preserving user Pi extensions
+- **`codex`** — Automatically enables five Toastty skills only for managed sessions, and uses installed Codex status hooks when set up, with notify and session-recording fallback paths for compatibility. Typed `cdx` launches are treated as Codex too.
+- **`claude`** — Automatically adds the same five Toastty skills for the managed process and injects lifecycle hooks that report session state back to the sidebar
+- **`opencode`** — Automatically adds the same five Toastty skills and injects a temporary OpenCode-compatible status plugin through `OPENCODE_CONFIG_CONTENT`
+- **`mimocode`** — Automatically adds the same five Toastty skills and injects a temporary OpenCode-compatible status plugin through `MIMOCODE_CONFIG_CONTENT`; typed `mimo` launches are treated as MiMo Code too
+- **`pi`** — Automatically adds the same five Toastty skills and injects Toastty's bundled Pi extension for session, tool, and changed-file telemetry while preserving user Pi extensions
 
 This matching is keyed on **the profile ID**, not on the command in `argv`:
 

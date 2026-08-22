@@ -33,6 +33,12 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
             .appendingPathComponent("toastty-open-markdown/scripts/open.sh")
             .path
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: scriptPath))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: URL(fileURLWithPath: first.skillsRootPath)
+                    .appendingPathComponent("toastty-send-diagnostics/SKILL.md").path
+            )
+        )
     }
 
     func testChangedBundleCreatesNewVersionAndRetainsPreviousVersion() async throws {

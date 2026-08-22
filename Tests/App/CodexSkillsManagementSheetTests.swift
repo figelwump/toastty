@@ -4,13 +4,14 @@ import XCTest
 @testable import ToasttyApp
 
 final class CodexSkillsManagementSheetTests: XCTestCase {
-    func testManagementRowsExposeTheExactFourQualifiedSkillsAndSummaries() {
+    func testManagementRowsExposeTheExactFiveQualifiedSkillsAndSummaries() {
         XCTAssertEqual(
             ToasttyAgentPluginBundle.skills.map { "toastty:\($0.name)" },
             [
                 "toastty:toastty-capabilities",
                 "toastty:toastty-open-markdown",
                 "toastty:toastty-scratchpad",
+                "toastty:toastty-send-diagnostics",
                 "toastty:worktree-create",
             ]
         )
@@ -27,13 +28,13 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         let codexNotice = ManagedAgentSkillsProvisionedNotice(
             windowID: targetWindowID,
             agent: .codex,
-            shippedSkillCount: 4,
+            shippedSkillCount: 5,
             deliveredUserSkillCount: 2
         )
         let claudeNotice = ManagedAgentSkillsProvisionedNotice(
             windowID: targetWindowID,
             agent: .claude,
-            shippedSkillCount: 4,
+            shippedSkillCount: 5,
             deliveredUserSkillCount: 0
         )
 
@@ -100,11 +101,11 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
                 for: ManagedAgentSkillsProvisionedNotice(
                     windowID: UUID(),
                     agent: .codex,
-                    shippedSkillCount: 4,
+                    shippedSkillCount: 5,
                     deliveredUserSkillCount: 0
                 )
             ),
-            "Toastty enabled 4 skills for managed Codex sessions. Global and project skill folders were not changed."
+            "Toastty enabled 5 skills for managed Codex sessions. Global and project skill folders were not changed."
         )
     }
 
@@ -114,22 +115,22 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
                 for: ManagedAgentSkillsProvisionedNotice(
                     windowID: UUID(),
                     agent: .codex,
-                    shippedSkillCount: 4,
+                    shippedSkillCount: 5,
                     deliveredUserSkillCount: 2
                 )
             ),
-            "Toastty enabled 6 skills for managed Codex sessions (including 2 user skills). Global and project skill folders were not changed."
+            "Toastty enabled 7 skills for managed Codex sessions (including 2 user skills). Global and project skill folders were not changed."
         )
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
                 for: ManagedAgentSkillsProvisionedNotice(
                     windowID: UUID(),
                     agent: .claude,
-                    shippedSkillCount: 4,
+                    shippedSkillCount: 5,
                     deliveredUserSkillCount: 1
                 )
             ),
-            "Toastty enabled 5 skills for managed Claude Code sessions (including 1 user skill). Global and project skill folders were not changed."
+            "Toastty enabled 6 skills for managed Claude Code sessions (including 1 user skill). Global and project skill folders were not changed."
         )
     }
 

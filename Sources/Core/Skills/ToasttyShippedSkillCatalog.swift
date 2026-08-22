@@ -25,6 +25,10 @@ public enum ToasttyShippedSkillCatalog {
             summary: "Create and update visual diagrams, mockups, and summaries."
         ),
         ToasttyShippedSkillDescriptor(
+            name: "toastty-send-diagnostics",
+            summary: "Collect, review, and send redacted Toastty diagnostics."
+        ),
+        ToasttyShippedSkillDescriptor(
             name: "worktree-create",
             summary: "Move work into an isolated Git worktree and Toastty workspace."
         ),

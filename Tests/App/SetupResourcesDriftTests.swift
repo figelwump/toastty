@@ -17,7 +17,7 @@ final class SetupResourcesDriftTests: XCTestCase {
             names,
             ToasttyAgentPluginBundle.skills.map(\.name).sorted()
         )
-        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 4)
+        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 5)
         XCTAssertTrue(
             (try? regularFiles(
                 under: setupResourcesURL().appendingPathComponent("starter-skills", isDirectory: true)

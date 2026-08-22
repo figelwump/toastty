@@ -7,6 +7,7 @@ DEFAULT_SKILLS=(
   "toastty-capabilities"
   "toastty-open-markdown"
   "toastty-scratchpad"
+  "toastty-send-diagnostics"
   "worktree-create"
 )
 

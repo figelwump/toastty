@@ -38,7 +38,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.manageToasttySkills.id, "agent.toastty-skills.manage")
         XCTAssertEqual(ToasttyBuiltInCommand.setUpAgentStatusHooks.id, "agent.status-hooks.setup")
         XCTAssertEqual(ToasttyBuiltInCommand.openRemoteAccess.id, "app.remote-access.open")
-        XCTAssertEqual(ToasttyBuiltInCommand.copyDiagnosticsSnippet.id, "diagnostics.snippet.copy")
+        XCTAssertEqual(ToasttyBuiltInCommand.sendDiagnostics.id, "diagnostics.snippet.copy")
         XCTAssertEqual(ToasttyBuiltInCommand.selectPreviousRightPanelTab.id, "right-panel.tab.select-previous")
         XCTAssertEqual(ToasttyBuiltInCommand.selectNextRightPanelTab.id, "right-panel.tab.select-next")
         XCTAssertEqual(ToasttyBuiltInCommand.reloadConfiguration.id, "app.reload-configuration")
@@ -104,7 +104,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.manageToasttySkills.id,
                 ToasttyBuiltInCommand.setUpAgentStatusHooks.id,
                 ToasttyBuiltInCommand.openRemoteAccess.id,
-                ToasttyBuiltInCommand.copyDiagnosticsSnippet.id,
+                ToasttyBuiltInCommand.sendDiagnostics.id,
                 ToasttyBuiltInCommand.reloadConfiguration.id,
             ]
         )
@@ -151,7 +151,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.canManageToasttySkillsValue = false
         actions.canSetUpAgentStatusHooksValue = false
         actions.canOpenRemoteAccessValue = false
-        actions.canCopyDiagnosticsSnippetValue = false
+        actions.canSendDiagnosticsValue = false
         actions.canSelectAdjacentRightPanelTabValue = false
         actions.canReloadValue = false
 
@@ -170,7 +170,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.manageToasttySkills.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.setUpAgentStatusHooks.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.openRemoteAccess.id }))
-        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.copyDiagnosticsSnippet.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.sendDiagnostics.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousRightPanelTab.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectNextRightPanelTab.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.reloadConfiguration.id }))
@@ -316,7 +316,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageToasttySkills.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.setUpAgentStatusHooks.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.openRemoteAccess.id })).invocation, originWindowID: originWindowID))
-        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.copyDiagnosticsSnippet.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.sendDiagnostics.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "workspace.switch.\(workspaceID.uuidString)" })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "agent.run.codex" })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "terminal-profile.zmx.split-right" })).invocation, originWindowID: originWindowID))
@@ -331,7 +331,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(actions.managedToasttySkillsWindowIDs, [originWindowID])
         XCTAssertEqual(actions.setUpAgentStatusHooksWindowIDs, [originWindowID])
         XCTAssertEqual(actions.openedRemoteAccessWindowIDs, [originWindowID])
-        XCTAssertEqual(actions.copiedDiagnosticsSnippetWindowIDs, [originWindowID])
+        XCTAssertEqual(actions.sentDiagnosticsWindowIDs, [originWindowID])
         XCTAssertEqual(
             actions.workspaceSwitchCalls,
             [RecordedPaletteWorkspaceSwitchCall(workspaceID: workspaceID, originWindowID: originWindowID)]

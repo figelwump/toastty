@@ -69,8 +69,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func setUpAgentStatusHooks(originWindowID: UUID) -> Bool
     func canOpenRemoteAccess(originWindowID: UUID) -> Bool
     func openRemoteAccess(originWindowID: UUID) -> Bool
-    func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool
-    func copyDiagnosticsSnippet(originWindowID: UUID) -> Bool
+    func canSendDiagnostics(originWindowID: UUID) -> Bool
+    func sendDiagnostics(originWindowID: UUID) -> Bool
     func canReloadConfiguration() -> Bool
     func reloadConfiguration() -> Bool
     func openFileResult(
@@ -101,7 +101,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let openTerminalProfilesConfigurationAction: @MainActor (UUID) -> Bool
     private let openAgentProfilesConfigurationAction: @MainActor (UUID) -> Bool
     private let openRemoteAccessAction: @MainActor (UUID) -> Void
-    private let presentDiagnosticsSnippetAction: @MainActor () -> Void
+    private let presentDiagnosticsAction: @MainActor () -> Void
 
     init(
         store: AppStore,
@@ -126,7 +126,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
                 object: originWindowID
             )
         },
-        presentDiagnosticsSnippetAction: @escaping @MainActor () -> Void = { DiagnosticsSnippetPresenter.present() },
+        presentDiagnosticsAction: @escaping @MainActor () -> Void = { DiagnosticsPresenter.present() },
         processWatchCommandController: ProcessWatchCommandController? = nil
     ) {
         self.store = store
@@ -151,7 +151,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         self.openTerminalProfilesConfigurationAction = openTerminalProfilesConfigurationAction
         self.openAgentProfilesConfigurationAction = openAgentProfilesConfigurationAction
         self.openRemoteAccessAction = openRemoteAccessAction
-        self.presentDiagnosticsSnippetAction = presentDiagnosticsSnippetAction
+        self.presentDiagnosticsAction = presentDiagnosticsAction
     }
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -588,15 +588,15 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return true
     }
 
-    func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
+    func canSendDiagnostics(originWindowID: UUID) -> Bool {
         store?.window(id: originWindowID) != nil
     }
 
-    func copyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
-        guard canCopyDiagnosticsSnippet(originWindowID: originWindowID) else {
+    func sendDiagnostics(originWindowID: UUID) -> Bool {
+        guard canSendDiagnostics(originWindowID: originWindowID) else {
             return false
         }
-        presentDiagnosticsSnippetAction()
+        presentDiagnosticsAction()
         return true
     }
 
@@ -751,8 +751,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return setUpAgentStatusHooks(originWindowID: originWindowID)
         case .openRemoteAccess:
             return openRemoteAccess(originWindowID: originWindowID)
-        case .copyDiagnosticsSnippet:
-            return copyDiagnosticsSnippet(originWindowID: originWindowID)
+        case .sendDiagnostics:
+            return sendDiagnostics(originWindowID: originWindowID)
         case .reloadConfiguration:
             return reloadConfiguration()
         }

@@ -194,7 +194,7 @@ timeouts, and launch failures to its structured local log. See
 
 - Automation mode creates a Unix domain socket at a short temp path derived from the active runtime home when runtime isolation is enabled, otherwise under `$TMPDIR/toastty-$UID/events-v1.sock`, unless `TOASTTY_SOCKET_PATH` overrides it.
 - Automation runs can also write screenshots and state dumps under `artifacts/` or the directory provided via `--artifacts-dir`.
-- `Toastty > Copy Diagnostics Collection Snippet…` copies an agent snippet that first runs `toastty doctor --json` into a temporary local file, then writes a redacted diagnostics JSON bundle to a per-run temporary path with restrictive permissions. The bundle includes app/runtime metadata, socket probe results, shell-integration checks, shell probe output when provided, recent complete-line tails of redacted Toastty logs, and a sanitized in-memory audit of recent automation socket requests when the running app can provide it.
+- `Toastty > Send Diagnostics…` validates its bundled `toastty-send-diagnostics` skill and CLI, then copies a short agent handoff containing their runtime-resolved absolute paths. Opening the dialog or copying the handoff does not collect or upload anything. When an agent follows the skill, it first writes doctor output and a redacted diagnostics JSON bundle to private per-run temporary paths. The bundle includes app/runtime metadata, socket probe results, shell-integration checks, shell probe output when provided, recent complete-line tails of redacted Toastty logs, and a sanitized in-memory audit of recent automation socket requests when the running app can provide it.
 - Browser panel screenshot actions can write user-selected PNG files, place PNG data on the macOS pasteboard, or write temporary agent-share screenshots under the system temp directory in `toastty-browser-screenshots/`.
 - Browser annotation sends can write temporary annotated PNG files under the system temp directory in `toastty-browser-annotations/`, then send the selected managed agent a prompt containing those file paths plus the page title, URL, viewport, and numbered comments when available.
 
@@ -242,6 +242,13 @@ Toastty does not upload diagnostics automatically. The diagnostics flow is:
 2. `toastty diagnostics collect` writes a local redacted JSON bundle and prints a human summary. It embeds recent complete-line log tails, without changing the source log files, and reduces those tails as needed to keep the reviewed bundle below the upload limit.
 3. You review the JSON bundle.
 4. Only after explicit approval, `toastty diagnostics submit --file <path> --yes` uploads that exact reviewed file to the Toastty diagnostics Worker. If the user provides follow-up contact details, `--contact <text>` can include them in the submitted diagnostics note without changing the local reviewed file.
+
+In a supported managed session, a user can say “send Toastty diagnostics” to
+invoke the shipped `toastty-send-diagnostics` skill. The **Send Diagnostics…**
+menu instead copies a direct pointer to that same bundled skill and CLI, so it
+does not depend on successful skill discovery. In both paths, the initial
+request authorizes local collection only; the skill requires a separate
+post-review approval before upload.
 
 The uploaded report is stored in Cloudflare R2 under a temporary `reports/`
 prefix. R2 lifecycle rules must delete that prefix after the configured

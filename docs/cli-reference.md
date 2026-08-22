@@ -68,7 +68,7 @@ List the skills Toastty can make available to new supported managed agent launch
 toastty setup skills list
 ```
 
-The read-only inventory includes Toastty's four shipped skills and accepted
+The read-only inventory includes Toastty's five shipped skills and accepted
 user-authored packages under `~/.toastty/skills`. Invalid user packages appear
 in an excluded section with the same diagnostic used by `Toastty > Manage
 Toastty Skills…`. A missing user-skills directory is an empty catalog and is
@@ -186,6 +186,11 @@ sv exec -- .agents/skills/toastty-diagnostics/scripts/fetch-diagnostics-report.p
 
 The no-argument form lists recent submissions. The report-ID form fetches and
 saves the selected report envelope for deeper analysis.
+
+Managed agents can use the shipped `toastty-send-diagnostics` skill when the
+user says “send Toastty diagnostics.” `Toastty > Send Diagnostics…` copies a
+direct handoff containing the runtime-resolved bundled skill and CLI paths, so
+the same workflow remains available when skill discovery did not load it.
 
 ### `action list`
 

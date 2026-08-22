@@ -39,7 +39,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canManageToasttySkillsValue = true
     var canSetUpAgentStatusHooksValue = true
     var canOpenRemoteAccessValue = true
-    var canCopyDiagnosticsSnippetValue = true
+    var canSendDiagnosticsValue = true
     var canReloadValue = true
 
     var createWindowResult = true
@@ -72,7 +72,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var manageToasttySkillsResult = true
     var setUpAgentStatusHooksResult = true
     var openRemoteAccessResult = true
-    var copyDiagnosticsSnippetResult = true
+    var sendDiagnosticsResult = true
     var reloadConfigurationResult = true
 
     var sidebarTitleValue = ToasttyBuiltInCommand.toggleSidebar.title
@@ -111,7 +111,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var managedToasttySkillsWindowIDs: [UUID] = []
     var setUpAgentStatusHooksWindowIDs: [UUID] = []
     var openedRemoteAccessWindowIDs: [UUID] = []
-    var copiedDiagnosticsSnippetWindowIDs: [UUID] = []
+    var sentDiagnosticsWindowIDs: [UUID] = []
     var reloadConfigurationCount = 0
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -488,14 +488,14 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return openRemoteAccessResult
     }
 
-    func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
+    func canSendDiagnostics(originWindowID: UUID) -> Bool {
         _ = originWindowID
-        return canCopyDiagnosticsSnippetValue
+        return canSendDiagnosticsValue
     }
 
-    func copyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
-        copiedDiagnosticsSnippetWindowIDs.append(originWindowID)
-        return copyDiagnosticsSnippetResult
+    func sendDiagnostics(originWindowID: UUID) -> Bool {
+        sentDiagnosticsWindowIDs.append(originWindowID)
+        return sendDiagnosticsResult
     }
 
     func canReloadConfiguration() -> Bool {
@@ -616,8 +616,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return setUpAgentStatusHooks(originWindowID: originWindowID)
             case .openRemoteAccess:
                 return openRemoteAccess(originWindowID: originWindowID)
-            case .copyDiagnosticsSnippet:
-                return copyDiagnosticsSnippet(originWindowID: originWindowID)
+            case .sendDiagnostics:
+                return sendDiagnostics(originWindowID: originWindowID)
             case .reloadConfiguration:
                 return reloadConfiguration()
             }

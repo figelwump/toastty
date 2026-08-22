@@ -38,6 +38,12 @@ final class CodexSkillsManagerTests: XCTestCase {
                     .appendingPathComponent("skills/toastty-capabilities/SKILL.md").path
             )
         )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: versionDirectories[0]
+                    .appendingPathComponent("skills/toastty-send-diagnostics/SKILL.md").path
+            )
+        )
 
         // Ownership-marked profile overlay and receipt sidecar exist.
         let profileContents = try String(
@@ -83,6 +89,12 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertTrue(fixture.recorder.operations.contains("plugin.install"))
         let versionDirectories = try fixture.cacheVersionDirectories(runtime: fixture.runtime())
         XCTAssertEqual(versionDirectories.map(\.lastPathComponent), ["0.2.1"])
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: versionDirectories[0]
+                    .appendingPathComponent("skills/toastty-send-diagnostics/SKILL.md").path
+            )
+        )
     }
 
     func testRestoredLaunchAfterAppRestartReusesCurrentInstallWithoutSubprocessWork() throws {

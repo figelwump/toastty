@@ -49,7 +49,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case manageToasttySkills
     case setUpAgentStatusHooks
     case openRemoteAccess
-    case copyDiagnosticsSnippet
+    case sendDiagnostics
     case reloadConfiguration
 
     private static let showSidebarTitle = "Show Sidebar"
@@ -152,7 +152,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "agent.status-hooks.setup"
         case .openRemoteAccess:
             return "app.remote-access.open"
-        case .copyDiagnosticsSnippet:
+        case .sendDiagnostics:
+            // Preserve the original command ID for saved command references.
             return "diagnostics.snippet.copy"
         case .reloadConfiguration:
             return "app.reload-configuration"
@@ -251,8 +252,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Set Up Agent Status Hooks"
         case .openRemoteAccess:
             return "Open Remote Access"
-        case .copyDiagnosticsSnippet:
-            return "Copy Diagnostics Collection Snippet"
+        case .sendDiagnostics:
+            return "Send Diagnostics"
         case .reloadConfiguration:
             return "Reload Configuration"
         }
@@ -348,7 +349,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .openRemoteAccess:
             return nil
-        case .copyDiagnosticsSnippet, .reloadConfiguration:
+        case .sendDiagnostics, .reloadConfiguration:
             return nil
         }
     }
@@ -452,8 +453,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["agent", "status", "hooks", "setup", "codex", "claude", "telemetry"]
         case .openRemoteAccess:
             return ["remote", "access", "open", "pair", "pairing", "mobile", "iphone", "tailscale"]
-        case .copyDiagnosticsSnippet:
-            return ["diagnostics", "diagnostic", "logs", "collect", "support", "developer", "copy", "snippet"]
+        case .sendDiagnostics:
+            return ["diagnostics", "diagnostic", "report", "logs", "collect", "send", "support", "developer"]
         case .reloadConfiguration:
             return ["reload", "configuration", "config", "preferences"]
         }

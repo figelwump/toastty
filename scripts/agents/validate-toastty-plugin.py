@@ -14,6 +14,7 @@ EXPECTED_SKILLS = [
     "toastty-capabilities",
     "toastty-open-markdown",
     "toastty-scratchpad",
+    "toastty-send-diagnostics",
     "worktree-create",
 ]
 
@@ -146,7 +147,11 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
             '$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh',
         ],
     }
-    skills_requiring_managed_root = set(EXPECTED_SKILLS) - {"toastty-capabilities"}
+    skills_requiring_managed_root = {
+        "toastty-open-markdown",
+        "toastty-scratchpad",
+        "worktree-create",
+    }
     for skill_name in EXPECTED_SKILLS:
         skill_path = skills_root / skill_name / "SKILL.md"
         if frontmatter_name(skill_path, errors) != skill_name:

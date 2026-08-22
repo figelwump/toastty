@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Send Diagnostics"
+  short_description: "Review and send redacted Toastty diagnostics."
+  default_prompt: "Use $toastty-send-diagnostics to collect, review, and send Toastty diagnostics after I approve the report."
