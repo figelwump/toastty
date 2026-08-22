@@ -68,6 +68,192 @@ struct DiagnosticsChecksTests {
     }
 
     @Test
+    func runtimeMarkerConfirmsIndirectBashIntegration() throws {
+        let report = DiagnosticsCheckEvaluator.evaluate(
+            diagnosticsBundle(
+                socket: socketResult(state: .healthy),
+                shell: shellSection(
+                    markerPresent: false,
+                    environment: [
+                        DiagnosticsEnvironmentEntry(
+                            name: ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName,
+                            value: "version=1;shell=bash;pid=4100"
+                        ),
+                    ]
+                ),
+                shimDirectory: shimDirectory(entries: [
+                    DiagnosticsDirectoryEntry(name: "codex", isDirectory: false, isExecutable: true, sizeBytes: 12),
+                ]),
+                logs: logsSection(currentExists: true)
+            ),
+            invokingProcessAncestry: [4200, 4100]
+        )
+
+        let shell = try #require(report.checks.first { $0.id == "shell-integration" })
+        #expect(shell.status == .pass)
+        #expect(shell.summary == "Toastty shell integration is loaded in an invoking Bash shell.")
+        #expect(shell.evidence.contains("direct Toastty references: 0"))
+        #expect(shell.evidence.contains("runtime marker: Bash v1 (confirmed ancestor)"))
+    }
+
+    @Test
+    func inheritedBashRuntimeMarkerDoesNotClaimIntegrationIsLoaded() throws {
+        let report = DiagnosticsCheckEvaluator.evaluate(
+            diagnosticsBundle(
+                socket: socketResult(state: .healthy),
+                shell: shellSection(
+                    markerPresent: true,
+                    environment: [
+                        DiagnosticsEnvironmentEntry(
+                            name: ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName,
+                            value: "version=1;shell=bash;pid=4100"
+                        ),
+                    ]
+                ),
+                shimDirectory: shimDirectory(entries: [
+                    DiagnosticsDirectoryEntry(name: "codex", isDirectory: false, isExecutable: true, sizeBytes: 12),
+                ]),
+                logs: logsSection(currentExists: true)
+            ),
+            invokingProcessAncestry: [4200, 4000]
+        )
+
+        let shell = try #require(report.checks.first { $0.id == "shell-integration" })
+        #expect(shell.status == .warn)
+        #expect(shell.summary.contains("inherited") == true)
+        #expect(shell.summary.contains("not confirmed") == true)
+    }
+
+    @Test
+    func fishRuntimeMarkerRequiresInvokingFishProcess() throws {
+        let matchingReport = DiagnosticsCheckEvaluator.evaluate(
+            diagnosticsBundle(
+                socket: socketResult(state: .healthy),
+                shell: shellSection(
+                    markerPresent: false,
+                    environment: [
+                        DiagnosticsEnvironmentEntry(
+                            name: ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName,
+                            value: "version=1;shell=fish;pid=5100"
+                        ),
+                    ]
+                ),
+                shimDirectory: shimDirectory(entries: [
+                    DiagnosticsDirectoryEntry(name: "codex", isDirectory: false, isExecutable: true, sizeBytes: 12),
+                ]),
+                logs: logsSection(currentExists: true)
+            ),
+            invokingProcessAncestry: [5100]
+        )
+        let inheritedReport = DiagnosticsCheckEvaluator.evaluate(
+            diagnosticsBundle(
+                socket: socketResult(state: .healthy),
+                shell: shellSection(
+                    markerPresent: false,
+                    environment: [
+                        DiagnosticsEnvironmentEntry(
+                            name: ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName,
+                            value: "version=1;shell=fish;pid=5100"
+                        ),
+                    ]
+                ),
+                shimDirectory: shimDirectory(entries: [
+                    DiagnosticsDirectoryEntry(name: "codex", isDirectory: false, isExecutable: true, sizeBytes: 12),
+                ]),
+                logs: logsSection(currentExists: true)
+            ),
+            invokingProcessAncestry: [5200]
+        )
+
+        #expect(matchingReport.checks.first { $0.id == "shell-integration" }?.status == .pass)
+        #expect(inheritedReport.checks.first { $0.id == "shell-integration" }?.status == .warn)
+    }
+
+    @Test
+    func runtimeMarkerParserRejectsMalformedAndAcceptsFutureFields() {
+        #expect(
+            ToasttyShellIntegrationMarkers.parseRuntimeMarker(
+                "version=1;shell=zsh;pid=6100;future=value"
+            ) == .valid(
+                ToasttyShellIntegrationMarkers.RuntimeMarker(
+                    schemaVersion: 1,
+                    shell: .zsh,
+                    shellProcessID: 6100
+                )
+            )
+        )
+        #expect(
+            ToasttyShellIntegrationMarkers.parseRuntimeMarker(
+                "version=2;shell=zsh;pid=6100"
+            ) == .unsupportedVersion(2)
+        )
+        #expect(
+            ToasttyShellIntegrationMarkers.parseRuntimeMarker(
+                "version=1;shell=zsh;pid=bad"
+            ) == .malformed
+        )
+    }
+
+    @Test
+    func emptyRuntimeMarkerFallsBackToStaticConfiguration() throws {
+        let report = DiagnosticsCheckEvaluator.evaluate(
+            diagnosticsBundle(
+                socket: socketResult(state: .healthy),
+                shell: shellSection(
+                    markerPresent: true,
+                    environment: [
+                        DiagnosticsEnvironmentEntry(
+                            name: ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName,
+                            value: "  "
+                        ),
+                    ]
+                ),
+                shimDirectory: shimDirectory(entries: [
+                    DiagnosticsDirectoryEntry(name: "codex", isDirectory: false, isExecutable: true, sizeBytes: 12),
+                ]),
+                logs: logsSection(currentExists: true)
+            ),
+            invokingProcessAncestry: [7100]
+        )
+
+        let shell = try #require(report.checks.first { $0.id == "shell-integration" })
+        #expect(shell.status == .pass)
+        #expect(shell.summary.contains("directly references") == true)
+        #expect(shell.summary.contains("does not expose a runtime marker") == true)
+    }
+
+    @Test
+    func redactionPreservesRuntimeMarkerForDiagnosticsEvaluation() throws {
+        let rawBundle = diagnosticsBundle(
+            socket: socketResult(state: .healthy),
+            shell: shellSection(
+                markerPresent: false,
+                environment: [
+                    DiagnosticsEnvironmentEntry(
+                        name: ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName,
+                        value: "version=1;shell=zsh;pid=8100"
+                    ),
+                ]
+            ),
+            shimDirectory: shimDirectory(entries: [
+                DiagnosticsDirectoryEntry(name: "codex", isDirectory: false, isExecutable: true, sizeBytes: 12),
+            ]),
+            logs: logsSection(currentExists: true)
+        )
+        let redactedBundle = DiagnosticsRedactor().redact(rawBundle).bundle
+        let report = DiagnosticsCheckEvaluator.evaluate(
+            redactedBundle,
+            invokingProcessAncestry: [8100]
+        )
+
+        let markerValue = redactedBundle.shell.environment.first {
+            $0.name == ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName
+        }?.value
+        #expect(markerValue == "version=1;shell=zsh;pid=8100")
+        #expect(report.checks.first { $0.id == "shell-integration" }?.status == .pass)
+    }
+
+    @Test
     func reportDoesNotIncludeRawLogsOrProbeContent() throws {
         var bundle = diagnosticsBundle(
             socket: socketResult(state: .healthy),
@@ -244,7 +430,10 @@ private func socketResult(
     )
 }
 
-private func shellSection(markerPresent: Bool) -> DiagnosticsShellSection {
+private func shellSection(
+    markerPresent: Bool,
+    environment: [DiagnosticsEnvironmentEntry] = []
+) -> DiagnosticsShellSection {
     DiagnosticsShellSection(
         detectedShells: [
             DiagnosticsShellInitFile(
@@ -256,7 +445,7 @@ private func shellSection(markerPresent: Bool) -> DiagnosticsShellSection {
             ),
         ],
         shimDirectory: shimDirectory(entries: []),
-        environment: [],
+        environment: environment,
         otherEnvironmentNames: []
     )
 }

@@ -244,6 +244,7 @@ public enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\tadd-zsh-hook preexec _toastty_preexec
             \t\ttypeset -g _TOASTTY_TITLE_HOOKS_INSTALLED=1
             \tfi
+            \ttypeset -gx \(ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName)="version=\(ToasttyShellIntegrationMarkers.runtimeMarkerSchemaVersion);shell=zsh;pid=$$"
             fi
             """
         case .bash:
@@ -470,6 +471,7 @@ public enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\tPROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
             \t\t_TOASTTY_TITLE_HOOKS_INSTALLED=1
             \tfi
+            \texport \(ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName)="version=\(ToasttyShellIntegrationMarkers.runtimeMarkerSchemaVersion);shell=bash;pid=$$"
             fi
             """
         case .fish:
@@ -710,6 +712,7 @@ public enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             _toastty_restore_agent_shim_path
             _toastty_initialize_pane_journal
+            set --global --export \(ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName) "version=\(ToasttyShellIntegrationMarkers.runtimeMarkerSchemaVersion);shell=fish;pid=$fish_pid"
             """
         }
     }

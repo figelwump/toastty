@@ -581,6 +581,48 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
     }
 
+    func testManagedZshSnippetExportsRuntimeMarker() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; print -r -- \"$TOASTTY_SHELL_INTEGRATION\"; print -r -- \"$$\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: ["PATH": "/usr/bin:/bin", "TERM": "xterm-256color"]
+        )
+
+        try assertRuntimeMarkerOutput(output, expectedShell: .zsh)
+    }
+
+    func testManagedZshSnippetDoesNotExportRuntimeMarkerNonInteractively() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fc",
+                "source \"$1\"; print -r -- \"${TOASTTY_SHELL_INTEGRATION-unset}\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: ["PATH": "/usr/bin:/bin", "TERM": "xterm-256color"]
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "unset")
+    }
+
     func testManagedZshSnippetRestoresAgentShimPathAfterLatePathPrepend() throws {
         let snippetURL = try writeStandaloneSnippet(
             ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
@@ -1179,6 +1221,52 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
         XCTAssertEqual(components.first, shimDirectory)
         XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedBashSnippetExportsRuntimeMarker() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; printf '%s\\n%s\\n' \"$TOASTTY_SHELL_INTEGRATION\" \"$$\"",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: ["PATH": "/usr/bin:/bin", "TERM": "xterm-256color"]
+        )
+
+        try assertRuntimeMarkerOutput(output, expectedShell: .bash)
+    }
+
+    func testManagedBashSnippetDoesNotExportRuntimeMarkerNonInteractively() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-c",
+                "source \"$1\"; printf '%s\\n' \"${TOASTTY_SHELL_INTEGRATION-unset}\"",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: ["PATH": "/usr/bin:/bin", "TERM": "xterm-256color"]
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "unset")
     }
 
     func testManagedBashSnippetRestoresAgentShimPathAfterLatePathPrepend() throws {
@@ -2230,6 +2318,51 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
         XCTAssertTrue(disabledHistoryOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
+
+    func testManagedFishSnippetExportsRuntimeMarker() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; printf '%s\\n%s\\n' \"$TOASTTY_SHELL_INTEGRATION\" \"$fish_pid\"",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(for: snippetURL)
+        )
+
+        try assertRuntimeMarkerOutput(output, expectedShell: .fish)
+    }
+
+    func testManagedFishSnippetDoesNotExportRuntimeMarkerNonInteractively() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-c",
+                "source \"$argv[1]\"; if set -q TOASTTY_SHELL_INTEGRATION; echo set; else; echo unset; end",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(for: snippetURL)
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "unset")
+    }
 }
 
 private func makeTemporaryHomeDirectory() throws -> URL {
@@ -2323,6 +2456,21 @@ private func runProcess(
 
     XCTAssertEqual(process.terminationStatus, 0, "stderr: \(stderr)")
     return stdout
+}
+
+private func assertRuntimeMarkerOutput(
+    _ output: String,
+    expectedShell: ToasttyShellIntegrationMarkers.RuntimeShell
+) throws {
+    let lines = output.split(whereSeparator: \.isNewline).map(String.init)
+    XCTAssertGreaterThanOrEqual(lines.count, 2)
+    guard lines.count >= 2 else { return }
+    guard case .valid(let marker) = ToasttyShellIntegrationMarkers.parseRuntimeMarker(lines[0]) else {
+        return XCTFail("Expected valid runtime marker, got: \(lines[0])")
+    }
+
+    XCTAssertEqual(marker.shell, expectedShell)
+    XCTAssertEqual(marker.shellProcessID, Int32(lines[1]))
 }
 
 private func paneJournalData(entries: [String]) -> Data {

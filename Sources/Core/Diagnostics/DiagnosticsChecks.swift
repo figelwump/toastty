@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum DiagnosticsCheckStatus: String, Codable, Equatable, Sendable {
@@ -64,10 +65,17 @@ public struct DiagnosticsCheckResult: Codable, Equatable, Sendable {
 
 public enum DiagnosticsCheckEvaluator {
     public static func evaluate(_ bundle: DiagnosticsBundle) -> DiagnosticsCheckReport {
+        evaluate(bundle, invokingProcessAncestry: currentProcessAncestry())
+    }
+
+    static func evaluate(
+        _ bundle: DiagnosticsBundle,
+        invokingProcessAncestry: [Int32]
+    ) -> DiagnosticsCheckReport {
         let checks = [
             runtimeCheck(bundle),
             socketCheck(bundle.socket),
-            shellIntegrationCheck(bundle.shell),
+            shellIntegrationCheck(bundle.shell, invokingProcessAncestry: invokingProcessAncestry),
             agentShimCheck(bundle.shell.shimDirectory),
             logCheck(bundle.logs),
         ]
@@ -234,7 +242,10 @@ public enum DiagnosticsCheckEvaluator {
         }
     }
 
-    private static func shellIntegrationCheck(_ shell: DiagnosticsShellSection) -> DiagnosticsCheckResult {
+    private static func shellIntegrationCheck(
+        _ shell: DiagnosticsShellSection,
+        invokingProcessAncestry: [Int32]
+    ) -> DiagnosticsCheckResult {
         let existing = shell.detectedShells.filter(\.exists)
         let installed = existing.filter(\.sourcingMarkerPresent)
         let readErrors = existing.compactMap { file -> String? in
@@ -248,6 +259,70 @@ public enum DiagnosticsCheckEvaluator {
         ]
         if readErrors.isEmpty == false {
             evidence.append("read errors: \(limitedList(readErrors))")
+        }
+
+        let environment = Dictionary(
+            shell.environment.compactMap { entry in
+                entry.value.map { (entry.name, $0) }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let runtimeMarkerValue = environment[ToasttyShellIntegrationMarkers.runtimeMarkerEnvironmentName]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+        let runtimeMarker = runtimeMarkerValue.map(ToasttyShellIntegrationMarkers.parseRuntimeMarker)
+
+        if case .valid(let marker)? = runtimeMarker {
+            if let ancestryIndex = invokingProcessAncestry.firstIndex(of: marker.shellProcessID) {
+                let relationship = ancestryIndex == 0 ? "direct parent" : "ancestor"
+                evidence.append(
+                    "runtime marker: \(marker.shell.displayName) v\(marker.schemaVersion) (confirmed \(relationship))"
+                )
+                return DiagnosticsCheckResult(
+                    id: "shell-integration",
+                    title: "Optional shell integration",
+                    status: .pass,
+                    summary: ancestryIndex == 0
+                        ? "Toastty shell integration is loaded in the current \(marker.shell.displayName) shell."
+                        : "Toastty shell integration is loaded in an invoking \(marker.shell.displayName) shell.",
+                    evidence: evidence + installed.map { "\($0.name): \($0.rcPath)" },
+                    remediation: nil
+                )
+            }
+
+            evidence.append("runtime marker: \(marker.shell.displayName) v\(marker.schemaVersion) (inherited or stale)")
+            return DiagnosticsCheckResult(
+                id: "shell-integration",
+                title: "Optional shell integration",
+                status: .warn,
+                summary: "A Toastty shell-integration marker was inherited, but loading is not confirmed in the current shell.",
+                evidence: evidence + installed.map { "\($0.name): \($0.rcPath)" },
+                remediation: "Start a new terminal pane or re-source Toastty's managed shell-integration snippet."
+            )
+        }
+
+        if case .unsupportedVersion(let version)? = runtimeMarker {
+            evidence.append("runtime marker: unsupported version \(version)")
+            return DiagnosticsCheckResult(
+                id: "shell-integration",
+                title: "Optional shell integration",
+                status: .warn,
+                summary: "The current shell exposes a newer Toastty shell-integration marker that this CLI cannot verify.",
+                evidence: evidence + installed.map { "\($0.name): \($0.rcPath)" },
+                remediation: "Use the `toastty` CLI bundled with the currently running Toastty app."
+            )
+        }
+
+        if case .malformed? = runtimeMarker {
+            evidence.append("runtime marker: malformed")
+            return DiagnosticsCheckResult(
+                id: "shell-integration",
+                title: "Optional shell integration",
+                status: .warn,
+                summary: "The current shell exposes a malformed Toastty shell-integration marker.",
+                evidence: evidence + installed.map { "\($0.name): \($0.rcPath)" },
+                remediation: "Start a new terminal pane or re-source Toastty's managed shell-integration snippet."
+            )
         }
 
         if existing.isEmpty {
@@ -287,7 +362,7 @@ public enum DiagnosticsCheckEvaluator {
             id: "shell-integration",
             title: "Optional shell integration",
             status: .pass,
-            summary: "At least one standard shell init file directly references Toastty's managed integration.",
+            summary: "A standard shell init file directly references Toastty's managed integration; this shell does not expose a runtime marker.",
             evidence: evidence + installed.map { "\($0.name): \($0.rcPath)" },
             remediation: nil
         )
@@ -350,6 +425,44 @@ public enum DiagnosticsCheckEvaluator {
             evidence: evidence,
             remediation: nonExecutableEntries.isEmpty ? nil : "Run the Toastty agent setup flow again to refresh managed shims."
         )
+    }
+
+    private static func currentProcessAncestry(maximumDepth: Int = 8) -> [Int32] {
+        var ancestry: [Int32] = []
+        var seen: Set<Int32> = []
+        var processID = getppid()
+
+        while processID > 1, ancestry.count < maximumDepth, seen.insert(processID).inserted {
+            ancestry.append(processID)
+            guard let parentProcessID = parentProcessID(of: processID) else {
+                break
+            }
+            processID = parentProcessID
+        }
+
+        return ancestry
+    }
+
+    private static func parentProcessID(of processID: Int32) -> Int32? {
+        var info = proc_bsdinfo()
+        let result = withUnsafeMutablePointer(to: &info) { infoPointer in
+            proc_pidinfo(
+                processID,
+                PROC_PIDTBSDINFO,
+                0,
+                infoPointer,
+                Int32(MemoryLayout<proc_bsdinfo>.stride)
+            )
+        }
+
+        guard
+            result == Int32(MemoryLayout<proc_bsdinfo>.stride),
+            info.pbi_ppid > 0,
+            info.pbi_ppid <= UInt32(Int32.max)
+        else {
+            return nil
+        }
+        return Int32(info.pbi_ppid)
     }
 
     private static func logCheck(_ logs: DiagnosticsLogsSection) -> DiagnosticsCheckResult {
@@ -443,5 +556,11 @@ public enum DiagnosticsCheckEvaluator {
             return values.joined(separator: ", ")
         }
         return values.prefix(limit).joined(separator: ", ") + ", +\(values.count - limit) more"
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

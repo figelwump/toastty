@@ -18,6 +18,13 @@ This is command-history restore only. It does not restore running programs, SSH 
 
 The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
 
+In interactive shells, the managed snippet also exports a diagnostic-only
+`TOASTTY_SHELL_INTEGRATION` marker containing its schema version, shell kind,
+and shell process ID. `toastty doctor` uses that marker to confirm that the
+integration was actually loaded, including when the command runs below Codex
+or Claude Code. Toastty's normal shell integration and agent behavior do not
+depend on the marker.
+
 Source the Toastty snippet after other `PATH`, history, and prompt-hook changes. It does not need to be the literal last line. Toastty reasserts its shim directory from prompt/preexec hooks when possible, but anything that replaces `PROMPT_COMMAND` or overwrites prompt hooks after it can still undo Toastty's journal/title hooks.
 
 Shell integration installation is disabled while runtime isolation is enabled, because sandboxed dev/test runs must not rewrite your login shell files.
@@ -165,6 +172,7 @@ if [[ -o interactive ]]; then
 		add-zsh-hook preexec _toastty_preexec
 		typeset -g _TOASTTY_TITLE_HOOKS_INSTALLED=1
 	fi
+	typeset -gx TOASTTY_SHELL_INTEGRATION="version=1;shell=zsh;pid=$$"
 fi
 ```
 
@@ -356,6 +364,7 @@ if [[ $- == *i* ]]; then
 		PROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 		_TOASTTY_TITLE_HOOKS_INSTALLED=1
 	fi
+	export TOASTTY_SHELL_INTEGRATION="version=1;shell=bash;pid=$$"
 fi
 ```
 

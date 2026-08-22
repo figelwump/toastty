@@ -35,11 +35,18 @@ toastty [--json] [--socket-path <path>] doctor
 ```
 
 `doctor` checks the resolved automation socket, runtime metadata, shell
-integration markers, managed agent shims, and log readability. It reads local
-state and actively connects to the local Toastty automation socket for a ping
-when one is present. Human output is a pass/warn/fail checklist with remediation
-hints. With `--json`, the CLI returns the same structured check report for
-agents and scripts.
+integration, managed agent shims, and log readability. For shell integration,
+it first looks for the runtime marker exported by Toastty's managed interactive
+shell snippet and confirms that the recorded shell is still in the invoking
+process chain. This works when `doctor` runs beneath Codex, Claude Code, or
+another child process. When no runtime marker is present, it falls back to
+checking standard shell init files for direct Toastty references; custom startup
+chains cannot be confirmed by that static fallback alone.
+
+The command reads local state and actively connects to the local Toastty
+automation socket for a ping when one is present. Human output is a
+pass/warn/fail checklist with remediation hints. With `--json`, the CLI returns
+the same structured check report for agents and scripts.
 
 The command does not write a diagnostics bundle, upload anything, or attempt
 automatic fixes. It exits non-zero only when at least one check fails.
