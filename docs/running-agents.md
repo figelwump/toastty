@@ -534,7 +534,12 @@ delegated task messages while leaving the task name readable; opaque ciphertext
 payloads are dropped whether they arrive via hook `tool_input` or the session
 recording, so the named row shows no description rather than ciphertext. This
 avoids duplicate rows and lets hook-tracked agents remain visible until Codex
-reports their completion.
+reports their completion. If the root is ready or idle but a trusted
+`SubagentStop` hook was missed, Toastty can reconcile the row from the exact
+provider-thread child rollout. This recovery path accepts only a top-level
+`task_complete` or `turn_aborted` event timestamped at or after that child's
+most recent `SubagentStart`; it ignores older terminal history and does not
+finish rows from a timeout or inferred message text.
 
 For Claude, asynchronous `Agent` and `Task` results create labeled subagent
 rows and include Claude's resolved child model when the launch response provides

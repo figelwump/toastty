@@ -133,6 +133,35 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return true
     }
 
+    /// Reopens a reusable sub-agent for a new run while retaining any
+    /// presentation metadata learned during its previous run.
+    @discardableResult
+    public mutating func reopenBackgroundActivity(
+        sessionID: String,
+        activity: SessionBackgroundActivity,
+        at now: Date
+    ) -> Bool {
+        guard var record = activeSession(sessionID: sessionID) else { return false }
+        if let existingActivity = record.backgroundActivitiesByID[activity.id] {
+            guard existingActivity.kind == .subagent,
+                  activity.kind == .subagent else {
+                return false
+            }
+            var reopenedActivity = Self.mergedBackgroundActivity(
+                existing: existingActivity,
+                incoming: activity
+            )
+            reopenedActivity.startedAt = activity.startedAt
+            guard reopenedActivity != existingActivity else { return false }
+            record.backgroundActivitiesByID[activity.id] = reopenedActivity
+        } else {
+            record.backgroundActivitiesByID[activity.id] = activity
+        }
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+        return true
+    }
+
     /// Adds presentation metadata to an existing sub-agent without changing
     /// lifecycle timestamps or creating a missing activity.
     @discardableResult

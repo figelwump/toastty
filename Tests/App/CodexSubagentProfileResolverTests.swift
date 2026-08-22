@@ -5,6 +5,28 @@ import Testing
 
 struct CodexSubagentProfileResolverTests {
     @Test
+    func resolvesExactChildRolloutURLWithoutReadingConversationContent() async throws {
+        let fixture = try makeFixture(day: "16")
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let childThreadID = "child-rollout-url"
+        let childURL = fixture.dayURL.appendingPathComponent("rollout-\(childThreadID).jsonl")
+        try writeLines([
+            #"{"type":"response_item","payload":{"type":"message","text":"private content"}}"#,
+        ], to: childURL)
+        let resolver = CodexSubagentProfileResolver(
+            maximumAttempts: 1,
+            retryDelayNanoseconds: 0
+        )
+
+        let resolvedURL = await resolver.resolveRolloutURL(
+            childThreadID: childThreadID,
+            parentRolloutURL: fixture.parentRolloutURL
+        )
+
+        #expect(resolvedURL?.standardizedFileURL.path == childURL.standardizedFileURL.path)
+    }
+
+    @Test
     func resolvesEffectiveProfileWithoutDecodingUnrelatedRecords() async throws {
         let fixture = try makeFixture(day: "16")
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }

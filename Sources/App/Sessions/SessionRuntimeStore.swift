@@ -788,11 +788,25 @@ final class SessionRuntimeStore: ObservableObject {
             sessionID: sessionID,
             activityID: activity.id
         )
-        return updateBackgroundActivity(
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.reopenBackgroundActivity(
             sessionID: sessionID,
             activity: activity,
             at: now
+        ) else {
+            return false
+        }
+        ToasttyLog.debug(
+            "Reopened managed session background activity",
+            category: .terminal,
+            metadata: backgroundActivityMetadata(
+                sessionID: sessionID,
+                activity: activity,
+                phase: .start
+            )
         )
+        publish(nextRegistry, reason: "reopen_background_activity", at: now)
+        return true
     }
 
     @discardableResult
@@ -1800,6 +1814,10 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
+    func usesCodexHookSubagentAuthority(sessionID: String) -> Bool {
+        codexStatusTrackingSourceBySessionID[sessionID] == .hooks
+    }
+
     /// Enriches an already-projected Codex sub-agent without participating in
     /// lifecycle authority. Missing or finished rows stay missing.
     @discardableResult
@@ -2509,7 +2527,10 @@ final class SessionRuntimeStore: ObservableObject {
                     command: existingActivity?.command,
                     processID: existingActivity?.processID,
                     preserveWhenUnlisted: existingActivity?.preserveWhenUnlisted ?? false,
-                    startedAt: existingActivity?.startedAt ?? now,
+                    // SubagentStart is the authoritative beginning of this
+                    // provider thread's current run. A reusable thread may
+                    // have a terminal event in its rollout from an older run.
+                    startedAt: now,
                     lastUpdatedAt: now
                 ),
                 at: now

@@ -569,6 +569,95 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesTimestampedTopLevelTerminalEvents() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let terminalEvents = expectation(description: "Top-level terminal events arrive")
+        terminalEvents.expectedFulfillmentCount = 2
+        terminalEvents.assertForOverFulfill = true
+        let completedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let abortedAt = completedAt.addingTimeInterval(1)
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            terminalEvents.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            #"{"timestamp":"\#(completedAt.ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))","type":"event_msg","payload":{"type":"task_complete","thread_id":"thread-child","turn_id":"turn-complete","last_agent_message":"Finished review"}}"# + "\n",
+            to: logURL
+        )
+        try append(
+            #"{"timestamp":"\#(abortedAt.ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-aborted","reason":"interrupted"}}"# + "\n",
+            to: logURL
+        )
+
+        await fulfillment(of: [terminalEvents], timeout: 1)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: "Finished review",
+                occurredAt: completedAt,
+                completionThreadID: "thread-child",
+                completionTurnID: "turn-complete"
+            ),
+            CodexSessionLogEvent(
+                kind: .turnAborted,
+                detail: "Ready for prompt",
+                occurredAt: abortedAt,
+                completionTurnID: "turn-aborted"
+            ),
+        ])
+    }
+
+    func testTerminalOnlyWatcherSkipsUnrelatedRecordsAndDoesNotDecodeCompletionText() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let terminalEvent = expectation(description: "Terminal-only event arrives")
+        terminalEvent.assertForOverFulfill = true
+        let completedAt = Date(timeIntervalSince1970: 1_800_000_010)
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            parsingMode: .topLevelTerminalEventsOnly
+        ) { event in
+            await recorder.append(event)
+            terminalEvent.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            #"{"timestamp":"2027-01-15T08:00:00.000Z","type":"response_item","payload":{"type":"message","nested":{"type":"event_msg","payload":{"type":"turn_aborted"}}}}"# + "\n",
+            to: logURL
+        )
+        try append(
+            #"{"timestamp":"\#(completedAt.ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))","type":"event_msg","payload":{"type":"task_complete","thread_id":"thread-child","turn_id":"turn-complete","last_agent_message":"Private completion text"}}"# + "\n",
+            to: logURL
+        )
+
+        await fulfillment(of: [terminalEvent], timeout: 1)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: "Turn complete",
+                occurredAt: completedAt,
+                completionThreadID: "thread-child",
+                completionTurnID: "turn-complete"
+            ),
+        ])
+    }
+
     func testWatcherParsesUserPromptPreviewEvents() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()

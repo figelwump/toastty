@@ -2598,6 +2598,275 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertNil(activeActivities["/root/missing_hook"])
     }
 
+    func testCodexChildRolloutAbortClearsExistingHookActivityAfterRolloutClaim() async throws {
+        let launchStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let childStartedAt = launchStart.addingTimeInterval(10)
+        let childThreadID = "child-aborted"
+        let parentRolloutURL = temporaryJSONLURL()
+        let childRolloutURL = parentRolloutURL.deletingLastPathComponent()
+            .appendingPathComponent("rollout-\(childThreadID).jsonl")
+        defer {
+            try? FileManager.default.removeItem(at: parentRolloutURL)
+            try? FileManager.default.removeItem(at: childRolloutURL)
+        }
+        let terminalTimestamp = childStartedAt.addingTimeInterval(1)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(terminalTimestamp)","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-child","reason":"interrupted"}}"#,
+            to: childRolloutURL
+        )
+        let fixture = try makePlannerFixture(
+            nowProvider: { launchStart },
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: launchStart)
+        }
+
+        XCTAssertTrue(fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: childThreadID,
+                subagentType: "reviewer"
+            ),
+            at: childStartedAt
+        ))
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: plan.sessionID,
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: childStartedAt.addingTimeInterval(2)
+        )
+        XCTAssertNotNil(fixture.sessionRuntimeStore.sessionRegistry
+            .activeSession(sessionID: plan.sessionID)?
+            .backgroundActivitiesByID[childThreadID])
+
+        XCTAssertTrue(fixture.store.send(.updateTerminalPanelResumeRecord(
+            panelID: fixture.panelID,
+            resumeRecord: codexResumeRecord(
+                sessionFilePath: parentRolloutURL.path,
+                capturedAt: launchStart
+            )
+        )))
+
+        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            fixture.sessionRuntimeStore.sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID[childThreadID] == nil
+        }
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry
+            .activeSession(sessionID: plan.sessionID)?
+            .backgroundActivitiesByID[childThreadID])
+        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            fixture.planner.codexSubagentTerminalWatcherCountForTesting == 0
+        }
+    }
+
+    func testCodexChildRolloutTerminalWatcherWaitsForDelayedRolloutFile() async throws {
+        let launchStart = Date(timeIntervalSince1970: 1_800_000_050)
+        let childStartedAt = launchStart.addingTimeInterval(10)
+        let childThreadID = "child-delayed"
+        let parentRolloutURL = temporaryJSONLURL()
+        let childRolloutURL = parentRolloutURL.deletingLastPathComponent()
+            .appendingPathComponent("rollout-\(childThreadID).jsonl")
+        defer {
+            try? FileManager.default.removeItem(at: parentRolloutURL)
+            try? FileManager.default.removeItem(at: childRolloutURL)
+        }
+        let fixture = try makePlannerFixture(
+            nowProvider: { launchStart },
+            codexSubagentProfileResolver: CodexSubagentProfileResolver(
+                maximumAttempts: 1,
+                retryDelayNanoseconds: 10_000_000
+            ),
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: launchStart)
+        }
+
+        XCTAssertTrue(fixture.store.send(.updateTerminalPanelResumeRecord(
+            panelID: fixture.panelID,
+            resumeRecord: codexResumeRecord(
+                sessionFilePath: parentRolloutURL.path,
+                capturedAt: launchStart
+            )
+        )))
+        XCTAssertTrue(fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: childThreadID,
+                subagentType: "reviewer"
+            ),
+            at: childStartedAt
+        ))
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: plan.sessionID,
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: childStartedAt.addingTimeInterval(2)
+        )
+
+        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            fixture.planner.codexSubagentTerminalWatcherCountForTesting == 1
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(fixture.planner.codexSubagentTerminalWatcherPathsForTesting.isEmpty)
+
+        let terminalTimestamp = childStartedAt.addingTimeInterval(1)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(terminalTimestamp)","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-child"}}"#,
+            to: childRolloutURL
+        )
+
+        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            fixture.sessionRuntimeStore.sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID[childThreadID] == nil
+        }
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry
+            .activeSession(sessionID: plan.sessionID)?
+            .backgroundActivitiesByID[childThreadID])
+        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            fixture.planner.codexSubagentTerminalWatcherCountForTesting == 0
+        }
+    }
+
+    func testCodexChildRolloutTerminalWatcherUsesRunStartCutoffAndDeduplicates() async throws {
+        let launchStart = Date(timeIntervalSince1970: 1_800_000_100)
+        let childStartedAt = launchStart.addingTimeInterval(10)
+        let childThreadID = "child-reused"
+        let parentRolloutURL = temporaryJSONLURL()
+        let childRolloutURL = parentRolloutURL.deletingLastPathComponent()
+            .appendingPathComponent("rollout-\(childThreadID).jsonl")
+        defer {
+            try? FileManager.default.removeItem(at: parentRolloutURL)
+            try? FileManager.default.removeItem(at: childRolloutURL)
+        }
+        let staleTimestamp = childStartedAt.addingTimeInterval(-1)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(staleTimestamp)","type":"event_msg","payload":{"type":"task_complete","turn_id":"old-turn"}}"#,
+            to: childRolloutURL
+        )
+        let fixture = try makePlannerFixture(
+            nowProvider: { launchStart },
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: launchStart)
+        }
+        XCTAssertTrue(fixture.store.send(.updateTerminalPanelResumeRecord(
+            panelID: fixture.panelID,
+            resumeRecord: codexResumeRecord(
+                sessionFilePath: parentRolloutURL.path,
+                capturedAt: launchStart
+            )
+        )))
+        XCTAssertTrue(fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: childThreadID,
+                subagentType: "reviewer"
+            ),
+            at: childStartedAt
+        ))
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: plan.sessionID,
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: childStartedAt.addingTimeInterval(2)
+        )
+
+        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            fixture.planner.codexSubagentTerminalWatcherPathsForTesting.values
+                .contains(childRolloutURL.path)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNotNil(fixture.sessionRuntimeStore.sessionRegistry
+            .activeSession(sessionID: plan.sessionID)?
+            .backgroundActivitiesByID[childThreadID])
+        XCTAssertEqual(fixture.planner.codexSubagentTerminalWatcherCountForTesting, 1)
+
+        XCTAssertTrue(fixture.sessionRuntimeStore.enrichCodexSubagentExecutionProfile(
+            sessionID: plan.sessionID,
+            rolloutActivityID: childThreadID,
+            providerAgentID: childThreadID,
+            profile: SessionAgentExecutionProfile(modelIdentifier: "gpt-5.6-sol"),
+            at: childStartedAt.addingTimeInterval(5)
+        ))
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: plan.sessionID,
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: childStartedAt.addingTimeInterval(6)
+        )
+        XCTAssertEqual(fixture.planner.codexSubagentTerminalWatcherCountForTesting, 1)
+
+        let currentTimestamp = childStartedAt.addingTimeInterval(1)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(currentTimestamp)","type":"event_msg","payload":{"type":"task_complete","turn_id":"current-turn","last_agent_message":"Done"}}"#,
+            to: childRolloutURL
+        )
+        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            fixture.sessionRuntimeStore.sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID[childThreadID] == nil
+        }
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry
+            .activeSession(sessionID: plan.sessionID)?
+            .backgroundActivitiesByID[childThreadID])
+        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            fixture.planner.codexSubagentTerminalWatcherCountForTesting == 0
+        }
+    }
+
     func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let plan = try fixture.planner.prepareManagedLaunch(
@@ -2721,9 +2990,18 @@ private func makePlannerFixture(
 
 private final class TestCodexSubagentProfileResolver: CodexSubagentProfileResolving, @unchecked Sendable {
     private let profile: SessionAgentExecutionProfile?
+    private let rolloutURL: URL?
 
-    init(profile: SessionAgentExecutionProfile?) {
+    init(profile: SessionAgentExecutionProfile?, rolloutURL: URL? = nil) {
         self.profile = profile
+        self.rolloutURL = rolloutURL
+    }
+
+    func resolveRolloutURL(
+        childThreadID _: String,
+        parentRolloutURL _: URL
+    ) async -> URL? {
+        rolloutURL
     }
 
     func resolveProfile(

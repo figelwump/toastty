@@ -75,6 +75,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
 
     let kind: Kind
     let detail: String
+    let occurredAt: Date?
     let backgroundActivity: CodexSessionBackgroundActivity?
     let rootInputFingerprint: String?
     let rootThreadID: String?
@@ -93,6 +94,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     init(
         kind: Kind,
         detail: String,
+        occurredAt: Date? = nil,
         backgroundActivity: CodexSessionBackgroundActivity? = nil,
         rootInputFingerprint: String? = nil,
         rootThreadID: String? = nil,
@@ -117,6 +119,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
 
         self.kind = kind
         self.detail = detail
+        self.occurredAt = occurredAt
         self.backgroundActivity = backgroundActivity
         self.rootInputFingerprint = rootInputFingerprint
         self.rootThreadID = rootThreadID
@@ -453,6 +456,29 @@ private enum CodexSessionLogReadResult {
     case restartFromZero
 }
 
+enum CodexSessionLogParsingMode: Sendable {
+    case full
+    case topLevelTerminalEventsOnly
+}
+
+private struct CodexTopLevelTerminalEnvelope: Decodable {
+    struct Payload: Decodable {
+        let type: String
+        let threadID: String?
+        let turnID: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case type
+            case threadID = "thread_id"
+            case turnID = "turn_id"
+        }
+    }
+
+    let timestamp: String?
+    let type: String
+    let payload: Payload
+}
+
 final class CodexSessionLogWatcher {
     typealias EventHandler = @Sendable (CodexSessionLogEvent) async -> Void
 
@@ -461,6 +487,7 @@ final class CodexSessionLogWatcher {
     private let logURL: URL
     private let pollIntervalNanoseconds: UInt64
     private let eventHandler: EventHandler
+    private let parsingMode: CodexSessionLogParsingMode
     private let cursorState: CodexSessionLogCursorState
     private let seenKeyCapacity: Int
     private let onSeenKeyCapacityExceeded: @Sendable (Int) -> Void
@@ -474,6 +501,7 @@ final class CodexSessionLogWatcher {
         logURL: URL,
         pollIntervalNanoseconds: UInt64 = 250_000_000,
         multiAgentEventCutoff: Date? = nil,
+        parsingMode: CodexSessionLogParsingMode = .full,
         cursorState: CodexSessionLogCursorState = CodexSessionLogCursorState(),
         seenKeyCapacity: Int = CodexSessionLogWatcher.maximumTrackedSeenKeyCount,
         onSeenKeyCapacityExceeded: (@Sendable (Int) -> Void)? = nil,
@@ -483,6 +511,7 @@ final class CodexSessionLogWatcher {
         self.logURL = logURL
         self.pollIntervalNanoseconds = pollIntervalNanoseconds
         self.multiAgentEventCutoff = multiAgentEventCutoff
+        self.parsingMode = parsingMode
         self.cursorState = cursorState
         self.seenKeyCapacity = seenKeyCapacity
         self.onSeenKeyCapacityExceeded = onSeenKeyCapacityExceeded ?? { capacity in
@@ -506,6 +535,7 @@ final class CodexSessionLogWatcher {
             logURL: logURL,
             pollIntervalNanoseconds: pollIntervalNanoseconds,
             multiAgentEventCutoff: multiAgentEventCutoff,
+            parsingMode: parsingMode,
             cursorState: cursorState,
             seenKeyCapacity: seenKeyCapacity,
             onSeenKeyCapacityExceeded: onSeenKeyCapacityExceeded,
@@ -523,10 +553,73 @@ final class CodexSessionLogWatcher {
 }
 
 private extension CodexSessionLogWatcher {
+    static let compactTopLevelEventMarker = Data(#""type":"event_msg""#.utf8)
+    static let spacedTopLevelEventMarker = Data(#""type": "event_msg""#.utf8)
+    static let compactTaskCompleteMarker = Data(#""type":"task_complete""#.utf8)
+    static let spacedTaskCompleteMarker = Data(#""type": "task_complete""#.utf8)
+    static let compactTurnAbortedMarker = Data(#""type":"turn_aborted""#.utf8)
+    static let spacedTurnAbortedMarker = Data(#""type": "turn_aborted""#.utf8)
+
+    static func parseTopLevelTerminalOnly(
+        lineData: Data,
+        seenKeys: CodexSessionLogSeenKeys
+    ) -> CodexSessionLogEvent? {
+        guard lineData.range(of: compactTopLevelEventMarker) != nil
+            || lineData.range(of: spacedTopLevelEventMarker) != nil else {
+            return nil
+        }
+        let containsTaskComplete = lineData.range(of: compactTaskCompleteMarker) != nil
+            || lineData.range(of: spacedTaskCompleteMarker) != nil
+        let containsTurnAborted = lineData.range(of: compactTurnAbortedMarker) != nil
+            || lineData.range(of: spacedTurnAbortedMarker) != nil
+        guard containsTaskComplete || containsTurnAborted,
+              let envelope = try? JSONDecoder().decode(
+                CodexTopLevelTerminalEnvelope.self,
+                from: lineData
+              ),
+              envelope.type == "event_msg" else {
+            return nil
+        }
+
+        let occurredAt = envelope.timestamp.flatMap { raw in
+            (try? Date(raw, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+                ?? (try? Date(raw, strategy: Date.ISO8601FormatStyle()))
+        }
+        let dedupeKey = [
+            "top_level_terminal_only",
+            envelope.payload.type,
+            envelope.payload.threadID ?? "",
+            envelope.payload.turnID ?? "",
+            envelope.timestamp ?? "",
+        ].joined(separator: ":")
+        guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
+
+        switch envelope.payload.type {
+        case "task_complete":
+            return CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: "Turn complete",
+                occurredAt: occurredAt,
+                completionThreadID: envelope.payload.threadID,
+                completionTurnID: envelope.payload.turnID
+            )
+        case "turn_aborted":
+            return CodexSessionLogEvent(
+                kind: .turnAborted,
+                detail: "Ready for prompt",
+                occurredAt: occurredAt,
+                completionTurnID: envelope.payload.turnID
+            )
+        default:
+            return nil
+        }
+    }
+
     static func makePollingTask(
         logURL: URL,
         pollIntervalNanoseconds: UInt64,
         multiAgentEventCutoff: Date? = nil,
+        parsingMode: CodexSessionLogParsingMode,
         cursorState: CodexSessionLogCursorState,
         seenKeyCapacity: Int,
         onSeenKeyCapacityExceeded: @escaping @Sendable (Int) -> Void,
@@ -549,6 +642,7 @@ private extension CodexSessionLogWatcher {
                     parserState: &parserState,
                     cursorState: cursorState,
                     multiAgentEventCutoff: multiAgentEventCutoff,
+                    parsingMode: parsingMode,
                     eventHandler: eventHandler
                 )
 
@@ -563,6 +657,7 @@ private extension CodexSessionLogWatcher {
                         parserState: &parserState,
                         cursorState: cursorState,
                         multiAgentEventCutoff: multiAgentEventCutoff,
+                        parsingMode: parsingMode,
                         eventHandler: eventHandler
                     )
                     break
@@ -580,6 +675,7 @@ private extension CodexSessionLogWatcher {
         parserState: inout CodexSessionLogParserState,
         cursorState: CodexSessionLogCursorState,
         multiAgentEventCutoff: Date? = nil,
+        parsingMode: CodexSessionLogParsingMode,
         eventHandler: @escaping EventHandler
     ) async {
         guard prepareReaderIfNeeded(
@@ -610,6 +706,7 @@ private extension CodexSessionLogWatcher {
                     sessionTopLevelApprovalsReviewer: &parserState.sessionTopLevelApprovalsReviewer,
                     pendingMultiAgentCalls: &parserState.pendingMultiAgentCalls,
                     multiAgentEventCutoff: multiAgentEventCutoff,
+                    parsingMode: parsingMode,
                     eventHandler: eventHandler
                 ) else {
                     continue
@@ -634,6 +731,7 @@ private extension CodexSessionLogWatcher {
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
         pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
         multiAgentEventCutoff: Date? = nil,
+        parsingMode: CodexSessionLogParsingMode,
         eventHandler: @escaping EventHandler
     ) async -> CodexSessionLogConsumedLines? {
         guard delta.isEmpty == false else {
@@ -652,13 +750,22 @@ private extension CodexSessionLogWatcher {
             consumedByteCount += UInt64(lineData.count) + 1
             lastLineHash = completeLineHash(lineData)
             lastLineByteCount = UInt64(lineData.count)
-            let events = parse(
-                lineData: lineData,
-                seenKeys: seenKeys,
-                sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-                pendingMultiAgentCalls: &pendingMultiAgentCalls,
-                multiAgentEventCutoff: multiAgentEventCutoff
-            )
+            let events: [CodexSessionLogEvent]
+            switch parsingMode {
+            case .full:
+                events = parse(
+                    lineData: lineData,
+                    seenKeys: seenKeys,
+                    sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
+                    pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                    multiAgentEventCutoff: multiAgentEventCutoff
+                )
+            case .topLevelTerminalEventsOnly:
+                events = parseTopLevelTerminalOnly(
+                    lineData: lineData,
+                    seenKeys: seenKeys
+                ).map { [$0] } ?? []
+            }
             guard events.isEmpty == false else {
                 continue
             }
@@ -863,6 +970,14 @@ private extension CodexSessionLogWatcher {
             fallbackLine: fallbackLine,
             seenKeys: seenKeys,
             sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer
+        ) {
+            return [event]
+        }
+
+        if let event = parseTopLevelTerminalEvent(
+            object: object,
+            fallbackLine: fallbackLine,
+            seenKeys: seenKeys
         ) {
             return [event]
         }
@@ -1475,6 +1590,7 @@ private extension CodexSessionLogWatcher {
             return CodexSessionLogEvent(
                 kind: .taskCompleted,
                 detail: normalizedSummaryText(message["last_agent_message"], limit: 240) ?? "Turn complete",
+                occurredAt: rolloutEntryDate(from: object),
                 completionThreadID: eventThreadID(payload: payload, message: message),
                 completionTurnID: eventTurnID(from: object, payload: payload, message: message)
             )
@@ -1482,7 +1598,11 @@ private extension CodexSessionLogWatcher {
         case "turn_aborted":
             let dedupeKey = "turn_aborted:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
-            return CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
+            return CodexSessionLogEvent(
+                kind: .turnAborted,
+                detail: "Ready for prompt",
+                occurredAt: rolloutEntryDate(from: object)
+            )
 
         case "context_compacted":
             // Intentionally skipped: this internal event does not carry actionable
@@ -1518,6 +1638,44 @@ private extension CodexSessionLogWatcher {
                 callID: callID,
                 approvalID: approvalID
             )
+        }
+    }
+
+    static func parseTopLevelTerminalEvent(
+        object: [String: Any],
+        fallbackLine: String,
+        seenKeys: CodexSessionLogSeenKeys
+    ) -> CodexSessionLogEvent? {
+        guard normalizedString(object["type"]) == "event_msg",
+              let payload = object["payload"] as? [String: Any],
+              let type = normalizedString(payload["type"]) else {
+            return nil
+        }
+
+        switch type {
+        case "task_complete":
+            let dedupeKey = "top_level_task_complete:\(topLevelEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
+            return CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: normalizedSummaryText(payload["last_agent_message"], limit: 240) ?? "Turn complete",
+                occurredAt: rolloutEntryDate(from: object),
+                completionThreadID: normalizedString(payload["thread_id"]),
+                completionTurnID: normalizedString(payload["turn_id"])
+            )
+
+        case "turn_aborted":
+            let dedupeKey = "top_level_turn_aborted:\(topLevelEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
+            return CodexSessionLogEvent(
+                kind: .turnAborted,
+                detail: "Ready for prompt",
+                occurredAt: rolloutEntryDate(from: object),
+                completionTurnID: normalizedString(payload["turn_id"])
+            )
+
+        default:
+            return nil
         }
     }
 

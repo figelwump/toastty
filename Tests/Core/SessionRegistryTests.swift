@@ -1035,6 +1035,56 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func reopeningSubagentStartsNewRunAndRetainsPresentationMetadata() throws {
+        var registry = SessionRegistry()
+        let now = Date(timeIntervalSince1970: 728)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        let didStart = registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                displayName: "reviewer",
+                command: "Review diff",
+                executionProfile: SessionAgentExecutionProfile(modelIdentifier: "gpt-5.6-sol"),
+                startedAt: now.addingTimeInterval(1),
+                lastUpdatedAt: now.addingTimeInterval(1)
+            ),
+            at: now.addingTimeInterval(1)
+        )
+        #expect(didStart)
+
+        let didReopen = registry.reopenBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                startedAt: now.addingTimeInterval(5),
+                lastUpdatedAt: now.addingTimeInterval(5)
+            ),
+            at: now.addingTimeInterval(5)
+        )
+        #expect(didReopen)
+
+        let activity = try #require(registry.sessionsByID["parent"]?
+            .backgroundActivitiesByID["subagent-1"])
+        #expect(activity.startedAt == now.addingTimeInterval(5))
+        #expect(activity.displayName == "reviewer")
+        #expect(activity.command == "Review diff")
+        #expect(activity.executionProfile?.modelIdentifier == "gpt-5.6-sol")
+    }
+
+    @Test
     func pendingBackgroundTaskCountProjectsWaitingWithoutActivities() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()

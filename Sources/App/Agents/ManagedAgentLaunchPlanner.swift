@@ -81,6 +81,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private var codexSubagentProfileResolutionsByKey: [
         CodexSubagentProfileResolutionKey: CodexSubagentProfileResolutionRegistration
     ] = [:]
+    private var codexSubagentTerminalWatchersByKey: [
+        CodexSubagentTerminalWatcherKey: CodexSubagentTerminalWatcherRegistration
+    ] = [:]
 
     init(
         store: AppStore,
@@ -131,6 +134,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             ?? { ProcessInfo.processInfo.environment }
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
+                await self?.synchronizeCodexSubagentTerminalWatchers(with: registry)
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
             }
         }
@@ -1270,11 +1274,13 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
         }
         reconcileCodexRolloutWatcher(sessionID: sessionID)
+        synchronizeCodexSubagentTerminalWatchersAfterRolloutClaimChange()
     }
 
     private func detachCodexRolloutWatcher(sessionID: String) {
         desiredCodexRolloutLogURLsBySessionID.removeValue(forKey: sessionID)
         reconcileCodexRolloutWatcher(sessionID: sessionID)
+        synchronizeCodexSubagentTerminalWatchersAfterRolloutClaimChange()
     }
 
     /// Replacements are serialized so two watchers never parse or checkpoint
@@ -1472,12 +1478,173 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         codexSubagentProfileResolutionsByKey.removeValue(forKey: key)?.task.cancel()
     }
 
+    private func synchronizeCodexSubagentTerminalWatchersAfterRolloutClaimChange() {
+        guard let registry = sessionRuntimeStore?.sessionRegistry else { return }
+        Task { @MainActor [weak self] in
+            await self?.synchronizeCodexSubagentTerminalWatchers(with: registry)
+        }
+    }
+
+    private func synchronizeCodexSubagentTerminalWatchers(
+        with registry: SessionRegistry
+    ) async {
+        guard let sessionRuntimeStore else { return }
+
+        var desiredByKey: [
+            CodexSubagentTerminalWatcherKey: CodexSubagentTerminalWatcherSpecification
+        ] = [:]
+        for record in registry.sessionsByID.values where record.isActive && record.agent == .codex {
+            guard sessionRuntimeStore.usesCodexHookSubagentAuthority(sessionID: record.sessionID),
+                  Self.isQuietCodexRootStatus(record.status?.kind),
+                  let parentRolloutURL = desiredCodexRolloutLogURLsBySessionID[record.sessionID] else {
+                continue
+            }
+            for activity in record.backgroundActivitiesByID.values where activity.kind == .subagent {
+                let key = CodexSubagentTerminalWatcherKey(
+                    sessionID: record.sessionID,
+                    childThreadID: activity.id
+                )
+                desiredByKey[key] = CodexSubagentTerminalWatcherSpecification(
+                    parentRolloutURL: parentRolloutURL,
+                    runStartedAt: activity.startedAt
+                )
+            }
+        }
+
+        let obsoleteKeys = codexSubagentTerminalWatchersByKey.keys.filter { key in
+            guard let desired = desiredByKey[key],
+                  let current = codexSubagentTerminalWatchersByKey[key] else {
+                return true
+            }
+            return current.parentRolloutURL != desired.parentRolloutURL
+                || current.runStartedAt != desired.runStartedAt
+        }
+        for key in obsoleteKeys {
+            await stopCodexSubagentTerminalWatcher(for: key)
+        }
+
+        for (key, desired) in desiredByKey where codexSubagentTerminalWatchersByKey[key] == nil {
+            startCodexSubagentTerminalWatcher(for: key, specification: desired)
+        }
+    }
+
+    private func startCodexSubagentTerminalWatcher(
+        for key: CodexSubagentTerminalWatcherKey,
+        specification: CodexSubagentTerminalWatcherSpecification
+    ) {
+        let registrationID = UUID()
+        let resolver = codexSubagentProfileResolver
+        let resolutionTask = Task { @MainActor [weak self] in
+            let childRolloutURL = await resolver.resolveRolloutURL(
+                childThreadID: key.childThreadID,
+                parentRolloutURL: specification.parentRolloutURL
+            )
+            guard Task.isCancelled == false else { return }
+            self?.finishCodexSubagentTerminalWatcherResolution(
+                key: key,
+                registrationID: registrationID,
+                childRolloutURL: childRolloutURL
+            )
+        }
+        codexSubagentTerminalWatchersByKey[key] = CodexSubagentTerminalWatcherRegistration(
+            id: registrationID,
+            parentRolloutURL: specification.parentRolloutURL,
+            runStartedAt: specification.runStartedAt,
+            resolutionTask: resolutionTask,
+            childRolloutURL: nil,
+            watcher: nil
+        )
+    }
+
+    private func finishCodexSubagentTerminalWatcherResolution(
+        key: CodexSubagentTerminalWatcherKey,
+        registrationID: UUID,
+        childRolloutURL: URL?
+    ) {
+        guard var registration = codexSubagentTerminalWatchersByKey[key],
+              registration.id == registrationID else {
+            return
+        }
+        registration.resolutionTask = nil
+        guard let childRolloutURL else {
+            codexSubagentTerminalWatchersByKey[key] = registration
+            return
+        }
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: childRolloutURL,
+            parsingMode: .topLevelTerminalEventsOnly
+        ) { [weak self] event in
+            await self?.handleCodexSubagentTerminalEvent(
+                event,
+                key: key,
+                registrationID: registrationID,
+                childRolloutURL: childRolloutURL
+            )
+        }
+        registration.childRolloutURL = childRolloutURL
+        registration.watcher = watcher
+        codexSubagentTerminalWatchersByKey[key] = registration
+        watcher.start()
+    }
+
+    private func handleCodexSubagentTerminalEvent(
+        _ event: CodexSessionLogEvent,
+        key: CodexSubagentTerminalWatcherKey,
+        registrationID: UUID,
+        childRolloutURL: URL
+    ) {
+        guard event.kind == .taskCompleted || event.kind == .turnAborted,
+              let occurredAt = event.occurredAt,
+              let registration = codexSubagentTerminalWatchersByKey[key],
+              registration.id == registrationID,
+              registration.childRolloutURL == childRolloutURL,
+              occurredAt >= registration.runStartedAt,
+              let sessionRuntimeStore,
+              sessionRuntimeStore.usesCodexHookSubagentAuthority(sessionID: key.sessionID),
+              let record = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: key.sessionID),
+              Self.isQuietCodexRootStatus(record.status?.kind),
+              record.backgroundActivitiesByID[key.childThreadID]?.startedAt == registration.runStartedAt,
+              desiredCodexRolloutLogURLsBySessionID[key.sessionID] == registration.parentRolloutURL else {
+            return
+        }
+
+        _ = sessionRuntimeStore.handleCodexSubagentRolloutObservation(
+            sessionID: key.sessionID,
+            observation: .finished(CodexSessionBackgroundActivity(
+                activityID: key.childThreadID,
+                hookActivityID: key.childThreadID,
+                kind: .subagent,
+                turnTransition: .deactivated
+            )),
+            at: nowProvider()
+        )
+    }
+
+    private func stopCodexSubagentTerminalWatcher(
+        for key: CodexSubagentTerminalWatcherKey
+    ) async {
+        guard let registration = codexSubagentTerminalWatchersByKey.removeValue(forKey: key) else {
+            return
+        }
+        registration.resolutionTask?.cancel()
+        if let resolutionTask = registration.resolutionTask {
+            await resolutionTask.value
+        }
+        await registration.watcher?.stop()
+    }
+
+    private static func isQuietCodexRootStatus(_ kind: SessionStatusKind?) -> Bool {
+        kind == .idle || kind == .ready
+    }
+
     private func cleanupManagedArtifacts(forInactiveSessionsIn registry: SessionRegistry) async {
         let trackedSessionIDs = Set(managedArtifactsBySessionID.keys)
             .union(codexRolloutWatchersBySessionID.keys)
             .union(desiredCodexRolloutLogURLsBySessionID.keys)
             .union(codexRolloutWatcherTransitionsBySessionID.keys)
             .union(codexSubagentProfileResolutionsByKey.keys.map(\.sessionID))
+            .union(codexSubagentTerminalWatchersByKey.keys.map(\.sessionID))
         let inactiveSessionIDs = trackedSessionIDs.filter { sessionID in
             registry.activeSession(sessionID: sessionID) == nil
         }
@@ -1500,6 +1667,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     }
 
     private func cleanupCodexRolloutWatcher(for sessionID: String) async {
+        let terminalWatcherKeys = codexSubagentTerminalWatchersByKey.keys.filter {
+            $0.sessionID == sessionID
+        }
+        for key in terminalWatcherKeys {
+            await stopCodexSubagentTerminalWatcher(for: key)
+        }
         let profileResolutionKeys = codexSubagentProfileResolutionsByKey.keys.filter {
             $0.sessionID == sessionID
         }
@@ -1600,6 +1773,17 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     var codexRolloutWatcherTransitionCountForTesting: Int {
         codexRolloutWatcherTransitionsBySessionID.count
     }
+
+    var codexSubagentTerminalWatcherCountForTesting: Int {
+        codexSubagentTerminalWatchersByKey.count
+    }
+
+    var codexSubagentTerminalWatcherPathsForTesting: [String: String] {
+        Dictionary(uniqueKeysWithValues: codexSubagentTerminalWatchersByKey.compactMap { key, registration in
+            guard let path = registration.childRolloutURL?.path else { return nil }
+            return ("\(key.sessionID):\(key.childThreadID)", path)
+        })
+    }
 }
 
 private struct ManagedLaunchTarget {
@@ -1634,6 +1818,25 @@ private struct CodexSubagentProfileResolutionKey: Hashable {
 private struct CodexSubagentProfileResolutionRegistration {
     let id: UUID
     let task: Task<Void, Never>
+}
+
+private struct CodexSubagentTerminalWatcherKey: Hashable {
+    let sessionID: String
+    let childThreadID: String
+}
+
+private struct CodexSubagentTerminalWatcherSpecification {
+    let parentRolloutURL: URL
+    let runStartedAt: Date
+}
+
+private struct CodexSubagentTerminalWatcherRegistration {
+    let id: UUID
+    let parentRolloutURL: URL
+    let runStartedAt: Date
+    var resolutionTask: Task<Void, Never>?
+    var childRolloutURL: URL?
+    var watcher: CodexSessionLogWatcher?
 }
 
 private enum CodexSessionLogStream: Hashable {

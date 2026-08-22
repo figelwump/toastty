@@ -334,6 +334,7 @@ extension SessionRuntimeStoreTests {
             .backgroundActivitiesByID["agent-child"])
         #expect(duplicateStartActivity.displayName == "scroll_implementation")
         #expect(duplicateStartActivity.command == "Inspect the scroll implementation")
+        #expect(duplicateStartActivity.startedAt == now.addingTimeInterval(4))
 
         #expect(store.handleCodexHookEvent(
             sessionID: sessionID,
@@ -345,6 +346,7 @@ extension SessionRuntimeStoreTests {
             .backgroundActivitiesByID["agent-child"])
         #expect(meaningfulTypeActivity.displayName == "reviewer")
         #expect(meaningfulTypeActivity.command == "Inspect the scroll implementation")
+        #expect(meaningfulTypeActivity.startedAt == now.addingTimeInterval(5))
     }
 
     @Test

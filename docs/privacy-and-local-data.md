@@ -158,7 +158,14 @@ timeouts, and launch failures to its structured local log. See
   briefly inspect a bounded prefix of the matching local child rollout to read
   its effective model identifier and reasoning effort. This lookup accepts only
   complete `turn_context` records, retains only those two metadata fields in
-  memory, and does not log rollout contents.
+  memory, and does not log rollout contents. If a hook-authoritative Codex root
+  is ready or idle while an active child row remains, Toastty may also watch
+  that exact child rollout for a top-level `task_complete` or `turn_aborted`
+  envelope from the child's current run. That recovery parser decodes only the
+  event timestamp, terminal type, and available thread/turn identifiers; it
+  does not retain or log completion-message or conversation content. The
+  watcher stops when the child finishes, starts a new run, the root resumes
+  work, the parent rollout changes, or the managed session ends.
   Toastty derives child-agent IDs, task/display names, and available plaintext
   descriptions for the live sidebar; task names are limited to 80 characters,
   descriptions to 512 characters, and opaque encrypted descriptions are

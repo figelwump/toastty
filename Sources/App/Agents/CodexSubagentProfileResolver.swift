@@ -2,16 +2,27 @@ import CoreState
 import Foundation
 
 protocol CodexSubagentProfileResolving: Sendable {
+    func resolveRolloutURL(
+        childThreadID: String,
+        parentRolloutURL: URL
+    ) async -> URL?
+
     func resolveProfile(
         childThreadID: String,
         parentRolloutURL: URL
     ) async -> SessionAgentExecutionProfile?
 }
 
-/// Resolves effective, runtime-selected sub-agent settings from the child's
-/// rollout. It only decodes complete `turn_context` records; conversation and
-/// instruction records are never decoded or logged.
+/// Locates an exact child rollout and resolves its effective, runtime-selected
+/// settings. Profile resolution only decodes complete `turn_context` records;
+/// conversation and instruction records are never decoded or logged.
 actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
+    private enum RolloutLookupResult {
+        case pending
+        case resolved(URL)
+        case unavailable
+    }
+
     private enum LookupResult {
         case pending
         case resolved(SessionAgentExecutionProfile?)
@@ -29,7 +40,7 @@ actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
     }
 
     private let fileManager: FileManager
-    private let maximumAttempts: Int
+    private let maximumProfileResolutionAttempts: Int
     private let retryDelayNanoseconds: UInt64
     private let maximumPrefixByteCount: Int
     private let maximumMetadataLineByteCount: Int
@@ -45,7 +56,7 @@ actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
         precondition(maximumPrefixByteCount > 0)
         precondition(maximumMetadataLineByteCount > 0)
         self.fileManager = fileManager
-        self.maximumAttempts = maximumAttempts
+        self.maximumProfileResolutionAttempts = maximumAttempts
         self.retryDelayNanoseconds = retryDelayNanoseconds
         self.maximumPrefixByteCount = maximumPrefixByteCount
         self.maximumMetadataLineByteCount = maximumMetadataLineByteCount
@@ -59,7 +70,7 @@ actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
             return nil
         }
 
-        for attempt in 0..<maximumAttempts {
+        for attempt in 0..<maximumProfileResolutionAttempts {
             if Task.isCancelled { return nil }
             switch lookupProfile(
                 childThreadID: childThreadID,
@@ -70,13 +81,45 @@ actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
             case .unavailable:
                 return nil
             case .pending:
-                guard attempt + 1 < maximumAttempts else { return nil }
+                guard attempt + 1 < maximumProfileResolutionAttempts else { return nil }
                 if retryDelayNanoseconds > 0 {
                     do {
                         try await Task.sleep(nanoseconds: retryDelayNanoseconds)
                     } catch {
                         return nil
                     }
+                }
+            }
+        }
+        return nil
+    }
+
+    func resolveRolloutURL(
+        childThreadID: String,
+        parentRolloutURL: URL
+    ) async -> URL? {
+        guard let childThreadID = Self.normalizedNonEmpty(childThreadID) else {
+            return nil
+        }
+
+        while Task.isCancelled == false {
+            switch lookupRolloutURL(
+                childThreadID: childThreadID,
+                parentRolloutURL: parentRolloutURL
+            ) {
+            case .resolved(let rolloutURL):
+                return rolloutURL
+            case .unavailable:
+                return nil
+            case .pending:
+                if retryDelayNanoseconds > 0 {
+                    do {
+                        try await Task.sleep(nanoseconds: retryDelayNanoseconds)
+                    } catch {
+                        return nil
+                    }
+                } else {
+                    await Task.yield()
                 }
             }
         }
@@ -92,6 +135,23 @@ private extension CodexSubagentProfileResolver {
         childThreadID: String,
         parentRolloutURL: URL
     ) -> LookupResult {
+        switch lookupRolloutURL(
+            childThreadID: childThreadID,
+            parentRolloutURL: parentRolloutURL
+        ) {
+        case .resolved(let candidateURL):
+            return profileFromRolloutPrefix(candidateURL)
+        case .pending:
+            return .pending
+        case .unavailable:
+            return .unavailable
+        }
+    }
+
+    private func lookupRolloutURL(
+        childThreadID: String,
+        parentRolloutURL: URL
+    ) -> RolloutLookupResult {
         let candidateURLs = candidateRolloutURLs(
             childThreadID: childThreadID,
             parentRolloutURL: parentRolloutURL
@@ -112,7 +172,7 @@ private extension CodexSubagentProfileResolver {
         values.isSymbolicLink != true else {
             return .unavailable
         }
-        return profileFromRolloutPrefix(candidateURL)
+        return .resolved(candidateURL)
     }
 
     func candidateRolloutURLs(
