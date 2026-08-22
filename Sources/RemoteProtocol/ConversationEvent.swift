@@ -16,18 +16,20 @@ public enum ConversationEventKind: String, Codable, Equatable, Sendable {
     case interactionResolved = "interaction_resolved"
     case subagentSummary = "subagent_summary"
     case sessionBindingChanged = "session_binding_changed"
+    case sendDeliveryUnconfirmed = "send_delivery_unconfirmed"
 
     /// Whether events of this kind are derived purely from provider files.
     ///
     /// Rebuilding a projection from unchanged provider files reproduces
     /// provider-derived events exactly (same eventID, same payload, same
     /// relative order). Runtime-derived kinds (`statusChanged`,
-    /// `sessionBindingChanged`) describe live host state — bindings, epochs,
-    /// availability — and are legitimately different across rebuilds; they are
-    /// excluded from the rebuild-determinism contract.
+    /// `sessionBindingChanged`, and `sendDeliveryUnconfirmed`) describe live
+    /// host state — bindings, epochs, availability, and delivery receipts —
+    /// and are legitimately different across rebuilds; they are excluded from
+    /// the rebuild-determinism contract.
     public var isProviderDerived: Bool {
         switch self {
-        case .statusChanged, .sessionBindingChanged:
+        case .statusChanged, .sessionBindingChanged, .sendDeliveryUnconfirmed:
             return false
         case .userMessage, .assistantMessage, .toolStarted, .toolFinished,
              .interactionPresented, .interactionResolved, .subagentSummary:
@@ -207,6 +209,18 @@ public struct ConversationSessionBindingChangedPayload: Codable, Equatable, Send
     }
 }
 
+/// Host-side receipt emitted when an accepted remote send did not appear in
+/// the provider transcript before the bounded confirmation deadline. This is
+/// deliberately conservative: a later correlated user message can still prove
+/// that the provider eventually consumed the send.
+public struct ConversationSendDeliveryUnconfirmedPayload: Codable, Equatable, Sendable {
+    public var clientRequestID: String
+
+    public init(clientRequestID: String) {
+        self.clientRequestID = clientRequestID
+    }
+}
+
 /// Typed payload for one conversation event. The wire discriminator is
 /// `ConversationEventKind`.
 public enum ConversationEventPayload: Codable, Equatable, Sendable {
@@ -219,6 +233,7 @@ public enum ConversationEventPayload: Codable, Equatable, Sendable {
     case interactionResolved(ConversationInteractionResolvedPayload)
     case subagentSummary(ConversationSubagentSummaryPayload)
     case sessionBindingChanged(ConversationSessionBindingChangedPayload)
+    case sendDeliveryUnconfirmed(ConversationSendDeliveryUnconfirmedPayload)
 
     public var kind: ConversationEventKind {
         switch self {
@@ -231,6 +246,7 @@ public enum ConversationEventPayload: Codable, Equatable, Sendable {
         case .interactionResolved: return .interactionResolved
         case .subagentSummary: return .subagentSummary
         case .sessionBindingChanged: return .sessionBindingChanged
+        case .sendDeliveryUnconfirmed: return .sendDeliveryUnconfirmed
         }
     }
 
@@ -260,6 +276,8 @@ public enum ConversationEventPayload: Codable, Equatable, Sendable {
             self = .subagentSummary(try container.decode(ConversationSubagentSummaryPayload.self, forKey: .payload))
         case .sessionBindingChanged:
             self = .sessionBindingChanged(try container.decode(ConversationSessionBindingChangedPayload.self, forKey: .payload))
+        case .sendDeliveryUnconfirmed:
+            self = .sendDeliveryUnconfirmed(try container.decode(ConversationSendDeliveryUnconfirmedPayload.self, forKey: .payload))
         }
     }
 
@@ -276,6 +294,7 @@ public enum ConversationEventPayload: Codable, Equatable, Sendable {
         case .interactionResolved(let value): try container.encode(value, forKey: .payload)
         case .subagentSummary(let value): try container.encode(value, forKey: .payload)
         case .sessionBindingChanged(let value): try container.encode(value, forKey: .payload)
+        case .sendDeliveryUnconfirmed(let value): try container.encode(value, forKey: .payload)
         }
     }
 }
@@ -384,6 +403,8 @@ public struct ConversationEvent: Codable, Equatable, Sendable {
             self.payload = .subagentSummary(try container.decode(ConversationSubagentSummaryPayload.self, forKey: .payload))
         case .sessionBindingChanged:
             self.payload = .sessionBindingChanged(try container.decode(ConversationSessionBindingChangedPayload.self, forKey: .payload))
+        case .sendDeliveryUnconfirmed:
+            self.payload = .sendDeliveryUnconfirmed(try container.decode(ConversationSendDeliveryUnconfirmedPayload.self, forKey: .payload))
         }
     }
 
@@ -417,6 +438,8 @@ public struct ConversationEvent: Codable, Equatable, Sendable {
         case .subagentSummary(let value):
             try container.encode(value, forKey: .payload)
         case .sessionBindingChanged(let value):
+            try container.encode(value, forKey: .payload)
+        case .sendDeliveryUnconfirmed(let value):
             try container.encode(value, forKey: .payload)
         }
     }

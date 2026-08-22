@@ -85,9 +85,9 @@ public enum ProviderObservationPayload: Equatable, Sendable {
     case interactionPresented(ProviderInteractionObservation)
     /// The root turn began; the prompt is closed.
     case turnStarted(turnID: String?)
-    /// The root turn ended. `completed` is the authoritative signal that the
-    /// provider composer is open again; `aborted` leaves input availability
-    /// unknown (read-only) until a later provider transition.
+    /// The root turn ended. `completed` authorizes the next prompt transition,
+    /// subject to any provider-specific host stabilization; `aborted` leaves
+    /// input availability unknown (read-only) until a later provider transition.
     case turnEnded(turnID: String?, reason: ConversationTurnEndReason)
     /// Provider session identity observed (`session_meta` /
     /// `session_configured`). Runtime binding remains a host decision.
@@ -99,8 +99,9 @@ public enum ProviderObservationPayload: Equatable, Sendable {
 
 /// One normalized observation extracted from a provider session log.
 ///
-/// Parsers are pure and provider-specific; the projector is provider-neutral
-/// and consumes only this type. `fingerprint` is the deterministic identity
+/// Parsers are pure and provider-specific; the projector consumes only this
+/// normalized type and applies any narrow host safety policy by provider.
+/// `fingerprint` is the deterministic identity
 /// used both for within-run dedup (file re-reads, compaction replays) and as
 /// the basis of provider-derived `ConversationEvent.eventID`s. Fingerprints
 /// are stable only when parsing restarts from the start of the same provider

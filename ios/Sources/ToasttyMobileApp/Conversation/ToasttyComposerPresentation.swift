@@ -336,7 +336,7 @@ struct ToasttySendReceiptPresentation: Equatable, Sendable {
         case .operationFailed:
             "Toastty could not complete the send"
         case .deliveryUnconfirmed:
-            "Toastty could not correlate this send after reconnecting"
+            "The Mac accepted this send, but it did not appear in the session transcript"
         }
     }
 
@@ -361,7 +361,7 @@ struct ToasttySendReceiptPresentation: Equatable, Sendable {
         case .operationFailed:
             "Check the transcript on the Mac. The attempted message is shown below; Toastty did not retry it."
         case .deliveryUnconfirmed:
-            "Check the transcript on the Mac. Toastty removed the sending bubble and will not retry this message."
+            "Check the session on the Mac before sending again. Toastty will not retry this message."
         }
     }
 }

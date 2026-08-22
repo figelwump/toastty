@@ -251,28 +251,49 @@ public actor SendReconciliation {
         await publish()
     }
 
-    /// Confirms only a known `user_message` carrying the exact request ID.
-    /// An uncertain transport result can still be confirmed because it means
-    /// the host may have committed the send. Text, timestamp, message origin,
-    /// and binding changes are never used.
+    /// Reconciles host delivery receipts and confirms only a known
+    /// `user_message` carrying the exact request ID. An uncertain or
+    /// unconfirmed result can still be confirmed because the host may have
+    /// committed the send. Text, timestamp, message origin, and binding changes
+    /// are never used.
     public func observe(_ events: [CompatibleConversationEvent]) async {
         var didChange = false
 
         for compatibleEvent in events {
             guard case .known(let event) = compatibleEvent else { continue }
-            guard case .userMessage(let payload) = event.payload else { continue }
-            guard let clientRequestID = payload.clientRequestID else { continue }
-            guard var stored = recordsByRequestID[clientRequestID] else { continue }
-            switch stored.record.deliveryState {
-            case .pending, .uncertain, .operationFailed, .deliveryUnconfirmed:
-                break
-            case .confirmed, .rejected:
+            switch event.payload {
+            case .userMessage(let payload):
+                guard let clientRequestID = payload.clientRequestID,
+                      var stored = recordsByRequestID[clientRequestID] else {
+                    continue
+                }
+                switch stored.record.deliveryState {
+                case .pending, .uncertain, .operationFailed, .deliveryUnconfirmed:
+                    stored.record.deliveryState = .confirmed(sequence: event.sequence)
+                    recordsByRequestID[clientRequestID] = stored
+                    didChange = true
+                case .confirmed, .rejected:
+                    continue
+                }
+
+            case .sendDeliveryUnconfirmed(let payload):
+                guard var stored = recordsByRequestID[payload.clientRequestID] else {
+                    continue
+                }
+                switch stored.record.deliveryState {
+                case .pending, .uncertain, .operationFailed:
+                    stored.record.deliveryState = .deliveryUnconfirmed
+                    recordsByRequestID[payload.clientRequestID] = stored
+                    didChange = true
+                case .confirmed, .rejected, .deliveryUnconfirmed:
+                    continue
+                }
+
+            case .assistantMessage, .toolStarted, .toolFinished,
+                 .statusChanged, .interactionPresented, .interactionResolved,
+                 .subagentSummary, .sessionBindingChanged:
                 continue
             }
-
-            stored.record.deliveryState = .confirmed(sequence: event.sequence)
-            recordsByRequestID[clientRequestID] = stored
-            didChange = true
         }
 
         if didChange {

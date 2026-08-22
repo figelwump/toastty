@@ -307,6 +307,28 @@ final class RemoteAccessService: ObservableObject {
     private var storeActionObserverToken: UUID?
     private var conversationTrackingGeneration: UInt64 = 0
     private var sessionListBroadcastTask: Task<Void, Never>?
+    private let claudePromptStabilizationDelay: Duration
+    private let sendConfirmationTimeout: Duration
+
+    private struct PromptStabilizationWork {
+        var token: ConversationPromptStabilizationToken
+        var task: Task<Void, Never>
+    }
+    private var promptStabilizationWorkByConversationID: [
+        RemoteConversationID: PromptStabilizationWork
+    ] = [:]
+
+    private struct PendingSendConfirmationKey: Hashable {
+        var conversationID: RemoteConversationID
+        var clientRequestID: String
+    }
+    private struct PendingSendConfirmationWork {
+        var acceptedAt: Date
+        var task: Task<Void, Never>
+    }
+    private var pendingSendConfirmationWork: [
+        PendingSendConfirmationKey: PendingSendConfirmationWork
+    ] = [:]
 
     private var tailersByConversationID: [RemoteConversationID: RemoteTranscriptTailer] = [:]
     private var activeSessionIDByConversationID: [RemoteConversationID: String] = [:]
@@ -355,6 +377,8 @@ final class RemoteAccessService: ObservableObject {
         runtimePaths: ToasttyRuntimePaths,
         port: UInt16 = RemoteAccessPreferences.loadPort(),
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
+        claudePromptStabilizationDelay: Duration = .milliseconds(500),
+        sendConfirmationTimeout: Duration = .seconds(10),
         gatewayServerFactory: (RemoteGatewayRequestHandler) -> any RemoteAccessGatewayServing = {
             RemoteAccessGatewayServer(handler: $0)
         }
@@ -363,6 +387,8 @@ final class RemoteAccessService: ObservableObject {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.port = port
+        self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
+        self.sendConfirmationTimeout = sendConfirmationTimeout
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
         self.deviceStore = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
         self.auditLog = RemoteAccessAuditLog(fileURL: runtimePaths.remoteAccessAuditFileURL)
@@ -560,6 +586,14 @@ final class RemoteAccessService: ObservableObject {
         providerFeedIdentityByConversationID.removeAll()
         providerFeedLastFingerprintByConversationID.removeAll()
         bootstrappedPromptAuthorityByConversationID.removeAll()
+        for work in promptStabilizationWorkByConversationID.values {
+            work.task.cancel()
+        }
+        promptStabilizationWorkByConversationID.removeAll()
+        for work in pendingSendConfirmationWork.values {
+            work.task.cancel()
+        }
+        pendingSendConfirmationWork.removeAll()
         pendingSendCorrelator = RemotePendingSendCorrelator()
         coordinator = RemoteInputCoordinator()
         writeControllableSessions = []
@@ -1063,6 +1097,57 @@ final class RemoteAccessService: ObservableObject {
         )
     }
 
+    /// Claude's completion hook precedes the terminal composer's final reset.
+    /// Delay only the prompt-open authority; transcript content and ready state
+    /// remain current while the compose bar stays fail-closed.
+    private func refreshPromptStabilization(for conversationID: RemoteConversationID) {
+        let token = projectionStore.projectorState(for: conversationID)?
+            .pendingPromptStabilizationToken
+        if let existing = promptStabilizationWorkByConversationID[conversationID],
+           existing.token == token {
+            return
+        }
+
+        promptStabilizationWorkByConversationID
+            .removeValue(forKey: conversationID)?
+            .task.cancel()
+        guard let token else { return }
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(for: self.claudePromptStabilizationDelay)
+            } catch {
+                return
+            }
+            guard Task.isCancelled == false,
+                  self.isEnabled,
+                  self.promptStabilizationWorkByConversationID[conversationID]?.token == token else {
+                return
+            }
+            self.promptStabilizationWorkByConversationID.removeValue(forKey: conversationID)
+            let emitted = self.projectionStore.completePromptStabilization(
+                for: conversationID,
+                token: token,
+                at: Date()
+            )
+            guard emitted.isEmpty == false else { return }
+            self.syncCoordinatorAvailability(for: conversationID)
+            self.broadcastEvents(emitted, for: conversationID)
+            ToasttyLog.debug(
+                "Claude remote prompt stabilization completed",
+                category: .automation,
+                metadata: [
+                    "conversation_id": conversationID.rawValue.uuidString,
+                ]
+            )
+        }
+        promptStabilizationWorkByConversationID[conversationID] = PromptStabilizationWork(
+            token: token,
+            task: task
+        )
+    }
+
     private func logCoordinatorAvailabilityTransition(
         for conversationID: RemoteConversationID,
         source: String,
@@ -1211,6 +1296,8 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func removeConversationState(_ conversationID: RemoteConversationID) {
+        promptStabilizationWorkByConversationID.removeValue(forKey: conversationID)?.task.cancel()
+        cancelPendingSendConfirmations(for: conversationID)
         if isEnabled, projectionStore.isConversationRegistered(conversationID) {
             server.broadcast(.resnapshotRequired(conversationID: conversationID))
         }
@@ -1411,6 +1498,7 @@ final class RemoteAccessService: ObservableObject {
         }
         let stamped = stampPendingSends(observations, for: candidate.conversationID)
         let emitted = projectionStore.ingest(stamped, for: candidate.conversationID)
+        refreshPromptStabilization(for: candidate.conversationID)
         syncCoordinatorAvailability(for: candidate.conversationID)
         broadcastEvents(emitted, for: candidate.conversationID)
         if let lastFingerprint = feed.observations.last?.fingerprint {
@@ -1502,6 +1590,7 @@ final class RemoteAccessService: ObservableObject {
             // its own send apart from another device's identical text.
             let stamped = stampPendingSends(observations, for: conversationID)
             let emitted = projectionStore.ingest(stamped, for: conversationID)
+            refreshPromptStabilization(for: conversationID)
             // A newly ingested transcript can open the prompt; keep the
             // coordinator in step before broadcasting.
             syncCoordinatorAvailability(for: conversationID)
@@ -1686,6 +1775,10 @@ final class RemoteAccessService: ObservableObject {
         // share the same fail-closed contract; the store uses an idempotent set.
         sessionRuntimeStore.noteLocalInputForActiveSession(panelID: panelID)
         guard let conversationID = conversationIDByPanelID[panelID] else { return }
+        promptStabilizationWorkByConversationID
+            .removeValue(forKey: conversationID)?
+            .task.cancel()
+        _ = projectionStore.cancelPromptStabilization(for: conversationID)
         let previous = coordinator.availability(for: conversationID)
         coordinator.noteLocalInput(for: conversationID)
         logCoordinatorAvailabilityTransition(
@@ -1712,6 +1805,46 @@ final class RemoteAccessService: ObservableObject {
     private func recordPendingSend(_ request: RemoteMessageSendRequest, for conversationID: RemoteConversationID) {
         precondition(request.conversationID == conversationID)
         pendingSendCorrelator.record(request)
+        let clientRequestID = request.clientRequestID
+        let key = PendingSendConfirmationKey(
+            conversationID: conversationID,
+            clientRequestID: clientRequestID
+        )
+        pendingSendConfirmationWork.removeValue(forKey: key)?.task.cancel()
+        let acceptedAt = Date()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(for: self.sendConfirmationTimeout)
+            } catch {
+                return
+            }
+            guard Task.isCancelled == false,
+                  self.isEnabled,
+                  let work = self.pendingSendConfirmationWork.removeValue(forKey: key) else {
+                return
+            }
+            let emitted = self.projectionStore.noteSendDeliveryUnconfirmed(
+                for: conversationID,
+                clientRequestID: clientRequestID,
+                at: Date()
+            )
+            guard emitted.isEmpty == false else { return }
+            let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
+            ToasttyLog.warning(
+                "Remote send was not confirmed by the provider transcript",
+                category: .automation,
+                metadata: [
+                    "conversation_id": conversationID.rawValue.uuidString,
+                    "latency_ms": String(latencyMs),
+                ]
+            )
+            self.broadcastEvents(emitted, for: conversationID)
+        }
+        pendingSendConfirmationWork[key] = PendingSendConfirmationWork(
+            acceptedAt: acceptedAt,
+            task: task
+        )
     }
 
     /// Stamps origin=.remote and the clientRequestID onto the confirming user
@@ -1722,7 +1855,50 @@ final class RemoteAccessService: ObservableObject {
         _ observations: [ProviderTranscriptObservation],
         for conversationID: RemoteConversationID
     ) -> [ProviderTranscriptObservation] {
-        pendingSendCorrelator.stamp(observations, for: conversationID)
+        let stamped = pendingSendCorrelator.stamp(observations, for: conversationID)
+        for observation in stamped {
+            guard case .transcript(.userMessage(let payload)) = observation.payload,
+                  let clientRequestID = payload.clientRequestID else {
+                continue
+            }
+            confirmPendingSend(
+                conversationID: conversationID,
+                clientRequestID: clientRequestID
+            )
+        }
+        return stamped
+    }
+
+    private func confirmPendingSend(
+        conversationID: RemoteConversationID,
+        clientRequestID: String
+    ) {
+        let key = PendingSendConfirmationKey(
+            conversationID: conversationID,
+            clientRequestID: clientRequestID
+        )
+        guard let work = pendingSendConfirmationWork.removeValue(forKey: key) else {
+            return
+        }
+        work.task.cancel()
+        let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
+        ToasttyLog.info(
+            "Remote send confirmed by provider transcript",
+            category: .automation,
+            metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "latency_ms": String(latencyMs),
+            ]
+        )
+    }
+
+    private func cancelPendingSendConfirmations(for conversationID: RemoteConversationID) {
+        let keys = pendingSendConfirmationWork.keys.filter {
+            $0.conversationID == conversationID
+        }
+        for key in keys {
+            pendingSendConfirmationWork.removeValue(forKey: key)?.task.cancel()
+        }
     }
 
     // MARK: - Per-session write controls

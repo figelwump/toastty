@@ -106,6 +106,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var searchDispatchTokenByPanelID: [UUID: UUID] = [:]
     private var restoredManagedLaunchSubmitterForTesting: ((String, Bool, UUID) -> Bool)?
     private var automationSendTextHandlerForTesting: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?
+    private var automationPromptStateHandlerForTesting: ((UUID) -> TerminalPromptState)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -214,6 +215,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func setAutomationSendTextHandlerForTesting(_ handler: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?) {
         automationSendTextHandlerForTesting = handler
+    }
+
+    func setAutomationPromptStateHandlerForTesting(
+        _ handler: ((UUID) -> TerminalPromptState)?
+    ) {
+        automationPromptStateHandlerForTesting = handler
     }
 
     func setExternalURLOpenerForTesting(_ opener: @escaping @MainActor (URL) -> Bool) {
@@ -515,10 +522,15 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func promptState(panelID: UUID) -> TerminalPromptState {
+        if let automationPromptStateHandlerForTesting {
+            return automationPromptStateHandlerForTesting(panelID)
+        }
         #if TOASTTY_HAS_GHOSTTY_KIT
-        GhosttySurfaceSemanticState.promptState(for: runtimeStore.currentGhosttySurface(for: panelID))
+        return GhosttySurfaceSemanticState.promptState(
+            for: runtimeStore.currentGhosttySurface(for: panelID)
+        )
         #else
-        .unavailable
+        return .unavailable
         #endif
     }
 

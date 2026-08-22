@@ -170,6 +170,43 @@ public final class RemoteConversationProjectionStore {
         return emitted
     }
 
+    @discardableResult
+    public func completePromptStabilization(
+        for conversationID: RemoteConversationID,
+        token: ConversationPromptStabilizationToken,
+        at date: Date
+    ) -> [ConversationEvent] {
+        guard var projector = projectorsByID[conversationID] else { return [] }
+        let emitted = projector.completePromptStabilization(token: token, at: date)
+        projectorsByID[conversationID] = projector
+        return emitted
+    }
+
+    @discardableResult
+    public func cancelPromptStabilization(
+        for conversationID: RemoteConversationID
+    ) -> Bool {
+        guard var projector = projectorsByID[conversationID] else { return false }
+        let didCancel = projector.cancelPromptStabilization()
+        projectorsByID[conversationID] = projector
+        return didCancel
+    }
+
+    @discardableResult
+    public func noteSendDeliveryUnconfirmed(
+        for conversationID: RemoteConversationID,
+        clientRequestID: String,
+        at date: Date
+    ) -> [ConversationEvent] {
+        guard var projector = projectorsByID[conversationID] else { return [] }
+        let emitted = projector.noteSendDeliveryUnconfirmed(
+            clientRequestID: clientRequestID,
+            at: date
+        )
+        projectorsByID[conversationID] = projector
+        return emitted
+    }
+
     /// Discards one conversation's sequence space (unreconcilable provider
     /// rewrite) and starts a fresh generation. Existing cursors for this
     /// conversation become invalid; other conversations are untouched. The

@@ -483,6 +483,15 @@ private extension RemoteProtocolGoldenTests {
             )
         }
 
+        appendEvent(
+            to: &events,
+            payload: .sendDeliveryUnconfirmed(
+                ConversationSendDeliveryUnconfirmedPayload(
+                    clientRequestID: "ios-request-unconfirmed"
+                )
+            )
+        )
+
         return ConversationEventPage(
             conversationID: conversationID,
             projectionRunID: projectionRunID,

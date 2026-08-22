@@ -116,6 +116,69 @@ struct ConversationProjectorTests {
         #expect(projector.inputAvailability.allowsRemoteSend)
     }
 
+    @Test func claudeCompletedTurnOpensOnlyAfterExactStabilizationCompletes() throws {
+        var projector = ConversationProjector(
+            conversationID: Self.conversationID,
+            provider: .claude,
+            bindingID: Self.bindingID,
+            at: Self.epochDate
+        )
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1),
+            fingerprint: "claude:user-1",
+            payload: .transcript(.userMessage(.init(text: "Run it")))
+        ))
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(2),
+            fingerprint: "claude:turn-end-1",
+            payload: .turnEnded(turnID: "turn-1", reason: .completed)
+        ))
+
+        let token = try #require(projector.pendingPromptStabilizationToken)
+        #expect(projector.state == .awaitingInput)
+        #expect(projector.inputAvailability == .unavailable(reason: .unknownProviderState))
+        #expect(projector.inputAvailability.allowsRemoteSend == false)
+
+        let wrongToken = ConversationPromptStabilizationToken(
+            observationFingerprint: "claude:another-turn"
+        )
+        #expect(projector.completePromptStabilization(
+            token: wrongToken,
+            at: Self.epochDate.addingTimeInterval(2.4)
+        ).isEmpty)
+
+        let emitted = projector.completePromptStabilization(
+            token: token,
+            at: Self.epochDate.addingTimeInterval(2.5)
+        )
+        #expect(emitted.contains { $0.kind == .statusChanged })
+        #expect(projector.pendingPromptStabilizationToken == nil)
+        #expect(projector.inputAvailability.allowsRemoteSend)
+    }
+
+    @Test func localInputCancellationPreventsClaudePromptFromOpening() throws {
+        var projector = ConversationProjector(
+            conversationID: Self.conversationID,
+            provider: .claude,
+            bindingID: Self.bindingID,
+            at: Self.epochDate
+        )
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1),
+            fingerprint: "claude:turn-end-cancelled",
+            payload: .turnEnded(turnID: "turn-1", reason: .completed)
+        ))
+        let token = try #require(projector.pendingPromptStabilizationToken)
+
+        let cancelled = projector.cancelPromptStabilization()
+        #expect(cancelled)
+        #expect(projector.completePromptStabilization(
+            token: token,
+            at: Self.epochDate.addingTimeInterval(2)
+        ).isEmpty)
+        #expect(projector.inputAvailability == .unavailable(reason: .unknownProviderState))
+    }
+
     @Test func historicalCompletedTurnCannotAuthorizeFreshRuntimeBinding() {
         var projector = ConversationProjector(
             conversationID: Self.conversationID,

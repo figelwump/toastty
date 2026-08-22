@@ -1,6 +1,14 @@
 import RemoteProtocol
 import Foundation
 
+public struct ConversationPromptStabilizationToken: Equatable, Hashable, Sendable {
+    public let observationFingerprint: String
+
+    public init(observationFingerprint: String) {
+        self.observationFingerprint = observationFingerprint
+    }
+}
+
 /// Per-conversation projection state machine.
 ///
 /// Consumes normalized `ProviderTranscriptObservation`s plus host-side runtime
@@ -33,6 +41,11 @@ public struct ConversationProjector: Sendable {
     /// prevents a completed turn replayed during managed-session restore from
     /// opening a prompt before the resumed provider has emitted live evidence.
     private(set) var providerAuthorityEstablishedAt: Date?
+    /// Claude reports turn completion just before its terminal composer has
+    /// finished resetting. Keep the next prompt closed until the host finishes
+    /// the short stabilization window for this exact completion observation.
+    public private(set) var pendingPromptStabilizationToken:
+        ConversationPromptStabilizationToken?
 
     private var currentEpoch: RemoteInputEpoch
     /// A confirmed managed-runtime bootstrap may authorize the first prompt
@@ -67,6 +80,7 @@ public struct ConversationProjector: Sendable {
         self.events = []
         self.isRuntimeBound = runtimeBound
         self.providerAuthorityEstablishedAt = runtimeBound ? date : nil
+        self.pendingPromptStabilizationToken = nil
         self.state = runtimeBound ? .starting : .offline
         self.inputAvailability = .unavailable(reason: runtimeBound ? .starting : .offline)
         self.pendingInteractions = []
@@ -95,6 +109,9 @@ public struct ConversationProjector: Sendable {
 
         var emitted: [ConversationEvent] = []
         let authorizesCurrentRuntime = observationAuthorizesCurrentRuntime(observation)
+        if authorizesCurrentRuntime {
+            pendingPromptStabilizationToken = nil
+        }
         switch observation.payload {
         case .transcript(let payload):
             guard payload.kind.isProviderDerived else { return [] }
@@ -141,8 +158,20 @@ public struct ConversationProjector: Sendable {
                 supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
                 switch reason {
                 case .completed:
-                    currentEpoch = currentEpoch.next()
-                    transition(to: .awaitingInput, availability: .openPrompt(epoch: currentEpoch), at: observation.timestamp, emitting: &emitted)
+                    if provider == .claude {
+                        pendingPromptStabilizationToken = ConversationPromptStabilizationToken(
+                            observationFingerprint: observation.fingerprint
+                        )
+                        transition(
+                            to: .awaitingInput,
+                            availability: .unavailable(reason: .unknownProviderState),
+                            at: observation.timestamp,
+                            emitting: &emitted
+                        )
+                    } else {
+                        currentEpoch = currentEpoch.next()
+                        transition(to: .awaitingInput, availability: .openPrompt(epoch: currentEpoch), at: observation.timestamp, emitting: &emitted)
+                    }
                 case .aborted:
                     // Conservative: an aborted turn usually returns to the
                     // composer, but that is inferred, not authoritative. Unknown
@@ -177,6 +206,7 @@ public struct ConversationProjector: Sendable {
         bindingID: UUID,
         at date: Date
     ) -> [ConversationEvent] {
+        pendingPromptStabilizationToken = nil
         currentEpoch = RemoteInputEpoch(bindingID: bindingID, counter: 0)
         switch reason {
         case .runtimeBound, .runtimeResumed, .runtimeEnded:
@@ -233,6 +263,7 @@ public struct ConversationProjector: Sendable {
     public mutating func bootstrapConfirmedOpenPrompt(at date: Date) -> [ConversationEvent] {
         guard isRuntimeBound,
               didBootstrapConfirmedPromptForCurrentBinding == false,
+              pendingPromptStabilizationToken == nil,
               case .unavailable(reason: .unknownProviderState) = inputAvailability else {
             return []
         }
@@ -248,6 +279,60 @@ public struct ConversationProjector: Sendable {
         )
         updatedAt = max(updatedAt, date)
         return emitted
+    }
+
+    /// Opens a Claude prompt only if no provider transition, binding change,
+    /// or local input invalidated the exact completion being stabilized.
+    @discardableResult
+    public mutating func completePromptStabilization(
+        token: ConversationPromptStabilizationToken,
+        at date: Date
+    ) -> [ConversationEvent] {
+        guard provider == .claude,
+              isRuntimeBound,
+              pendingPromptStabilizationToken == token,
+              state == .awaitingInput,
+              inputAvailability == .unavailable(reason: .unknownProviderState) else {
+            return []
+        }
+
+        pendingPromptStabilizationToken = nil
+        currentEpoch = currentEpoch.next()
+        var emitted: [ConversationEvent] = []
+        transition(
+            to: .awaitingInput,
+            availability: .openPrompt(epoch: currentEpoch),
+            at: date,
+            emitting: &emitted
+        )
+        updatedAt = max(updatedAt, date)
+        return emitted
+    }
+
+    /// Cancels a pending prompt-open transition without claiming a local draft
+    /// epoch. The prompt remains read-only until the provider emits another
+    /// authoritative lifecycle transition.
+    @discardableResult
+    public mutating func cancelPromptStabilization() -> Bool {
+        guard pendingPromptStabilizationToken != nil else { return false }
+        pendingPromptStabilizationToken = nil
+        return true
+    }
+
+    /// Appends the desktop-owned terminal receipt for a send whose provider
+    /// echo did not arrive before the confirmation deadline.
+    @discardableResult
+    public mutating func noteSendDeliveryUnconfirmed(
+        clientRequestID: String,
+        at date: Date
+    ) -> [ConversationEvent] {
+        guard clientRequestID.isEmpty == false else { return [] }
+        let event = appendRuntimeEvent(
+            .sendDeliveryUnconfirmed(.init(clientRequestID: clientRequestID)),
+            at: date
+        )
+        updatedAt = max(updatedAt, date)
+        return [event]
     }
 
     /// Revokes only the synthetic prompt opened by

@@ -122,6 +122,29 @@ final class SendReconciliationTests: XCTestCase {
         XCTAssertEqual(state["uncertain"]?.deliveryState, .confirmed(sequence: 4))
     }
 
+    func testHostUnconfirmedReceiptStopsPendingAndLateEchoStillConfirms() async {
+        let reconciliation = SendReconciliation(initialProjectionRunID: firstRunID)
+        await reconciliation.enqueue(clientRequestID: "host-timeout", text: "hello")
+        await reconciliation.apply(.accepted(epoch: epoch), clientRequestID: "host-timeout")
+
+        await reconciliation.observe([
+            .known(makeEvent(
+                sequence: 4,
+                payload: .sendDeliveryUnconfirmed(.init(
+                    clientRequestID: "host-timeout"
+                ))
+            )),
+        ])
+        var state = await reconciliation.currentState()
+        XCTAssertEqual(state["host-timeout"]?.deliveryState, .deliveryUnconfirmed)
+
+        await reconciliation.observe([
+            .known(makeUserMessage(sequence: 5, clientRequestID: "host-timeout")),
+        ])
+        state = await reconciliation.currentState()
+        XCTAssertEqual(state["host-timeout"]?.deliveryState, .confirmed(sequence: 5))
+    }
+
     func testUncertainWithoutEchoBecomesDeliveryUnconfirmedAtResnapshotBoundary() async {
         let reconciliation = SendReconciliation(initialProjectionRunID: firstRunID)
         await reconciliation.enqueue(clientRequestID: "uncertain", text: "hello")

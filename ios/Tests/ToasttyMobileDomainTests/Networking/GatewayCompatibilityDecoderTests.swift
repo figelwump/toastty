@@ -27,7 +27,7 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         let response = try decoder.decodeEventsResponse(Data(contentsOf: fixtureURL))
         guard case .page(let page) = response else { return XCTFail("Expected canonical event page") }
 
-        XCTAssertEqual(page.events.map(\.sequence), Array(1...37).map(UInt64.init))
+        XCTAssertEqual(page.events.map(\.sequence), Array(1...38).map(UInt64.init))
         XCTAssertEqual(
             Set(page.events.map(\.kind)),
             Set([
@@ -40,6 +40,7 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
                 "interaction_resolved",
                 "subagent_summary",
                 "session_binding_changed",
+                "send_delivery_unconfirmed",
             ])
         )
 
@@ -79,6 +80,13 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
             return XCTFail("Sequence 37 must remain a binding change")
         }
         XCTAssertEqual(binding.reason, .projectionRebuilt)
+
+        let deliveryEvent = try XCTUnwrap(knownEventsBySequence[38])
+        XCTAssertEqual(deliveryEvent.eventID, "fixture:event:38")
+        guard case .sendDeliveryUnconfirmed(let delivery) = deliveryEvent.payload else {
+            return XCTFail("Sequence 38 must remain an unconfirmed send receipt")
+        }
+        XCTAssertEqual(delivery.clientRequestID, "ios-request-unconfirmed")
     }
 
     func testVersionMismatchFailsAdmission() throws {

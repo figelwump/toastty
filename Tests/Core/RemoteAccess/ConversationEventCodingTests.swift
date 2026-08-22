@@ -54,6 +54,9 @@ struct ConversationEventCodingTests {
             providerSessionID: "0190-session",
             providerSessionFilePath: "/tmp/rollout.jsonl"
         )),
+        .sendDeliveryUnconfirmed(ConversationSendDeliveryUnconfirmedPayload(
+            clientRequestID: "req-unconfirmed"
+        )),
     ]
 
     @Test func everyEventKindRoundTripsThroughWireJSON() throws {
@@ -85,6 +88,7 @@ struct ConversationEventCodingTests {
             "interaction_resolved",
             "subagent_summary",
             "session_binding_changed",
+            "send_delivery_unconfirmed",
         ])
     }
 

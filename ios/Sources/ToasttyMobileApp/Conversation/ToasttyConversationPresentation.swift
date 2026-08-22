@@ -197,6 +197,10 @@ enum ToasttyConversationPresentationAdapter {
                     )
                 case .sessionBindingChanged(let payload):
                     content = .sessionBindingChanged(reason: payload.reason)
+                case .sendDeliveryUnconfirmed:
+                    // Delivery receipts render through SendReconciliation so
+                    // they stay attached to the optimistic outgoing message.
+                    return nil
                 }
                 return ToasttyTranscriptRow(
                     id: rowID(

@@ -377,6 +377,119 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func claudeProviderFeedDefersPromptUntilStabilizationCompletes() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40)
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID,
+            provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-stabilization",
+            at: fixture.confirmedAt
+        ))
+        #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+            managedSessionID: fixture.sessionID,
+            provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-stabilization",
+            observation: ProviderTranscriptObservation(
+                timestamp: fixture.confirmedAt.addingTimeInterval(1),
+                fingerprint: "managed:claude:user-1",
+                payload: .transcript(.userMessage(.init(text: "Run it")))
+            )
+        ))
+        #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+            managedSessionID: fixture.sessionID,
+            provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-stabilization",
+            observation: ProviderTranscriptObservation(
+                timestamp: fixture.confirmedAt.addingTimeInterval(2),
+                fingerprint: "managed:claude:turn-end-1",
+                payload: .turnEnded(turnID: "turn-1", reason: .completed)
+            )
+        ))
+
+        #expect(fixture.summary.state == .awaitingInput)
+        #expect(fixture.summary.inputAvailability ==
+            .unavailable(reason: .unknownProviderState))
+
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.summary.inputAvailability.allowsRemoteSend
+        }
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend)
+    }
+
+    @MainActor
+    @Test func acceptedSendWithoutProviderEchoEmitsUnconfirmedReceipt() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            sendConfirmationTimeout: .milliseconds(40)
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in
+            .idleAtPrompt
+        }
+        let panelID = fixture.panelID
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting {
+            _, _, deliveredPanelID, _ in deliveredPanelID == panelID
+        }
+
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID,
+            clientRequestID: "missing-provider-echo",
+            expectedInputEpoch: epoch,
+            text: "Please continue"
+        )
+        #expect(fixture.service.performRemoteSend(
+            request,
+            device: RemoteDeviceRecord(
+                name: "Test iPhone",
+                scopes: [.read, .send],
+                createdAt: fixture.confirmedAt
+            )
+        ).isAccepted)
+
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            guard case .page(let page) = fixture.service.facadeConversationEvents(
+                for: fixture.conversationID,
+                after: nil,
+                limit: 100
+            ) else {
+                return false
+            }
+            return page.events.contains { event in
+                guard case .sendDeliveryUnconfirmed(let payload) = event.payload else {
+                    return false
+                }
+                return payload.clientRequestID == request.clientRequestID
+            }
+        }
+        guard case .page(let page) = fixture.service.facadeConversationEvents(
+            for: fixture.conversationID,
+            after: nil,
+            limit: 100
+        ) else {
+            Issue.record("Expected conversation event page")
+            return
+        }
+        #expect(page.events.contains { event in
+            guard case .sendDeliveryUnconfirmed(let payload) = event.payload else {
+                return false
+            }
+            return payload.clientRequestID == request.clientRequestID
+        })
+    }
+
+    @MainActor
     @Test func activationMintsIdentityBeforeListeningAndDisableRemovesLiveTracking() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -578,7 +691,9 @@ private final class RemoteBootstrapFixture {
 
     init(
         agent: AgentKind = .codex,
-        statusKind: SessionStatusKind = .idle
+        statusKind: SessionStatusKind = .idle,
+        claudePromptStabilizationDelay: Duration = .milliseconds(500),
+        sendConfirmationTimeout: Duration = .seconds(10)
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -625,6 +740,8 @@ private final class RemoteBootstrapFixture {
             ),
             port: 42_997,
             initiallyEnabled: false,
+            claudePromptStabilizationDelay: claudePromptStabilizationDelay,
+            sendConfirmationTimeout: sendConfirmationTimeout,
             gatewayServerFactory: { _ in gatewayServer }
         )
         service.setEnabled(true, persist: false)
