@@ -1,9 +1,5 @@
 import SwiftUI
 
-struct ToasttyToolBatchSelection: Identifiable {
-    let id: ToasttyTranscriptRowID
-}
-
 struct ToasttyToolBatchActivity: Equatable {
     let id: ToasttyTranscriptRowID
     let lastSequence: UInt64
@@ -143,57 +139,6 @@ struct ToasttyToolBatchCard: View {
             cornerRadius: ToasttyDesignTokens.controlCornerRadius,
             style: .continuous
         ))
-    }
-}
-
-// TODO: Remove the legacy sheet and selection model after the inline flow is
-// verified on a physical device. They intentionally have no invocation path.
-struct ToasttyToolActivitySheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    let rows: [ToasttyTranscriptRow]
-
-    private var callCount: Int {
-        Set(rows.compactMap(\.toolCallID)).count
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if rows.isEmpty {
-                    ContentUnavailableView(
-                        "Tool details unavailable",
-                        systemImage: "wrench.and.screwdriver",
-                        description: Text("This tool activity is no longer in the transcript.")
-                    )
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(rows) { row in
-                                ToasttyToolEventRow(row: row)
-                            }
-                        }
-                        .padding(16)
-                    }
-                }
-            }
-            .background(ToasttyDesignTokens.background)
-            .navigationTitle(callCount == 1 ? "1 Tool Call" : "\(callCount) Tool Calls")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .accessibilityIdentifier("toastty-mobile-tool-activity-done")
-                }
-            }
-        }
-        .accessibilityIdentifier("toastty-mobile-tool-activity-sheet")
-        .tint(ToasttyDesignTokens.amber)
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
-        .presentationBackground(ToasttyDesignTokens.background)
     }
 }
 
