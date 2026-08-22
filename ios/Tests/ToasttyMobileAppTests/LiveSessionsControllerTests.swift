@@ -153,11 +153,11 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertEqual(home.freshness, .unreachable)
     }
 
-    func testSceneLifecycleSuspendsAndForegroundRequestsConnection() async {
+    func testSceneLifecycleRetainsActiveConversationWhileSuspended() async throws {
         let runtime = LiveRuntimeSpy()
         let home = HomeScreenController(
             runtimeMode: .fixture,
-            snapshot: ToasttyMobileFixture.home,
+            snapshot: snapshot(titles: ["Alpha"]).presentation(),
             connectionState: .live
         )
         let subject = LiveSessionsController(
@@ -165,15 +165,33 @@ final class LiveSessionsControllerTests: XCTestCase {
             hostName: "toastty.test.ts.net",
             homeController: home
         )
+        let conversation = try XCTUnwrap(home.snapshot.workspaces.first?.conversations.first)
+        await subject.openConversation(conversation.id)
+        let controller = try XCTUnwrap(subject.activeConversationController)
 
         await subject.background()
         let didSuspend = await runtime.didSuspend()
         XCTAssertTrue(didSuspend)
         XCTAssertEqual(home.freshness, .stale)
+        XCTAssertTrue(subject.activeConversationController === controller)
+        var conversationOpenCount = await runtime.conversationOpenCount()
+        var conversationCloseCount = await runtime.conversationCloseCount()
+        XCTAssertEqual(conversationOpenCount, 1)
+        XCTAssertEqual(conversationCloseCount, 0)
 
         await subject.foreground()
         let connectCount = await runtime.connectCount()
         XCTAssertEqual(connectCount, 1)
+        XCTAssertTrue(subject.activeConversationController === controller)
+        conversationOpenCount = await runtime.conversationOpenCount()
+        conversationCloseCount = await runtime.conversationCloseCount()
+        XCTAssertEqual(conversationOpenCount, 1)
+        XCTAssertEqual(conversationCloseCount, 0)
+
+        await subject.closeConversation(conversation.id)
+        XCTAssertNil(subject.activeConversationController)
+        conversationCloseCount = await runtime.conversationCloseCount()
+        XCTAssertEqual(conversationCloseCount, 1)
         subject.stopObserving()
     }
 

@@ -15,6 +15,39 @@ enum ToasttyHomeListMode: String, CaseIterable {
     }
 }
 
+enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
+    case active
+    case all
+
+    static let defaultFilter = ToasttyWorkspaceSessionFilter.all
+    static let preferenceKey = "toastty-mobile-workspace-session-filter"
+
+    var title: String {
+        switch self {
+        case .active: "Active"
+        case .all: "All"
+        }
+    }
+
+    func conversations(in workspace: MobileWorkspace) -> [MobileConversation] {
+        workspace.sortedConversations.filter { conversation in
+            self == .all || conversation.state.bucket != .idle
+        }
+    }
+
+    func workspaces(from workspaces: [MobileWorkspace]) -> [MobileWorkspace] {
+        workspaces.compactMap { workspace in
+            let conversations = conversations(in: workspace)
+            guard conversations.isEmpty == false else { return nil }
+            return MobileWorkspace(
+                id: workspace.id,
+                title: workspace.title,
+                conversations: conversations
+            )
+        }
+    }
+}
+
 struct ToasttyHomeView: View {
     static let listModePreferenceKey = "toastty-mobile-home-list-mode"
 
@@ -23,6 +56,7 @@ struct ToasttyHomeView: View {
     let onSettings: () -> Void
 
     @AppStorage private var storedListMode: String
+    @AppStorage private var storedWorkspaceSessionFilter: String
     @State private var isRetryingConnection = false
 
     init(
@@ -37,6 +71,11 @@ struct ToasttyHomeView: View {
         _storedListMode = AppStorage(
             wrappedValue: ToasttyHomeListMode.defaultMode.rawValue,
             Self.listModePreferenceKey,
+            store: defaults
+        )
+        _storedWorkspaceSessionFilter = AppStorage(
+            wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
+            ToasttyWorkspaceSessionFilter.preferenceKey,
             store: defaults
         )
     }
@@ -72,6 +111,9 @@ struct ToasttyHomeView: View {
                 header
                 connectionNotice
                 listModePicker
+                if selectedListMode == .workspaces {
+                    workspaceSessionFilterPicker
+                }
             }
             .padding(.horizontal, 14)
             .frame(maxWidth: 560)
@@ -87,6 +129,10 @@ struct ToasttyHomeView: View {
         .onAppear {
             if ToasttyHomeListMode(rawValue: storedListMode) == nil {
                 storedListMode = ToasttyHomeListMode.defaultMode.rawValue
+            }
+            if ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) == nil {
+                storedWorkspaceSessionFilter =
+                    ToasttyWorkspaceSessionFilter.defaultFilter.rawValue
             }
         }
     }
@@ -110,7 +156,7 @@ struct ToasttyHomeView: View {
         case .activity:
             controller.snapshot.activitySessions.map(\.id)
         case .workspaces:
-            controller.snapshot.rankedWorkspaces.flatMap { workspace in
+            visibleWorkspaces.flatMap { workspace in
                 [workspace.id] + workspace.conversations.map(\.id)
             }
         }
@@ -133,6 +179,27 @@ struct ToasttyHomeView: View {
         .accessibilityIdentifier("toastty-mobile-home-mode")
     }
 
+    private var selectedWorkspaceSessionFilter: ToasttyWorkspaceSessionFilter {
+        ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) ?? .defaultFilter
+    }
+
+    private var workspaceSessionFilterSelection: Binding<ToasttyWorkspaceSessionFilter> {
+        Binding(
+            get: { selectedWorkspaceSessionFilter },
+            set: { storedWorkspaceSessionFilter = $0.rawValue }
+        )
+    }
+
+    private var workspaceSessionFilterPicker: some View {
+        Picker("Workspace sessions", selection: workspaceSessionFilterSelection) {
+            ForEach(ToasttyWorkspaceSessionFilter.allCases, id: \.self) { filter in
+                Text(filter.title).tag(filter)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("toastty-mobile-workspace-session-filter")
+    }
+
     @ViewBuilder
     private var activityContent: some View {
         if controller.snapshot.activitySessions.isEmpty {
@@ -152,10 +219,10 @@ struct ToasttyHomeView: View {
 
     @ViewBuilder
     private var workspaceContent: some View {
-        if controller.snapshot.rankedWorkspaces.isEmpty {
-            emptyState
+        if visibleWorkspaces.isEmpty {
+            workspaceEmptyState
         } else {
-            ForEach(controller.snapshot.rankedWorkspaces) { workspace in
+            ForEach(visibleWorkspaces) { workspace in
                 Section {
                     ForEach(workspace.conversations) { conversation in
                         ToasttySessionCard(
@@ -171,6 +238,10 @@ struct ToasttyHomeView: View {
                 }
             }
         }
+    }
+
+    private var visibleWorkspaces: [MobileWorkspace] {
+        selectedWorkspaceSessionFilter.workspaces(from: controller.snapshot.rankedWorkspaces)
     }
 
     private func workspaceHeader(_ workspace: MobileWorkspace) -> some View {
@@ -209,6 +280,20 @@ struct ToasttyHomeView: View {
             "No sessions yet",
             systemImage: "rectangle.stack",
             description: Text("Open a session in Toastty on your Mac and it will appear here.")
+        )
+        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+        .padding(.vertical, 32)
+    }
+
+    private var workspaceEmptyState: some View {
+        ContentUnavailableView(
+            selectedWorkspaceSessionFilter == .active ? "No active sessions" : "No sessions yet",
+            systemImage: "rectangle.stack",
+            description: Text(
+                selectedWorkspaceSessionFilter == .active
+                    ? "Choose All to show idle sessions."
+                    : "Open a session in Toastty on your Mac and it will appear here."
+            )
         )
         .foregroundStyle(ToasttyDesignTokens.secondaryText)
         .padding(.vertical, 32)
@@ -479,7 +564,7 @@ struct ToasttySessionCard: View {
     private var metadata: some View {
         TimelineView(.periodic(from: .now, by: 60)) { _ in
             let label = trailingMetadataLabel
-            if !label.characters.isEmpty {
+            if !label.isEmpty {
                 Text(label)
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                     .lineLimit(1)
@@ -495,31 +580,17 @@ struct ToasttySessionCard: View {
         return title.isEmpty ? nil : title
     }
 
-    private var trailingMetadataLabel: AttributedString {
-        let segments: [(value: String?, color: Color?)] = [
-            (conversation.abbreviatedCWD, nil),
-            (conversation.agent.displayName, agentTint),
-            (conversation.displayAge, nil),
+    private var trailingMetadataLabel: String {
+        [
+            conversation.abbreviatedCWD,
+            conversation.agent.displayName,
+            conversation.displayAge,
         ]
-        var label = AttributedString()
-        for (value, color) in segments {
-            guard let value, !value.isEmpty else { continue }
-            if !label.characters.isEmpty {
-                label += AttributedString(" · ")
-            }
-            var segment = AttributedString(value)
-            segment.foregroundColor = color
-            label += segment
+        .compactMap { value in
+            guard let value, value.isEmpty == false else { return nil }
+            return value
         }
-        return label
-    }
-
-    // Known agents carry their brand color in metadata so Claude and Codex
-    // sessions are distinguishable at a glance; other agents stay muted.
-    private var agentTint: Color? {
-        if conversation.agent == .claude { return ToasttyDesignTokens.claude }
-        if conversation.agent == .codex { return ToasttyDesignTokens.codex }
-        return nil
+        .joined(separator: " · ")
     }
 
     // Tint strength tracks urgency: needs-approval reads loudest, error next,

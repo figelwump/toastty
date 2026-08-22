@@ -8,6 +8,57 @@ final class ToasttyHomeListModeTests: XCTestCase {
     }
 }
 
+final class ToasttyWorkspaceSessionFilterTests: XCTestCase {
+    func testAllIsTheDefaultFilter() {
+        XCTAssertEqual(ToasttyWorkspaceSessionFilter.defaultFilter, .all)
+    }
+
+    func testActiveExcludesIdleSessionsAndEmptyWorkspaceGroups() throws {
+        let activeConversation = try XCTUnwrap(
+            ToasttyMobileFixture.home.activitySessions.first { $0.state.bucket != .idle }
+        )
+        let idleConversation = try XCTUnwrap(
+            ToasttyMobileFixture.home.activitySessions.first { $0.state.bucket == .idle }
+        )
+        let activeWorkspace = MobileWorkspace(
+            id: activeConversation.workspaceID,
+            title: activeConversation.workspaceTitle,
+            conversations: [idleConversation, activeConversation]
+        )
+        let idleWorkspace = MobileWorkspace(
+            id: idleConversation.workspaceID,
+            title: idleConversation.workspaceTitle,
+            conversations: [idleConversation]
+        )
+
+        let visible = ToasttyWorkspaceSessionFilter.active.workspaces(
+            from: [activeWorkspace, idleWorkspace]
+        )
+
+        XCTAssertEqual(visible.map(\.id), [activeWorkspace.id])
+        XCTAssertEqual(visible.first?.conversations.map(\.id), [activeConversation.id])
+    }
+
+    func testAllIncludesIdleSessionsButStillOmitsEmptyWorkspaceGroups() throws {
+        let idleConversation = try XCTUnwrap(
+            ToasttyMobileFixture.home.activitySessions.first { $0.state.bucket == .idle }
+        )
+        let idleWorkspace = MobileWorkspace(
+            id: idleConversation.workspaceID,
+            title: idleConversation.workspaceTitle,
+            conversations: [idleConversation]
+        )
+        let emptyWorkspace = MobileWorkspace(id: UUID(), title: "Empty", conversations: [])
+
+        let visible = ToasttyWorkspaceSessionFilter.all.workspaces(
+            from: [idleWorkspace, emptyWorkspace]
+        )
+
+        XCTAssertEqual(visible.map(\.id), [idleWorkspace.id])
+        XCTAssertEqual(visible.first?.conversations.map(\.id), [idleConversation.id])
+    }
+}
+
 @MainActor
 final class HomeScreenControllerTests: XCTestCase {
     func testOpenAndDismissOwnConversationPresentationState() throws {

@@ -11,7 +11,7 @@ struct ToasttyTranscriptView: View {
     let readAcknowledgementEpoch: MobileSessionStatus?
     let onVisibleLiveEdge: () -> Void
 
-    @State private var selectedToolBatch: ToasttyToolBatchSelection?
+    @State private var toolBatchDisclosure = ToasttyToolBatchDisclosureState()
     @State private var expandedSubagentIDs: Set<ToasttyTranscriptRowID> = []
     @State private var isAtLiveEdge = true
     @State private var hasMeasuredScrollGeometry = false
@@ -225,8 +225,8 @@ struct ToasttyTranscriptView: View {
             .background(ToasttyDesignTokens.background)
             .onAppear { isVisible = true }
             .onDisappear { isVisible = false }
-            .sheet(item: $selectedToolBatch) { selection in
-                ToasttyToolActivitySheet(rows: toolRows(for: selection.id))
+            .onChange(of: toolBatchActivity, initial: true) { _, activity in
+                toolBatchDisclosure.reconcile(activity: activity, revision: state.revision)
             }
         }
     }
@@ -315,30 +315,26 @@ struct ToasttyTranscriptView: View {
             ToasttyToolBatchCard(
                 blockID: block.id,
                 rows: rows,
-                showDetails: {
-                    selectedToolBatch = ToasttyToolBatchSelection(id: block.id)
+                isExpanded: toolBatchDisclosure.isExpanded(block.id),
+                toggleDetails: {
+                    toolBatchDisclosure.toggle(block.id)
                 }
             )
         }
-    }
-
-    private func toolRows(for id: ToasttyTranscriptRowID) -> [ToasttyTranscriptRow] {
-        guard let block = state.blocks.first(where: { $0.id == id }),
-              case .toolBatch(let rows) = block.content
-        else {
-            return []
-        }
-        return rows
     }
 
     private var scrollChangeKey: ScrollChangeKey {
         ScrollChangeKey(
             revision: state.revision,
             blockCount: state.blocks.count,
-            sendItems: state.sendItems,
+            sendItems: state.sendItems.map(ToasttySendScrollItem.init),
             firstID: state.blocks.first?.id,
             lastTarget: lastScrollTarget
         )
+    }
+
+    private var toolBatchActivity: [ToasttyToolBatchActivity] {
+        ToasttyToolBatchActivity.make(from: state.blocks)
     }
 
     private var lastScrollTarget: ToasttyConversationScrollTarget? {
@@ -441,9 +437,27 @@ private enum ToasttyConversationScrollTarget: Hashable {
 private struct ScrollChangeKey: Equatable {
     let revision: ToasttyTranscriptRevision
     let blockCount: Int
-    let sendItems: [ToasttySendPresentationItem]
+    let sendItems: [ToasttySendScrollItem]
     let firstID: ToasttyTranscriptRowID?
     let lastTarget: ToasttyConversationScrollTarget?
+}
+
+private struct ToasttySendScrollItem: Equatable {
+    enum ContentKind: Equatable {
+        case optimistic
+        case receipt
+    }
+
+    let clientRequestID: String
+    let contentKind: ContentKind
+
+    init(_ item: ToasttySendPresentationItem) {
+        clientRequestID = item.clientRequestID
+        contentKind = switch item.content {
+        case .optimistic: .optimistic
+        case .receipt: .receipt
+        }
+    }
 }
 
 private struct ToasttySendTailItemView: View {

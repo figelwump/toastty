@@ -215,7 +215,10 @@ final class LiveSessionsController {
 
     func background() async {
         endManualRefreshPresentationGracePeriod()
-        await tearDownActiveConversation(clearDesiredConversation: false)
+        // The coordinator suspends the existing conversation runtime in place.
+        // Keep its presentation controller alive so foreground catch-up appends
+        // new events without rebuilding the transcript. Explicit navigation
+        // away from the conversation remains the owner of teardown.
         await runtime.suspend()
         applyPresentation(freshnessOverride: .stale)
     }

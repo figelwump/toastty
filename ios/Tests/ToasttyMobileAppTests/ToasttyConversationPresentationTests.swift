@@ -19,7 +19,7 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         XCTAssertEqual(state.rows.map(\.id.projectionRunID), Array(repeating: runID(1).rawValue, count: 9))
         XCTAssertEqual(state.rows.map(\.id.projectionGeneration), Array(repeating: 7, count: 9))
         XCTAssertEqual(state.rows.map(\.id.conversationID), Array(repeating: conversationID.rawValue, count: 9))
-        XCTAssertFalse(state.rows.contains { $0.id.sequence == 10 })
+        XCTAssertFalse(state.rows.contains { [10, 11].contains($0.id.sequence) })
 
         guard case .userMessage(let text, let origin) = state.rows[0].content else {
             return XCTFail("Expected user message row")
@@ -162,6 +162,131 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         )
     }
 
+    func testToolDisclosureCollapsesHistoryAndExpandsOnlyNewLiveActivity() throws {
+        let historicalEvents: [CompatibleConversationEvent] = [
+            knownEvent(
+                sequence: 1,
+                payload: .toolStarted(.init(
+                    callID: "historical-call",
+                    toolName: "Read",
+                    detail: "input"
+                ))
+            ),
+            knownEvent(
+                sequence: 2,
+                payload: .toolFinished(.init(
+                    callID: "historical-call",
+                    outcome: .succeeded,
+                    detail: "output"
+                ))
+            ),
+        ]
+        let historical = ToasttyConversationPresentationAdapter.makeState(
+            events: historicalEvents,
+            projectionRunID: runID(1),
+            projectionGeneration: 7,
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+        var disclosure = ToasttyToolBatchDisclosureState()
+        disclosure.reconcile(
+            activity: ToasttyToolBatchActivity.make(from: historical.blocks),
+            revision: historical.revision
+        )
+        let historicalID = try XCTUnwrap(historical.blocks.first?.id)
+        XCTAssertFalse(disclosure.isExpanded(historicalID))
+
+        let appendedEvents = historicalEvents + [
+            knownEvent(
+                sequence: 3,
+                payload: .assistantMessage(.init(text: "next step", phase: .final))
+            ),
+            knownEvent(
+                sequence: 4,
+                payload: .toolStarted(.init(
+                    callID: "live-call",
+                    toolName: "Build",
+                    detail: "starting"
+                ))
+            ),
+        ]
+        let appendedStart = ToasttyConversationPresentationAdapter.makeState(
+            events: appendedEvents,
+            projectionRunID: runID(1),
+            projectionGeneration: 7,
+            phase: .live,
+            revision: .appended,
+            historyTruncated: false
+        )
+        disclosure.reconcile(
+            activity: ToasttyToolBatchActivity.make(from: appendedStart.blocks),
+            revision: appendedStart.revision
+        )
+        let liveID = try XCTUnwrap(appendedStart.blocks.last?.id)
+        XCTAssertFalse(disclosure.isExpanded(historicalID))
+        XCTAssertTrue(disclosure.isExpanded(liveID))
+
+        let finishedEvents = appendedEvents + [
+            knownEvent(
+                sequence: 5,
+                payload: .toolFinished(.init(
+                    callID: "live-call",
+                    outcome: .succeeded,
+                    detail: "finished"
+                ))
+            ),
+        ]
+        let appendedFinish = ToasttyConversationPresentationAdapter.makeState(
+            events: finishedEvents,
+            projectionRunID: runID(1),
+            projectionGeneration: 7,
+            phase: .live,
+            revision: .appended,
+            historyTruncated: false
+        )
+        disclosure.reconcile(
+            activity: ToasttyToolBatchActivity.make(from: appendedFinish.blocks),
+            revision: appendedFinish.revision
+        )
+        XCTAssertTrue(
+            disclosure.isExpanded(liveID),
+            "An expanded live batch must stay expanded as more rows arrive"
+        )
+
+        disclosure.toggle(liveID)
+        XCTAssertFalse(disclosure.isExpanded(liveID))
+
+        let appendedAfterCollapse = ToasttyConversationPresentationAdapter.makeState(
+            events: finishedEvents + [
+                knownEvent(
+                    sequence: 6,
+                    payload: .toolStarted(.init(
+                        callID: "next-live-call",
+                        toolName: "Test",
+                        detail: "starting"
+                    ))
+                ),
+            ],
+            projectionRunID: runID(1),
+            projectionGeneration: 7,
+            phase: .live,
+            revision: .appended,
+            historyTruncated: false
+        )
+        disclosure.reconcile(
+            activity: ToasttyToolBatchActivity.make(from: appendedAfterCollapse.blocks),
+            revision: appendedAfterCollapse.revision
+        )
+        XCTAssertFalse(
+            disclosure.isExpanded(liveID),
+            "A user-collapsed live batch must stay collapsed as more rows arrive"
+        )
+
+        disclosure.toggle(liveID)
+        XCTAssertTrue(disclosure.isExpanded(liveID))
+    }
+
     private func allKnownEventsWithUnknownMiddle() -> [CompatibleConversationEvent] {
         let interaction = RemotePendingInteraction(
             id: interactionID,
@@ -220,9 +345,13 @@ final class ToasttyConversationPresentationTests: XCTestCase {
                 sequence: 9,
                 payload: .sessionBindingChanged(.init(reason: .runtimeResumed))
             ),
+            knownEvent(
+                sequence: 10,
+                payload: .sendDeliveryUnconfirmed(.init(clientRequestID: "send-1"))
+            ),
             .unknown(
                 conversationID: conversationID,
-                sequence: 10,
+                sequence: 11,
                 kind: "future_optional_event"
             ),
         ]

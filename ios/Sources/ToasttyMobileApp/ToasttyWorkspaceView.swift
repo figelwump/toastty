@@ -5,6 +5,22 @@ struct ToasttyWorkspaceView: View {
     let workspaceID: UUID
     let controller: HomeScreenController
 
+    @AppStorage private var storedWorkspaceSessionFilter: String
+
+    init(
+        workspaceID: UUID,
+        controller: HomeScreenController,
+        defaults: UserDefaults = .standard
+    ) {
+        self.workspaceID = workspaceID
+        self.controller = controller
+        _storedWorkspaceSessionFilter = AppStorage(
+            wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
+            ToasttyWorkspaceSessionFilter.preferenceKey,
+            store: defaults
+        )
+    }
+
     var body: some View {
         Group {
             if let workspace = controller.workspace(id: workspaceID) {
@@ -24,26 +40,51 @@ struct ToasttyWorkspaceView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .accessibilityIdentifier("toastty-mobile-workspace-detail")
+        .onAppear {
+            if ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) == nil {
+                storedWorkspaceSessionFilter =
+                    ToasttyWorkspaceSessionFilter.defaultFilter.rawValue
+            }
+        }
     }
 
     private func workspaceList(_ workspace: MobileWorkspace) -> some View {
-        let sortedConversations = workspace.sortedConversations
+        let visibleConversations = selectedWorkspaceSessionFilter.conversations(in: workspace)
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
-                Text(sessionCountLabel(workspace.conversations.count))
+                workspaceSessionFilterPicker
+
+                Text(sessionCountLabel(visibleConversations.count))
                     .font(.caption2.monospaced())
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                     .padding(.horizontal, 6)
                     .accessibilityIdentifier("toastty-mobile-workspace-context")
 
-                ForEach(sortedConversations) { conversation in
-                    ToasttySessionCard(
-                        conversation: conversation,
-                        showsWorkspace: false,
-                        accessibilityIdentifier:
-                            "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
-                        onOpen: onOpen
+                if visibleConversations.isEmpty {
+                    ContentUnavailableView(
+                        selectedWorkspaceSessionFilter == .active
+                            ? "No active sessions"
+                            : "No sessions yet",
+                        systemImage: "rectangle.stack",
+                        description: Text(
+                            selectedWorkspaceSessionFilter == .active
+                                ? "Choose All to show idle sessions in this workspace."
+                                : "Open a session in Toastty on your Mac and it will appear here."
+                        )
                     )
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .padding(.vertical, 24)
+                    .accessibilityIdentifier("toastty-mobile-workspace-empty")
+                } else {
+                    ForEach(visibleConversations) { conversation in
+                        ToasttySessionCard(
+                            conversation: conversation,
+                            showsWorkspace: false,
+                            accessibilityIdentifier:
+                                "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
+                            onOpen: onOpen
+                        )
+                    }
                 }
             }
             .padding(.horizontal, 14)
@@ -53,10 +94,31 @@ struct ToasttyWorkspaceView: View {
             .frame(maxWidth: .infinity)
             // Reorders happen only on status-bucket transitions; animate so
             // the moving card stays trackable.
-            .animation(.default, value: sortedConversations.map(\.id))
+            .animation(.default, value: visibleConversations.map(\.id))
         }
         .scrollIndicators(.hidden)
         .background(ToasttyDesignTokens.background)
+    }
+
+    private var selectedWorkspaceSessionFilter: ToasttyWorkspaceSessionFilter {
+        ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) ?? .defaultFilter
+    }
+
+    private var workspaceSessionFilterSelection: Binding<ToasttyWorkspaceSessionFilter> {
+        Binding(
+            get: { selectedWorkspaceSessionFilter },
+            set: { storedWorkspaceSessionFilter = $0.rawValue }
+        )
+    }
+
+    private var workspaceSessionFilterPicker: some View {
+        Picker("Workspace sessions", selection: workspaceSessionFilterSelection) {
+            ForEach(ToasttyWorkspaceSessionFilter.allCases, id: \.self) { filter in
+                Text(filter.title).tag(filter)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("toastty-mobile-workspace-session-filter")
     }
 
     private func onOpen(_ conversation: MobileConversation) {

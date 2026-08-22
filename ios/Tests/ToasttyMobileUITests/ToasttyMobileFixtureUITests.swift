@@ -8,6 +8,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     private let workingConversationID = "B1000000-0000-0000-0000-000000000002"
     private let firstToasttyConversationID = "B1000000-0000-0000-0000-000000000003"
     private let fourthToasttyConversationID = "B1000000-0000-0000-0000-000000000004"
+    private let researchWorkspaceID = "A1000000-0000-0000-0000-000000000002"
+    private let activeResearchConversationID = "B1000000-0000-0000-0000-000000000005"
+    private let idleResearchConversationID = "B1000000-0000-0000-0000-000000000006"
     private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
     private let openPromptConversationID = "B1000000-0000-0000-0000-000000000007"
 
@@ -239,6 +242,49 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
+    func testWorkspaceFilterDefaultsToAllAndIsSharedWithWorkspaceDetail() throws {
+        let app = launchFixtureApp()
+        selectWorkspacesMode(in: app)
+
+        var filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        XCTAssertTrue(filter.buttons["All"].isSelected)
+
+        let groupedIdle = app.buttons[
+            "toastty-mobile-grouped-card-\(idleResearchConversationID)"
+        ]
+        XCTAssertTrue(scrollHomeTo(groupedIdle, in: app))
+
+        filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
+        filter.buttons["Active"].tap()
+        XCTAssertTrue(groupedIdle.waitForNonExistence(timeout: 5))
+
+        let workspaceURL = try XCTUnwrap(URL(
+            string: "toastty-mobile-dev://workspace/\(researchWorkspaceID)"
+        ))
+        app.open(workspaceURL)
+        XCTAssertTrue(
+            app.descendants(matching: .any)["toastty-mobile-workspace-detail"]
+                .waitForExistence(timeout: 10)
+        )
+
+        filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        XCTAssertTrue(filter.buttons["Active"].isSelected)
+        XCTAssertTrue(app.buttons[
+            "toastty-mobile-workspace-session-\(activeResearchConversationID)"
+        ].exists)
+        XCTAssertFalse(app.buttons[
+            "toastty-mobile-workspace-session-\(idleResearchConversationID)"
+        ].exists)
+
+        filter.buttons["All"].tap()
+        let detailIdle = app.buttons[
+            "toastty-mobile-workspace-session-\(idleResearchConversationID)"
+        ]
+        XCTAssertTrue(scrollWorkspaceTo(detailIdle, in: app))
+    }
+
     func testFixtureHomeModePersistsAcrossRelaunch() {
         var app = launchFixtureApp()
 
@@ -331,7 +377,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-transcript-event-kinds", of: app)
     }
 
-    func testFixtureToolCardPresentsDetailsInSheet() {
+    func testFixtureToolCardExpandsDetailsInlineWithoutPresentingSheet() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "tool-activity"]
         )
@@ -343,22 +389,20 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         toolDisclosure.tap()
 
-        let dismissToolSheet = app.buttons["toastty-mobile-tool-activity-done"]
-        XCTAssertTrue(dismissToolSheet.waitForExistence(timeout: 5))
-        XCTAssertTrue(
-            app.descendants(matching: .any)["toastty-mobile-tool-activity-sheet"].exists
-        )
         let toolStarted = app.descendants(matching: .any)["toastty-mobile-transcript-row-4"]
         let toolFinished = app.descendants(matching: .any)["toastty-mobile-transcript-row-5"]
         XCTAssertTrue(toolStarted.waitForExistence(timeout: 5))
         XCTAssertTrue(toolStarted.label.contains("Read · running"))
         XCTAssertTrue(toolFinished.waitForExistence(timeout: 5))
         XCTAssertTrue(toolFinished.label.contains("Read · succeeded"))
-        attachScreenshot(named: "fixture-tool-activity-sheet", of: app)
-        XCTAssertTrue(dismissToolSheet.isHittable)
-        dismissToolSheet.tap()
-        XCTAssertTrue(dismissToolSheet.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(toolDisclosure.waitForExistence(timeout: 5))
+        XCTAssertFalse(
+            app.descendants(matching: .any)["toastty-mobile-tool-activity-sheet"].exists
+        )
+        attachScreenshot(named: "fixture-tool-activity-inline", of: app)
+
+        toolDisclosure.tap()
+        XCTAssertTrue(toolStarted.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(toolFinished.waitForNonExistence(timeout: 5))
     }
 
     func testSlowReaderKeepsPositionAndCanJumpBackToLiveTail() {

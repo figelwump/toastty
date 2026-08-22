@@ -4,60 +4,150 @@ struct ToasttyToolBatchSelection: Identifiable {
     let id: ToasttyTranscriptRowID
 }
 
+struct ToasttyToolBatchActivity: Equatable {
+    let id: ToasttyTranscriptRowID
+    let lastSequence: UInt64
+
+    static func make(from blocks: [ToasttyTranscriptBlock]) -> [Self] {
+        blocks.compactMap { block in
+            guard case .toolBatch(let rows) = block.content,
+                  let lastSequence = rows.last?.id.sequence else { return nil }
+            return Self(id: block.id, lastSequence: lastSequence)
+        }
+    }
+}
+
+struct ToasttyToolBatchDisclosureState: Equatable {
+    private(set) var expandedIDs: Set<ToasttyTranscriptRowID> = []
+    private var explicitlyCollapsedIDs: Set<ToasttyTranscriptRowID> = []
+    private var lastSequenceByID: [ToasttyTranscriptRowID: UInt64] = [:]
+    private var isInitialized = false
+
+    func isExpanded(_ id: ToasttyTranscriptRowID) -> Bool {
+        expandedIDs.contains(id)
+    }
+
+    mutating func toggle(_ id: ToasttyTranscriptRowID) {
+        if expandedIDs.remove(id) != nil {
+            explicitlyCollapsedIDs.insert(id)
+        } else {
+            expandedIDs.insert(id)
+            explicitlyCollapsedIDs.remove(id)
+        }
+    }
+
+    mutating func reconcile(
+        activity: [ToasttyToolBatchActivity],
+        revision: ToasttyTranscriptRevision
+    ) {
+        let current = activity.reduce(into: [ToasttyTranscriptRowID: UInt64]()) { values, batch in
+            values[batch.id] = batch.lastSequence
+        }
+        let currentIDs = Set(current.keys)
+
+        guard isInitialized else {
+            isInitialized = true
+            lastSequenceByID = current
+            return
+        }
+
+        switch revision {
+        case .initial, .rebuilt:
+            expandedIDs.removeAll(keepingCapacity: true)
+            explicitlyCollapsedIDs.removeAll(keepingCapacity: true)
+        case .appended:
+            for (id, lastSequence) in current {
+                let isNewOrGrowing = lastSequenceByID[id].map { lastSequence > $0 } ?? true
+                if isNewOrGrowing, explicitlyCollapsedIDs.contains(id) == false {
+                    expandedIDs.insert(id)
+                }
+            }
+        case .prepended, .metadataOnly:
+            break
+        }
+
+        expandedIDs.formIntersection(currentIDs)
+        explicitlyCollapsedIDs.formIntersection(currentIDs)
+        lastSequenceByID = current
+    }
+}
+
 struct ToasttyToolBatchCard: View {
     let blockID: ToasttyTranscriptRowID
     let rows: [ToasttyTranscriptRow]
-    let showDetails: () -> Void
+    let isExpanded: Bool
+    let toggleDetails: () -> Void
 
     private var callCount: Int {
         Set(rows.compactMap(\.toolCallID)).count
     }
 
     var body: some View {
-        Button(action: showDetails) {
-            HStack(spacing: 10) {
-                Image(systemName: "wrench.and.screwdriver")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.amberText)
-                    .frame(width: 30, height: 30)
-                    .background(ToasttyDesignTokens.amber.opacity(0.12), in: Circle())
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: toggleDetails) {
+                HStack(spacing: 10) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(ToasttyDesignTokens.amberText)
+                        .frame(width: 30, height: 30)
+                        .background(ToasttyDesignTokens.amber.opacity(0.12), in: Circle())
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(callCount == 1 ? "1 tool call" : "\(callCount) tool calls")
-                        .font(.caption.monospaced().weight(.semibold))
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                    Text("View details")
-                        .font(.caption2.monospaced())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(callCount == 1 ? "1 tool call" : "\(callCount) tool calls")
+                            .font(.caption.monospaced().weight(.semibold))
+                            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        Text(isExpanded ? "Hide details" : "Show details")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(ToasttyDesignTokens.mutedText)
                 }
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(callCount == 1 ? "1 tool call" : "\(callCount) tool calls")
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(isExpanded ? "Collapses tool details" : "Expands tool details")
+            .accessibilityIdentifier(
+                "toastty-mobile-transcript-tool-\(blockID.accessibilitySuffix)"
+            )
 
-                Spacer(minLength: 4)
+            if isExpanded {
+                Divider()
+                    .overlay(ToasttyDesignTokens.border)
+
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(rows) { row in
+                        ToasttyToolEventRow(row: row)
+                    }
+                }
+                .padding(12)
             }
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .background(ToasttyDesignTokens.raisedSurface)
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
-                    style: .continuous
-                )
-                .stroke(ToasttyDesignTokens.border)
-            }
-            .clipShape(RoundedRectangle(
+        }
+        .background(ToasttyDesignTokens.raisedSurface)
+        .overlay {
+            RoundedRectangle(
                 cornerRadius: ToasttyDesignTokens.controlCornerRadius,
                 style: .continuous
-            ))
-            .contentShape(Rectangle())
+            )
+            .stroke(ToasttyDesignTokens.border)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(callCount == 1 ? "1 tool call" : "\(callCount) tool calls")
-        .accessibilityHint("Opens tool details")
-        .accessibilityIdentifier(
-            "toastty-mobile-transcript-tool-\(blockID.accessibilitySuffix)"
-        )
+        .clipShape(RoundedRectangle(
+            cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+            style: .continuous
+        ))
     }
 }
 
+// TODO: Remove the legacy sheet and selection model after the inline flow is
+// verified on a physical device. They intentionally have no invocation path.
 struct ToasttyToolActivitySheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -81,7 +171,7 @@ struct ToasttyToolActivitySheet: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
                             ForEach(rows) { row in
-                                toolEvent(row)
+                                ToasttyToolEventRow(row: row)
                             }
                         }
                         .padding(16)
@@ -105,8 +195,12 @@ struct ToasttyToolActivitySheet: View {
         .presentationDragIndicator(.visible)
         .presentationBackground(ToasttyDesignTokens.background)
     }
+}
 
-    private func toolEvent(_ row: ToasttyTranscriptRow) -> some View {
+private struct ToasttyToolEventRow: View {
+    let row: ToasttyTranscriptRow
+
+    var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: row.toolIcon)
                 .font(.body)

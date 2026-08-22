@@ -1,4 +1,3 @@
-import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 
@@ -27,8 +26,6 @@ enum ToasttyDesignTokens {
     static let green = Color(red: 70 / 255, green: 165 / 255, blue: 126 / 255)
     static let red = Color(red: 224 / 255, green: 88 / 255, blue: 78 / 255)
     static let offline = Color(red: 107 / 255, green: 112 / 255, blue: 118 / 255)
-    static let codex = Color(red: 45 / 255, green: 187 / 255, blue: 160 / 255)
-    static let claude = Color(red: 217 / 255, green: 119 / 255, blue: 87 / 255)
     static let userBubbleSurface = Color(red: 64 / 255, green: 47 / 255, blue: 21 / 255)
     static let userBubbleBorder = Color(red: 90 / 255, green: 62 / 255, blue: 27 / 255)
     static let userBubbleText = Color(red: 240 / 255, green: 232 / 255, blue: 216 / 255)
@@ -60,12 +57,6 @@ enum ToasttyDesignTokens {
         case .error: red
         case .idle: offline
         }
-    }
-
-    static func color(for agent: AgentKind) -> Color {
-        if agent == .claude { return claude }
-        if agent == .codex { return codex }
-        return secondaryText
     }
 }
 

@@ -313,6 +313,9 @@ final class AppSessionController {
 
     func sceneBecameInactive() {
         pairingController?.sceneBecameInactive()
+    }
+
+    func sceneEnteredBackground() {
         Task { await liveController?.background() }
     }
 

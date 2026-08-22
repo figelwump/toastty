@@ -366,19 +366,108 @@ final class LiveConversationControllerTests: XCTestCase {
 
         XCTAssertEqual(
             subject.transcriptPresentation.sendItems.map(\.id),
-            ["pending", "duplicate", "rejected", "uncertain", "operation-failed", "unconfirmed"]
+            [
+                "pending", "duplicate", "confirmed", "rejected", "uncertain",
+                "operation-failed", "unconfirmed",
+            ]
         )
         XCTAssertEqual(
             subject.transcriptPresentation.sendItems.map(\.content),
             [
                 .optimistic(response: .awaitingResponse),
                 .optimistic(response: .duplicate),
+                .optimistic(response: .accepted),
                 .receipt(.init(kind: .rejected(.epochMismatch))),
                 .receipt(.init(kind: .uncertain)),
                 .receipt(.init(kind: .operationFailed)),
                 .receipt(.init(kind: .deliveryUnconfirmed)),
             ]
         )
+    }
+
+    func testOptimisticSendHandsOffToCanonicalUserRowWithoutMissingOrDuplicateFrame() {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live
+        ))
+        subject.consumeSendReconciliation(.init(records: [
+            sendRecord("request-1", .pending(.accepted)),
+        ]))
+        XCTAssertEqual(subject.transcriptPresentation.sendItems.map(\.id), ["request-1"])
+
+        subject.consumeSendReconciliation(.init(records: [
+            sendRecord("request-1", .confirmed(sequence: 2)),
+        ]))
+        XCTAssertEqual(
+            subject.transcriptPresentation.sendItems.map(\.id),
+            ["request-1"],
+            "Confirmation must retain the optimistic row until the canonical row is present"
+        )
+
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1), userEvent(2, clientRequestID: "request-1")],
+            phase: .live
+        ))
+        XCTAssertTrue(subject.transcriptPresentation.sendItems.isEmpty)
+        XCTAssertEqual(subject.transcriptPresentation.rows.map(\.id.sequence), [1, 2])
+
+        let canonicalFirst = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        canonicalFirst.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live
+        ))
+        canonicalFirst.consumeSendReconciliation(.init(records: [
+            sendRecord("request-2", .pending(.accepted)),
+        ]))
+        canonicalFirst.consume(state(
+            runID: runID(1),
+            events: [event(1), userEvent(2, clientRequestID: "request-2")],
+            phase: .live
+        ))
+        XCTAssertTrue(
+            canonicalFirst.transcriptPresentation.sendItems.isEmpty,
+            "An exact canonical echo must suppress a stale optimistic row"
+        )
+        XCTAssertEqual(canonicalFirst.transcriptPresentation.rows.map(\.id.sequence), [1, 2])
+    }
+
+    func testConfirmedSendFromAnotherOrUnknownProjectionDoesNotBecomeGhostBubble() {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        subject.consume(state(
+            runID: runID(1),
+            events: [event(1)],
+            phase: .live
+        ))
+
+        subject.consumeSendReconciliation(.init(records: [
+            SendReconciliationRecord(
+                clientRequestID: "unknown-run",
+                text: "unknown run",
+                projectionRunID: nil,
+                deliveryState: .confirmed(sequence: 2)
+            ),
+            SendReconciliationRecord(
+                clientRequestID: "old-run",
+                text: "old run",
+                projectionRunID: runID(2),
+                deliveryState: .confirmed(sequence: 2)
+            ),
+        ]))
+
+        XCTAssertTrue(subject.transcriptPresentation.sendItems.isEmpty)
     }
 
     func testReconciliationChangeClearsCapacityGateFeedback() async {
@@ -615,6 +704,24 @@ final class LiveConversationControllerTests: XCTestCase {
             payload: .assistantMessage(ConversationAssistantMessagePayload(
                 text: "message \(sequence)",
                 phase: .final
+            ))
+        ))
+    }
+
+    private func userEvent(
+        _ sequence: UInt64,
+        clientRequestID: String
+    ) -> CompatibleConversationEvent {
+        .known(ConversationEvent(
+            conversationID: conversationID,
+            sequence: sequence,
+            eventID: "event-\(sequence)",
+            timestamp: Date(timeIntervalSince1970: TimeInterval(sequence)),
+            provider: .codex,
+            payload: .userMessage(ConversationUserMessagePayload(
+                text: "sent message",
+                origin: .remote,
+                clientRequestID: clientRequestID
             ))
         ))
     }

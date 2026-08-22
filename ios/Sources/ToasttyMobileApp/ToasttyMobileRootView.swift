@@ -86,8 +86,10 @@ struct ToasttyMobileRootView: View {
             switch newPhase {
             case .active:
                 sessionController.sceneBecameActive()
-            case .inactive, .background:
+            case .inactive:
                 sessionController.sceneBecameInactive()
+            case .background:
+                sessionController.sceneEnteredBackground()
             @unknown default:
                 sessionController.sceneBecameInactive()
             }

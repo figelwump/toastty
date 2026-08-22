@@ -374,11 +374,50 @@ final class LiveConversationController {
             phase: transcriptPhase,
             revision: transcriptRevision,
             historyTruncated: historyTruncated,
-            sendItems: ToasttySendPresentationAdapter.makeItems(from: sendReconciliation),
+            sendItems: ToasttySendPresentationAdapter.makeItems(
+                from: sendReconciliationForPresentation
+            ),
             hasOlder: hasOlder,
             isLoadingOlder: isLoadingOlder,
             prependAnchorID: prependAnchorID
         )
+    }
+
+    /// The canonical conversation stream and send-reconciliation stream are
+    /// observed independently. Keep a confirmed optimistic row visible until
+    /// the exact host-echoed request ID is present in the canonical events, so
+    /// SwiftUI never renders an intermediate frame with neither row. The same
+    /// exact-ID check also prevents a duplicate frame if the canonical event
+    /// reaches this controller before the reconciliation update.
+    private var sendReconciliationForPresentation: SendReconciliationState {
+        guard sendReconciliation.records.isEmpty == false else {
+            return sendReconciliation
+        }
+        let canonicalRequestIDs = events.reduce(into: Set<String>()) { requestIDs, event in
+            guard case .known(let known) = event,
+                  case .userMessage(let payload) = known.payload else {
+                return
+            }
+            if let clientRequestID = payload.clientRequestID {
+                requestIDs.insert(clientRequestID)
+            }
+        }
+
+        return SendReconciliationState(records: sendReconciliation.records.compactMap { record in
+            guard canonicalRequestIDs.contains(record.clientRequestID) == false else {
+                return nil
+            }
+            guard case .confirmed = record.deliveryState else { return record }
+            guard record.projectionRunID == projectionRunID else {
+                return nil
+            }
+            return SendReconciliationRecord(
+                clientRequestID: record.clientRequestID,
+                text: record.text,
+                projectionRunID: record.projectionRunID,
+                deliveryState: .pending(.accepted)
+            )
+        })
     }
 
     private func runReadAcknowledgement(
