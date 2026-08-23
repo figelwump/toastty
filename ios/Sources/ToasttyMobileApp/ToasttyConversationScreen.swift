@@ -4,6 +4,7 @@ import ToasttyMobileDomain
 struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @FocusState private var isComposerFocused: Bool
+    @State private var jumpToLiveEdgeRequest: UInt64 = 0
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -12,7 +13,7 @@ struct ToasttyConversationScreen: View {
     @Binding var draft: String
     let isSubmitting: Bool
     let loadOlder: () -> Void
-    let submitDraft: () -> Void
+    let submitDraft: () -> Bool
     let dismissSendReceipt: (String) -> Void
     let onVisibleLiveEdge: (MobileSessionStatus) -> Void
 
@@ -24,7 +25,7 @@ struct ToasttyConversationScreen: View {
         draft: Binding<String> = .constant(""),
         isSubmitting: Bool = false,
         loadOlder: @escaping () -> Void = {},
-        submitDraft: @escaping () -> Void = {},
+        submitDraft: @escaping () -> Bool = { false },
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in }
     ) {
@@ -48,6 +49,7 @@ struct ToasttyConversationScreen: View {
                     loadOlder: loadOlder,
                     dismissSendReceipt: dismissSendReceipt,
                     readAcknowledgementEpoch: conversation.state,
+                    jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
                     onVisibleLiveEdge: {
                         onVisibleLiveEdge(conversation.state)
                     }
@@ -228,7 +230,7 @@ struct ToasttyConversationScreen: View {
     }
 
     private func sendButton(_ presentation: ToasttyComposerPresentation) -> some View {
-        Button(action: submitDraft) {
+        Button(action: sendDraft) {
             Group {
                 if isSubmitting {
                     ProgressView()
@@ -257,6 +259,12 @@ struct ToasttyConversationScreen: View {
         .accessibilityLabel(isSubmitting ? "Sending message" : "Send message")
         .accessibilityValue(isSubmitting ? "In progress" : "")
         .accessibilityIdentifier("toastty-mobile-composer-send")
+    }
+
+    private func sendDraft() {
+        if submitDraft() {
+            jumpToLiveEdgeRequest &+= 1
+        }
     }
 
     private func canSubmit(_ presentation: ToasttyComposerPresentation) -> Bool {

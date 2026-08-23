@@ -617,6 +617,41 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-gated-send-optimistic", of: app)
     }
 
+    func testGatedSendWhileScrolledUpJumpsToLiveEdgeAndFollowsAppendedTail() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        transcript.swipeDown()
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
+
+        let input = app.textFields["toastty-mobile-composer-input"]
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(input.isHittable)
+        input.tap()
+        input.typeText("Send from the older transcript position")
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+
+        let optimistic = app.descendants(matching: .any)[
+            "toastty-mobile-send-optimistic-fixture-enqueued-1"
+        ]
+        XCTAssertTrue(optimistic.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            jumpToLatest.waitForNonExistence(timeout: 5),
+            "Sending must jump from a slow-reader position to the live edge"
+        )
+        XCTAssertTrue(
+            optimistic.isHittable,
+            "The newly appended optimistic message should remain visible at the live edge"
+        )
+        attachScreenshot(named: "fixture-gated-send-from-slow-reader", of: app)
+    }
+
     func testGatedSendUnconfirmedReceiptShowsAttemptedTextAndDismisses() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send-receipt"]

@@ -168,7 +168,7 @@ enum ToasttyConversationFixture {
             rows: fixture.rows.filter { $0.id.sequence != 14 },
             sendItems: sendItems,
             phase: .live,
-            revision: .initial,
+            revision: sendItems.isEmpty ? .initial : .appended,
             historyTruncated: false
         )
     }

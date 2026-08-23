@@ -358,23 +358,23 @@ struct ToasttyMobileRootView: View {
         )
     }
 
-    private func conversationSubmitAction(for conversationID: UUID) -> () -> Void {
+    private func conversationSubmitAction(for conversationID: UUID) -> () -> Bool {
         {
             guard let submission = composerDraftState.beginSubmission(
                 for: conversationID
             ) else {
-                return
+                return false
             }
             recordDiagnostic(.sendStarted)
             guard let controller = sessionController.liveController?.activeConversationController,
                   controller.conversationID == conversationID else {
-                fixtureSubmit(submission)
-                return
+                return fixtureSubmit(submission)
             }
             Task { @MainActor in
                 let outcome = await controller.send(submission.text)
                 finishSubmission(submission, outcome: outcome)
             }
+            return true
         }
     }
 
@@ -443,7 +443,7 @@ struct ToasttyMobileRootView: View {
 #endif
     }
 
-    private func fixtureSubmit(_ submission: ToasttyComposerSubmission) {
+    private func fixtureSubmit(_ submission: ToasttyComposerSubmission) -> Bool {
 #if DEBUG
         guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
               submission.conversationID == Self.fixtureOpenPromptConversationID else {
@@ -451,7 +451,7 @@ struct ToasttyMobileRootView: View {
                 submission,
                 outcome: .notEnqueued(.conversationNotOpen)
             )
-            return
+            return false
         }
         let clientRequestID = "fixture-enqueued-\(fixtureSendItems.count + 1)"
         fixtureSendItems.append(ToasttySendPresentationItem(
@@ -464,11 +464,13 @@ struct ToasttyMobileRootView: View {
             submission,
             outcome: .enqueued(clientRequestID: clientRequestID)
         )
+        return true
 #else
         finishSubmission(
             submission,
             outcome: .notEnqueued(.conversationNotOpen)
         )
+        return false
 #endif
     }
 

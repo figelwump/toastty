@@ -10,6 +10,7 @@ struct ToasttyTranscriptView: View {
     let dismissSendReceipt: (String) -> Void
     let readAcknowledgementEpoch: MobileSessionStatus?
     let onVisibleLiveEdge: () -> Void
+    @Binding private var jumpToLiveEdgeRequest: UInt64
 
     @State private var toolBatchDisclosure = ToasttyToolBatchDisclosureState()
     @State private var turnFold = ToasttyTurnFoldState()
@@ -19,7 +20,6 @@ struct ToasttyTranscriptView: View {
     @State private var measuredBoundaryID: ToasttyTranscriptRowID?
     @State private var isVisible = false
     @State private var followsLiveEdge = true
-    @State private var jumpToLiveEdgeRequest: UInt64 = 0
     @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
 
     init(
@@ -27,6 +27,7 @@ struct ToasttyTranscriptView: View {
         loadOlder: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
         readAcknowledgementEpoch: MobileSessionStatus? = nil,
+        jumpToLiveEdgeRequest: Binding<UInt64>,
         onVisibleLiveEdge: @escaping () -> Void = {}
     ) {
         self.state = state
@@ -34,6 +35,7 @@ struct ToasttyTranscriptView: View {
         self.dismissSendReceipt = dismissSendReceipt
         self.readAcknowledgementEpoch = readAcknowledgementEpoch
         self.onVisibleLiveEdge = onVisibleLiveEdge
+        _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
     }
 
     var body: some View {
