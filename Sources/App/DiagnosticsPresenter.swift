@@ -16,13 +16,13 @@ enum DiagnosticsSkillHandoffGenerator {
         """
         I want to send Toastty diagnostics.
 
-        Read and follow the Toastty diagnostics skill at this exact filesystem path:
+        Read and follow the Toastty diagnostics skill at:
         \(skillPath)
 
-        For every command in that skill, use this exact Toastty CLI executable path:
+        Use this Toastty CLI:
         \(cliPath)
 
-        This is a direct handoff to the skill bundled with the running Toastty app. Do not rely on skill discovery or TOASTTY_SKILLS_ROOT. The two lines above are literal filesystem paths with no quotes included; shell-quote each path when using it in a command. Show me the collected diagnostics review and wait for my explicit approval before uploading anything. Submit anonymously unless I explicitly provide contact text for this report; never infer or discover contact information. If either path is inaccessible, stop and show me the exact error instead of guessing another path or workflow.
+        Use these exact bundled paths. If either is inaccessible, stop and tell me.
         """
     }
 }
