@@ -56,23 +56,50 @@ struct ToasttyStatusLabel: View {
     }
 }
 
+/// The app-wide activity spinner, matching the desktop app's
+/// `SessionStatusIndicator`: a trimmed arc rotating once every 0.9 seconds.
+struct ToasttySpinner: View {
+    var size: CGFloat = 8
+    var lineWidth: CGFloat = 1.5
+    var color: Color = ToasttyDesignTokens.amber
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+            Circle()
+                .trim(from: 0.16, to: 0.9)
+                .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(angle(at: context.date))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+
+    private func angle(at date: Date) -> Angle {
+        let phase = date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: 0.9) / 0.9
+        return .degrees(phase * 360)
+    }
+}
+
 /// Session-row status treatment: the working bucket swaps the dot for a
 /// mini spinner so in-flight sessions read as live everywhere they appear.
+/// The spinner occupies the same 8-point slot as the status dot so rows
+/// keep a single text baseline.
 struct ToasttySessionStatusLabel: View {
     let bucket: MobileSessionBucket
 
     @ViewBuilder
     var body: some View {
         if bucket == .working {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(ToasttyDesignTokens.color(for: .working))
-                    .accessibilityHidden(true)
+            HStack(spacing: 5) {
+                ToasttySpinner(color: ToasttyDesignTokens.color(for: .working))
                 Text(MobileSessionBucket.working.rawValue)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .font(.caption2.monospaced())
             .foregroundStyle(ToasttyDesignTokens.color(for: .working))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(MobileSessionBucket.working.rawValue)
         } else {
             ToasttyStatusLabel(bucket: bucket, compact: true)
         }

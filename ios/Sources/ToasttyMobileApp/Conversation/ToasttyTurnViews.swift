@@ -77,9 +77,7 @@ struct ToasttyTurnWorkStrip: View {
         Button(action: toggle) {
             HStack(spacing: 8) {
                 if isLive {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(ToasttyDesignTokens.amber)
+                    ToasttySpinner(size: 9)
                 } else {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
