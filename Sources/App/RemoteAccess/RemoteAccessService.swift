@@ -310,6 +310,18 @@ final class RemoteAccessService: ObservableObject {
     private let claudePromptStabilizationDelay: Duration
     private let sendConfirmationTimeout: Duration
 
+    private struct RemotePresentationDiagnosticState: Equatable {
+        var provider: AgentKind
+        var workspaceID: UUID?
+        var panelID: UUID?
+        var lifecycleState: RemoteSessionState
+        var presentationStatus: RemoteSessionPresentationStatus?
+        var isUnread: Bool
+    }
+    private var loggedPresentationStateByConversationID: [
+        RemoteConversationID: RemotePresentationDiagnosticState
+    ] = [:]
+
     private struct PromptStabilizationWork {
         var token: ConversationPromptStabilizationToken
         var task: Task<Void, Never>
@@ -550,13 +562,28 @@ final class RemoteAccessService: ObservableObject {
         // Resume-record and conversation-identity changes mutate panel state
         // without touching the session registry; without this observer a
         // rollout-path change would never restart the transcript tailer.
-        storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, _, _ in
+        storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
             guard let self,
                   self.isEnabled,
                   self.conversationTrackingGeneration == generation else { return }
             switch action {
             case .updateTerminalPanelResumeRecord, .updateTerminalPanelRemoteConversationID:
                 self.syncConversations()
+            case .focusPanel(let workspaceID, let panelID),
+                 .markPanelNotificationsRead(let workspaceID, let panelID),
+                 .recordDesktopNotification(let workspaceID, let panelID?):
+                guard Self.panelIsUnread(
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    state: previousState
+                ) != Self.panelIsUnread(
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    state: nextState
+                ) else {
+                    return
+                }
+                self.scheduleSessionListBroadcast()
             default:
                 break
             }
@@ -597,6 +624,7 @@ final class RemoteAccessService: ObservableObject {
         pendingSendCorrelator = RemotePendingSendCorrelator()
         coordinator = RemoteInputCoordinator()
         writeControllableSessions = []
+        loggedPresentationStateByConversationID.removeAll()
     }
 
     // MARK: - Pairing and devices
@@ -770,17 +798,35 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteConversationReadAcknowledgementRequest,
         device _: RemoteDeviceRecord
     ) -> RemoteConversationReadAcknowledgementResult {
-        guard isReady else { return .conversationNotFound }
+        guard isReady else {
+            logReadAcknowledgement(
+                request,
+                result: .conversationNotFound,
+                reason: "service_not_ready"
+            )
+            return .conversationNotFound
+        }
         guard let projector = projectionStore.projectorState(for: request.conversationID),
               let mappedPanelID = panelIDByConversationID[request.conversationID],
               let candidate = scanConversationCandidates(mintingIDs: false).first(where: {
                   $0.conversationID == request.conversationID && $0.panelID == mappedPanelID
               }) else {
+            logReadAcknowledgement(
+                request,
+                result: .conversationNotFound,
+                reason: "conversation_not_bound"
+            )
             return .conversationNotFound
         }
         guard let workspace = store.state.workspacesByID[candidate.workspaceID],
               let tabID = workspace.tabID(containingPanelID: mappedPanelID)
                 ?? workspace.rightAuxPanelTabLocation(containingPanelID: mappedPanelID)?.mainTabID else {
+            logReadAcknowledgement(
+                request,
+                result: .conversationNotFound,
+                reason: "panel_not_placed",
+                before: candidate
+            )
             return .conversationNotFound
         }
         let result = Self.readAcknowledgementResult(
@@ -791,6 +837,13 @@ final class RemoteAccessService: ObservableObject {
             isUnread: workspace.tab(id: tabID)?.unreadPanelIDs.contains(mappedPanelID) == true
         )
         guard result == .acknowledged else {
+            logReadAcknowledgement(
+                request,
+                result: result,
+                reason: "boundary_evaluated",
+                before: candidate,
+                after: candidate
+            )
             return result
         }
 
@@ -798,11 +851,51 @@ final class RemoteAccessService: ObservableObject {
             workspaceID: candidate.workspaceID,
             panelID: mappedPanelID
         ))
-        // The action also drives SessionRuntimeStore's ready -> idle
-        // transition. Publish the resulting list immediately rather than
-        // waiting for the debounced registry observer.
+        let updatedCandidate = scanConversationCandidates(mintingIDs: false).first(where: {
+            $0.conversationID == request.conversationID && $0.panelID == mappedPanelID
+        })
+        logReadAcknowledgement(
+            request,
+            result: .acknowledged,
+            reason: "unread_cleared",
+            before: candidate,
+            after: updatedCandidate
+        )
+        // The action may also drive SessionRuntimeStore's active ready -> idle
+        // transition. Publish immediately; broadcastSessionList cancels the
+        // coalesced store-action broadcast scheduled for the same mutation.
         broadcastSessionList()
         return .acknowledged
+    }
+
+    private func logReadAcknowledgement(
+        _ request: RemoteConversationReadAcknowledgementRequest,
+        result: RemoteConversationReadAcknowledgementResult,
+        reason: String,
+        before: ConversationCandidate? = nil,
+        after: ConversationCandidate? = nil
+    ) {
+        ToasttyLog.info(
+            "Remote conversation read acknowledgement evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": request.conversationID.rawValue.uuidString,
+                "projection_run_id": request.projectionRunID.rawValue.uuidString,
+                "projection_generation": String(request.projectionGeneration),
+                "observed_through_sequence": String(request.observedThroughSequence),
+                "result": result.rawValue,
+                "reason": reason,
+                "workspace_id": before?.workspaceID.uuidString ?? after?.workspaceID.uuidString ?? "unknown",
+                "panel_id": before?.panelID.uuidString ?? after?.panelID.uuidString ?? "unknown",
+                "provider": before?.provider.rawValue ?? after?.provider.rawValue ?? "unknown",
+                "before_lifecycle": before?.registryState.rawValue ?? "unknown",
+                "before_presentation": before?.presentationStatus?.rawValue ?? "none",
+                "before_unread": before.map { String($0.isUnread) } ?? "unknown",
+                "after_lifecycle": after?.registryState.rawValue ?? "unknown",
+                "after_presentation": after?.presentationStatus?.rawValue ?? "none",
+                "after_unread": after.map { String($0.isUnread) } ?? "unknown",
+            ]
+        )
     }
 
     nonisolated static func readAcknowledgementResult(
@@ -838,6 +931,7 @@ final class RemoteAccessService: ObservableObject {
         var runtimeBindingStartedAt: Date?
         var registryState: RemoteSessionState
         var presentationStatus: RemoteSessionPresentationStatus?
+        var isUnread: Bool
         var statusDetail: String?
         var updatedAt: Date
         var transcriptPath: String?
@@ -1196,6 +1290,12 @@ final class RemoteAccessService: ObservableObject {
                 // such as child activity, stopped ready/error sessions, and
                 // focus-driven idle transitions.
                 let panelStatus = sessionRuntimeStore.panelStatus(for: panelID)
+                guard let tabID = workspace.tabID(containingPanelID: panelID)
+                    ?? workspace.rightAuxPanelTabLocation(containingPanelID: panelID)?.mainTabID,
+                      let workspaceTab = workspace.tab(id: tabID) else {
+                    continue
+                }
+                let isUnread = workspaceTab.unreadPanelIDs.contains(panelID)
                 let hasLiveAgent = activeRecord.map { $0.isActive && $0.agent != .processWatch } ?? false
                 let restorableProvider = terminalState.resumeRecord?.agent
                 let restorableFeed = terminalState.resumeRecord.flatMap { resumeRecord in
@@ -1275,8 +1375,12 @@ final class RemoteAccessService: ObservableObject {
                         record.status.map { Self.remoteState(for: $0.kind) }
                     } ?? (hasLiveAgent ? .starting : .offline),
                     presentationStatus: panelStatus.map {
-                        Self.remotePresentationStatus(for: $0.status.kind)
+                        Self.remotePresentationStatus(
+                            for: $0.status.kind,
+                            isUnread: isUnread
+                        )
                     },
+                    isUnread: isUnread,
                     statusDetail: Self.remoteStatusDetail(from: panelStatus?.status.detail),
                     updatedAt: max(
                         activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? .distantPast,
@@ -1409,7 +1513,8 @@ final class RemoteAccessService: ObservableObject {
     }
 
     nonisolated static func remotePresentationStatus(
-        for kind: SessionStatusKind
+        for kind: SessionStatusKind,
+        isUnread: Bool
     ) -> RemoteSessionPresentationStatus {
         switch kind {
         case .idle:
@@ -1419,7 +1524,7 @@ final class RemoteAccessService: ObservableObject {
         case .needsApproval:
             return .needsApproval
         case .ready:
-            return .ready
+            return isUnread ? .ready : .idle
         case .error:
             return .error
         }
@@ -1640,7 +1745,73 @@ final class RemoteAccessService: ObservableObject {
 
     private func broadcastSessionList() {
         guard isEnabled else { return }
-        server.broadcast(.sessionList(facadeSessionList(at: Date())))
+        sessionListBroadcastTask?.cancel()
+        sessionListBroadcastTask = nil
+        let snapshot = facadeSessionList(at: Date())
+        logRemotePresentationChanges(in: snapshot)
+        server.broadcast(.sessionList(snapshot))
+    }
+
+    private func logRemotePresentationChanges(in snapshot: RemoteSessionListSnapshot) {
+        let current = Dictionary(uniqueKeysWithValues: snapshot.conversations.map { summary in
+            let state = RemotePresentationDiagnosticState(
+                provider: summary.provider,
+                workspaceID: summary.placement.workspaceID,
+                panelID: summary.placement.panelID,
+                lifecycleState: summary.state,
+                presentationStatus: summary.presentationStatus,
+                isUnread: Self.panelIsUnread(
+                    workspaceID: summary.placement.workspaceID,
+                    panelID: summary.placement.panelID,
+                    state: store.state
+                )
+            )
+            return (summary.conversationID, state)
+        })
+
+        let conversationIDs = Set(loggedPresentationStateByConversationID.keys).union(current.keys)
+        for conversationID in conversationIDs.sorted(by: {
+            $0.rawValue.uuidString < $1.rawValue.uuidString
+        }) {
+            let previous = loggedPresentationStateByConversationID[conversationID]
+            let next = current[conversationID]
+            guard previous != next else { continue }
+
+            let reference = next ?? previous
+            ToasttyLog.info(
+                "Remote session presentation changed",
+                category: .automation,
+                metadata: [
+                    "conversation_id": conversationID.rawValue.uuidString,
+                    "change": previous == nil ? "added" : (next == nil ? "removed" : "updated"),
+                    "workspace_id": reference?.workspaceID?.uuidString ?? "unknown",
+                    "panel_id": reference?.panelID?.uuidString ?? "unknown",
+                    "provider": reference?.provider.rawValue ?? "unknown",
+                    "previous_lifecycle": previous?.lifecycleState.rawValue ?? "none",
+                    "previous_presentation": previous?.presentationStatus?.rawValue ?? "none",
+                    "previous_unread": previous.map { String($0.isUnread) } ?? "none",
+                    "current_lifecycle": next?.lifecycleState.rawValue ?? "none",
+                    "current_presentation": next?.presentationStatus?.rawValue ?? "none",
+                    "current_unread": next.map { String($0.isUnread) } ?? "none",
+                ]
+            )
+        }
+        loggedPresentationStateByConversationID = current
+    }
+
+    nonisolated private static func panelIsUnread(
+        workspaceID: UUID?,
+        panelID: UUID?,
+        state: AppState
+    ) -> Bool {
+        guard let workspaceID,
+              let panelID,
+              let workspace = state.workspacesByID[workspaceID],
+              let tabID = workspace.tabID(containingPanelID: panelID)
+                ?? workspace.rightAuxPanelTabLocation(containingPanelID: panelID)?.mainTabID else {
+            return false
+        }
+        return workspace.tab(id: tabID)?.unreadPanelIDs.contains(panelID) == true
     }
 
     // MARK: - Gated free-form send

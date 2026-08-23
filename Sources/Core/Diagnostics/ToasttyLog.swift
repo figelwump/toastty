@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum ToasttyLogLevel: String, CaseIterable, Comparable, Sendable {
@@ -180,17 +181,23 @@ public enum ToasttyLog {
     }
 }
 
-private final class ToasttyLogWriter: @unchecked Sendable {
+final class ToasttyLogWriter: @unchecked Sendable {
     private let configuration: ToasttyLogConfiguration
     private let lock = NSLock()
     private var fileHandle: FileHandle?
+    private var rotationLockDescriptor: Int32 = -1
+    private var didReportFileSinkFailure = false
     private let formatter = ISO8601DateFormatter()
 
     init(configuration: ToasttyLogConfiguration) {
         self.configuration = configuration
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if configuration.enabled {
-            fileHandle = Self.openLogFileIfConfigured(configuration)
+    }
+
+    deinit {
+        try? fileHandle?.close()
+        if rotationLockDescriptor >= 0 {
+            Darwin.close(rotationLockDescriptor)
         }
     }
 
@@ -245,9 +252,7 @@ private final class ToasttyLogWriter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        if fileHandle == nil {
-            fileHandle = Self.openLogFileIfConfigured(configuration)
-        }
+        prepareFileHandleForWrite(incomingByteCount: UInt64(lineData.count))
         if let handle = fileHandle {
             do {
                 if #available(macOS 10.15.4, *) {
@@ -256,7 +261,8 @@ private final class ToasttyLogWriter: @unchecked Sendable {
                     handle.write(lineData)
                 }
             } catch {
-                self.fileHandle = nil
+                closeFileHandle()
+                reportFileSinkFailureOnce("write_failed")
             }
         }
 
@@ -275,41 +281,199 @@ private final class ToasttyLogWriter: @unchecked Sendable {
         return line
     }
 
-    private static func openLogFileIfConfigured(_ configuration: ToasttyLogConfiguration) -> FileHandle? {
-        guard let filePath = configuration.filePath else {
-            return nil
+    private func prepareFileHandleForWrite(incomingByteCount: UInt64) {
+        guard let filePath = configuration.filePath else { return }
+        let fileURL = URL(fileURLWithPath: filePath)
+
+        do {
+            try reopenFileHandleIfNeeded(fileURL: fileURL)
+        } catch {
+            closeFileHandle()
+            reportFileSinkFailureOnce("open_failed")
+            return
         }
 
-        let fileURL = URL(fileURLWithPath: filePath)
-        do {
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try rotateIfOversized(fileURL: fileURL, maxBytes: configuration.maxFileSizeBytes)
-            if FileManager.default.fileExists(atPath: fileURL.path) == false {
-                FileManager.default.createFile(atPath: fileURL.path, contents: nil)
-            }
-            let handle = try FileHandle(forWritingTo: fileURL)
-            try handle.seekToEnd()
-            return handle
-        } catch {
-            return nil
+        guard shouldRotate(
+            fileURL: fileURL,
+            incomingByteCount: incomingByteCount,
+            maxBytes: configuration.maxFileSizeBytes
+        ) else {
+            return
+        }
+
+        let rotationResult = withRotationLock(fileURL: fileURL) {
+            rotateIfStillNeeded(fileURL: fileURL, incomingByteCount: incomingByteCount)
+        }
+        switch rotationResult {
+        case .acquired:
+            return
+        case .contended:
+            // Rotation is already in progress elsewhere. Keep logging and let
+            // the next record retry; an identity check first avoids retaining
+            // a handle that the competing writer already moved.
+            try? reopenFileHandleIfNeeded(fileURL: fileURL)
+        case .unavailable:
+            // A broken or unwritable lock path must not permit unbounded log
+            // growth. Fall back to the pre-coordination behavior under this
+            // process's NSLock; rotation remains best-effort across processes.
+            rotateIfStillNeeded(fileURL: fileURL, incomingByteCount: incomingByteCount)
         }
     }
 
-    private static func rotateIfOversized(fileURL: URL, maxBytes: UInt64) throws {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+    private func rotateIfStillNeeded(fileURL: URL, incomingByteCount: UInt64) {
+        do {
+            // A competing writer may have rotated while this writer was
+            // acquiring the lock. Rebind and recheck before replacing the
+            // one retained archive.
+            try reopenFileHandleIfNeeded(fileURL: fileURL)
+            guard shouldRotate(
+                fileURL: fileURL,
+                incomingByteCount: incomingByteCount,
+                maxBytes: configuration.maxFileSizeBytes
+            ) else {
+                return
+            }
+            closeFileHandle()
+            try Self.rotate(fileURL: fileURL)
+            try reopenFileHandleIfNeeded(fileURL: fileURL)
+        } catch {
+            closeFileHandle()
+            reportFileSinkFailureOnce("rotation_failed")
+            try? reopenFileHandleIfNeeded(fileURL: fileURL)
+        }
+    }
+
+    private func reopenFileHandleIfNeeded(fileURL: URL) throws {
+        if let handle = fileHandle,
+           let handleIdentity = Self.fileIdentity(descriptor: handle.fileDescriptor),
+           let pathIdentity = Self.fileIdentity(path: fileURL.path),
+           handleIdentity == pathIdentity {
             return
         }
+        closeFileHandle()
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
 
-        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let fileSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
-        guard fileSize > maxBytes else {
-            return
+        let descriptor = Self.openFile(
+            path: fileURL.path,
+            flags: O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            throw ToasttyLogFileError.openFailed
         }
+        fileHandle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
 
+    private func shouldRotate(
+        fileURL: URL,
+        incomingByteCount: UInt64,
+        maxBytes: UInt64
+    ) -> Bool {
+        guard let fileSize = Self.fileSize(path: fileURL.path), fileSize > 0 else {
+            // Always accept one record into an empty file, even when that
+            // single record is larger than the configured limit.
+            return false
+        }
+        let (projectedSize, overflowed) = fileSize.addingReportingOverflow(incomingByteCount)
+        return overflowed || projectedSize > maxBytes
+    }
+
+    private static func rotate(fileURL: URL) throws {
         let archivedURL = fileURL.deletingPathExtension().appendingPathExtension("previous.log")
-        if FileManager.default.fileExists(atPath: archivedURL.path) {
-            try FileManager.default.removeItem(at: archivedURL)
+        let result = fileURL.path.withCString { currentPath in
+            archivedURL.path.withCString { archivedPath in
+                Darwin.rename(currentPath, archivedPath)
+            }
         }
-        try FileManager.default.moveItem(at: fileURL, to: archivedURL)
+        guard result != 0 else { return }
+        let errorCode = errno
+        if errorCode == ENOENT {
+            return
+        }
+        throw ToasttyLogFileError.rotationFailed(errorCode)
+    }
+
+    private func withRotationLock(fileURL: URL, _ body: () -> Void) -> RotationLockResult {
+        if rotationLockDescriptor < 0 {
+            let lockURL = fileURL.appendingPathExtension("lock")
+            rotationLockDescriptor = Self.openFile(
+                path: lockURL.path,
+                flags: O_RDWR | O_CREAT | O_CLOEXEC
+            )
+            guard rotationLockDescriptor >= 0 else {
+                reportFileSinkFailureOnce("rotation_lock_unavailable")
+                return .unavailable
+            }
+        }
+
+        guard Darwin.lockf(rotationLockDescriptor, F_TLOCK, 0) == 0 else {
+            let errorCode = errno
+            if errorCode == EACCES || errorCode == EAGAIN {
+                return .contended
+            }
+            Darwin.close(rotationLockDescriptor)
+            rotationLockDescriptor = -1
+            reportFileSinkFailureOnce("rotation_lock_failed")
+            return .unavailable
+        }
+        // lockf ownership is process-scoped; the surrounding NSLock is what
+        // serializes this process, while lockf coordinates sibling processes.
+        defer { _ = Darwin.lockf(rotationLockDescriptor, F_ULOCK, 0) }
+        body()
+        return .acquired
+    }
+
+    private func closeFileHandle() {
+        try? fileHandle?.close()
+        fileHandle = nil
+    }
+
+    private func reportFileSinkFailureOnce(_ reason: String) {
+        guard didReportFileSinkFailure == false else { return }
+        didReportFileSinkFailure = true
+        let message = "Toastty file logging issue (\(reason)); later records will retry.\n"
+        try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
+    }
+
+    private struct FileIdentity: Equatable {
+        var device: dev_t
+        var inode: ino_t
+    }
+
+    private static func fileIdentity(descriptor: Int32) -> FileIdentity? {
+        var info = stat()
+        guard Darwin.fstat(descriptor, &info) == 0 else { return nil }
+        return FileIdentity(device: info.st_dev, inode: info.st_ino)
+    }
+
+    private static func fileIdentity(path: String) -> FileIdentity? {
+        var info = stat()
+        let result = path.withCString { Darwin.fstatat(AT_FDCWD, $0, &info, 0) }
+        guard result == 0 else { return nil }
+        return FileIdentity(device: info.st_dev, inode: info.st_ino)
+    }
+
+    private static func fileSize(path: String) -> UInt64? {
+        var info = stat()
+        let result = path.withCString { Darwin.fstatat(AT_FDCWD, $0, &info, 0) }
+        guard result == 0 else { return nil }
+        return UInt64(max(0, info.st_size))
+    }
+
+    private static func openFile(path: String, flags: Int32) -> Int32 {
+        path.withCString { Darwin.open($0, flags, S_IRUSR | S_IWUSR) }
+    }
+
+    private enum ToasttyLogFileError: Error {
+        case openFailed
+        case rotationFailed(Int32)
+    }
+
+    private enum RotationLockResult {
+        case acquired
+        case contended
+        case unavailable
     }
 }

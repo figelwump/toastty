@@ -89,18 +89,139 @@ struct RemoteAccessServiceSafetyTests {
         ) == .alreadyRead)
     }
 
-    @Test func desktopSessionStatusMapsExactlyToRemotePresentationStatus() {
+    @Test func desktopSessionStatusMapsToRemotePresentationStatusWithUnreadReadySemantics() {
         let cases: [(SessionStatusKind, RemoteSessionPresentationStatus)] = [
             (.idle, .idle),
             (.working, .working),
             (.needsApproval, .needsApproval),
-            (.ready, .ready),
             (.error, .error),
         ]
 
         for (desktop, remote) in cases {
-            #expect(RemoteAccessService.remotePresentationStatus(for: desktop) == remote)
+            #expect(RemoteAccessService.remotePresentationStatus(
+                for: desktop,
+                isUnread: false
+            ) == remote)
+            #expect(RemoteAccessService.remotePresentationStatus(
+                for: desktop,
+                isUnread: true
+            ) == remote)
         }
+        #expect(RemoteAccessService.remotePresentationStatus(
+            for: .ready,
+            isUnread: true
+        ) == .ready)
+        #expect(RemoteAccessService.remotePresentationStatus(
+            for: .ready,
+            isUnread: false
+        ) == .idle)
+    }
+
+    @MainActor
+    @Test func readAcknowledgementPublishesReadReadyConversationAsIdle() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
+        defer { fixture.removeRuntimeFiles() }
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+
+        #expect(fixture.store.send(.recordDesktopNotification(
+            workspaceID: workspaceID,
+            panelID: fixture.panelID
+        )))
+        let before = fixture.service.facadeSessionList(at: fixture.confirmedAt)
+        let beforeSummary = try #require(before.conversations.first {
+            $0.conversationID == fixture.conversationID
+        })
+        #expect(beforeSummary.presentationStatus == .ready)
+
+        let result = fixture.service.acknowledgeConversationRead(
+            RemoteConversationReadAcknowledgementRequest(
+                conversationID: fixture.conversationID,
+                projectionRunID: before.projectionRunID,
+                projectionGeneration: beforeSummary.projectionGeneration,
+                observedThroughSequence: beforeSummary.latestSequence
+            ),
+            device: RemoteDeviceRecord(
+                name: "Test iPhone",
+                scopes: [.read],
+                createdAt: fixture.confirmedAt
+            )
+        )
+
+        #expect(result == .acknowledged)
+        #expect(fixture.summary.presentationStatus == .idle)
+        #expect(fixture.server.sessionListSnapshots.last?.conversations.first {
+            $0.conversationID == fixture.conversationID
+        }?.presentationStatus == .idle)
+    }
+
+    @MainActor
+    @Test func readReadyRestorableClaudeConversationProjectsIdleAfterRead() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
+        defer { fixture.removeRuntimeFiles() }
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+
+        #expect(fixture.store.send(.recordDesktopNotification(
+            workspaceID: workspaceID,
+            panelID: fixture.panelID
+        )))
+        fixture.sessionRuntimeStore.stopSession(
+            sessionID: fixture.sessionID,
+            at: fixture.confirmedAt.addingTimeInterval(1)
+        )
+        #expect(fixture.publishResumeRecord())
+        #expect(fixture.summary.presentationStatus == .ready)
+
+        #expect(fixture.store.send(.markPanelNotificationsRead(
+            workspaceID: workspaceID,
+            panelID: fixture.panelID
+        )))
+
+        #expect(fixture.summary.presentationStatus == .idle)
+    }
+
+    @MainActor
+    @Test func desktopReadTransitionSchedulesFreshIdleSessionList() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
+        defer { fixture.removeRuntimeFiles() }
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+
+        #expect(fixture.store.send(.recordDesktopNotification(
+            workspaceID: workspaceID,
+            panelID: fixture.panelID
+        )))
+        fixture.server.removeAllBroadcasts()
+        #expect(fixture.store.send(.markPanelNotificationsRead(
+            workspaceID: workspaceID,
+            panelID: fixture.panelID
+        )))
+
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.server.sessionListSnapshots.last?.conversations.first {
+                $0.conversationID == fixture.conversationID
+            }?.presentationStatus == .idle
+        }
+        #expect(fixture.server.sessionListSnapshots.count == 1)
+    }
+
+    @MainActor
+    @Test func desktopUnreadTransitionSchedulesFreshReadySessionList() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
+        defer { fixture.removeRuntimeFiles() }
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+
+        #expect(fixture.summary.presentationStatus == .idle)
+        fixture.server.removeAllBroadcasts()
+        #expect(fixture.store.send(.recordDesktopNotification(
+            workspaceID: workspaceID,
+            panelID: fixture.panelID
+        )))
+
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.server.sessionListSnapshots.last?.conversations.first {
+                $0.conversationID == fixture.conversationID
+            }?.presentationStatus == .ready
+        }
+        #expect(fixture.server.sessionListSnapshots.count == 1)
     }
 
     @Test func desktopSessionDetailProjectsThroughSharedWireNormalization() {
@@ -820,6 +941,14 @@ private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
 
     private(set) var startedPorts: [UInt16] = []
     private(set) var stopCallCount = 0
+    private(set) var broadcasts: [RemoteGatewayStreamMessage] = []
+
+    var sessionListSnapshots: [RemoteSessionListSnapshot] {
+        broadcasts.compactMap { message in
+            guard case .sessionList(let snapshot) = message else { return nil }
+            return snapshot
+        }
+    }
 
     var startCallCount: Int {
         startedPorts.count
@@ -835,7 +964,13 @@ private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
 
     func disconnectWebSockets(for _: UUID) {}
     func disconnectAllWebSockets() {}
-    func broadcast(_: RemoteGatewayStreamMessage) {}
+    func broadcast(_ message: RemoteGatewayStreamMessage) {
+        broadcasts.append(message)
+    }
+
+    func removeAllBroadcasts() {
+        broadcasts.removeAll()
+    }
 
     func reportReady(port: UInt16) {
         onListenerReady?(port)

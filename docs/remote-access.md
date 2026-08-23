@@ -67,6 +67,13 @@ through Toastty's injected instrumentation; that history remains available
 only while the current Toastty app process retains it and is rebuilt from the
 provider when a managed launch or resume exposes a snapshot.
 
+**Ready** is an unread-completion presentation, shared with Toastty on the Mac.
+When Toastty Mobile has rendered a conversation through the transcript's live
+edge, it acknowledges that boundary to the Mac. The Mac clears the panel's
+unread state and the remote presentation returns to **Idle**, including for a
+completed session that has already stopped. Reading the same completion on the
+Mac has the same effect on the phone.
+
 Remote replies are enabled by default for active sessions. For every supported
 provider, Toastty requires an exact match between the active managed session,
 panel, provider, and provider-native session before it enables replies. You can
