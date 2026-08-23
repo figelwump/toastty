@@ -284,6 +284,12 @@ function commandContext(command, dryRun) {
     TOASTTY_IOS_RUN_ROOT: runRoot,
     TOASTTY_IOS_WORKTREE_ID: rawWorktreeID,
   };
+  if (
+    environment.TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM === undefined
+    && environment.TOASTTY_IOS_DEVELOPMENT_TEAM !== undefined
+  ) {
+    environment.TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM = environment.TOASTTY_IOS_DEVELOPMENT_TEAM;
+  }
 
   return {
     bundleSuffix,
@@ -443,7 +449,7 @@ function nativeDeviceSpec(options, context) {
 }
 
 function printHelp() {
-  process.stdout.write(`Usage: node ios/scripts/toastty-ios.mjs <command> [options]\n\nCommands:\n  generate       Install Tuist packages and generate the Xcode workspace\n  build          Generate, select an iOS 18+ simulator, and build the app\n  test           Generate, select an iOS 18+ simulator, and run all app tests\n  native-device  Build Debug for the fixed development identity, then install and launch it\n\nAll commands:\n  --dry-run          Print a deterministic plan without invoking tools\n\nNative device options:\n  --preflight-only   Check the toolchain and selected physical iPhone, then stop\n  --build-only       Build and validate the signed app without install or launch\n  --device <value>   Select an exact CoreDevice identifier, UDID, hostname, or unique name\n\nEnvironment:\n  TOASTTY_IOS_CONFIGURATION             Debug or Release (default: Debug)\n  TOASTTY_IOS_DESTINATION               Explicit simulator xcodebuild destination\n  TOASTTY_IOS_SIMULATOR_DEVICE_NAMES    Preferred iPhone names, comma-separated\n  TOASTTY_IOS_RUN_ID                    Simulator run label\n  TOASTTY_IOS_RUN_ROOT                  Simulator run directory override\n  TOASTTY_IOS_DERIVED_DATA_PATH         Simulator DerivedData override\n  TOASTTY_IOS_WORKTREE_ID               Worktree identity override\n  TOASTTY_IOS_DEVELOPMENT_TEAM          Apple development team for a device build\n  TOASTTY_NATIVE_DEVICE_RUN_ID          Physical-device run label override\n  TOASTTY_NATIVE_DEVICE_RUN_ROOT        Physical-device evidence directory override\n  TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH Physical-device DerivedData override\n`);
+  process.stdout.write(`Usage: node ios/scripts/toastty-ios.mjs <command> [options]\n\nCommands:\n  generate       Install Tuist packages and generate the Xcode workspace\n  build          Generate, select an iOS 18+ simulator, and build the app\n  test           Generate, select an iOS 18+ simulator, and run all app tests\n  native-device  Build Debug for the fixed development identity, then install and launch it\n\nAll commands:\n  --dry-run          Print a deterministic plan without invoking tools\n\nNative device options:\n  --preflight-only   Check the toolchain and selected physical iPhone, then stop\n  --build-only       Build and validate the signed app without install or launch\n  --device <value>   Select an exact CoreDevice identifier, UDID, hostname, or unique name\n\nEnvironment:\n  TOASTTY_IOS_CONFIGURATION             Debug or Release (default: Debug)\n  TOASTTY_IOS_DESTINATION               Explicit simulator xcodebuild destination\n  TOASTTY_IOS_SIMULATOR_DEVICE_NAMES    Preferred iPhone names, comma-separated\n  TOASTTY_IOS_RUN_ID                    Simulator run label\n  TOASTTY_IOS_RUN_ROOT                  Simulator run directory override\n  TOASTTY_IOS_DERIVED_DATA_PATH         Simulator DerivedData override\n  TOASTTY_IOS_WORKTREE_ID               Worktree identity override\n  TOASTTY_IOS_DEVELOPMENT_TEAM          Override the repository Apple development team\n  TOASTTY_NATIVE_DEVICE_RUN_ID          Physical-device run label override\n  TOASTTY_NATIVE_DEVICE_RUN_ROOT        Physical-device evidence directory override\n  TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH Physical-device DerivedData override\n`);
 }
 
 function main() {

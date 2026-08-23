@@ -101,9 +101,12 @@ open ios/ToasttyMobile.xcworkspace
 ```
 
 The dispatcher runs `tuist install` and `tuist generate --no-open` from the
-`ios/` graph. In Xcode, use the `ToasttyMobileApp` scheme with an iOS 18 or
-newer Simulator. To generate and build or run all app tests from the command
-line, use:
+`ios/` graph. Generated projects use the Toastty development team
+`SP7JP8254U` with automatic signing by default, so regenerating the workspace
+preserves the Xcode signing selection. Set `TOASTTY_IOS_DEVELOPMENT_TEAM` when
+generating to override that team. In Xcode, use the `ToasttyMobileApp` scheme
+with an iOS 18 or newer Simulator. To generate and build or run all app tests
+from the command line, use:
 
 ```bash
 node ios/scripts/toastty-ios.mjs build

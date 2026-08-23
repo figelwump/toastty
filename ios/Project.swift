@@ -86,10 +86,13 @@ let gatewayURL = optionalManifestValue([
     "TUIST_TOASTTY_MOBILE_GATEWAY_URL",
     "TOASTTY_MOBILE_GATEWAY_URL",
 ])
-let developmentTeam = optionalManifestValue([
-    "TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM",
-    "TOASTTY_IOS_DEVELOPMENT_TEAM",
-])
+let developmentTeam = manifestValue(
+    [
+        "TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM",
+        "TOASTTY_IOS_DEVELOPMENT_TEAM",
+    ],
+    default: "SP7JP8254U"
+)
 let releaseCodeSignIdentity = optionalManifestValue([
     "TUIST_TOASTTY_MOBILE_RELEASE_CODE_SIGN_IDENTITY",
 ])
@@ -134,23 +137,17 @@ var appSettings: SettingsDictionary = [
     "TOASTTY_MOBILE_URL_SCHEME[config=Release]": SettingValue(stringLiteral: releaseURLScheme),
 ]
 
-if let developmentTeam {
-    appSettings["CODE_SIGN_STYLE"] = "Automatic"
-    appSettings["DEVELOPMENT_TEAM"] = SettingValue(stringLiteral: developmentTeam)
-    if let releaseProvisioningProfile {
-        appSettings["CODE_SIGN_STYLE[config=Release]"] = "Manual"
-        appSettings["PROVISIONING_PROFILE_SPECIFIER[config=Release]"] = SettingValue(stringLiteral: releaseProvisioningProfile)
-    }
-    if let releaseCodeSignIdentity {
-        appSettings["CODE_SIGN_IDENTITY[config=Release]"] = SettingValue(stringLiteral: releaseCodeSignIdentity)
-    }
-    if let releaseOtherCodeSignFlags {
-        appSettings["OTHER_CODE_SIGN_FLAGS[config=Release]"] = SettingValue(stringLiteral: releaseOtherCodeSignFlags)
-    }
-} else {
-    appSettings["CODE_SIGN_IDENTITY"] = "-"
-    appSettings["CODE_SIGN_STYLE"] = "Manual"
-    appSettings["DEVELOPMENT_TEAM"] = ""
+appSettings["CODE_SIGN_STYLE"] = "Automatic"
+appSettings["DEVELOPMENT_TEAM"] = SettingValue(stringLiteral: developmentTeam)
+if let releaseProvisioningProfile {
+    appSettings["CODE_SIGN_STYLE[config=Release]"] = "Manual"
+    appSettings["PROVISIONING_PROFILE_SPECIFIER[config=Release]"] = SettingValue(stringLiteral: releaseProvisioningProfile)
+}
+if let releaseCodeSignIdentity {
+    appSettings["CODE_SIGN_IDENTITY[config=Release]"] = SettingValue(stringLiteral: releaseCodeSignIdentity)
+}
+if let releaseOtherCodeSignFlags {
+    appSettings["OTHER_CODE_SIGN_FLAGS[config=Release]"] = SettingValue(stringLiteral: releaseOtherCodeSignFlags)
 }
 
 var appInfoPlist: [String: Plist.Value] = [

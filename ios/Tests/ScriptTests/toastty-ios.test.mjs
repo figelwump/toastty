@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const testPath = fileURLToPath(import.meta.url);
 const iosRoot = path.resolve(path.dirname(testPath), "../..");
 const dispatcherPath = path.join(iosRoot, "scripts", "toastty-ios.mjs");
+const projectManifestPath = path.join(iosRoot, "Project.swift");
 
 function runDispatcher(args, environment = {}) {
   const childEnvironment = { ...process.env };
@@ -68,6 +69,7 @@ fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({
   tool,
   args,
   bundleSuffix: process.env.TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX,
+  developmentTeam: process.env.TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM,
   runRoot: process.env.TOASTTY_IOS_RUN_ROOT,
   derivedDataPath: process.env.TOASTTY_IOS_DERIVED_DATA_PATH,
 }) + "\\n");
@@ -142,6 +144,37 @@ test("all commands have stable, tool-free dry-run plans", () => {
     assert.equal(`com.giantthings.toastty.mobile${plan.bundleSuffix}`, "com.giantthings.toastty.mobile.dev.feature-mobile-ios");
     assert.equal(plan.environment.TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX, plan.bundleSuffix);
   }
+});
+
+test("Tuist generation keeps the repository development team unless overridden", () => {
+  const manifest = readFileSync(projectManifestPath, "utf8");
+
+  assert.match(
+    manifest,
+    /let developmentTeam = manifestValue\([\s\S]*?"TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM"[\s\S]*?"TOASTTY_IOS_DEVELOPMENT_TEAM"[\s\S]*?default: "SP7JP8254U"[\s\S]*?\)/,
+  );
+  assert.match(manifest, /appSettings\["CODE_SIGN_STYLE"\] = "Automatic"/);
+  assert.match(
+    manifest,
+    /appSettings\["DEVELOPMENT_TEAM"\] = SettingValue\(stringLiteral: developmentTeam\)/,
+  );
+  assert.doesNotMatch(manifest, /appSettings\["DEVELOPMENT_TEAM"\] = ""/);
+});
+
+test("generation forwards the public development-team override to Tuist", () => {
+  const toolchain = createStubToolchain();
+  const result = runDispatcher(["generate"], {
+    ...toolchain.environment,
+    TOASTTY_IOS_DEVELOPMENT_TEAM: "TEAM123456",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const commands = readLog(toolchain.logPath);
+  assert.deepEqual(commands.map(({ tool, args }) => [tool, args]), [
+    ["tuist", ["install"]],
+    ["tuist", ["generate", "--no-open"]],
+  ]);
+  assert.ok(commands.every(({ developmentTeam }) => developmentTeam === "TEAM123456"));
 });
 
 test("bundle suffix sanitization is deterministic, bounded, and collision-resistant when truncated", () => {
