@@ -2,6 +2,7 @@ import Foundation
 
 public enum DiagnosticsSocketState: String, Codable, Equatable, Sendable {
     case healthy
+    case permissionDenied = "permission-denied"
     case refused
     case timeout
     case stale
@@ -62,6 +63,7 @@ public struct DiagnosticsSocketStat: Codable, Equatable, Sendable {
     public var groupID: UInt32?
     public var sizeBytes: UInt64?
     public var error: String?
+    public var errnoCode: Int32?
 
     public init(
         exists: Bool,
@@ -70,7 +72,8 @@ public struct DiagnosticsSocketStat: Codable, Equatable, Sendable {
         ownerUID: UInt32?,
         groupID: UInt32?,
         sizeBytes: UInt64?,
-        error: String?
+        error: String?,
+        errnoCode: Int32? = nil
     ) {
         self.exists = exists
         self.isSocket = isSocket
@@ -79,6 +82,7 @@ public struct DiagnosticsSocketStat: Codable, Equatable, Sendable {
         self.groupID = groupID
         self.sizeBytes = sizeBytes
         self.error = error
+        self.errnoCode = errnoCode
     }
 }
 

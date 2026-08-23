@@ -5,10 +5,12 @@ import Foundation
 struct DiagnosticsSocketProbe {
     typealias ConnectProbe = (String, TimeInterval) -> DiagnosticsSocketConnectResult
     typealias PingProbe = (String, TimeInterval) -> DiagnosticsSocketPingResult
+    typealias StatProbe = (String) -> DiagnosticsSocketStat
 
     var timeoutInterval: TimeInterval = 2
     var connectProbe: ConnectProbe = Self.defaultConnectProbe
     var pingProbe: PingProbe = Self.defaultPingProbe
+    var statProbe: StatProbe = Self.defaultSocketStat
     var fileManager: FileManager = .default
 
     func probe(
@@ -32,7 +34,7 @@ struct DiagnosticsSocketProbe {
             candidates: candidates,
             override: pathSourceOverride
         )
-        let stat = socketStat(path: socketPath)
+        let stat = statProbe(socketPath)
         let instancePID = readInstancePID(runtimePaths: runtimePaths)
         let instancePIDAlive = instancePID.map(Self.processIsAlive)
 
@@ -46,9 +48,12 @@ struct DiagnosticsSocketProbe {
                 ping = nil
             }
         } else {
+            let status = Self.isPermissionDenied(stat.errnoCode)
+                ? "permission-denied"
+                : stat.exists ? "not-socket" : "not-found"
             connect = DiagnosticsSocketConnectResult(
-                status: stat.exists ? "not-socket" : "not-found",
-                errnoCode: nil,
+                status: status,
+                errnoCode: stat.errnoCode,
                 error: stat.error,
                 latencyMs: nil
             )
@@ -75,6 +80,9 @@ struct DiagnosticsSocketProbe {
         connect: DiagnosticsSocketConnectResult,
         ping: DiagnosticsSocketPingResult?
     ) -> DiagnosticsSocketState {
+        if Self.isPermissionDenied(stat.errnoCode) {
+            return .permissionDenied
+        }
         guard stat.exists else {
             return .noSocket
         }
@@ -88,10 +96,17 @@ struct DiagnosticsSocketProbe {
         switch connect.status {
         case "connected":
             return ping?.ok == true ? .healthy : .stale
+        case "permission-denied":
+            return .permissionDenied
         case "refused":
             return .refused
         case "timeout":
             return .timeout
+        case "error":
+            if Self.isPermissionDenied(connect.errnoCode) {
+                return .permissionDenied
+            }
+            return .stale
         default:
             return .stale
         }
@@ -130,10 +145,11 @@ struct DiagnosticsSocketProbe {
         return .legacy
     }
 
-    private func socketStat(path: String) -> DiagnosticsSocketStat {
+    private static func defaultSocketStat(path: String) -> DiagnosticsSocketStat {
         var info = stat()
         guard lstat(path, &info) == 0 else {
-            if errno == ENOENT {
+            let statErrno = errno
+            if statErrno == ENOENT {
                 return DiagnosticsSocketStat(
                     exists: false,
                     isSocket: false,
@@ -141,7 +157,8 @@ struct DiagnosticsSocketProbe {
                     ownerUID: nil,
                     groupID: nil,
                     sizeBytes: nil,
-                    error: nil
+                    error: nil,
+                    errnoCode: statErrno
                 )
             }
 
@@ -152,7 +169,8 @@ struct DiagnosticsSocketProbe {
                 ownerUID: nil,
                 groupID: nil,
                 sizeBytes: nil,
-                error: String(cString: strerror(errno))
+                error: String(cString: strerror(statErrno)),
+                errnoCode: statErrno
             )
         }
 
@@ -165,6 +183,10 @@ struct DiagnosticsSocketProbe {
             sizeBytes: UInt64(info.st_size),
             error: nil
         )
+    }
+
+    private static func isPermissionDenied(_ errnoCode: Int32?) -> Bool {
+        errnoCode == EPERM || errnoCode == EACCES
     }
 
     private func readInstancePID(runtimePaths: ToasttyRuntimePaths) -> Int32? {
@@ -403,6 +425,8 @@ struct DiagnosticsSocketProbe {
     ) -> DiagnosticsSocketConnectResult {
         let status: String
         switch errnoCode {
+        case EPERM, EACCES:
+            status = "permission-denied"
         case ECONNREFUSED:
             status = "refused"
         case ETIMEDOUT:

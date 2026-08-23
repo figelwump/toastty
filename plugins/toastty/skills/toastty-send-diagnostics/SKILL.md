@@ -92,6 +92,30 @@ the printed CLI and diagnostics paths
 for the later submission; do not rely on shell variables persisting between
 tool calls.
 
+### Socket Permission Retry
+
+Before review or any upload approval, inspect the collected bundle's structured
+`socket.stat` and `socket.connect` fields. Treat the first result as
+permission-limited when either:
+
+- `socket.stat.errnoCode` is `1` (`EPERM`) or `13` (`EACCES`); or
+- the target exists and is a Unix socket, and either `socket.state` is
+  `permission-denied` or `socket.connect.errnoCode` is `1` or `13`.
+
+In that case, request the narrowest permission the agent runtime supports to
+connect to that exact Unix socket while running the exact doctor-and-collection
+workflow above, then rerun that workflow once with the same CLI path and note.
+This is the only collection retry allowed by this skill. Do not use `sudo`,
+change socket permissions, disable sandboxing for the session, restart Toastty,
+remove the socket, or select a different Toastty instance.
+
+If the retry produces a complete bundle, use its doctor and diagnostics files
+as authoritative, even when it reveals a different socket failure. If it shows
+a healthy socket, explain in the review that the first result was limited by
+the agent sandbox. If scoped access is unavailable, denied, or the retry is
+still permission-limited, stop retrying and describe socket health as
+inconclusive rather than stale; use the most recent complete bundle for review.
+
 ## Review
 
 Before asking to upload, show the user a concise review containing:
@@ -108,7 +132,8 @@ Base the privacy summary on the diagnostics structure, redaction metadata, and
 printed summary. Do not paste the full diagnostics JSON when it is large.
 Do not run broad heuristic grep or token scans over the raw JSON unless a
 warning, failure, or secret-scan result indicates a problem. Do not recollect
-merely to improve the note.
+merely to improve the note or for any reason outside the socket permission retry
+above.
 
 Then ask whether the user approves sending this exact reviewed file to the
 Toastty developer team. Explain that anonymous submission is fine and that the

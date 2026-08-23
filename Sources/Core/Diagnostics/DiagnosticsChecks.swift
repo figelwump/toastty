@@ -177,6 +177,9 @@ public enum DiagnosticsCheckEvaluator {
         if let error = socket.connect.error {
             evidence.append("connect error: \(error)")
         }
+        if let errnoCode = socket.connect.errnoCode {
+            evidence.append("connect errno: \(errnoCode)")
+        }
         if let ping = socket.ping {
             evidence.append("ping: \(ping.ok ? "ok" : "failed")")
             if let latencyMs = ping.latencyMs {
@@ -202,6 +205,30 @@ public enum DiagnosticsCheckEvaluator {
                 summary: "Toastty's automation socket is reachable.",
                 evidence: evidence,
                 remediation: nil
+            )
+        case .permissionDenied:
+            if let mode = socket.stat.mode {
+                evidence.append("socket mode: \(mode)")
+            }
+            if let ownerUID = socket.stat.ownerUID {
+                evidence.append("socket owner uid: \(ownerUID)")
+            }
+            if let groupID = socket.stat.groupID {
+                evidence.append("socket group id: \(groupID)")
+            }
+            if let error = socket.stat.error {
+                evidence.append("socket stat error: \(error)")
+            }
+            if let errnoCode = socket.stat.errnoCode {
+                evidence.append("socket stat errno: \(errnoCode)")
+            }
+            return DiagnosticsCheckResult(
+                id: "automation-socket",
+                title: "Automation socket",
+                status: .fail,
+                summary: "This process was denied permission to inspect or connect to Toastty's automation socket.",
+                evidence: evidence,
+                remediation: "Socket health is inconclusive from this process. Rerun `toastty doctor` in an environment allowed to connect to the resolved Unix socket. If access is still denied outside a sandbox, verify ownership and permissions for the socket and its parent directory. Do not remove the socket based on this result."
             )
         case .noSocket:
             return DiagnosticsCheckResult(

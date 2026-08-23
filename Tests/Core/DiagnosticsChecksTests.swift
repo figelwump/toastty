@@ -308,6 +308,31 @@ struct DiagnosticsChecksTests {
     }
 
     @Test
+    func socketPermissionDenialIsInconclusiveInsteadOfStale() throws {
+        let report = DiagnosticsCheckEvaluator.evaluate(
+            diagnosticsBundle(
+                socket: socketResult(state: .permissionDenied),
+                shell: shellSection(markerPresent: true),
+                shimDirectory: shimDirectory(entries: [
+                    DiagnosticsDirectoryEntry(name: "codex", isDirectory: false, isExecutable: true, sizeBytes: 12),
+                ]),
+                logs: logsSection(currentExists: true)
+            )
+        )
+
+        let socket = try #require(report.checks.first { $0.id == "automation-socket" })
+        #expect(report.overallStatus == .fail)
+        #expect(report.summary.fail == 1)
+        #expect(socket.status == .fail)
+        #expect(socket.summary.contains("denied permission"))
+        #expect(socket.evidence.contains("connect errno: \(EPERM)"))
+        #expect(socket.remediation?.contains("inconclusive") == true)
+        #expect(socket.remediation?.contains("Do not remove the socket") == true)
+        #expect(socket.remediation?.contains("ownership and permissions") == true)
+        #expect(socket.remediation?.contains("Quit and reopen") == false)
+    }
+
+    @Test
     func logCheckDistinguishesDisabledLoggingFromNoConfiguredFile() throws {
         var disabled = logsSection(currentExists: false)
         disabled.configSummary["enabled"] = "false"
@@ -397,6 +422,10 @@ private func socketResult(
             protocolVersion: "1.0",
             error: nil
         )
+        stat = DiagnosticsSocketStat(exists: true, isSocket: true, mode: "0700", ownerUID: nil, groupID: nil, sizeBytes: nil, error: nil)
+    case .permissionDenied:
+        connect = DiagnosticsSocketConnectResult(status: "permission-denied", errnoCode: EPERM, error: "Operation not permitted", latencyMs: 1)
+        ping = nil
         stat = DiagnosticsSocketStat(exists: true, isSocket: true, mode: "0700", ownerUID: nil, groupID: nil, sizeBytes: nil, error: nil)
     case .noSocket:
         connect = DiagnosticsSocketConnectResult(status: "not-found", errnoCode: nil, error: nil, latencyMs: nil)

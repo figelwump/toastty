@@ -6,6 +6,21 @@ import Testing
 
 struct DiagnosticsSocketProbeTests {
     @Test
+    func permissionDeniedStateRoundTripsAndLegacyStatRemainsDecodable() throws {
+        let stateData = try JSONEncoder().encode(DiagnosticsSocketState.permissionDenied)
+        #expect(String(decoding: stateData, as: UTF8.self) == "\"permission-denied\"")
+        #expect(try JSONDecoder().decode(DiagnosticsSocketState.self, from: stateData) == .permissionDenied)
+
+        let legacyStat = Data(
+            #"{"exists":true,"isSocket":true,"mode":"0700","ownerUID":501,"groupID":20,"sizeBytes":0}"#.utf8
+        )
+        let decodedStat = try JSONDecoder().decode(DiagnosticsSocketStat.self, from: legacyStat)
+        #expect(decodedStat.exists)
+        #expect(decodedStat.isSocket)
+        #expect(decodedStat.errnoCode == nil)
+    }
+
+    @Test
     func classifiesNoSocket() throws {
         let root = try makeProbeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -81,6 +96,67 @@ struct DiagnosticsSocketProbeTests {
 
         #expect(refused.state == .refused)
         #expect(timeout.state == .timeout)
+    }
+
+    @Test
+    func classifiesPermissionDeniedWithoutCallingTheSocketStale() throws {
+        let root = try makeProbeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let socketPath = root.appendingPathComponent("permission-denied.sock", isDirectory: false).path
+        try makeSocketFile(at: socketPath)
+
+        for errnoCode in [EPERM, EACCES] {
+            let result = DiagnosticsSocketProbe(
+                connectProbe: { _, _ in
+                    DiagnosticsSocketConnectResult(
+                        status: "error",
+                        errnoCode: errnoCode,
+                        error: String(cString: strerror(errnoCode)),
+                        latencyMs: 1
+                    )
+                },
+                pingProbe: { _, _ in Issue.record("ping should not run"); return healthyPingResult() }
+            )
+            .probe(
+                environment: ["TMPDIR": root.path + "/"],
+                socketPathOverride: socketPath,
+                pathSourceOverride: .cliOption
+            )
+
+            #expect(result.state == .permissionDenied)
+            #expect(result.connect.errnoCode == errnoCode)
+        }
+    }
+
+    @Test
+    func classifiesPermissionDeniedWhenSandboxBlocksSocketMetadata() {
+        for errnoCode in [EPERM, EACCES] {
+            let result = DiagnosticsSocketProbe(
+                connectProbe: { _, _ in Issue.record("connect should not run"); return connectedResult() },
+                pingProbe: { _, _ in Issue.record("ping should not run"); return healthyPingResult() },
+                statProbe: { _ in
+                    DiagnosticsSocketStat(
+                        exists: false,
+                        isSocket: false,
+                        mode: nil,
+                        ownerUID: nil,
+                        groupID: nil,
+                        sizeBytes: nil,
+                        error: String(cString: strerror(errnoCode)),
+                        errnoCode: errnoCode
+                    )
+                }
+            )
+            .probe(
+                environment: ["TMPDIR": "/tmp/"],
+                socketPathOverride: "/tmp/toastty-hidden.sock",
+                pathSourceOverride: .cliOption
+            )
+
+            #expect(result.state == .permissionDenied)
+            #expect(result.connect.status == "permission-denied")
+            #expect(result.stat.errnoCode == errnoCode)
+        }
     }
 
     @Test
