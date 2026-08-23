@@ -60,6 +60,28 @@ final class ToasttyTurnPresentationTests: XCTestCase {
         XCTAssertEqual(turn.noteCount, 1)
     }
 
+    func testUnknownPhaseAssistantMessageCountsAsResponseNotWork() throws {
+        // Codex transcripts deliver assistant messages without a phase field;
+        // they must settle the turn like a final message or the work strip
+        // spins forever and the answer renders demoted.
+        let rows: [ToasttyTranscriptRow] = [
+            row(1, .userMessage(text: "question", origin: .local)),
+            row(2, .toolStarted(callID: "call-1", name: "Bash", detail: nil)),
+            row(3, .assistantMessage(text: "the codex answer", phase: .unknown)),
+        ]
+        let state = ToasttyConversationPresentationState(
+            rows: rows,
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+
+        let turn = try XCTUnwrap(state.turns.first)
+        XCTAssertTrue(turn.hasResponse)
+        XCTAssertEqual(turn.workBlockIDs.map(\.rowID.sequence), [2])
+        XCTAssertEqual(turn.noteCount, 0)
+    }
+
     func testTurnsWithoutWorkOrWithoutUserAnchorAreNotFoldable() {
         let rows: [ToasttyTranscriptRow] = [
             row(1, .toolStarted(callID: "call-0", name: "Read", detail: nil)),

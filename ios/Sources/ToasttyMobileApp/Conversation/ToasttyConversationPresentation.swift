@@ -169,11 +169,17 @@ struct ToasttyTranscriptTurn: Equatable, Sendable {
                     flushTurn()
                     currentID = row.id
                 case .assistantMessage(_, let phase):
-                    if phase == .final {
-                        if currentID != nil { hasResponse = true }
-                    } else if currentID != nil, hasResponse == false {
-                        workBlockIDs.append(block.id)
-                        noteRowIDs.insert(row.id)
+                    // Only explicit commentary folds as work. Codex transcripts
+                    // deliver responses with an unknown phase, so anything not
+                    // marked commentary must count as the turn's response or
+                    // the turn never settles.
+                    if phase == .commentary {
+                        if currentID != nil, hasResponse == false {
+                            workBlockIDs.append(block.id)
+                            noteRowIDs.insert(row.id)
+                        }
+                    } else if currentID != nil {
+                        hasResponse = true
                     }
                 case .subagentSummary, .statusChanged, .interactionResolved,
                      .sessionBindingChanged:
@@ -185,11 +191,13 @@ struct ToasttyTranscriptTurn: Equatable, Sendable {
                 }
             case .messageChunk(let chunk):
                 guard case .assistantMessage(_, let phase) = chunk.row.content else { break }
-                if phase == .final {
-                    if currentID != nil { hasResponse = true }
-                } else if currentID != nil, hasResponse == false {
-                    workBlockIDs.append(block.id)
-                    noteRowIDs.insert(chunk.row.id)
+                if phase == .commentary {
+                    if currentID != nil, hasResponse == false {
+                        workBlockIDs.append(block.id)
+                        noteRowIDs.insert(chunk.row.id)
+                    }
+                } else if currentID != nil {
+                    hasResponse = true
                 }
             case .toolBatch(let rows):
                 if currentID != nil, hasResponse == false {

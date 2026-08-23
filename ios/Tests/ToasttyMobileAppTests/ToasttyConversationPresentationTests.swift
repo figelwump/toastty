@@ -162,7 +162,7 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         )
     }
 
-    func testToolDisclosureCollapsesHistoryAndExpandsOnlyNewLiveActivity() throws {
+    func testToolDisclosureStaysCollapsedUntilToggledAndHonorsExplicitState() throws {
         let historicalEvents: [CompatibleConversationEvent] = [
             knownEvent(
                 sequence: 1,
@@ -225,6 +225,11 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         )
         let liveID = try XCTUnwrap(appendedStart.blocks.last?.id)
         XCTAssertFalse(disclosure.isExpanded(historicalID))
+        XCTAssertFalse(
+            disclosure.isExpanded(liveID),
+            "New live activity must not auto-expand its batch"
+        )
+        disclosure.toggle(liveID)
         XCTAssertTrue(disclosure.isExpanded(liveID))
 
         let finishedEvents = appendedEvents + [

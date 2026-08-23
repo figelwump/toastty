@@ -13,22 +13,19 @@ struct ToasttyToolBatchActivity: Equatable {
     }
 }
 
+/// Tool batches stay collapsed until the user opens them — live activity
+/// keeps its count updating in the header without expanding, which stays
+/// quiet inside an already-expanded working turn.
 struct ToasttyToolBatchDisclosureState: Equatable {
     private(set) var expandedIDs: Set<ToasttyTranscriptBlockID> = []
-    private var explicitlyCollapsedIDs: Set<ToasttyTranscriptBlockID> = []
-    private var lastSequenceByID: [ToasttyTranscriptBlockID: UInt64] = [:]
-    private var isInitialized = false
 
     func isExpanded(_ id: ToasttyTranscriptBlockID) -> Bool {
         expandedIDs.contains(id)
     }
 
     mutating func toggle(_ id: ToasttyTranscriptBlockID) {
-        if expandedIDs.remove(id) != nil {
-            explicitlyCollapsedIDs.insert(id)
-        } else {
+        if expandedIDs.remove(id) == nil {
             expandedIDs.insert(id)
-            explicitlyCollapsedIDs.remove(id)
         }
     }
 
@@ -36,35 +33,13 @@ struct ToasttyToolBatchDisclosureState: Equatable {
         activity: [ToasttyToolBatchActivity],
         revision: ToasttyTranscriptRevision
     ) {
-        let current = activity.reduce(into: [ToasttyTranscriptBlockID: UInt64]()) { values, batch in
-            values[batch.id] = batch.lastSequence
-        }
-        let currentIDs = Set(current.keys)
-
-        guard isInitialized else {
-            isInitialized = true
-            lastSequenceByID = current
-            return
-        }
-
         switch revision {
         case .initial, .rebuilt:
             expandedIDs.removeAll(keepingCapacity: true)
-            explicitlyCollapsedIDs.removeAll(keepingCapacity: true)
-        case .appended:
-            for (id, lastSequence) in current {
-                let isNewOrGrowing = lastSequenceByID[id].map { lastSequence > $0 } ?? true
-                if isNewOrGrowing, explicitlyCollapsedIDs.contains(id) == false {
-                    expandedIDs.insert(id)
-                }
-            }
-        case .prepended, .metadataOnly:
+        case .appended, .prepended, .metadataOnly:
             break
         }
-
-        expandedIDs.formIntersection(currentIDs)
-        explicitlyCollapsedIDs.formIntersection(currentIDs)
-        lastSequenceByID = current
+        expandedIDs.formIntersection(activity.map(\.id))
     }
 }
 
