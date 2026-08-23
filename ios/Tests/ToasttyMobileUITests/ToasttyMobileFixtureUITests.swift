@@ -335,6 +335,27 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         XCTAssertFalse(app.buttons["toastty-mobile-transcript-expand-13"].exists)
 
+        // The settled turn's work opens folded behind its strip; expand it so
+        // every event row is reachable, then return to the live tail.
+        let workStrip = app.buttons["toastty-mobile-transcript-turn-2"]
+        XCTAssertTrue(scrollToOlder(workStrip, in: app))
+        XCTAssertTrue(workStrip.label.contains("worked"))
+        XCTAssertTrue(workStrip.label.contains("1 tool call"))
+        XCTAssertFalse(
+            app.descendants(matching: .any)["toastty-mobile-transcript-row-3"].exists,
+            "Folded work rows stay out of the transcript until expanded"
+        )
+        workStrip.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["toastty-mobile-transcript-row-3"]
+                .waitForExistence(timeout: 5),
+            "Expanding the strip must reveal the turn's work rows"
+        )
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 5))
+
         let expectedRows: [(UInt64, String)] = [
             (1, "session connected"),
             (2, "Extract the gateway protocol"),
@@ -610,10 +631,12 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         ]
         XCTAssertTrue(receipt.waitForExistence(timeout: 5))
         XCTAssertTrue(
-            app.staticTexts["Toastty could not correlate this send after reconnecting"].exists
+            app.staticTexts["Toastty could not correlate this send after reconnecting"]
+                .waitForExistence(timeout: 5)
         )
         XCTAssertTrue(
-            app.staticTexts["Use build 413 and keep the release as a draft."].exists
+            app.staticTexts["Use build 413 and keep the release as a draft."]
+                .waitForExistence(timeout: 5)
         )
         if dismiss.isHittable == false {
             let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]

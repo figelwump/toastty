@@ -12,6 +12,7 @@ struct ToasttyTranscriptView: View {
     let onVisibleLiveEdge: () -> Void
 
     @State private var toolBatchDisclosure = ToasttyToolBatchDisclosureState()
+    @State private var turnFold = ToasttyTurnFoldState()
     @State private var expandedSubagentIDs: Set<ToasttyTranscriptRowID> = []
     @State private var isAtLiveEdge = true
     @State private var hasMeasuredScrollGeometry = false
@@ -230,6 +231,24 @@ struct ToasttyTranscriptView: View {
             .onChange(of: toolBatchActivity, initial: true) { _, activity in
                 toolBatchDisclosure.reconcile(activity: activity, revision: state.revision)
             }
+            .onChange(of: turnFoldKey, initial: true) { old, new in
+                let apply = {
+                    turnFold.reconcile(
+                        turns: new.turns,
+                        settledIDs: new.settledIDs,
+                        revision: new.revision,
+                        previousBoundarySequence: old.firstSequence
+                    )
+                }
+                // Animate only live transitions; initial, rebuilt, and
+                // prepended reconciles must land instantly so opening or
+                // re-anchoring never races an in-flight fold animation.
+                if old != new, new.revision == .appended || new.revision == .metadataOnly {
+                    withAnimation(.easeInOut(duration: 0.25), apply)
+                } else {
+                    apply()
+                }
+            }
         }
     }
 
@@ -240,9 +259,9 @@ struct ToasttyTranscriptView: View {
     private var transcriptStackContent: some View {
         olderHistoryControl
 
-        ForEach(state.blocks) { block in
-            blockView(block)
-                .id(ToasttyConversationScrollTarget.transcript(block.id))
+        ForEach(displayItems) { item in
+            displayItemView(item)
+                .id(item.id)
         }
 
         ForEach(state.sendItems) { item in
@@ -270,6 +289,97 @@ struct ToasttyTranscriptView: View {
         Color.clear
             .frame(height: 2)
             .id(ToasttyConversationScrollTarget.liveEdge)
+    }
+
+    /// Blocks interleaved with per-turn work strips; a folded turn's work
+    /// blocks are omitted and its strip stands in for them.
+    private var displayItems: [ToasttyTranscriptDisplayItem] {
+        guard state.turns.isEmpty == false else {
+            return state.blocks.map { .block($0, isWork: false) }
+        }
+        var turnAtFirstWorkBlock: [ToasttyTranscriptBlockID: ToasttyTranscriptTurn] = [:]
+        var turnForWorkBlock: [ToasttyTranscriptBlockID: ToasttyTranscriptRowID] = [:]
+        for turn in state.turns {
+            if let first = turn.workBlockIDs.first {
+                turnAtFirstWorkBlock[first] = turn
+            }
+            for blockID in turn.workBlockIDs {
+                turnForWorkBlock[blockID] = turn.id
+            }
+        }
+
+        var items: [ToasttyTranscriptDisplayItem] = []
+        items.reserveCapacity(state.blocks.count + state.turns.count)
+        for block in state.blocks {
+            if let turn = turnAtFirstWorkBlock[block.id] {
+                items.append(.workStrip(turn))
+            }
+            if let turnID = turnForWorkBlock[block.id] {
+                if turnFold.isExpanded(turnID) {
+                    items.append(.block(block, isWork: true))
+                }
+            } else {
+                items.append(.block(block, isWork: false))
+            }
+        }
+        return items
+    }
+
+    @ViewBuilder
+    private func displayItemView(_ item: ToasttyTranscriptDisplayItem) -> some View {
+        switch item {
+        case .workStrip(let turn):
+            ToasttyTurnWorkStrip(
+                turn: turn,
+                isExpanded: turnFold.isExpanded(turn.id),
+                isLive: turn.id == liveTurnID,
+                toggle: {
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        turnFold.toggle(turn.id)
+                    }
+                }
+            )
+        case .block(let block, let isWork):
+            if isWork {
+                blockView(block, demoted: true)
+                    .padding(.leading, 14)
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(ToasttyDesignTokens.border)
+                            .frame(width: 2)
+                    }
+            } else {
+                blockView(block)
+            }
+        }
+    }
+
+    private var isSessionWorking: Bool {
+        readAcknowledgementEpoch?.bucket == .working
+    }
+
+    /// Turns whose work may fold: the response arrived, and for the last turn
+    /// the session is also no longer streaming it.
+    private var settledTurnIDs: Set<ToasttyTranscriptRowID> {
+        var settled = Set(state.turns.filter(\.hasResponse).map(\.id))
+        if let last = state.turns.last, isSessionWorking {
+            settled.remove(last.id)
+        }
+        return settled
+    }
+
+    private var liveTurnID: ToasttyTranscriptRowID? {
+        guard let last = state.turns.last else { return nil }
+        return settledTurnIDs.contains(last.id) ? nil : last.id
+    }
+
+    private var turnFoldKey: TurnFoldKey {
+        TurnFoldKey(
+            turns: state.turns,
+            settledIDs: settledTurnIDs,
+            revision: state.revision,
+            firstSequence: state.blocks.first?.id.rowID.sequence
+        )
     }
 
     @ViewBuilder
@@ -344,11 +454,12 @@ struct ToasttyTranscriptView: View {
     }
 
     @ViewBuilder
-    private func blockView(_ block: ToasttyTranscriptBlock) -> some View {
+    private func blockView(_ block: ToasttyTranscriptBlock, demoted: Bool = false) -> some View {
         switch block.content {
         case .row(let row):
             ToasttyTranscriptRowView(
                 row: row,
+                isDemoted: demoted,
                 subagentIsExpanded: expandedSubagentIDs.contains(row.id),
                 toggleSubagentExpansion: { toggle(row.id, in: &expandedSubagentIDs) }
             )
@@ -356,6 +467,7 @@ struct ToasttyTranscriptView: View {
             ToasttyTranscriptRowView(
                 row: chunk.row,
                 chunk: chunk,
+                isDemoted: demoted,
                 subagentIsExpanded: false,
                 toggleSubagentExpansion: {}
             )
@@ -478,8 +590,28 @@ struct TranscriptLiveEdgeVisibilityKey: Equatable {
 
 private enum ToasttyConversationScrollTarget: Hashable {
     case transcript(ToasttyTranscriptBlockID)
+    case turnWork(ToasttyTranscriptRowID)
     case send(String)
     case liveEdge
+}
+
+private enum ToasttyTranscriptDisplayItem: Identifiable {
+    case block(ToasttyTranscriptBlock, isWork: Bool)
+    case workStrip(ToasttyTranscriptTurn)
+
+    var id: ToasttyConversationScrollTarget {
+        switch self {
+        case .block(let block, _): .transcript(block.id)
+        case .workStrip(let turn): .turnWork(turn.id)
+        }
+    }
+}
+
+private struct TurnFoldKey: Equatable {
+    let turns: [ToasttyTranscriptTurn]
+    let settledIDs: Set<ToasttyTranscriptRowID>
+    let revision: ToasttyTranscriptRevision
+    let firstSequence: UInt64?
 }
 
 private struct ScrollChangeKey: Equatable {
@@ -609,6 +741,7 @@ private struct ToasttySendTailItemView: View {
 private struct ToasttyTranscriptRowView: View {
     let row: ToasttyTranscriptRow
     var chunk: ToasttyTranscriptMessageChunk?
+    var isDemoted = false
     let subagentIsExpanded: Bool
     let toggleSubagentExpansion: () -> Void
 
@@ -690,7 +823,12 @@ private struct ToasttyTranscriptRowView: View {
                     .foregroundStyle(ToasttyDesignTokens.userBubbleText)
                     .textSelection(.enabled)
             } else {
-                ToasttyMarkdownText(text: text)
+                ToasttyMarkdownText(
+                    text: text,
+                    textColor: isDemoted
+                        ? ToasttyDesignTokens.secondaryText
+                        : ToasttyDesignTokens.primaryText
+                )
             }
 
             if let metadata {
@@ -790,6 +928,7 @@ private struct ToasttyTranscriptRowView: View {
 
 struct ToasttyMarkdownText: View {
     let text: String
+    var textColor: Color = ToasttyDesignTokens.primaryText
 
     var body: some View {
         // Matches the transcript stack spacing so the seams between chunks of
@@ -799,7 +938,7 @@ struct ToasttyMarkdownText: View {
                 blockView(block)
             }
         }
-        .foregroundStyle(ToasttyDesignTokens.primaryText)
+        .foregroundStyle(textColor)
         .lineSpacing(6)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)

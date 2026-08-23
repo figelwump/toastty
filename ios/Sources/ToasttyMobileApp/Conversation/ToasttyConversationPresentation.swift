@@ -124,6 +124,92 @@ struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
     }
 }
 
+/// One user turn: the user message anchor plus the work (tool batches,
+/// commentary, status markers) between it and its first final response.
+/// Interaction cards are never part of a turn's foldable work — they stay
+/// visible so pending prompts cannot hide.
+struct ToasttyTranscriptTurn: Equatable, Sendable {
+    let id: ToasttyTranscriptRowID
+    let workBlockIDs: [ToasttyTranscriptBlockID]
+    let toolCallCount: Int
+    let noteCount: Int
+    /// True once a final assistant message follows the work, which is what
+    /// makes the work section foldable.
+    let hasResponse: Bool
+
+    static func turns(for blocks: [ToasttyTranscriptBlock]) -> [ToasttyTranscriptTurn] {
+        var turns: [ToasttyTranscriptTurn] = []
+        var currentID: ToasttyTranscriptRowID?
+        var workBlockIDs: [ToasttyTranscriptBlockID] = []
+        var toolCallIDs: Set<String> = []
+        var noteRowIDs: Set<ToasttyTranscriptRowID> = []
+        var hasResponse = false
+
+        func flushTurn() {
+            guard let id = currentID else { return }
+            turns.append(ToasttyTranscriptTurn(
+                id: id,
+                workBlockIDs: workBlockIDs,
+                toolCallCount: toolCallIDs.count,
+                noteCount: noteRowIDs.count,
+                hasResponse: hasResponse
+            ))
+            currentID = nil
+            workBlockIDs.removeAll(keepingCapacity: true)
+            toolCallIDs.removeAll(keepingCapacity: true)
+            noteRowIDs.removeAll(keepingCapacity: true)
+            hasResponse = false
+        }
+
+        for block in blocks {
+            switch block.content {
+            case .row(let row):
+                switch row.content {
+                case .userMessage:
+                    flushTurn()
+                    currentID = row.id
+                case .assistantMessage(_, let phase):
+                    if phase == .final {
+                        if currentID != nil { hasResponse = true }
+                    } else if currentID != nil, hasResponse == false {
+                        workBlockIDs.append(block.id)
+                        noteRowIDs.insert(row.id)
+                    }
+                case .subagentSummary, .statusChanged, .interactionResolved,
+                     .sessionBindingChanged:
+                    if currentID != nil, hasResponse == false {
+                        workBlockIDs.append(block.id)
+                    }
+                case .interaction, .toolStarted, .toolFinished:
+                    break
+                }
+            case .messageChunk(let chunk):
+                guard case .assistantMessage(_, let phase) = chunk.row.content else { break }
+                if phase == .final {
+                    if currentID != nil { hasResponse = true }
+                } else if currentID != nil, hasResponse == false {
+                    workBlockIDs.append(block.id)
+                    noteRowIDs.insert(chunk.row.id)
+                }
+            case .toolBatch(let rows):
+                if currentID != nil, hasResponse == false {
+                    workBlockIDs.append(block.id)
+                    for row in rows {
+                        switch row.content {
+                        case .toolStarted(let callID, _, _), .toolFinished(let callID, _, _, _):
+                            toolCallIDs.insert(callID)
+                        default:
+                            break
+                        }
+                    }
+                }
+            }
+        }
+        flushTurn()
+        return turns.filter { $0.workBlockIDs.isEmpty == false }
+    }
+}
+
 enum ToasttyConversationPresentationPhase: Equatable, Sendable {
     case loading
     case live
@@ -143,6 +229,7 @@ enum ToasttyTranscriptRevision: Equatable, Sendable {
 struct ToasttyConversationPresentationState: Equatable, Sendable {
     let rows: [ToasttyTranscriptRow]
     let blocks: [ToasttyTranscriptBlock]
+    let turns: [ToasttyTranscriptTurn]
     let sendItems: [ToasttySendPresentationItem]
     let phase: ToasttyConversationPresentationPhase
     let revision: ToasttyTranscriptRevision
@@ -163,6 +250,7 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
     ) {
         self.rows = rows
         blocks = ToasttyTranscriptBlock.group(rows)
+        turns = ToasttyTranscriptTurn.turns(for: blocks)
         self.sendItems = sendItems
         self.phase = phase
         self.revision = revision
