@@ -287,6 +287,67 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         XCTAssertTrue(disclosure.isExpanded(liveID))
     }
 
+    func testLongAssistantMessageSplitsIntoStableChunkBlocks() throws {
+        let giant = (1 ... 14).map { index in
+            "Paragraph \(index): " + Array(repeating: "chunked transcript body", count: 20)
+                .joined(separator: " ")
+        }.joined(separator: "\n\n")
+        XCTAssertGreaterThan(giant.count, ToasttyMarkdownChunking.chunkThreshold)
+
+        let events = [
+            knownEvent(sequence: 1, payload: .userMessage(.init(text: "user", origin: .local))),
+            knownEvent(sequence: 2, payload: .assistantMessage(.init(text: giant, phase: .final))),
+            knownEvent(sequence: 3, payload: .assistantMessage(.init(text: "tail", phase: .final))),
+        ]
+        let state = ToasttyConversationPresentationAdapter.makeState(
+            events: events,
+            projectionRunID: runID(1),
+            projectionGeneration: 7,
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+
+        XCTAssertEqual(state.rows.count, 3)
+        let chunkBlocks = state.blocks.filter { $0.id.rowID.sequence == 2 }
+        XCTAssertGreaterThan(chunkBlocks.count, 1)
+        XCTAssertEqual(chunkBlocks.map(\.id.chunkIndex), Array(0 ..< chunkBlocks.count))
+        XCTAssertEqual(chunkBlocks.first?.id.accessibilitySuffix, "2")
+        XCTAssertEqual(chunkBlocks[1].id.accessibilitySuffix, "2-c1")
+
+        var recombined: [String] = []
+        for (index, block) in chunkBlocks.enumerated() {
+            guard case .messageChunk(let chunk) = block.content else {
+                return XCTFail("Expected a message chunk block")
+            }
+            XCTAssertEqual(chunk.index, index)
+            XCTAssertEqual(chunk.isLast, index == chunkBlocks.count - 1)
+            XCTAssertEqual(chunk.row.id.sequence, 2)
+            recombined.append(chunk.text)
+        }
+        XCTAssertEqual(recombined.joined(separator: "\n\n"), giant)
+
+        let short = try XCTUnwrap(state.blocks.last)
+        guard case .row = short.content else {
+            return XCTFail("A short assistant message must stay a single row block")
+        }
+        XCTAssertEqual(short.id.chunkIndex, 0)
+
+        let regrouped = ToasttyConversationPresentationAdapter.makeState(
+            events: events,
+            projectionRunID: runID(1),
+            projectionGeneration: 7,
+            phase: .live,
+            revision: .appended,
+            historyTruncated: false
+        )
+        XCTAssertEqual(
+            regrouped.blocks.map(\.id),
+            state.blocks.map(\.id),
+            "Chunk identity must be stable across regrouping of the same rows"
+        )
+    }
+
     private func allKnownEventsWithUnknownMiddle() -> [CompatibleConversationEvent] {
         let interaction = RemotePendingInteraction(
             id: interactionID,

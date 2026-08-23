@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ToasttyToolBatchActivity: Equatable {
-    let id: ToasttyTranscriptRowID
+    let id: ToasttyTranscriptBlockID
     let lastSequence: UInt64
 
     static func make(from blocks: [ToasttyTranscriptBlock]) -> [Self] {
@@ -14,16 +14,16 @@ struct ToasttyToolBatchActivity: Equatable {
 }
 
 struct ToasttyToolBatchDisclosureState: Equatable {
-    private(set) var expandedIDs: Set<ToasttyTranscriptRowID> = []
-    private var explicitlyCollapsedIDs: Set<ToasttyTranscriptRowID> = []
-    private var lastSequenceByID: [ToasttyTranscriptRowID: UInt64] = [:]
+    private(set) var expandedIDs: Set<ToasttyTranscriptBlockID> = []
+    private var explicitlyCollapsedIDs: Set<ToasttyTranscriptBlockID> = []
+    private var lastSequenceByID: [ToasttyTranscriptBlockID: UInt64] = [:]
     private var isInitialized = false
 
-    func isExpanded(_ id: ToasttyTranscriptRowID) -> Bool {
+    func isExpanded(_ id: ToasttyTranscriptBlockID) -> Bool {
         expandedIDs.contains(id)
     }
 
-    mutating func toggle(_ id: ToasttyTranscriptRowID) {
+    mutating func toggle(_ id: ToasttyTranscriptBlockID) {
         if expandedIDs.remove(id) != nil {
             explicitlyCollapsedIDs.insert(id)
         } else {
@@ -36,7 +36,7 @@ struct ToasttyToolBatchDisclosureState: Equatable {
         activity: [ToasttyToolBatchActivity],
         revision: ToasttyTranscriptRevision
     ) {
-        let current = activity.reduce(into: [ToasttyTranscriptRowID: UInt64]()) { values, batch in
+        let current = activity.reduce(into: [ToasttyTranscriptBlockID: UInt64]()) { values, batch in
             values[batch.id] = batch.lastSequence
         }
         let currentIDs = Set(current.keys)
@@ -69,7 +69,7 @@ struct ToasttyToolBatchDisclosureState: Equatable {
 }
 
 struct ToasttyToolBatchCard: View {
-    let blockID: ToasttyTranscriptRowID
+    let blockID: ToasttyTranscriptBlockID
     let rows: [ToasttyTranscriptRow]
     let isExpanded: Bool
     let toggleDetails: () -> Void

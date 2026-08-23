@@ -173,6 +173,53 @@ enum ToasttyConversationFixture {
         )
     }
 
+    /// A conversation whose middle assistant message is far above the chunking
+    /// threshold, exercising chunked rendering and live-edge jumps over a
+    /// transcript dominated by one giant message.
+    static func longMessagePresentation(
+        for conversationID: UUID
+    ) -> ToasttyConversationPresentationState {
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        // Big enough to split into several chunks, small enough that XCUITest
+        // accessibility snapshots of the transcript stay fast.
+        let sections = (1 ... 10).map { index in
+            """
+            ## Deep dive \(index)
+
+            Chunked rendering keeps giant transcripts scrollable because every \
+            slice is measured independently while the markdown stays valid \
+            across the seams. Section \(index) repeats enough body text that \
+            the message far exceeds a single chunk budget.
+            """
+        }
+        let fence = (["```swift"]
+            + (1 ... 30).map { "let fixtureValue\($0) = transcriptFixtureValue(\($0))" }
+            + ["```"]).joined(separator: "\n")
+        let giantMessage = (sections + [fence]).joined(separator: "\n\n")
+
+        return ToasttyConversationPresentationState(
+            rows: [
+                row(conversationID, 1, timestamp, .sessionBindingChanged(reason: .runtimeBound)),
+                row(
+                    conversationID,
+                    2,
+                    timestamp,
+                    .userMessage(text: "Walk me through the whole subsystem in detail.", origin: .local)
+                ),
+                row(conversationID, 3, timestamp, .assistantMessage(text: giantMessage, phase: .final)),
+                row(
+                    conversationID,
+                    4,
+                    timestamp,
+                    .assistantMessage(text: "That covers every layer end to end.", phase: .final)
+                ),
+            ],
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+
     static func toolActivityPresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {

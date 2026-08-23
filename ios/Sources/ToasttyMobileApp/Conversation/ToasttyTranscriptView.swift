@@ -18,8 +18,8 @@ struct ToasttyTranscriptView: View {
     @State private var measuredBoundaryID: ToasttyTranscriptRowID?
     @State private var isVisible = false
     @State private var followsLiveEdge = true
-    @State private var isJumpingToLiveEdge = false
-    @State private var visibleBlockIDs: [ToasttyTranscriptRowID] = []
+    @State private var jumpToLiveEdgeRequest: UInt64 = 0
+    @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
 
     init(
         state: ToasttyConversationPresentationState,
@@ -119,8 +119,8 @@ struct ToasttyTranscriptView: View {
                             proxy.scrollTo(target, anchor: .bottom)
                         }
                     }
-                    if atLiveEdge, isJumpingToLiveEdge {
-                        isJumpingToLiveEdge = false
+                    if atLiveEdge, jumpToLiveEdgeRequest > 0 {
+                        jumpToLiveEdgeRequest = 0
                         followsLiveEdge = true
                     }
                 }
@@ -128,7 +128,7 @@ struct ToasttyTranscriptView: View {
                     if newPhase == .interacting {
                         // A direct gesture owns the reader's position until it
                         // settles, including any momentum after finger lift.
-                        isJumpingToLiveEdge = false
+                        jumpToLiveEdgeRequest = 0
                         followsLiveEdge = false
                         return
                     }
@@ -148,8 +148,8 @@ struct ToasttyTranscriptView: View {
                     threshold: 0.12
                 ) { ids in
                     visibleBlockIDs = ids.compactMap { id in
-                        guard case .transcript(let rowID) = id else { return nil }
-                        return rowID
+                        guard case .transcript(let blockID) = id else { return nil }
+                        return blockID
                     }
                 }
                 .overlay(alignment: .bottomTrailing) {
@@ -157,8 +157,9 @@ struct ToasttyTranscriptView: View {
                        followsLiveEdge == false,
                        lastScrollTarget != nil {
                         Button {
-                            followsLiveEdge = true
-                            isJumpingToLiveEdge = true
+                            // The affordance stays visible until the live edge
+                            // is actually reached; each tap (re)starts a jump.
+                            jumpToLiveEdgeRequest &+= 1
                         } label: {
                             Label("Jump to latest", systemImage: "arrow.down")
                                 .font(.caption.weight(.semibold))
@@ -172,9 +173,9 @@ struct ToasttyTranscriptView: View {
                         .padding(14)
                     }
                 }
-                .task(id: isJumpingToLiveEdge) {
-                    guard isJumpingToLiveEdge, let target = lastScrollTarget else { return }
-                    // Let the follow-state update settle before calculating the
+                .task(id: jumpToLiveEdgeRequest) {
+                    guard jumpToLiveEdgeRequest > 0, let target = lastScrollTarget else { return }
+                    // Let the tap's state update settle before calculating the
                     // live-edge scroll, without waiting on any layout change.
                     await Task.yield()
                     guard Task.isCancelled == false else { return }
@@ -182,12 +183,27 @@ struct ToasttyTranscriptView: View {
                         proxy.scrollTo(target, anchor: .bottom)
                     }
 
-                    try? await Task.sleep(for: .milliseconds(400))
-                    guard Task.isCancelled == false, isJumpingToLiveEdge else { return }
-                    isJumpingToLiveEdge = false
-                    if isAtLiveEdge == false {
-                        followsLiveEdge = false
+                    // A single scroll can land short of the tail while lazily
+                    // measured cell heights are still being corrected; keep
+                    // re-targeting until the live edge is actually reached.
+                    // Success is observed by the scroll-geometry handler, which
+                    // clears the request and restores live-edge following.
+                    try? await Task.sleep(for: .milliseconds(250))
+                    for _ in 0 ..< 8 {
+                        guard Task.isCancelled == false, jumpToLiveEdgeRequest > 0 else { return }
+                        if isAtLiveEdge == false {
+                            var transaction = Transaction(animation: nil)
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
+                                proxy.scrollTo(target, anchor: .bottom)
+                            }
+                        }
+                        try? await Task.sleep(for: .milliseconds(150))
                     }
+
+                    guard Task.isCancelled == false, jumpToLiveEdgeRequest > 0 else { return }
+                    jumpToLiveEdgeRequest = 0
+                    followsLiveEdge = isAtLiveEdge
                 }
                 .task(id: scrollChangeKey) {
                     await Task.yield()
@@ -205,7 +221,10 @@ struct ToasttyTranscriptView: View {
                             proxy.scrollTo(target, anchor: .bottom)
                         }
                     case .prepended:
-                        if let anchor = state.prependAnchorID ?? visibleBlockIDs.first {
+                        let anchor = state.prependAnchorID
+                            .map { ToasttyTranscriptBlockID(rowID: $0) }
+                            ?? visibleBlockIDs.first
+                        if let anchor {
                             proxy.scrollTo(
                                 ToasttyConversationScrollTarget.transcript(anchor),
                                 anchor: .top
@@ -310,6 +329,13 @@ struct ToasttyTranscriptView: View {
                 row: row,
                 subagentIsExpanded: expandedSubagentIDs.contains(row.id),
                 toggleSubagentExpansion: { toggle(row.id, in: &expandedSubagentIDs) }
+            )
+        case .messageChunk(let chunk):
+            ToasttyTranscriptRowView(
+                row: chunk.row,
+                chunk: chunk,
+                subagentIsExpanded: false,
+                toggleSubagentExpansion: {}
             )
         case .toolBatch(let rows):
             ToasttyToolBatchCard(
@@ -429,7 +455,7 @@ struct TranscriptLiveEdgeVisibilityKey: Equatable {
 }
 
 private enum ToasttyConversationScrollTarget: Hashable {
-    case transcript(ToasttyTranscriptRowID)
+    case transcript(ToasttyTranscriptBlockID)
     case send(String)
     case liveEdge
 }
@@ -438,7 +464,7 @@ private struct ScrollChangeKey: Equatable {
     let revision: ToasttyTranscriptRevision
     let blockCount: Int
     let sendItems: [ToasttySendScrollItem]
-    let firstID: ToasttyTranscriptRowID?
+    let firstID: ToasttyTranscriptBlockID?
     let lastTarget: ToasttyConversationScrollTarget?
 }
 
@@ -560,6 +586,7 @@ private struct ToasttySendTailItemView: View {
 
 private struct ToasttyTranscriptRowView: View {
     let row: ToasttyTranscriptRow
+    var chunk: ToasttyTranscriptMessageChunk?
     let subagentIsExpanded: Bool
     let toggleSubagentExpansion: () -> Void
 
@@ -595,10 +622,12 @@ private struct ToasttyTranscriptRowView: View {
                 metadata: origin == .remote ? "sent remotely" : nil
             )
         case .assistantMessage(let text, let phase):
+            // A chunked message renders this row's slice; the metadata caption
+            // belongs to the final slice only.
             message(
-                text: text,
+                text: chunk?.text ?? text,
                 isUser: false,
-                metadata: phase == .commentary ? "commentary" : nil
+                metadata: phase == .commentary && (chunk?.isLast ?? true) ? "commentary" : nil
             )
         case .statusChanged(let state, let availability):
             marker(icon: "circle.dotted", text: "\(state) · \(availability)")
@@ -622,7 +651,12 @@ private struct ToasttyTranscriptRowView: View {
     }
 
     private var rowAccessibilityIdentifier: String {
-        "toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)"
+        // Only the first chunk keeps the bare row identifier so accessibility
+        // queries for a row stay unambiguous.
+        if let chunk, chunk.isFirst == false {
+            return "toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)-c\(chunk.index)"
+        }
+        return "toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)"
     }
 
     @ViewBuilder
@@ -736,7 +770,9 @@ struct ToasttyMarkdownText: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // Matches the transcript stack spacing so the seams between chunks of
+        // a split message are indistinguishable from in-message block gaps.
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(Self.blocks(text)) { block in
                 blockView(block)
             }

@@ -30,13 +30,43 @@ struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
     let content: Content
 }
 
+/// Identity of one rendered transcript block. Long assistant messages split
+/// into several blocks sharing a row ID and counting up `chunkIndex`, so each
+/// chunk is an independently laid-out `LazyVStack` cell with stable identity.
+struct ToasttyTranscriptBlockID: Hashable, Sendable {
+    let rowID: ToasttyTranscriptRowID
+    let chunkIndex: Int
+
+    init(rowID: ToasttyTranscriptRowID, chunkIndex: Int = 0) {
+        self.rowID = rowID
+        self.chunkIndex = chunkIndex
+    }
+
+    var accessibilitySuffix: String {
+        chunkIndex == 0
+            ? rowID.accessibilitySuffix
+            : "\(rowID.accessibilitySuffix)-c\(chunkIndex)"
+    }
+}
+
+/// One slice of a chunked assistant message.
+struct ToasttyTranscriptMessageChunk: Equatable, Sendable {
+    let row: ToasttyTranscriptRow
+    let text: String
+    let index: Int
+    let isLast: Bool
+
+    var isFirst: Bool { index == 0 }
+}
+
 struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
     enum Content: Equatable, Sendable {
         case row(ToasttyTranscriptRow)
+        case messageChunk(ToasttyTranscriptMessageChunk)
         case toolBatch([ToasttyTranscriptRow])
     }
 
-    let id: ToasttyTranscriptRowID
+    let id: ToasttyTranscriptBlockID
     let content: Content
 
     static func group(_ rows: [ToasttyTranscriptRow]) -> [ToasttyTranscriptBlock] {
@@ -45,17 +75,48 @@ struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
 
         func flushTools() {
             guard let first = toolRows.first else { return }
-            blocks.append(ToasttyTranscriptBlock(id: first.id, content: .toolBatch(toolRows)))
+            blocks.append(ToasttyTranscriptBlock(
+                id: ToasttyTranscriptBlockID(rowID: first.id),
+                content: .toolBatch(toolRows)
+            ))
             toolRows.removeAll(keepingCapacity: true)
+        }
+
+        func appendChunked(_ row: ToasttyTranscriptRow, text: String) {
+            let chunks = ToasttyMarkdownChunking.split(text)
+            guard chunks.count > 1 else {
+                blocks.append(ToasttyTranscriptBlock(
+                    id: ToasttyTranscriptBlockID(rowID: row.id),
+                    content: .row(row)
+                ))
+                return
+            }
+            for (index, chunkText) in chunks.enumerated() {
+                blocks.append(ToasttyTranscriptBlock(
+                    id: ToasttyTranscriptBlockID(rowID: row.id, chunkIndex: index),
+                    content: .messageChunk(ToasttyTranscriptMessageChunk(
+                        row: row,
+                        text: chunkText,
+                        index: index,
+                        isLast: index == chunks.count - 1
+                    ))
+                ))
+            }
         }
 
         for row in rows {
             switch row.content {
             case .toolStarted, .toolFinished:
                 toolRows.append(row)
+            case .assistantMessage(let text, _):
+                flushTools()
+                appendChunked(row, text: text)
             default:
                 flushTools()
-                blocks.append(ToasttyTranscriptBlock(id: row.id, content: .row(row)))
+                blocks.append(ToasttyTranscriptBlock(
+                    id: ToasttyTranscriptBlockID(rowID: row.id),
+                    content: .row(row)
+                ))
             }
         }
         flushTools()

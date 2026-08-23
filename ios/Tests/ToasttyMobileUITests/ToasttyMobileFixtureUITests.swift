@@ -438,6 +438,37 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-transcript-jumped-to-latest", of: app)
     }
 
+    func testLongMessageChunksScrollIndependentlyAndJumpToLatestRecovers() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "transcript-long-message"]
+        )
+        openFixtureConversation(in: app)
+
+        let newestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-4"]
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(newestRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(newestRow.isHittable, "The conversation should open at its live tail")
+
+        // Scrolling up through the giant message must keep moving backwards —
+        // the message renders as independent chunks instead of one cell whose
+        // deferred measurement snaps the reader back down.
+        let earlyChunk = app.descendants(matching: .any)["toastty-mobile-transcript-row-3-c1"]
+        XCTAssertTrue(
+            scrollToOlder(earlyChunk, in: app, requireHittable: false),
+            "An early chunk of the giant message should be reachable by scrolling up"
+        )
+
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
+        jumpToLatest.tap()
+        XCTAssertTrue(
+            jumpToLatest.waitForNonExistence(timeout: 5),
+            "The jump affordance must dismiss once the live tail is reached"
+        )
+        XCTAssertTrue(newestRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(newestRow.isHittable)
+        attachScreenshot(named: "fixture-transcript-long-message-jump", of: app)
+    }
+
     func testBackwardPagingPrependsStableRowsWithoutMovingTheReader() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "transcript-paging"]
