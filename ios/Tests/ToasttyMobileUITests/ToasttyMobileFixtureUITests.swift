@@ -454,8 +454,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         // deferred measurement snaps the reader back down.
         let earlyChunk = app.descendants(matching: .any)["toastty-mobile-transcript-row-3-c1"]
         XCTAssertTrue(
-            scrollToOlder(earlyChunk, in: app, requireHittable: false),
-            "An early chunk of the giant message should be reachable by scrolling up"
+            scrollToOlder(earlyChunk, in: app),
+            "An early chunk of the giant message should be visible after scrolling up"
         )
 
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))

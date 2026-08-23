@@ -49,39 +49,22 @@ struct ToasttyTranscriptView: View {
                 }
 
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        olderHistoryControl
-
-                        ForEach(state.blocks) { block in
-                            blockView(block)
-                                .id(ToasttyConversationScrollTarget.transcript(block.id))
+                    // Modest transcripts lay out eagerly: measured heights mean
+                    // no lazy-estimation churn, which both snapped the reader
+                    // to a long message's start and could live-lock layout when
+                    // a few large cells dominated the list. The lazy container
+                    // stays for huge lists, where chunked messages keep cell
+                    // sizes in the regime its estimation handles well.
+                    Group {
+                        if state.blocks.count <= Self.eagerLayoutBlockLimit {
+                            VStack(alignment: .leading, spacing: 12) {
+                                transcriptStackContent
+                            }
+                        } else {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                transcriptStackContent
+                            }
                         }
-
-                        ForEach(state.sendItems) { item in
-                            ToasttySendTailItemView(
-                                item: item,
-                                dismiss: { dismissSendReceipt(item.clientRequestID) }
-                            )
-                            .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
-                        }
-
-                        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading {
-                            ContentUnavailableView(
-                                "No transcript yet",
-                                systemImage: "text.bubble",
-                                description: Text("New conversation activity will appear here.")
-                            )
-                            .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 44)
-                        }
-
-                        // The preceding 12-point stack spacing plus this target's
-                        // height preserve the original 14-point bottom inset while
-                        // making that inset part of the live-edge scroll target.
-                        Color.clear
-                            .frame(height: 2)
-                            .id(ToasttyConversationScrollTarget.liveEdge)
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
@@ -248,6 +231,45 @@ struct ToasttyTranscriptView: View {
                 toolBatchDisclosure.reconcile(activity: activity, revision: state.revision)
             }
         }
+    }
+
+    /// Above this block count the transcript falls back to lazy layout.
+    private static let eagerLayoutBlockLimit = 150
+
+    @ViewBuilder
+    private var transcriptStackContent: some View {
+        olderHistoryControl
+
+        ForEach(state.blocks) { block in
+            blockView(block)
+                .id(ToasttyConversationScrollTarget.transcript(block.id))
+        }
+
+        ForEach(state.sendItems) { item in
+            ToasttySendTailItemView(
+                item: item,
+                dismiss: { dismissSendReceipt(item.clientRequestID) }
+            )
+            .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
+        }
+
+        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading {
+            ContentUnavailableView(
+                "No transcript yet",
+                systemImage: "text.bubble",
+                description: Text("New conversation activity will appear here.")
+            )
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 44)
+        }
+
+        // The preceding 12-point stack spacing plus this target's height
+        // preserve the original 14-point bottom inset while making that inset
+        // part of the live-edge scroll target.
+        Color.clear
+            .frame(height: 2)
+            .id(ToasttyConversationScrollTarget.liveEdge)
     }
 
     @ViewBuilder
@@ -839,7 +861,30 @@ struct ToasttyMarkdownText: View {
         }
     }
 
+    /// Parsed-block cache: with eager transcript layout every message re-parses
+    /// on each body evaluation without it. Keyed by the raw markdown text.
+    private static let parsedBlockCache: NSCache<NSString, ParsedMarkdownBlocks> = {
+        let cache = NSCache<NSString, ParsedMarkdownBlocks>()
+        cache.countLimit = 600
+        return cache
+    }()
+
+    private final class ParsedMarkdownBlocks {
+        let blocks: [ToasttyMarkdownBlock]
+        init(_ blocks: [ToasttyMarkdownBlock]) { self.blocks = blocks }
+    }
+
     static func blocks(_ text: String) -> [ToasttyMarkdownBlock] {
+        let key = text as NSString
+        if let cached = parsedBlockCache.object(forKey: key) {
+            return cached.blocks
+        }
+        let parsed = parseBlocks(text)
+        parsedBlockCache.setObject(ParsedMarkdownBlocks(parsed), forKey: key)
+        return parsed
+    }
+
+    private static func parseBlocks(_ text: String) -> [ToasttyMarkdownBlock] {
         guard let attributed = try? AttributedString(markdown: text) else {
             return [ToasttyMarkdownBlock(
                 id: 0,
