@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import XCTest
 @testable import ToasttyMobileApp
 
@@ -66,6 +67,36 @@ final class ToasttyMarkdownTextTests: XCTestCase {
             "let product = left_value * rightValue\n[literal](not-a-link)\n"
         )
         XCTAssertTrue(inlineCodeRuns(in: blocks[1].content).isEmpty)
+    }
+
+    func testInlineCodeSpansCarryAccentTintButFencedCodeStaysPlain() {
+        let source = """
+        Run `sv exec` before generating.
+
+        ```bash
+        tuist generate --no-open
+        ```
+        """
+
+        let blocks = ToasttyMarkdownText.blocks(source)
+        XCTAssertEqual(blocks.count, 2)
+
+        let paragraph = blocks[0].content
+        let codeRun = paragraph.runs.first {
+            $0.inlinePresentationIntent?.contains(.code) == true
+        }
+        XCTAssertEqual(codeRun?.foregroundColor, ToasttyDesignTokens.amberText)
+        XCTAssertEqual(codeRun?.backgroundColor, ToasttyDesignTokens.chipSurface)
+
+        let proseRun = paragraph.runs.first {
+            $0.inlinePresentationIntent?.contains(.code) != true
+        }
+        XCTAssertNil(proseRun?.foregroundColor)
+        XCTAssertNil(proseRun?.backgroundColor)
+
+        XCTAssertFalse(blocks[1].content.runs.contains {
+            $0.foregroundColor != nil || $0.backgroundColor != nil
+        }, "Fenced code keeps the block-level styling only")
     }
 
     private func inlineCodeRuns(in attributed: AttributedString) -> [String] {

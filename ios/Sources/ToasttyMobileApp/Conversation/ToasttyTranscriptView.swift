@@ -800,7 +800,7 @@ struct ToasttyMarkdownText: View {
             }
         }
         .foregroundStyle(ToasttyDesignTokens.primaryText)
-        .lineSpacing(3)
+        .lineSpacing(6)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -835,16 +835,23 @@ struct ToasttyMarkdownText: View {
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
             }
         case .code(let language):
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
                 if let language, language.isEmpty == false {
                     Text(language)
                         .font(.caption2.monospaced())
                         .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ToasttyDesignTokens.codeHeaderSurface)
+                    Divider()
+                        .overlay(ToasttyDesignTokens.border)
                 }
                 Text(block.content)
                     .font(.body.monospaced())
+                    .lineSpacing(4)
+                    .padding(12)
             }
-            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(ToasttyDesignTokens.raisedSurface)
             .overlay {
@@ -900,9 +907,10 @@ struct ToasttyMarkdownText: View {
 
         func flushCurrentBlock() {
             guard currentContent.characters.isEmpty == false else { return }
+            let isCodeBlock = if case .code = currentStyle { true } else { false }
             blocks.append(ToasttyMarkdownBlock(
                 id: blocks.count,
-                content: currentContent,
+                content: isCodeBlock ? currentContent : stylingInlineCode(currentContent),
                 style: currentStyle
             ))
             currentContent = AttributedString()
@@ -928,6 +936,26 @@ struct ToasttyMarkdownText: View {
             )]
         }
         return blocks
+    }
+
+    /// Tints inline code spans so they stand out from prose; SwiftUI `Text`
+    /// renders run-level foreground and background colors, which is as much
+    /// chip styling as attributed text allows.
+    private static func stylingInlineCode(_ content: AttributedString) -> AttributedString {
+        guard content.runs.contains(where: {
+            $0.inlinePresentationIntent?.contains(.code) == true
+        }) else { return content }
+
+        var styled = AttributedString()
+        for run in content.runs {
+            var piece = AttributedString(content[run.range])
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                piece.foregroundColor = ToasttyDesignTokens.amberText
+                piece.backgroundColor = ToasttyDesignTokens.chipSurface
+            }
+            styled.append(piece)
+        }
+        return styled
     }
 
     private static func style(

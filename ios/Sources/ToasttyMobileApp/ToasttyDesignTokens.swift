@@ -19,6 +19,8 @@ enum ToasttyDesignTokens {
     // card backgrounds.
     static let chipSurface = Color.white.opacity(0.055)
     static let chipBorder = Color.white.opacity(0.11)
+    /// Faint lift for the language header strip on transcript code blocks.
+    static let codeHeaderSurface = Color.white.opacity(0.025)
     static let amber = Color(red: 232 / 255, green: 147 / 255, blue: 12 / 255)
     static let amberText = Color(red: 232 / 255, green: 180 / 255, blue: 106 / 255)
     /// Foreground for text and glyphs placed on the amber accent.
