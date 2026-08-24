@@ -94,7 +94,11 @@ struct ToasttyConversationScreen: View {
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("toastty-mobile-conversation-title")
             HStack(spacing: 5) {
-                ToasttySessionStatusLabel(bucket: conversation.state.bucket)
+                ToasttySessionStatusLabel(
+                    bucket: conversation.state.bucket,
+                    freshness: controller.freshness
+                )
+                .accessibilityIdentifier("toastty-mobile-conversation-status")
                 let metadata = headerMetadata(conversation)
                 if metadata.isEmpty == false {
                     Text("·")

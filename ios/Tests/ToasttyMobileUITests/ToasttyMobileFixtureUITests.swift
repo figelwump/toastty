@@ -105,6 +105,24 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
         XCTAssertEqual(notice.value as? String, "In progress")
 
+        let workingCard = app.buttons[
+            "toastty-mobile-activity-card-\(workingConversationID)"
+        ]
+        XCTAssertTrue(scrollHomeTo(workingCard, in: app))
+        XCTAssertTrue(workingCard.label.contains("Last seen working. Updates paused."))
+        workingCard.tap()
+
+        let conversationStatus = app.descendants(matching: .any)[
+            "toastty-mobile-conversation-status"
+        ]
+        XCTAssertTrue(conversationStatus.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            conversationStatus.label,
+            "Last seen working. Updates paused."
+        )
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+
         let retry = app.buttons["toastty-mobile-connection-retry"]
         XCTAssertTrue(retry.waitForExistence(timeout: 5))
         XCTAssertEqual(retry.label, "Retry connection")

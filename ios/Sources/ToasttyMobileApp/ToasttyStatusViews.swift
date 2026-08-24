@@ -30,32 +30,6 @@ struct ToasttyConnectionPill: View {
     }
 }
 
-struct ToasttyStatusLabel: View {
-    let bucket: MobileSessionBucket
-    var compact = false
-
-    @ViewBuilder
-    var body: some View {
-        if bucket.isVisible {
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 8, height: 8)
-                Text(bucket.rawValue)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .font(compact ? .caption2.monospaced() : .caption.monospaced())
-            .foregroundStyle(statusColor)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(bucket.rawValue)
-        }
-    }
-
-    private var statusColor: Color {
-        ToasttyDesignTokens.color(for: bucket)
-    }
-}
-
 /// The app-wide activity spinner, matching the desktop app's
 /// `SessionStatusIndicator`: a trimmed arc rotating once every 0.9 seconds.
 struct ToasttySpinner: View {
@@ -81,28 +55,79 @@ struct ToasttySpinner: View {
     }
 }
 
-/// Session-row status treatment: the working bucket swaps the dot for a
-/// mini spinner so in-flight sessions read as live everywhere they appear.
-/// The spinner occupies the same 8-point slot as the status dot so rows
-/// keep a single text baseline.
+struct ToasttySessionStatusPresentation: Equatable, Sendable {
+    let bucket: MobileSessionBucket
+    let freshness: LiveProjectionFreshness
+
+    var isVisible: Bool { bucket.isVisible }
+    var showsWorkingSpinner: Bool { freshness == .live && bucket == .working }
+    var label: String {
+        freshness == .live ? bucket.rawValue : "last seen \(bucket.rawValue)"
+    }
+    var accessibilityLabel: String {
+        freshness == .live ? bucket.rawValue : "Last seen \(bucket.rawValue). Updates paused."
+    }
+
+    func accessibilitySummary(for conversation: MobileConversation) -> String {
+        let facts: [String?] = [
+            conversation.title,
+            isVisible ? accessibilityLabel : conversation.state.accessibilityLabel,
+            conversation.lastActivity,
+            conversation.workspaceTitle,
+            conversation.agent.displayName,
+            conversation.cwd,
+            conversation.displayAge,
+        ]
+        return facts
+            .compactMap(Self.nonemptyTrimmed)
+            .joined(separator: ", ")
+    }
+
+    private static func nonemptyTrimmed(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+}
+
+/// Session status remains a last-known host fact while the projection is
+/// stale. Only a live projection can animate working activity; disconnected
+/// views use a neutral, static treatment without rewriting the cached state.
 struct ToasttySessionStatusLabel: View {
     let bucket: MobileSessionBucket
+    let freshness: LiveProjectionFreshness
+
+    private var presentation: ToasttySessionStatusPresentation {
+        ToasttySessionStatusPresentation(bucket: bucket, freshness: freshness)
+    }
 
     @ViewBuilder
     var body: some View {
-        if bucket == .working {
+        if presentation.isVisible {
             HStack(spacing: 5) {
-                ToasttySpinner(color: ToasttyDesignTokens.color(for: .working))
-                Text(MobileSessionBucket.working.rawValue)
+                if presentation.showsWorkingSpinner {
+                    ToasttySpinner(color: statusColor)
+                } else {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 8, height: 8)
+                }
+                Text(presentation.label)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.color(for: .working))
+            .foregroundStyle(statusColor)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(MobileSessionBucket.working.rawValue)
-        } else {
-            ToasttyStatusLabel(bucket: bucket, compact: true)
+            .accessibilityLabel(presentation.accessibilityLabel)
         }
+    }
+
+    private var statusColor: Color {
+        freshness == .live
+            ? ToasttyDesignTokens.color(for: bucket)
+            : ToasttyDesignTokens.mutedText
     }
 }
 

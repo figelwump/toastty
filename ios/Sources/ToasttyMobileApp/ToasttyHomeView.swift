@@ -208,6 +208,7 @@ struct ToasttyHomeView: View {
             ForEach(controller.snapshot.activitySessions) { conversation in
                 ToasttySessionCard(
                     conversation: conversation,
+                    freshness: controller.freshness,
                     showsWorkspace: true,
                     accessibilityIdentifier:
                         "toastty-mobile-activity-card-\(conversation.id.uuidString)",
@@ -227,6 +228,7 @@ struct ToasttyHomeView: View {
                     ForEach(workspace.conversations) { conversation in
                         ToasttySessionCard(
                             conversation: conversation,
+                            freshness: controller.freshness,
                             showsWorkspace: false,
                             accessibilityIdentifier:
                                 "toastty-mobile-grouped-card-\(conversation.id.uuidString)",
@@ -425,6 +427,7 @@ struct ToasttyHomeView: View {
 
 struct ToasttySessionCard: View {
     let conversation: MobileConversation
+    let freshness: LiveProjectionFreshness
     let showsWorkspace: Bool
     let accessibilityIdentifier: String
     let onOpen: (MobileConversation) -> Void
@@ -460,7 +463,7 @@ struct ToasttySessionCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(conversation.accessibilitySummary)
+        .accessibilityLabel(statusPresentation.accessibilitySummary(for: conversation))
         .accessibilityHint("Opens the conversation")
         .accessibilityIdentifier(accessibilityIdentifier)
     }
@@ -533,7 +536,17 @@ struct ToasttySessionCard: View {
     }
 
     private var statusLabel: some View {
-        ToasttySessionStatusLabel(bucket: conversation.state.bucket)
+        ToasttySessionStatusLabel(
+            bucket: conversation.state.bucket,
+            freshness: freshness
+        )
+    }
+
+    private var statusPresentation: ToasttySessionStatusPresentation {
+        ToasttySessionStatusPresentation(
+            bucket: conversation.state.bucket,
+            freshness: freshness
+        )
     }
 
     private var activityDestination: some View {

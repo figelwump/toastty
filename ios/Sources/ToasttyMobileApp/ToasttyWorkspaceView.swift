@@ -79,6 +79,7 @@ struct ToasttyWorkspaceView: View {
                     ForEach(visibleConversations) { conversation in
                         ToasttySessionCard(
                             conversation: conversation,
+                            freshness: controller.freshness,
                             showsWorkspace: false,
                             accessibilityIdentifier:
                                 "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
