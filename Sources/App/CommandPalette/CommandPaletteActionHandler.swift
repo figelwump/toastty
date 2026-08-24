@@ -391,7 +391,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         }
         return focusedPanelCommandController.closeFocusedPanel(
             in: workspaceID,
-            source: .command("command_palette_close_panel")
+            source: .command("command_palette_close_panel"),
+            confirmationPolicy: .interactive
         ).didMutateState
     }
 

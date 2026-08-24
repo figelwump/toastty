@@ -261,6 +261,15 @@ Notable action-specific behavior:
   - requires `args.index` and `args.toIndex`, both 1-based tab positions in the
     target workspace.
   - Reorders the workspace's tab list without changing the selected tab ID.
+- `panel.close`
+  - never presents interactive confirmation UI on the app-control path.
+  - a running terminal returns `CONFIRMATION_REQUIRED` unless
+    `args.terminateRunningProcess=true` explicitly authorizes terminating it.
+  - the terminal-only override never discards an unsaved local document or
+    interrupts a document save; those states return `CONFIRMATION_REQUIRED` or
+    `CLOSE_BLOCKED`.
+  - an unavailable terminal assessment fails closed with `CLOSE_BLOCKED` unless
+    process termination was explicitly authorized.
 - `terminal.send-text`
   - writes directly to the resolved terminal surface without making that
     terminal the AppKit first responder.
@@ -520,6 +529,8 @@ Supported action IDs:
 - `workspace.split.down.with-profile`
   - requires `args.profileID`
 - `workspace.close-focused-panel`
+  - compatibility alias for `panel.close`; accepts
+    `args.terminateRunningProcess` with the same terminal-only semantics
 - `workspace.reopen-last-closed-panel`
 - `workspace.focus-slot.previous`
 - `workspace.focus-slot.next`
@@ -1458,6 +1469,8 @@ Current response error codes:
 - `UNKNOWN_EVENT_TYPE`
 - `UNKNOWN_COMMAND`
 - `INVALID_PAYLOAD`
+- `CONFIRMATION_REQUIRED`
+- `CLOSE_BLOCKED`
 - `INTERNAL_ERROR`
 
 ## 9) implementation notes that are not separate protocol guarantees

@@ -4240,7 +4240,8 @@ struct PanelCardView: View {
         Button {
             _ = focusedPanelCommandController.closePanel(
                 panelID: panelID,
-                source: .ui("panel_header_close")
+                source: .ui("panel_header_close"),
+                confirmationPolicy: .interactive
             )
         } label: {
             Image(systemName: "xmark")

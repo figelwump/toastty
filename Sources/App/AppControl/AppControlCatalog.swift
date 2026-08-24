@@ -259,7 +259,14 @@ enum AppControlActionID: String, CaseIterable, Sendable {
         case .workspaceSplitDownWithProfile:
             return .init(id: rawValue, kind: .action, summary: "Split down with a terminal profile.", selectors: [.windowID, .workspaceID], parameters: [.profileID(required: true)])
         case .panelClose:
-            return .init(id: rawValue, kind: .action, summary: "Close the focused panel.", selectors: [.windowID, .workspaceID], aliases: aliases)
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Close the focused panel without interactive confirmation.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [.terminateRunningProcess(required: false)],
+                aliases: aliases
+            )
         case .workspaceFocusSlotPrevious:
             return .init(id: rawValue, kind: .action, summary: "Focus the previous slot.", selectors: [.windowID, .workspaceID])
         case .workspaceFocusSlotNext:
@@ -622,6 +629,15 @@ private extension AppControlParameterDescriptor {
 
     static func text(required: Bool) -> Self {
         .init(name: "text", summary: "Text payload.", valueType: .string, required: required)
+    }
+
+    static func terminateRunningProcess(required: Bool) -> Self {
+        .init(
+            name: "terminateRunningProcess",
+            summary: "Allow panel.close to terminate a running terminal process. Defaults to false and does not discard unsaved documents.",
+            valueType: .boolean,
+            required: required
+        )
     }
 
     static func toIndex(summary: String, required: Bool) -> Self {

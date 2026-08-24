@@ -671,7 +671,8 @@ struct RightAuxPanelTabStrip: View {
         Button {
             _ = focusedPanelCommandController.closePanel(
                 panelID: tab.panelID,
-                source: .ui("right_aux_panel_tab_close")
+                source: .ui("right_aux_panel_tab_close"),
+                confirmationPolicy: .interactive
             )
         } label: {
             Image(systemName: "xmark")

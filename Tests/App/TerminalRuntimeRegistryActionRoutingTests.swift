@@ -407,7 +407,10 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
             )
 
             withExtendedLifetime(focusedPanelCommandController) {
-                let closeResult = focusedPanelCommandController.closePanel(panelID: panelIDToClose)
+                let closeResult = focusedPanelCommandController.closePanel(
+                    panelID: panelIDToClose,
+                    confirmationPolicy: .interactive
+                )
 
                 XCTAssertEqual(closeResult, .closed)
                 guard let workspaceAfterClose = try? XCTUnwrap(store.selectedWorkspace) else {
@@ -463,7 +466,10 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
             )
 
             withExtendedLifetime(focusedPanelCommandController) {
-                let closeResult = focusedPanelCommandController.closePanel(panelID: backgroundWorkspacePanelToClose)
+                let closeResult = focusedPanelCommandController.closePanel(
+                    panelID: backgroundWorkspacePanelToClose,
+                    confirmationPolicy: .interactive
+                )
 
                 XCTAssertEqual(closeResult, .closed)
                 let selectedWorkspaceAfterClose = try? XCTUnwrap(store.selectedWorkspace)
@@ -511,7 +517,10 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
             )
 
             withExtendedLifetime(focusedPanelCommandController) {
-                let closeResult = focusedPanelCommandController.closePanel(panelID: backgroundPanelToClose)
+                let closeResult = focusedPanelCommandController.closePanel(
+                    panelID: backgroundPanelToClose,
+                    confirmationPolicy: .interactive
+                )
 
                 XCTAssertEqual(closeResult, .closed)
                 let updatedWorkspace = try? XCTUnwrap(store.state.workspacesByID[workspaceID])

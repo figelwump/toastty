@@ -37,9 +37,23 @@ final class SlotFocusRestoreCoordinator {
 
 @MainActor
 final class FocusedPanelCommandController {
+    enum CloseConfirmationPolicy: Equatable {
+        case interactive
+        case nonInteractive(terminateRunningProcess: Bool)
+    }
+
+    enum CloseRejectionReason: Equatable {
+        case runningTerminal(command: String?)
+        case terminalAssessmentUnavailable
+        case dirtyLocalDocument(displayName: String)
+        case localDocumentSaveInProgress(displayName: String)
+    }
+
     enum CloseResult: Equatable {
         case notHandled
         case canceled
+        case confirmationRequired(CloseRejectionReason)
+        case blocked(CloseRejectionReason)
         case closed
 
         var consumesShortcut: Bool {
@@ -53,25 +67,46 @@ final class FocusedPanelCommandController {
 
     private weak var store: AppStore?
     private weak var runtimeRegistry: TerminalRuntimeRegistry?
-    private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
     private let slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator
     private let shouldConfirmClose: Bool
+    private let terminalCloseAssessmentProvider: @MainActor (UUID) -> TerminalCloseConfirmationAssessment?
+    private let localDocumentCloseConfirmationStateProvider: @MainActor (UUID) -> LocalDocumentCloseConfirmationState?
+    private let runningTerminalCloseConfirmationPresenter: @MainActor (TerminalCloseConfirmationAssessment) -> Bool
+    private let discardLocalDocumentDraftConfirmationPresenter: @MainActor (String) -> Bool
+    private let localDocumentSaveInProgressPresenter: @MainActor (String) -> Void
 
     init(
         store: AppStore,
         runtimeRegistry: TerminalRuntimeRegistry,
         slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator,
-        webPanelRuntimeRegistry: WebPanelRuntimeRegistry? = nil
+        webPanelRuntimeRegistry: WebPanelRuntimeRegistry? = nil,
+        shouldConfirmClose: Bool? = nil,
+        terminalCloseAssessmentProvider: (@MainActor (UUID) -> TerminalCloseConfirmationAssessment?)? = nil,
+        localDocumentCloseConfirmationStateProvider: (@MainActor (UUID) -> LocalDocumentCloseConfirmationState?)? = nil,
+        runningTerminalCloseConfirmationPresenter: (@MainActor (TerminalCloseConfirmationAssessment) -> Bool)? = nil,
+        discardLocalDocumentDraftConfirmationPresenter: (@MainActor (String) -> Bool)? = nil,
+        localDocumentSaveInProgressPresenter: (@MainActor (String) -> Void)? = nil
     ) {
         self.store = store
         self.runtimeRegistry = runtimeRegistry
-        self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.slotFocusRestoreCoordinator = slotFocusRestoreCoordinator
         let processInfo = ProcessInfo.processInfo
-        shouldConfirmClose = !AutomationConfig.shouldBypassInteractiveConfirmation(
+        self.shouldConfirmClose = shouldConfirmClose ?? !AutomationConfig.shouldBypassInteractiveConfirmation(
             arguments: processInfo.arguments,
             environment: processInfo.environment
         )
+        self.terminalCloseAssessmentProvider = terminalCloseAssessmentProvider ?? { [weak runtimeRegistry] panelID in
+            runtimeRegistry?.terminalCloseConfirmationAssessment(panelID: panelID)
+        }
+        self.localDocumentCloseConfirmationStateProvider = localDocumentCloseConfirmationStateProvider ?? { [weak webPanelRuntimeRegistry] panelID in
+            webPanelRuntimeRegistry?.localDocumentCloseConfirmationState(panelID: panelID)
+        }
+        self.runningTerminalCloseConfirmationPresenter = runningTerminalCloseConfirmationPresenter
+            ?? Self.presentRunningTerminalCloseConfirmation
+        self.discardLocalDocumentDraftConfirmationPresenter = discardLocalDocumentDraftConfirmationPresenter
+            ?? Self.presentDiscardLocalDocumentDraftConfirmation
+        self.localDocumentSaveInProgressPresenter = localDocumentSaveInProgressPresenter
+            ?? Self.presentLocalDocumentSaveInProgressAlert
         runtimeRegistry.setGhosttyCloseSurfaceHandler { [weak self] panelID, _ in
             guard let self else { return false }
             // Route Ghostty close requests through the same close path as Cmd+W
@@ -83,7 +118,8 @@ final class FocusedPanelCommandController {
             // main-actor hop completes.
             return self.closePanel(
                 panelID: panelID,
-                source: .ui("ghostty_close_surface")
+                source: .ui("ghostty_close_surface"),
+                confirmationPolicy: .interactive
             ).consumesShortcut
         }
     }
@@ -98,28 +134,41 @@ final class FocusedPanelCommandController {
     @discardableResult
     func closeFocusedPanel(
         in workspaceID: UUID? = nil,
-        source: AppActionSource = .command("close_focused_panel")
+        source: AppActionSource = .command("close_focused_panel"),
+        confirmationPolicy: CloseConfirmationPolicy
     ) -> CloseResult {
         guard let workspace = resolvedWorkspace(preferredWorkspaceID: workspaceID),
               let focusedPanelID = focusedPanelID(in: workspace) else {
             return .notHandled
         }
-        return closePanel(panelID: focusedPanelID, preferredWorkspaceID: workspace.id, source: source)
+        return closePanel(
+            panelID: focusedPanelID,
+            preferredWorkspaceID: workspace.id,
+            source: source,
+            confirmationPolicy: confirmationPolicy
+        )
     }
 
     @discardableResult
     func closePanel(
         panelID: UUID,
-        source: AppActionSource = .command("close_panel")
+        source: AppActionSource = .command("close_panel"),
+        confirmationPolicy: CloseConfirmationPolicy
     ) -> CloseResult {
-        closePanel(panelID: panelID, preferredWorkspaceID: nil, source: source)
+        closePanel(
+            panelID: panelID,
+            preferredWorkspaceID: nil,
+            source: source,
+            confirmationPolicy: confirmationPolicy
+        )
     }
 
     @discardableResult
     private func closePanel(
         panelID: UUID,
         preferredWorkspaceID: UUID?,
-        source: AppActionSource
+        source: AppActionSource,
+        confirmationPolicy: CloseConfirmationPolicy
     ) -> CloseResult {
         guard let store else { return .notHandled }
         let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
@@ -131,17 +180,31 @@ final class FocusedPanelCommandController {
         let closedPanelWasFocused = workspace.focusedPanelID == panelID
         let panelState = workspace.panelState(for: panelID)
         var didPromptForConfirmation = false
-        if shouldConfirmClose {
-            switch panelState {
-            case .some(.terminal):
-                if let closeAssessment = runtimeRegistry?.terminalCloseConfirmationAssessment(panelID: panelID) {
+        switch panelState {
+        case .some(.terminal):
+            if shouldConfirmClose {
+                if let closeAssessment = terminalCloseAssessmentProvider(panelID) {
                     if closeAssessment.requiresConfirmation {
-                        didPromptForConfirmation = true
-                        guard confirmRunningTerminalClose(closeAssessment) else {
-                            return .canceled
+                        switch confirmationPolicy {
+                        case .interactive:
+                            didPromptForConfirmation = true
+                            guard runningTerminalCloseConfirmationPresenter(closeAssessment) else {
+                                return .canceled
+                            }
+
+                        case .nonInteractive(let terminateRunningProcess):
+                            guard terminateRunningProcess else {
+                                return .confirmationRequired(
+                                    .runningTerminal(command: closeAssessment.runningCommand)
+                                )
+                            }
                         }
                     }
                 } else {
+                    if case .nonInteractive(let terminateRunningProcess) = confirmationPolicy,
+                       terminateRunningProcess == false {
+                        return .blocked(.terminalAssessmentUnavailable)
+                    }
                     ToasttyLog.warning(
                         "Skipping terminal close confirmation because runtime assessment is unavailable",
                         category: .terminal,
@@ -152,25 +215,45 @@ final class FocusedPanelCommandController {
                         ]
                     )
                 }
+            }
 
-            case .some(.web(let webState)) where webState.definition == .localDocument:
-                if let closeConfirmationState = webPanelRuntimeRegistry?.localDocumentCloseConfirmationState(panelID: panelID) {
+        case .some(.web(let webState)) where webState.definition == .localDocument:
+            switch confirmationPolicy {
+            case .interactive where shouldConfirmClose == false:
+                break
+
+            case .interactive:
+                if let closeConfirmationState = localDocumentCloseConfirmationStateProvider(panelID) {
                     didPromptForConfirmation = true
                     switch closeConfirmationState.kind {
                     case .dirtyDraft:
-                        guard confirmDiscardLocalDocumentDraft(displayName: closeConfirmationState.displayName) else {
+                        guard discardLocalDocumentDraftConfirmationPresenter(closeConfirmationState.displayName) else {
                             return .canceled
                         }
 
                     case .saveInProgress:
-                        presentLocalDocumentSaveInProgressAlert(displayName: closeConfirmationState.displayName)
+                        localDocumentSaveInProgressPresenter(closeConfirmationState.displayName)
                         return .canceled
                     }
                 }
 
-            default:
-                break
+            case .nonInteractive:
+                if let closeConfirmationState = localDocumentCloseConfirmationStateProvider(panelID) {
+                    switch closeConfirmationState.kind {
+                    case .dirtyDraft:
+                        return .confirmationRequired(
+                            .dirtyLocalDocument(displayName: closeConfirmationState.displayName)
+                        )
+                    case .saveInProgress:
+                        return .blocked(
+                            .localDocumentSaveInProgress(displayName: closeConfirmationState.displayName)
+                        )
+                    }
+                }
             }
+
+        default:
+            break
         }
 
         let didClosePanel = store.send(.closePanel(panelID: panelID), source: source)
@@ -229,7 +312,7 @@ final class FocusedPanelCommandController {
         workspace.rightAuxPanel.focusedPanelID ?? workspace.focusedPanelID
     }
 
-    private func confirmRunningTerminalClose(_ assessment: TerminalCloseConfirmationAssessment) -> Bool {
+    private static func presentRunningTerminalCloseConfirmation(_ assessment: TerminalCloseConfirmationAssessment) -> Bool {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Close this terminal?"
 
@@ -249,7 +332,7 @@ final class FocusedPanelCommandController {
         return response == .alertSecondButtonReturn
     }
 
-    private func confirmDiscardLocalDocumentDraft(displayName: String) -> Bool {
+    private static func presentDiscardLocalDocumentDraftConfirmation(displayName: String) -> Bool {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Discard document draft?"
         confirmationAlert.informativeText = "\"\(displayName)\" has unsaved changes. Closing the panel will discard them."
@@ -264,7 +347,7 @@ final class FocusedPanelCommandController {
         return response == .alertSecondButtonReturn
     }
 
-    private func presentLocalDocumentSaveInProgressAlert(displayName: String) {
+    private static func presentLocalDocumentSaveInProgressAlert(displayName: String) {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Document save in progress"
         confirmationAlert.informativeText =

@@ -105,6 +105,30 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
         #expect(ids.contains("panel.close"))
         #expect(ids.contains("agent.launch"))
         #expect(ids.contains("config.reload") == false)
+
+        let panelCloseDescriptor = commands.compactMap { entry -> [String: AutomationJSONValue]? in
+            guard case .object(let object) = entry,
+                  object.string("id") == "panel.close" else {
+                return nil
+            }
+            return object
+        }.first
+        let panelCloseParameters: [AutomationJSONValue]
+        switch panelCloseDescriptor?["parameters"] {
+        case .array(let values):
+            panelCloseParameters = values
+        default:
+            panelCloseParameters = []
+        }
+        let terminateRunningProcessParameter = panelCloseParameters.compactMap { parameter -> [String: AutomationJSONValue]? in
+            guard case .object(let object) = parameter,
+                  object.string("name") == "terminateRunningProcess" else {
+                return nil
+            }
+            return object
+        }.first
+        #expect(terminateRunningProcessParameter?.string("valueType") == "boolean")
+        #expect(terminateRunningProcessParameter?.bool("required") == false)
     }
 
     @Test
@@ -142,6 +166,197 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
             server.store.state.windows.first?.sidebarVisible
         }
         #expect(toggledSidebarVisible == false)
+    }
+
+    @Test
+    func appControlPanelCloseRejectsRunningTerminalWithoutPresentingAlert() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                shouldConfirmPanelClose: true,
+                terminalCloseAssessmentProvider: { _ in
+                    TerminalCloseConfirmationAssessment(
+                        requiresConfirmation: true,
+                        runningCommand: "sleep 30"
+                    )
+                },
+                runningTerminalCloseConfirmationPresenter: { _ in
+                    Issue.record("app-control panel.close must not present interactive confirmation")
+                    return false
+                }
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("panel.close"),
+                    "args": .object([
+                        "workspaceID": .string(server.workspaceID.uuidString),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "CONFIRMATION_REQUIRED")
+        #expect(response.error?.message.contains("terminateRunningProcess=true") == true)
+        let panelStillExists = await MainActor.run {
+            server.store.state.workspaceSelection(containingPanelID: server.panelID) != nil
+        }
+        #expect(panelStillExists)
+    }
+
+    @Test
+    func appControlPanelCloseTerminatesRunningProcessWhenExplicitlyRequested() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                shouldConfirmPanelClose: true,
+                terminalCloseAssessmentProvider: { _ in
+                    TerminalCloseConfirmationAssessment(
+                        requiresConfirmation: true,
+                        runningCommand: "sleep 30"
+                    )
+                },
+                runningTerminalCloseConfirmationPresenter: { _ in
+                    Issue.record("explicit non-interactive panel.close must not present confirmation")
+                    return false
+                }
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("panel.close"),
+                    "args": .object([
+                        "workspaceID": .string(server.workspaceID.uuidString),
+                        // toastty action run encodes key=value arguments as strings.
+                        "terminateRunningProcess": .string("true"),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.int("stateVersion") == 1)
+        let panelStillExists = await MainActor.run {
+            server.store.state.workspaceSelection(containingPanelID: server.panelID) != nil
+        }
+        #expect(panelStillExists == false)
+    }
+
+    @Test
+    func appControlPanelCloseFailsClosedWhenTerminalAssessmentIsUnavailable() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                shouldConfirmPanelClose: true,
+                terminalCloseAssessmentProvider: { _ in nil }
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("panel.close"),
+                    "args": .object([
+                        "workspaceID": .string(server.workspaceID.uuidString),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "CLOSE_BLOCKED")
+        let panelStillExists = await MainActor.run {
+            server.store.state.workspaceSelection(containingPanelID: server.panelID) != nil
+        }
+        #expect(panelStillExists)
+    }
+
+    @Test
+    func appControlPanelCloseNeverUsesTerminalForceToDiscardDirtyDocument() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            let server = try makeServer(
+                socketPath: socketPath,
+                shouldConfirmPanelClose: true,
+                localDocumentCloseConfirmationStateProvider: { _ in
+                    LocalDocumentCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
+                },
+                discardLocalDocumentDraftConfirmationPresenter: { _ in
+                    Issue.record("app-control panel.close must not present document confirmation")
+                    return false
+                }
+            )
+            _ = server.store.send(
+                .createWebPanel(
+                    workspaceID: server.workspaceID,
+                    panel: WebPanelState(
+                        definition: .localDocument,
+                        title: "README.md",
+                        filePath: "/tmp/README.md"
+                    ),
+                    placement: .newTab
+                )
+            )
+            return server
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+        let localDocumentPanelID = try await MainActor.run {
+            try #require(server.store.selectedWorkspace?.focusedPanelID)
+        }
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("panel.close"),
+                    "args": .object([
+                        "workspaceID": .string(server.workspaceID.uuidString),
+                        "terminateRunningProcess": .bool(true),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "CONFIRMATION_REQUIRED")
+        let panelStillExists = await MainActor.run {
+            server.store.state.workspaceSelection(containingPanelID: localDocumentPanelID) != nil
+        }
+        #expect(panelStillExists)
     }
 
     @Test

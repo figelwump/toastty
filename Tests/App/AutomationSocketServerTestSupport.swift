@@ -60,7 +60,13 @@ extension AutomationSocketServerTestSupport {
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter = { _, _, completion in
             completion(.cancel)
         },
-        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil
+        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
+        shouldConfirmPanelClose: Bool? = nil,
+        terminalCloseAssessmentProvider: (@MainActor (UUID) -> TerminalCloseConfirmationAssessment?)? = nil,
+        localDocumentCloseConfirmationStateProvider: (@MainActor (UUID) -> LocalDocumentCloseConfirmationState?)? = nil,
+        runningTerminalCloseConfirmationPresenter: (@MainActor (TerminalCloseConfirmationAssessment) -> Bool)? = nil,
+        discardLocalDocumentDraftConfirmationPresenter: (@MainActor (String) -> Bool)? = nil,
+        localDocumentSaveInProgressPresenter: (@MainActor (String) -> Void)? = nil
     ) throws -> (
         server: AutomationSocketServer,
         store: AppStore,
@@ -78,7 +84,14 @@ extension AutomationSocketServerTestSupport {
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
-            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator(),
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            shouldConfirmClose: shouldConfirmPanelClose,
+            terminalCloseAssessmentProvider: terminalCloseAssessmentProvider,
+            localDocumentCloseConfirmationStateProvider: localDocumentCloseConfirmationStateProvider,
+            runningTerminalCloseConfirmationPresenter: runningTerminalCloseConfirmationPresenter,
+            discardLocalDocumentDraftConfirmationPresenter: discardLocalDocumentDraftConfirmationPresenter,
+            localDocumentSaveInProgressPresenter: localDocumentSaveInProgressPresenter
         )
 
         let workspace = try #require(store.selectedWorkspace)

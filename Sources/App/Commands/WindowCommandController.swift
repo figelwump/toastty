@@ -22,7 +22,10 @@ final class WindowCommandController: NSObject {
         guard let workspaceID = currentCommandSelection()?.workspace.id else {
             return false
         }
-        return focusedPanelCommandController.closeFocusedPanel(in: workspaceID).consumesShortcut
+        return focusedPanelCommandController.closeFocusedPanel(
+            in: workspaceID,
+            confirmationPolicy: .interactive
+        ).consumesShortcut
     }
 
     func canCloseWindow() -> Bool {

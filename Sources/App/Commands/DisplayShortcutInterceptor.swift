@@ -817,7 +817,10 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
         let preferredWorkspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id
-        guard focusedPanelCommandController.closeFocusedPanel(in: preferredWorkspaceID).consumesShortcut else {
+        guard focusedPanelCommandController.closeFocusedPanel(
+            in: preferredWorkspaceID,
+            confirmationPolicy: .interactive
+        ).consumesShortcut else {
             if let window = store.window(id: preferredWindowID),
                window.workspaceIDs.isEmpty {
                 return closeEmptyWindow(windowID: preferredWindowID)
@@ -1303,4 +1306,3 @@ final class DisplayShortcutInterceptor {
         return store.focusedLocalDocumentPanelSelection(preferredWindowID: preferredWindowID)
     }
 }
-

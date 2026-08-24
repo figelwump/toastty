@@ -51,6 +51,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         "submit",
         "summary",
         "tabID",
+        "terminateRunningProcess",
         "text",
         "threadID",
         "title",
@@ -1503,7 +1504,10 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.close-focused-panel":
             didMutate = focusedPanelCommandController.closeFocusedPanel(
                 in: try workspaceID(),
-                source: .automation(command: "automation.perform_action", actionID: actionID)
+                source: .automation(command: "automation.perform_action", actionID: actionID),
+                confirmationPolicy: .nonInteractive(
+                    terminateRunningProcess: args.bool("terminateRunningProcess") ?? false
+                )
             ).didMutateState
 
         case "workspace.focus-slot.previous":

@@ -350,13 +350,31 @@ final class AppControlExecutor {
             return try splitWithProfile(direction: .down, args: args)
 
         case .panelClose:
-            return .init(
-                didMutateState: focusedPanelCommandController.closeFocusedPanel(
-                    in: try resolveWorkspaceID(args: args),
-                    source: .appControl(actionID: action.rawValue)
-                ).didMutateState,
-                result: nil
+            let closeResult = focusedPanelCommandController.closeFocusedPanel(
+                in: try resolveWorkspaceID(args: args),
+                source: .appControl(actionID: action.rawValue),
+                confirmationPolicy: .nonInteractive(
+                    terminateRunningProcess: try optionalBooleanParameter(
+                        "terminateRunningProcess",
+                        args: args,
+                        defaultValue: false
+                    )
+                )
             )
+            switch closeResult {
+            case .closed:
+                return .init(didMutateState: true, result: nil)
+            case .notHandled:
+                return .init(didMutateState: false, result: nil)
+            case .confirmationRequired(let reason):
+                throw panelCloseError(reason)
+            case .blocked(let reason):
+                throw panelCloseError(reason)
+            case .canceled:
+                throw AutomationSocketError.internalError(
+                    "panel.close unexpectedly entered an interactive confirmation path"
+                )
+            }
 
         case .workspaceFocusSlotPrevious:
             return try focusSlot(.previous, args: args)
@@ -1232,6 +1250,43 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("\(name) is required")
         }
         return value
+    }
+
+    func optionalBooleanParameter(
+        _ name: String,
+        args: [String: AutomationJSONValue],
+        defaultValue: Bool
+    ) throws -> Bool {
+        guard args[name] != nil else { return defaultValue }
+        guard let value = args.boolValue(name) else {
+            throw AutomationSocketError.invalidPayload("\(name) must be a boolean")
+        }
+        return value
+    }
+
+    func panelCloseError(
+        _ reason: FocusedPanelCommandController.CloseRejectionReason
+    ) -> AutomationSocketError {
+        switch reason {
+        case .runningTerminal(let command):
+            var message = "panel.close requires terminateRunningProcess=true because a process is still running"
+            if let command {
+                message += "; detected command: \(command)"
+            }
+            return .confirmationRequired(message)
+        case .dirtyLocalDocument(let displayName):
+            return .confirmationRequired(
+                "panel.close cannot discard unsaved changes in \"\(displayName)\" from automation; save or discard the draft first"
+            )
+        case .terminalAssessmentUnavailable:
+            return .closeBlocked(
+                "panel.close could not determine whether the terminal has a running process; retry when the runtime is available or pass terminateRunningProcess=true"
+            )
+        case .localDocumentSaveInProgress(let displayName):
+            return .closeBlocked(
+                "panel.close cannot close \"\(displayName)\" while a document save is in progress"
+            )
+        }
     }
 
     func agentLaunchEnvironment(args: [String: AutomationJSONValue]) throws -> [String: String] {

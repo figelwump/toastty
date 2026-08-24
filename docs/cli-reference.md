@@ -402,6 +402,24 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 
 Descriptors can also advertise compatibility aliases. Those aliases are accepted by the socket executor, but canonical IDs are preferred for new integrations.
 
+`panel.close` is non-interactive when invoked through the CLI. It closes the
+focused panel in the selected workspace without presenting an AppKit alert. If
+the terminal still has a running process, the command fails with
+`CONFIRMATION_REQUIRED`; pass `terminateRunningProcess=true` to explicitly
+terminate that process and close the panel:
+
+```bash
+"$TOASTTY_CLI_PATH" action run panel.close \
+  --workspace "$TOASTTY_WORKSPACE_ID" \
+  terminateRunningProcess=true
+```
+
+That parameter applies only to running terminal processes. It never discards
+an unsaved local-document draft or interrupts a document save. Those states
+return `CONFIRMATION_REQUIRED` or `CLOSE_BLOCKED` without showing a modal. If
+Toastty cannot assess the terminal runtime, the default close also fails closed
+with `CLOSE_BLOCKED`; explicit process termination remains available.
+
 Scratchpad actions are intended for agent and automation integrations:
 
 - `panel.scratchpad.set-content` creates or updates the Scratchpad linked to an active managed session. It requires `sessionID` plus either `filePath` or `content`, accepts optional `title`, `expectedRevision`, and `createPolicy`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`. Session-linked Scratchpads open the source session's right panel and make the Scratchpad active there without activating another window, workspace, or workspace tab, and without moving keyboard focus into the Scratchpad. No CLI flag is needed for background creation. `createPolicy` defaults to `reuse`; set `createPolicy=new` to create a fresh session-linked Scratchpad and leave the previous one open but unbound.

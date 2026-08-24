@@ -8,6 +8,8 @@ enum AutomationSocketError: Error {
     case unknownEventType
     case unknownCommand
     case invalidPayload(String)
+    case confirmationRequired(String)
+    case closeBlocked(String)
     case annotationColorLocked(key: String, currentColor: String)
     case annotationUsageUnavailable
     case scopeDenied(workspaceID: UUID)
@@ -36,6 +38,10 @@ enum AutomationSocketError: Error {
             return AutomationResponseError(code: "UNKNOWN_COMMAND", message: "command is not supported")
         case .invalidPayload(let message):
             return AutomationResponseError(code: "INVALID_PAYLOAD", message: message)
+        case .confirmationRequired(let message):
+            return AutomationResponseError(code: "CONFIRMATION_REQUIRED", message: message)
+        case .closeBlocked(let message):
+            return AutomationResponseError(code: "CLOSE_BLOCKED", message: message)
         case .annotationColorLocked(let key, let currentColor):
             return AutomationResponseError(
                 code: "ANNOTATION_COLOR_LOCKED",

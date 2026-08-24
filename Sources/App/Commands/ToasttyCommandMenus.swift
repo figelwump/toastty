@@ -790,7 +790,10 @@ struct ToasttyCommandMenus: Commands {
     }
 
     private func closeFocusedPanelFromCommandSelection() {
-        _ = focusedPanelCommandController.closeFocusedPanel(in: commandWorkspace?.id)
+        _ = focusedPanelCommandController.closeFocusedPanel(
+            in: commandWorkspace?.id,
+            confirmationPolicy: .interactive
+        )
     }
 
     private func showScratchpadForCurrentSession(_ preferredWindowID: UUID?) {
