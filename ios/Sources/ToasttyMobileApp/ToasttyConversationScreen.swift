@@ -1,17 +1,11 @@
 import SwiftUI
 import ToasttyMobileDomain
 
-private enum ComposerTouchFocusState: Equatable {
-    case idle
-    case requested
-    case cancelled
-}
-
 struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @FocusState private var isComposerFocused: Bool
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
-    @State private var composerTouchFocusState = ComposerTouchFocusState.idle
+    @State private var didRequestComposerFocusOnTouchDown = false
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -198,12 +192,7 @@ struct ToasttyConversationScreen: View {
     ) -> some View {
         TextField(presentation.placeholder, text: $draft, axis: .vertical)
             .focused($isComposerFocused)
-            .simultaneousGesture(
-                composerFocusGesture(presentation),
-                including: isComposerFocused && composerTouchFocusState == .idle
-                    ? .subviews
-                    : .all
-            )
+            .simultaneousGesture(composerFocusGesture(presentation))
             .textFieldStyle(.plain)
             .lineLimit(1...5)
             .textInputAutocapitalization(.sentences)
@@ -245,39 +234,33 @@ struct ToasttyConversationScreen: View {
     private func composerFocusGesture(
         _ presentation: ToasttyComposerPresentation
     ) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        LongPressGesture(minimumDuration: 0)
+            .sequenced(before: DragGesture(minimumDistance: 10))
             .onChanged { value in
-                switch composerTouchFocusState {
-                case .idle:
-                    guard presentation.gate.allowsInput,
-                          isComposerFocused == false
-                    else {
-                        return
-                    }
-                    // Start first-responder setup on touch-down so a cold
-                    // keyboard cannot postpone editing until tap completion.
-                    composerTouchFocusState = .requested
-                    isComposerFocused = true
-                case .requested:
-                    if Self.isCancelledComposerTouch(value.translation) {
-                        composerTouchFocusState = .cancelled
+                guard case .first(true) = value else {
+                    if case .second(true, .some) = value,
+                       didRequestComposerFocusOnTouchDown {
+                        didRequestComposerFocusOnTouchDown = false
                         isComposerFocused = false
                     }
-                case .cancelled:
-                    break
+                    return
                 }
-            }
-            .onEnded { value in
-                if composerTouchFocusState == .requested,
-                   Self.isCancelledComposerTouch(value.translation) {
-                    isComposerFocused = false
-                }
-                composerTouchFocusState = .idle
-            }
-    }
 
-    private static func isCancelledComposerTouch(_ translation: CGSize) -> Bool {
-        max(abs(translation.width), abs(translation.height)) > 10
+                // A sequenced drag always observes this phase before its
+                // movement phase, so an older completed tap cannot be
+                // mistaken for the current touch.
+                didRequestComposerFocusOnTouchDown = false
+                guard presentation.gate.allowsInput,
+                      isComposerFocused == false
+                else { return }
+                // Start first-responder setup on touch-down so a cold
+                // keyboard cannot postpone editing until tap completion.
+                didRequestComposerFocusOnTouchDown = true
+                isComposerFocused = true
+            }
+            .onEnded { _ in
+                didRequestComposerFocusOnTouchDown = false
+            }
     }
 
     private var composerKeyboardClearance: CGFloat {

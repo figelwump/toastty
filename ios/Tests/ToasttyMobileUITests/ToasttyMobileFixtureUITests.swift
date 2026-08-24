@@ -766,6 +766,38 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
+    func testGatedSendFocusedComposerDragKeepsFocus() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let input = app.textFields["toastty-mobile-composer-input"]
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(input.isHittable)
+        input.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+
+        let start = input.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        let end = input.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)
+        )
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: end,
+            withVelocity: .fast,
+            thenHoldForDuration: 0
+        )
+
+        XCTAssertTrue(
+            keyboard.waitForExistence(timeout: 1),
+            "Dragging within a focused composer should preserve keyboard focus"
+        )
+    }
+
     func testGatedSendKeyboardPresentationKeepsLiveTailVisible() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
