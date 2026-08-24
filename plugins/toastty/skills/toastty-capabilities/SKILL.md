@@ -79,6 +79,26 @@ Common workflow families:
 - Scratchpad: `panel.scratchpad.set-content`, `panel.scratchpad.patch-content`, `panel.scratchpad.export`, `panel.scratchpad.state`.
 - Notifications: `toastty notify`.
 
+## Closing Panels
+
+`panel.close` is non-interactive on the app-control path: it returns an error
+instead of presenting confirmation UI. Invoke it without a termination override
+first unless the request already authorizes terminating a running terminal
+process. Resolve the target workspace first and pass it explicitly.
+
+- On `CONFIRMATION_REQUIRED`, preserve the error message. If it identifies a
+  running terminal and process termination is authorized, retry with
+  `terminateRunningProcess=true`. That parameter is terminal-only; never use it
+  as permission to discard unsaved local-document changes.
+- On `CLOSE_BLOCKED`, preserve the error message and do not retry in a loop. An
+  unavailable terminal assessment may be overridden once when process
+  termination is authorized; a document save in progress cannot be forced.
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run panel.close \
+  --workspace "<workspace-id>"
+```
+
 ## Workspace Annotations
 
 Treat requests to annotate, label, tag, or mark a Toastty workspace as workspace
