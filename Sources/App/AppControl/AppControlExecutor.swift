@@ -538,6 +538,8 @@ final class AppControlExecutor {
                 panelID: args.uuid("panelID"),
                 cwd: normalizedOptionalText(args.stringValue("cwd")),
                 environment: try agentLaunchEnvironment(args: args),
+                model: args.stringValue("model"),
+                reasoningEffort: args.stringValue("reasoningEffort"),
                 initialPrompt: args.stringValue("initialPrompt"),
                 initialCommands: try agentLaunchInitialCommands(args: args),
                 inheritedScopedWorkspaceIDs: inheritedWorkspaceScopeForChildLaunch(),
@@ -683,6 +685,8 @@ final class AppControlExecutor {
                 panelID: args.uuid("panelID"),
                 cwd: normalizedOptionalText(args.stringValue("cwd")),
                 environment: try agentLaunchEnvironment(args: args),
+                model: args.stringValue("model"),
+                reasoningEffort: args.stringValue("reasoningEffort"),
                 initialPrompt: args.stringValue("initialPrompt"),
                 initialCommands: try agentLaunchInitialCommands(args: args),
                 inheritedScopedWorkspaceIDs: inheritedWorkspaceScopeForChildLaunch(),
@@ -696,6 +700,8 @@ final class AppControlExecutor {
             panelID: preparation.panelID,
             cwd: preparation.cwd,
             environment: preparation.environment,
+            model: preparation.model,
+            reasoningEffort: preparation.reasoningEffort,
             initialPrompt: preparation.initialPrompt,
             initialCommands: preparation.initialCommands,
             inheritedScopedWorkspaceIDs: preparation.inheritedScopedWorkspaceIDs,
@@ -828,6 +834,8 @@ private extension AppControlExecutor {
         let panelID: UUID?
         let cwd: String?
         let environment: [String: String]
+        let model: String?
+        let reasoningEffort: String?
         let initialPrompt: String?
         let initialCommands: [String]
         let inheritedScopedWorkspaceIDs: Set<UUID>?

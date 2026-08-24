@@ -98,9 +98,29 @@ arguments for automation:
   `TOASTTY_USER_SKILLS_ROOT`, `TOASTTY_MANAGED_AGENT_SHIM_BYPASS`,
   `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT`, `CODEX_TUI_RECORD_SESSION`,
   `CODEX_TUI_SESSION_LOG_PATH`, and `TOASTTY_PI_TELEMETRY_LOG_PATH`.
+- `model=<value>` makes an explicit, action-local model selection for Codex,
+  Claude Code, OpenCode, MiMo Code, or Pi. Omit it to use the exact configured
+  profile argv and any provider defaults. Toastty translates an explicit value
+  to `--model` for each provider.
+- `reasoningEffort=<value>` makes an explicit, action-local reasoning selection
+  for Codex (`--config model_reasoning_effort=<TOML string>`), Claude Code
+  (`--effort`), or Pi (`--thinking`). OpenCode and MiMo Code do not support this
+  parameter; Toastty rejects the whole launch before changing the target panel
+  or managed-session state and never maps it to an OpenCode-family `variant`.
 - `initialPrompt` appends the first prompt as a trailing argv argument only when
   the resolved profile supports it. Blank values are ignored; nonblank prompts
   must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
+
+Model and reasoning values are syntax-checked without a built-in catalog: each
+must be nonblank, no more than 256 UTF-8 bytes, contain no control characters,
+and not begin with `-`. The provider CLI remains authoritative for whether a
+delivered model or reasoning value exists and is valid upstream. Explicit
+selections replace equivalent, safely parseable settings already present in a
+configured profile while preserving unrelated flags and Toastty's managed
+instrumentation. Toastty fails the launch clearly when a wrapper, executable,
+or equivalent flag shape is ambiguous instead of risking a conflicting argv.
+The live `agent.launch` action descriptor advertises `supportedProfileIDs` on
+both parameters so automation can feature-detect this support.
 
 Built-in Codex and Claude automation launches support `initialPrompt` when the
 resolved argv is exactly one direct first-party command (`codex`, `cdx`, or

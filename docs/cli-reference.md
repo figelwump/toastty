@@ -428,13 +428,23 @@ Scratchpad actions are intended for agent and automation integrations:
 - `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
 - `agent.launch` starts a managed agent profile in a resolved terminal panel. It
   requires `profileID` and accepts optional `cwd`, repeatable
-  `initialCommands=<command>`, repeatable `env.NAME=value`, and `initialPrompt`
-  arguments. `cwd` must be absolute or `~`-expanded and becomes both the launch
+  `initialCommands=<command>`, repeatable `env.NAME=value`, `model`,
+  `reasoningEffort`, and `initialPrompt` arguments. `cwd` must be absolute or
+  `~`-expanded and becomes both the launch
   directory and the session working directory; `initialCommands` are raw
   single-line shell snippets rendered after `cd <cwd>` and before the final
   agent command; `env.NAME` entries are injected before Toastty's managed launch
   context on the final agent command and are not exported to
-  `initialCommands`; `initialPrompt` is appended only for supported profiles.
+  `initialCommands`; `model` selects a model for `codex`, `claude`, `opencode`,
+  `mimocode`, or `pi`; `reasoningEffort` selects reasoning for `codex`, `claude`,
+  or `pi`; and `initialPrompt` is appended only for supported profiles.
+  OpenCode and MiMo Code reject `reasoningEffort` atomically and do not map it
+  to `variant`. Omit either selection to retain the configured argv/provider
+  default. Explicit selections replace safely parseable equivalent profile
+  flags; ambiguous executable, wrapper, or flag shapes fail without launch.
+  Values are syntax-checked (nonblank, at most 256 UTF-8 bytes, no control
+  characters, and no leading dash), while the provider CLI makes the final
+  upstream validity decision after delivery.
   Callers own side effects and trust changes in `initialCommands`, such as
   `direnv allow`. Built-in `codex`, `claude`, `opencode`, `mimocode`, and `pi` automation launches work
   even when the user has not created `~/.toastty/agents.toml`. CLI/app-control
@@ -443,11 +453,16 @@ Scratchpad actions are intended for agent and automation integrations:
   target. When an active managed session invokes `agent.launch`, Toastty records
   that caller as the new session's parent so the child can appear nested in the
   sidebar and contribute to the parent's orchestration status.
+  The result's `command` is the composed invocation evidence, including managed
+  instrumentation and environment assignments; inspect it without printing or
+  logging unrelated environment values.
 
 ```bash
 "$TOASTTY_CLI_PATH" action run agent.launch \
   --workspace "$WORKSPACE_ID" \
   profileID=codex \
+  model=gpt-5.6-codex \
+  reasoningEffort=high \
   cwd="$HOME/new-work-tree" \
   "initialCommands=direnv allow" \
   env.TOASTTY_DEV_WORKTREE_ROOT="$HOME/new-work-tree" \
@@ -823,7 +838,8 @@ When `--json` is passed, responses follow the automation protocol envelope:
 
 Error responses set `ok: false` and include an `error` object with `code` and `message` fields.
 
-For `action list` and `query list`, `result.commands` contains an array of descriptors:
+For `action list` and `query list`, `result.commands` contains an array of descriptors.
+Parameters may include `supportedProfileIDs` when support varies by agent profile:
 
 ```json
 {

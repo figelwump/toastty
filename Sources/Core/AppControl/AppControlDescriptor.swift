@@ -26,6 +26,9 @@ public struct AppControlParameterDescriptor: Codable, Equatable, Sendable {
     public let required: Bool
     public let repeatable: Bool
     public let allowedValues: [String]?
+    /// Profile IDs for which this parameter is supported when support varies
+    /// within one action. Omitted when the parameter applies uniformly.
+    public let supportedProfileIDs: [String]?
 
     public init(
         name: String,
@@ -33,7 +36,8 @@ public struct AppControlParameterDescriptor: Codable, Equatable, Sendable {
         valueType: AppControlParameterValueType,
         required: Bool,
         repeatable: Bool = false,
-        allowedValues: [String]? = nil
+        allowedValues: [String]? = nil,
+        supportedProfileIDs: [String]? = nil
     ) {
         self.name = name
         self.summary = summary
@@ -41,6 +45,7 @@ public struct AppControlParameterDescriptor: Codable, Equatable, Sendable {
         self.required = required
         self.repeatable = repeatable
         self.allowedValues = allowedValues
+        self.supportedProfileIDs = supportedProfileIDs
     }
 }
 

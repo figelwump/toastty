@@ -158,6 +158,32 @@ final class SetupResourcesDriftTests: XCTestCase {
         }
     }
 
+    func testCapabilitiesSkillDocumentsDiscoverableAgentLaunchSelection() throws {
+        let content = try String(
+            contentsOf: shippedSkillsURL()
+                .appendingPathComponent("toastty-capabilities", isDirectory: true)
+                .appendingPathComponent("SKILL.md", isDirectory: false),
+            encoding: .utf8
+        )
+
+        for requiredGuidance in [
+            "Agent Model And Reasoning Selection",
+            "configured profile/provider default",
+            "supportedProfileIDs",
+            "running Toastty version does not support that selection",
+            "Do not fall back to `terminal.send-text`",
+            "never translate reasoning to `variant`",
+            "final upstream validity decision",
+            "result.command",
+            "Never echo or log the complete command",
+        ] {
+            XCTAssertTrue(
+                content.contains(requiredGuidance),
+                "Capabilities skill is missing launch-selection guidance: \(requiredGuidance)"
+            )
+        }
+    }
+
     func testOnboardingGuideMentionsOnlyKnownAppControlIDs() throws {
         let guide = try String(
             contentsOf: setupResourcesURL().appendingPathComponent("onboarding-guide.md", isDirectory: false),

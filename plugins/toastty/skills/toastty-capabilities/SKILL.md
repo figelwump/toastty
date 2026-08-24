@@ -52,7 +52,12 @@ Discover the live app-control surface before composing a workflow:
 "$TOASTTY_CLI_PATH" --json query list
 ```
 
-Use the returned descriptors for canonical IDs, selectors, parameters, aliases, summaries, repeatability, and allowed values. Do not duplicate the whole catalog in your prompt or skill output. For every JSON response, check `.ok == true` before reading `.result`; if `.ok` is false, branch on `.error.code` and preserve the message in your report.
+Use the returned descriptors for canonical IDs, selectors, parameters, aliases,
+summaries, repeatability, allowed values, and parameter-specific
+`supportedProfileIDs`. Do not duplicate the whole catalog in your prompt or
+skill output. For every JSON response, check `.ok == true` before reading
+`.result`; if `.ok` is false, branch on `.error.code` and preserve the message
+in your report.
 
 ## Workspace, Panel, And Session Model
 
@@ -140,6 +145,40 @@ canonical key for the annotation kind, such as the examples above.
 Include a URL only when the user supplied it or available context verified it;
 never construct one by guessing from the label. Multiple annotations of the
 same kind need distinct stable keys.
+
+## Agent Model And Reasoning Selection
+
+Treat `model` and `reasoningEffort` on `agent.launch` as explicit, action-local
+selections, not changes to `agents.toml` or durable provider defaults. Omit a
+parameter when the configured profile/provider default is intended. When the
+user requests either selection:
+
+1. Read the live `agent.launch` descriptor from `--json action list`.
+2. Require the requested parameter to exist and require the target `profileID`
+   to appear in that parameter's `supportedProfileIDs`.
+3. If the parameter or support metadata is absent, stop cleanly and report that
+   the running Toastty version does not support that selection.
+   Do not fall back to `terminal.send-text`; that would bypass managed launch
+   validation and instrumentation.
+
+Current provider translations are:
+
+- `model`: Codex, Claude Code, OpenCode, MiMo Code, and Pi (`--model`).
+- `reasoningEffort`: Codex (`--config model_reasoning_effort=<TOML string>`),
+  Claude Code (`--effort`), and Pi (`--thinking`). OpenCode and MiMo Code do not
+  support it; never translate reasoning to `variant`.
+
+Pass requested values unchanged in the structured action arguments and let the
+provider CLI make the final upstream validity decision after Toastty delivers
+the command. Toastty performs only bounded syntax validation and safe
+replacement of equivalent configured argv flags. An ambiguous wrapper or flag
+shape is a clean launch failure, not a reason to retry with raw terminal input.
+
+On success, treat `result.command` as composed-invocation evidence. It includes
+Toastty instrumentation and environment assignments, so inspect it locally to
+verify the expected provider flag/value and report only that check plus the
+returned session/workspace/panel IDs. Never echo or log the complete command or
+unrelated environment values.
 
 ## Scope Semantics
 

@@ -190,6 +190,8 @@ struct ToasttyCLITests {
                 "--workspace", workspaceID.uuidString,
                 "profileID=codex",
                 "cwd=/tmp/worktree",
+                "model=gpt-5.6-codex",
+                "reasoningEffort=xhigh",
                 "initialCommands=direnv allow",
                 "initialCommands=printf ready",
                 "initialPrompt=/work-on POP-1234",
@@ -207,6 +209,8 @@ struct ToasttyCLITests {
         #expect(args["workspaceID"] == .string(workspaceID.uuidString))
         #expect(args["profileID"] == .string("codex"))
         #expect(args["cwd"] == .string("/tmp/worktree"))
+        #expect(args["model"] == .string("gpt-5.6-codex"))
+        #expect(args["reasoningEffort"] == .string("xhigh"))
         #expect(args["initialCommands"] == .array([.string("direnv allow"), .string("printf ready")]))
         #expect(args["initialPrompt"] == .string("/work-on POP-1234"))
     }

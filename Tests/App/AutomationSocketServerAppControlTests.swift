@@ -106,6 +106,32 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
         #expect(ids.contains("agent.launch"))
         #expect(ids.contains("config.reload") == false)
 
+        let agentLaunchDescriptor = commands.compactMap { entry -> [String: AutomationJSONValue]? in
+            guard case .object(let object) = entry,
+                  object.string("id") == "agent.launch" else {
+                return nil
+            }
+            return object
+        }.first
+        let agentLaunchParameters: [[String: AutomationJSONValue]]
+        switch agentLaunchDescriptor?["parameters"] {
+        case .array(let values):
+            agentLaunchParameters = values.compactMap { value in
+                guard case .object(let object) = value else { return nil }
+                return object
+            }
+        default:
+            agentLaunchParameters = []
+        }
+        let modelParameter = agentLaunchParameters.first { $0.string("name") == "model" }
+        let reasoningParameter = agentLaunchParameters.first { $0.string("name") == "reasoningEffort" }
+        #expect(modelParameter?.stringArray("supportedProfileIDs") == [
+            "codex", "claude", "opencode", "mimocode", "pi",
+        ])
+        #expect(reasoningParameter?.stringArray("supportedProfileIDs") == [
+            "codex", "claude", "pi",
+        ])
+
         let panelCloseDescriptor = commands.compactMap { entry -> [String: AutomationJSONValue]? in
             guard case .object(let object) = entry,
                   object.string("id") == "panel.close" else {
@@ -502,6 +528,9 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
                     "id": .string("agent.launch"),
                     "args": .object([
                         "profileID": .string(AgentKind.codex.rawValue),
+                        "model": .string("gpt-5.6-codex"),
+                        "reasoningEffort": .string("high"),
+                        "initialPrompt": .string("Review the launch evidence."),
                     ]),
                 ]
             ),
@@ -512,10 +541,114 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
         let sessionID = try #require(response.result?.string("sessionID"))
         #expect(response.result?.string("panelID") == server.panelID.uuidString)
         #expect(response.result?.int("stateVersion") == 1)
+        let command = try #require(response.result?.string("command"))
+        #expect(command.contains("--model gpt-5.6-codex"))
+        #expect(command.contains("model_reasoning_effort=\"high\""))
+        #expect(command.contains("notify="))
+        let modelRange = try #require(command.range(of: "--model gpt-5.6-codex"))
+        let promptRange = try #require(command.range(of: "Review the launch evidence."))
+        #expect(modelRange.lowerBound < promptRange.lowerBound)
         let activeAgent = await MainActor.run {
             server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.agent
         }
         #expect(activeAgent == .codex)
+    }
+
+    @Test
+    func appControlRejectsUnsupportedReasoningBeforeManagedSessionOrTerminalMutation() async throws {
+        let socketPath = temporarySocketPath()
+        let terminalRouter = TestTerminalCommandRouter()
+        await MainActor.run {
+            terminalRouter.defaultPromptState = .busy
+        }
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath, terminalCommandRouter: terminalRouter)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        for profileID in ["opencode", "mimocode"] {
+            let response = try sendRequest(
+                AutomationRequestEnvelope(
+                    requestID: UUID().uuidString,
+                    command: "app_control.run_action",
+                    payload: [
+                        "id": .string("agent.launch"),
+                        "args": .object([
+                            "profileID": .string(profileID),
+                            "model": .string("provider/model"),
+                            "reasoningEffort": .string("high"),
+                        ]),
+                    ]
+                ),
+                socketPath: socketPath
+            )
+
+            #expect(response.ok == false)
+            #expect(response.error?.code == "INVALID_PAYLOAD")
+            #expect(response.error?.message == "Agent profile '\(profileID)' does not support reasoningEffort.")
+        }
+
+        let remainedUnmutated = await MainActor.run {
+            terminalRouter.sentTextByPanelID.isEmpty
+                && server.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty
+        }
+        #expect(remainedUnmutated)
+    }
+
+    @Test
+    func appControlRejectsUnsafeCustomProfileArgvBeforeManagedSessionOrTerminalMutation() async throws {
+        let socketPath = temporarySocketPath()
+        let terminalRouter = TestTerminalCommandRouter()
+        await MainActor.run {
+            terminalRouter.defaultPromptState = .busy
+        }
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                terminalCommandRouter: terminalRouter,
+                agentCatalogProvider: TestAgentCatalogProvider(
+                    profiles: [
+                        AgentProfile(
+                            id: "codex",
+                            displayName: "Custom Codex",
+                            argv: ["custom-wrapper", "codex", "--search"]
+                        ),
+                    ]
+                )
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("agent.launch"),
+                    "args": .object([
+                        "profileID": .string("codex"),
+                        "model": .string("replacement-model"),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "INVALID_PAYLOAD")
+        #expect(response.error?.message.contains("argv cannot safely apply launch overrides") == true)
+        let remainedUnmutated = await MainActor.run {
+            terminalRouter.sentTextByPanelID.isEmpty
+                && server.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty
+        }
+        #expect(remainedUnmutated)
     }
 
     @Test

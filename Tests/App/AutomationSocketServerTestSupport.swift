@@ -50,6 +50,7 @@ extension AutomationSocketServerTestSupport {
         socketPath: String,
         automationConfig: AutomationConfig? = nil,
         terminalCommandRouter: (any TerminalCommandRouting)? = nil,
+        agentCatalogProvider: (any AgentCatalogProviding)? = nil,
         annotationStyleStore: AnnotationStyleStore? = nil,
         recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
         testHooks: AutomationSocketServerTestHooks = .disabled,
@@ -80,7 +81,7 @@ extension AutomationSocketServerTestSupport {
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
-        let agentCatalogProvider = TestAgentCatalogProvider()
+        let resolvedAgentCatalogProvider = agentCatalogProvider ?? TestAgentCatalogProvider()
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
@@ -101,7 +102,7 @@ extension AutomationSocketServerTestSupport {
             store: store,
             terminalCommandRouter: terminalCommandRouter ?? terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
-            agentCatalogProvider: agentCatalogProvider,
+            agentCatalogProvider: resolvedAgentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { socketPath },
             codexStatusTrackingSourceProvider: codexStatusTrackingSourceProvider,

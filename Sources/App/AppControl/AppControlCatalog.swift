@@ -387,6 +387,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .profileID(required: true),
                     .cwd(required: false),
                     .environment(required: false),
+                    .model(required: false),
+                    .reasoningEffort(required: false),
                     .initialCommands(required: false),
                     .initialPrompt(required: false),
                 ]
@@ -592,6 +594,26 @@ private extension AppControlParameterDescriptor {
             valueType: .string,
             required: required,
             repeatable: true
+        )
+    }
+
+    static func model(required: Bool) -> Self {
+        .init(
+            name: "model",
+            summary: "Action-local provider model selection. Provider CLI validates the delivered value.",
+            valueType: .string,
+            required: required,
+            supportedProfileIDs: AgentLaunchArgumentOverrideAdapter.modelSupportedAgents.map(\.rawValue)
+        )
+    }
+
+    static func reasoningEffort(required: Bool) -> Self {
+        .init(
+            name: "reasoningEffort",
+            summary: "Action-local provider reasoning selection. Provider CLI validates the delivered value.",
+            valueType: .string,
+            required: required,
+            supportedProfileIDs: AgentLaunchArgumentOverrideAdapter.reasoningEffortSupportedAgents.map(\.rawValue)
         )
     }
 

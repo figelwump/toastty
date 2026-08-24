@@ -186,7 +186,7 @@ Each descriptor includes:
 - `kind: "action"`
 - `summary: String`
 - `selectors: [windowID | workspaceID | panelID]`
-- `parameters: [name, summary, valueType, required, repeatable, allowedValues?]`
+- `parameters: [name, summary, valueType, required, repeatable, allowedValues?, supportedProfileIDs?]`
 - `aliases: [String]`
 
 Use this for discovery rather than hard-coding the full catalog in external tools. Aliases are accepted for compatibility, but new integrations should prefer canonical IDs.
@@ -278,9 +278,10 @@ Notable action-specific behavior:
     action when the terminal should become the interactive keyboard target.
 - `agent.launch`
   - requires `args.profileID`.
-  - accepts optional `args.cwd`, `args.initialCommands`, `args.initialPrompt`,
-    and environment values as either `args.env` / `args.environment` string
-    objects or flattened `args["env.NAME"]` string entries.
+  - accepts optional `args.cwd`, `args.initialCommands`, `args.model`,
+    `args.reasoningEffort`, `args.initialPrompt`, and environment values as
+    either `args.env` / `args.environment` string objects or flattened
+    `args["env.NAME"]` string entries.
   - app-control delivery preserves the current AppKit first responder; use a
     separate focus/select action when the terminal should become the interactive
     keyboard target.
@@ -304,6 +305,18 @@ Notable action-specific behavior:
     first-party command, or profiles that declare
     `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
     prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
+  - `model` is supported for `codex`, `claude`, `opencode`, `mimocode`, and
+    `pi`. `reasoningEffort` is supported for `codex`, `claude`, and `pi`.
+    OpenCode and MiMo Code reject `reasoningEffort` before target or panel
+    mutation and never map it to `variant`.
+  - omitted selections preserve the configured argv. Explicit selections
+    replace equivalent settings only when the provider executable, wrapper,
+    and flag/value shape are safely parseable; otherwise the launch fails.
+    Values must be nonblank, no more than 256 UTF-8 bytes, contain no control
+    characters, and not begin with `-`. Toastty does not ship model or effort
+    catalogs; the provider CLI finalizes upstream value validity after delivery.
+  - the result's `command` is evidence of the fully composed invocation,
+    including initial-prompt placement and managed instrumentation.
   - When an active managed session invokes `agent.launch`, Toastty records that
     caller as the new session's parent. Same-workspace child sessions are
     surfaced as nested sidebar rows; cross-workspace children retain their
@@ -764,6 +777,8 @@ Request payload:
 - `env?: { [name: String]: String }`
 - `env.NAME?: String`
 - `initialCommands?: String | String[]`
+- `model?: String`
+- `reasoningEffort?: String`
 - `initialPrompt?: String`
 
 Result:
@@ -796,6 +811,10 @@ Validation:
 - `initialPrompt` is rejected unless the resolved profile supports trailing
   prompt arguments. Blank values are ignored; nonblank prompts must not contain
   NUL bytes and are capped at 65,536 UTF-8 bytes.
+- `model` and `reasoningEffort` follow the provider support and syntax rules in
+  the canonical `agent.launch` action descriptor. Unsupported reasoning for
+  OpenCode or MiMo Code and unsafe configured argv shapes are rejected before
+  launch mutation.
 - environment keys must use shell variable syntax, values must be strings
   without NUL bytes, and duplicate keys across `environment`, `env`, and
   `env.NAME` forms are rejected.

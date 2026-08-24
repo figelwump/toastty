@@ -43,6 +43,9 @@ enum AgentLaunchError: LocalizedError, Equatable {
     case terminalUnavailable(panelID: UUID)
     case invalidWorkingDirectory(path: String)
     case invalidLaunchEnvironment(message: String)
+    case launchOverrideUnsupported(parameter: String, profileID: String)
+    case invalidLaunchOverride(parameter: String, message: String)
+    case unsafeLaunchOverrideArgv(profileID: String, message: String)
     case initialPromptUnsupported(profileID: String)
     case invalidInitialPrompt(message: String)
     case invalidInitialCommands(message: String)
@@ -89,6 +92,12 @@ enum AgentLaunchError: LocalizedError, Equatable {
             return "Agent launch cwd must be an existing directory: \(path)"
         case .invalidLaunchEnvironment(let message):
             return "Agent launch environment is invalid: \(message)"
+        case .launchOverrideUnsupported(let parameter, let profileID):
+            return "Agent profile '\(profileID)' does not support \(parameter)."
+        case .invalidLaunchOverride(let parameter, let message):
+            return "Agent launch \(parameter) is invalid: \(message)"
+        case .unsafeLaunchOverrideArgv(let profileID, let message):
+            return "Agent profile '\(profileID)' argv cannot safely apply launch overrides: \(message)."
         case .initialPromptUnsupported(let profileID):
             return "Agent profile '\(profileID)' does not support initialPrompt."
         case .invalidInitialPrompt(let message):
@@ -206,6 +215,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         panelID: UUID? = nil,
         cwd: String? = nil,
         environment: [String: String] = [:],
+        model: String? = nil,
+        reasoningEffort: String? = nil,
         initialPrompt: String? = nil,
         initialCommands: [String] = [],
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
@@ -218,6 +229,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             panelID: panelID,
             cwd: cwd,
             environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort,
             initialPrompt: initialPrompt,
             initialCommands: initialCommands,
             parentSessionID: parentSessionID,
@@ -236,6 +249,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         panelID: UUID? = nil,
         cwd: String? = nil,
         environment: [String: String] = [:],
+        model: String? = nil,
+        reasoningEffort: String? = nil,
         initialPrompt: String? = nil,
         initialCommands: [String] = [],
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
@@ -248,6 +263,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             panelID: panelID,
             cwd: cwd,
             environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort,
             initialPrompt: initialPrompt,
             initialCommands: initialCommands,
             parentSessionID: parentSessionID,
@@ -266,6 +283,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         panelID: UUID?,
         cwd: String?,
         environment: [String: String],
+        model: String?,
+        reasoningEffort: String?,
         initialPrompt: String?,
         initialCommands: [String],
         parentSessionID: String?,
@@ -283,32 +302,37 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 availableProfileIDs: availableProfileIDs()
             )
         }
-        let target = try resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)
-        try ensurePanelAppearsInteractive(panelID: target.panelID, terminalCommandRouter: terminalCommandRouter)
         guard let agent = AgentKind(rawValue: launchProfile.id) else {
             throw AgentLaunchError.profileNotFound(
                 profileID: launchProfile.id,
                 availableProfileIDs: availableProfileIDs()
             )
         }
+        let launchArgv = try argv(
+            for: launchProfile,
+            agent: agent,
+            applyingModel: model,
+            applyingReasoningEffort: reasoningEffort,
+            applyingInitialPrompt: initialPrompt
+        )
         let explicitCWD = try normalizedExplicitWorkingDirectory(cwd)
+        let validatedEnvironment = try validatedLaunchEnvironment(environment)
+        let validatedCommands = try validatedInitialCommands(initialCommands)
+        let target = try resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)
+        try ensurePanelAppearsInteractive(panelID: target.panelID, terminalCommandRouter: terminalCommandRouter)
         return AgentLaunchPreparation(
             agent: agent,
             displayName: launchProfile.displayName,
             target: target,
             explicitCWD: explicitCWD,
-            initialCommands: try validatedInitialCommands(initialCommands),
+            initialCommands: validatedCommands,
             focusPolicy: focusPolicy,
             request: ManagedAgentLaunchRequest(
                 agent: agent,
                 panelID: target.panelID,
-                argv: try argv(
-                    for: launchProfile,
-                    agent: agent,
-                    applyingInitialPrompt: initialPrompt
-                ),
+                argv: launchArgv,
                 cwd: explicitCWD ?? target.cwd,
-                environment: try validatedLaunchEnvironment(environment),
+                environment: validatedEnvironment,
                 parentSessionID: parentSessionID
             )
         )
@@ -542,15 +566,24 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private func argv(
         for profile: AgentProfile,
         agent: AgentKind,
+        applyingModel model: String?,
+        applyingReasoningEffort reasoningEffort: String?,
         applyingInitialPrompt initialPrompt: String?
     ) throws -> [String] {
+        let overrideArgv = try AgentLaunchArgumentOverrideAdapter.applying(
+            model: model,
+            reasoningEffort: reasoningEffort,
+            to: profile.argv,
+            agent: agent,
+            profileID: profile.id
+        )
         guard let prompt = try normalizedInitialPrompt(initialPrompt) else {
-            return profile.argv
+            return overrideArgv
         }
         guard initialPromptPlacement(for: profile, agent: agent) == .trailing else {
             throw AgentLaunchError.initialPromptUnsupported(profileID: profile.id)
         }
-        return profile.argv + [prompt]
+        return overrideArgv + [prompt]
     }
 
     private func normalizedInitialPrompt(_ initialPrompt: String?) throws -> String? {
