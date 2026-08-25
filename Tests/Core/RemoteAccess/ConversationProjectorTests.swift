@@ -19,6 +19,15 @@ struct ConversationProjectorTests {
         )
     }
 
+    static func makeClaudeProjector() -> ConversationProjector {
+        ConversationProjector(
+            conversationID: conversationID,
+            provider: .claude,
+            bindingID: bindingID,
+            at: epochDate
+        )
+    }
+
     static func observations(_ contents: String) -> [ProviderTranscriptObservation] {
         CodexRolloutTranscriptParser.parseContents(contents).observations
     }
@@ -117,12 +126,7 @@ struct ConversationProjectorTests {
     }
 
     @Test func claudeCompletedTurnOpensOnlyAfterExactStabilizationCompletes() throws {
-        var projector = ConversationProjector(
-            conversationID: Self.conversationID,
-            provider: .claude,
-            bindingID: Self.bindingID,
-            at: Self.epochDate
-        )
+        var projector = Self.makeClaudeProjector()
         _ = projector.ingest(ProviderTranscriptObservation(
             timestamp: Self.epochDate.addingTimeInterval(1),
             fingerprint: "claude:user-1",
@@ -156,13 +160,144 @@ struct ConversationProjectorTests {
         #expect(projector.inputAvailability.allowsRemoteSend)
     }
 
-    @Test func localInputCancellationPreventsClaudePromptFromOpening() throws {
-        var projector = ConversationProjector(
-            conversationID: Self.conversationID,
-            provider: .claude,
-            bindingID: Self.bindingID,
-            at: Self.epochDate
+    @Test func claudePromptStabilizationSurvivesLatePassiveObservations() throws {
+        var projector = Self.makeClaudeProjector()
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1),
+            fingerprint: "claude:turn-end-passive",
+            payload: .turnEnded(turnID: "turn-1", reason: .completed)
+        ))
+        let token = try #require(projector.pendingPromptStabilizationToken)
+
+        let passiveObservations: [ProviderTranscriptObservation] = [
+            ProviderTranscriptObservation(
+                timestamp: Self.epochDate.addingTimeInterval(1.1),
+                turnID: "turn-1",
+                fingerprint: "claude:assistant-late",
+                payload: .transcript(.assistantMessage(.init(text: "Done")))
+            ),
+            ProviderTranscriptObservation(
+                timestamp: Self.epochDate.addingTimeInterval(1.2),
+                turnID: "turn-1",
+                fingerprint: "claude:tool-started-late",
+                payload: .transcript(.toolStarted(.init(
+                    callID: "call-1",
+                    toolName: "Read"
+                )))
+            ),
+            ProviderTranscriptObservation(
+                timestamp: Self.epochDate.addingTimeInterval(1.3),
+                turnID: "turn-1",
+                fingerprint: "claude:tool-finished-late",
+                payload: .transcript(.toolFinished(.init(
+                    callID: "call-1",
+                    toolName: "Read",
+                    outcome: .succeeded
+                )))
+            ),
+            ProviderTranscriptObservation(
+                timestamp: Self.epochDate.addingTimeInterval(1.4),
+                turnID: "turn-1",
+                fingerprint: "claude:subagent-late",
+                payload: .transcript(.subagentSummary(.init(
+                    subagentID: "subagent-1",
+                    displayName: "Explorer",
+                    phase: .finished
+                )))
+            ),
+            ProviderTranscriptObservation(
+                timestamp: Self.epochDate.addingTimeInterval(1.5),
+                fingerprint: "claude:session-observed-late",
+                payload: .providerSessionObserved(providerSessionID: "session-1")
+            ),
+            ProviderTranscriptObservation(
+                timestamp: Self.epochDate.addingTimeInterval(1.6),
+                fingerprint: "claude:compaction-late",
+                payload: .contextCompacted
+            ),
+        ]
+
+        for observation in passiveObservations {
+            _ = projector.ingest(observation)
+            #expect(projector.pendingPromptStabilizationToken == token)
+            #expect(projector.state == .awaitingInput)
+            #expect(projector.inputAvailability == .unavailable(reason: .unknownProviderState))
+        }
+
+        let emitted = projector.completePromptStabilization(
+            token: token,
+            at: Self.epochDate.addingTimeInterval(1.7)
         )
+        #expect(emitted.contains { $0.kind == .statusChanged })
+        #expect(projector.inputAvailability.allowsRemoteSend)
+    }
+
+    @Test func promptInvalidatingActivityCancelsClaudeStabilization() throws {
+        let invalidatingPayloads: [ProviderObservationPayload] = [
+            .transcript(.userMessage(.init(text: "One more thing"))),
+            .interactionPresented(.init(
+                kind: .permission,
+                providerCallID: "call-1",
+                prompt: "Allow this command?"
+            )),
+            .turnStarted(turnID: "turn-2"),
+            .turnEnded(turnID: "turn-2", reason: .aborted),
+        ]
+
+        for (index, payload) in invalidatingPayloads.enumerated() {
+            var projector = Self.makeClaudeProjector()
+            _ = projector.ingest(ProviderTranscriptObservation(
+                timestamp: Self.epochDate.addingTimeInterval(1),
+                fingerprint: "claude:turn-end-before-invalidation-\(index)",
+                payload: .turnEnded(turnID: "turn-1", reason: .completed)
+            ))
+            let token = try #require(projector.pendingPromptStabilizationToken)
+
+            _ = projector.ingest(ProviderTranscriptObservation(
+                timestamp: Self.epochDate.addingTimeInterval(1.1),
+                fingerprint: "claude:prompt-invalidating-\(index)",
+                payload: payload
+            ))
+
+            #expect(projector.pendingPromptStabilizationToken == nil)
+            #expect(projector.completePromptStabilization(
+                token: token,
+                at: Self.epochDate.addingTimeInterval(1.5)
+            ).isEmpty)
+            #expect(projector.inputAvailability.allowsRemoteSend == false)
+        }
+    }
+
+    @Test func supersedingClaudeCompletionReplacesStabilizationToken() throws {
+        var projector = Self.makeClaudeProjector()
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1),
+            fingerprint: "claude:turn-end-original",
+            payload: .turnEnded(turnID: "turn-1", reason: .completed)
+        ))
+        let originalToken = try #require(projector.pendingPromptStabilizationToken)
+
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1.1),
+            fingerprint: "claude:turn-end-superseding",
+            payload: .turnEnded(turnID: "turn-2", reason: .completed)
+        ))
+        let supersedingToken = try #require(projector.pendingPromptStabilizationToken)
+
+        #expect(supersedingToken != originalToken)
+        #expect(projector.completePromptStabilization(
+            token: originalToken,
+            at: Self.epochDate.addingTimeInterval(1.5)
+        ).isEmpty)
+        #expect(projector.completePromptStabilization(
+            token: supersedingToken,
+            at: Self.epochDate.addingTimeInterval(1.6)
+        ).isEmpty == false)
+        #expect(projector.inputAvailability.allowsRemoteSend)
+    }
+
+    @Test func localInputCancellationPreventsClaudePromptFromOpening() throws {
+        var projector = Self.makeClaudeProjector()
         _ = projector.ingest(ProviderTranscriptObservation(
             timestamp: Self.epochDate.addingTimeInterval(1),
             fingerprint: "claude:turn-end-cancelled",

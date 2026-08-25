@@ -498,7 +498,7 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
-    @Test func claudeProviderFeedDefersPromptUntilStabilizationCompletes() async throws {
+    @Test func claudeProviderFeedStabilizationSurvivesLatePassiveObservation() async throws {
         let fixture = try RemoteBootstrapFixture(
             agent: .claude,
             claudePromptStabilizationDelay: .milliseconds(40)
@@ -536,6 +536,21 @@ struct RemoteAccessServiceSafetyTests {
         ))
 
         #expect(fixture.summary.state == .awaitingInput)
+        #expect(fixture.summary.inputAvailability ==
+            .unavailable(reason: .unknownProviderState))
+
+        #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+            managedSessionID: fixture.sessionID,
+            provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-stabilization",
+            observation: ProviderTranscriptObservation(
+                timestamp: fixture.confirmedAt.addingTimeInterval(2.1),
+                turnID: "turn-1",
+                fingerprint: "managed:claude:assistant-late",
+                payload: .transcript(.assistantMessage(.init(text: "Done")))
+            )
+        ))
         #expect(fixture.summary.inputAvailability ==
             .unavailable(reason: .unknownProviderState))
 

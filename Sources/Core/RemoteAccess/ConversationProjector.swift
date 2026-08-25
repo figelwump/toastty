@@ -109,9 +109,6 @@ public struct ConversationProjector: Sendable {
 
         var emitted: [ConversationEvent] = []
         let authorizesCurrentRuntime = observationAuthorizesCurrentRuntime(observation)
-        if authorizesCurrentRuntime {
-            pendingPromptStabilizationToken = nil
-        }
         switch observation.payload {
         case .transcript(let payload):
             guard payload.kind.isProviderDerived else { return [] }
@@ -119,6 +116,7 @@ public struct ConversationProjector: Sendable {
             if authorizesCurrentRuntime, case .userMessage = payload {
                 // A user message means the prompt was consumed; treat it as an
                 // authoritative prompt-closed signal even before task_started.
+                pendingPromptStabilizationToken = nil
                 transition(to: .working, availability: .unavailable(reason: .working), at: observation.timestamp, emitting: &emitted)
             }
             if authorizesCurrentRuntime, case .toolFinished(let finished) = payload {
@@ -138,6 +136,7 @@ public struct ConversationProjector: Sendable {
             )
             emitted.append(appendProviderEvent(.interactionPresented(interaction), from: observation))
             if authorizesCurrentRuntime {
+                pendingPromptStabilizationToken = nil
                 pendingInteractions.append(interaction)
                 transition(
                     to: .awaitingInput,
@@ -149,12 +148,14 @@ public struct ConversationProjector: Sendable {
 
         case .turnStarted:
             if authorizesCurrentRuntime {
+                pendingPromptStabilizationToken = nil
                 supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
                 transition(to: .working, availability: .unavailable(reason: .working), at: observation.timestamp, emitting: &emitted)
             }
 
         case .turnEnded(_, let reason):
             if authorizesCurrentRuntime {
+                pendingPromptStabilizationToken = nil
                 supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
                 switch reason {
                 case .completed:
@@ -281,8 +282,9 @@ public struct ConversationProjector: Sendable {
         return emitted
     }
 
-    /// Opens a Claude prompt only if no provider transition, binding change,
-    /// or local input invalidated the exact completion being stabilized.
+    /// Opens a Claude prompt only if no prompt-invalidating provider activity,
+    /// binding change, or local input invalidated the exact completion being
+    /// stabilized. Passive transcript facts may arrive during this window.
     @discardableResult
     public mutating func completePromptStabilization(
         token: ConversationPromptStabilizationToken,
