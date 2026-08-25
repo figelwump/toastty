@@ -1041,12 +1041,21 @@ public enum ToasttyCLI {
 
             var args: [String: AutomationJSONValue] = [:]
             if let windowID = parsed.singleValue("--window") {
+                guard UUID(uuidString: windowID) != nil else {
+                    throw ToasttyCLIError.usage("--window must be a UUID\n\n\(usage)")
+                }
                 args["windowID"] = .string(windowID)
             }
             if let workspaceID = parsed.singleValue("--workspace") {
+                guard UUID(uuidString: workspaceID) != nil else {
+                    throw ToasttyCLIError.usage("--workspace must be a UUID\n\n\(usage)")
+                }
                 args["workspaceID"] = .string(workspaceID)
             }
             if let panelID = parsed.singleValue("--panel") {
+                guard UUID(uuidString: panelID) != nil else {
+                    throw ToasttyCLIError.usage("--panel must be a UUID\n\n\(usage)")
+                }
                 args["panelID"] = .string(panelID)
             }
 

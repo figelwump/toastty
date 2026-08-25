@@ -555,6 +555,213 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
     }
 
     @Test
+    func appControlSplitReturnsCreatedPanelAndImmediateLaunchWaitsForItsSurface() async throws {
+        let socketPath = temporarySocketPath()
+        let terminalRouter = TestTerminalCommandRouter()
+        await MainActor.run {
+            terminalRouter.defaultPromptState = .busy
+        }
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath, terminalCommandRouter: terminalRouter)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let splitResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("workspace.split.right"),
+                    "args": .object([
+                        "workspaceID": .string(server.workspaceID.uuidString),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(splitResponse.ok)
+        #expect(splitResponse.result?.string("workspaceID") == server.workspaceID.uuidString)
+        #expect(splitResponse.result?.int("stateVersion") == 1)
+        let createdPanelID = try #require(
+            splitResponse.result?.string("panelID").flatMap(UUID.init(uuidString:))
+        )
+        #expect(createdPanelID != server.panelID)
+        let focusedPanelID = await MainActor.run {
+            server.store.state.workspacesByID[server.workspaceID]?.focusedPanelID
+        }
+        #expect(focusedPanelID == createdPanelID)
+
+        await MainActor.run {
+            terminalRouter.promptStateByPanelID[createdPanelID] = .unavailable
+        }
+        let surfaceReadiness = Task { @MainActor in
+            try await Task.sleep(for: .milliseconds(50))
+            terminalRouter.promptStateByPanelID[createdPanelID] = .idleAtPrompt
+        }
+
+        let launchResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("agent.launch"),
+                    "args": .object([
+                        "workspaceID": .string(server.workspaceID.uuidString),
+                        "panelID": .string(createdPanelID.uuidString),
+                        "profileID": .string(AgentKind.codex.rawValue),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        _ = await surfaceReadiness.result
+
+        #expect(launchResponse.ok)
+        #expect(launchResponse.result?.string("panelID") == createdPanelID.uuidString)
+        #expect(launchResponse.result?.int("stateVersion") == 2)
+        let sentPanelIDs = await MainActor.run {
+            Set(terminalRouter.sentTextByPanelID.keys)
+        }
+        #expect(sentPanelIDs == Set([createdPanelID]))
+    }
+
+    @Test
+    func appControlLaunchStillRejectsBusyTerminal() async throws {
+        let socketPath = temporarySocketPath()
+        let terminalRouter = TestTerminalCommandRouter()
+        await MainActor.run {
+            terminalRouter.defaultPromptState = .busy
+        }
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath, terminalCommandRouter: terminalRouter)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("agent.launch"),
+                    "args": .object([
+                        "panelID": .string(server.panelID.uuidString),
+                        "profileID": .string(AgentKind.codex.rawValue),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "INVALID_PAYLOAD")
+        #expect(response.error?.message == "The target terminal is not at an interactive prompt.")
+        let remainedUnmutated = await MainActor.run {
+            terminalRouter.sentTextByPanelID.isEmpty
+                && server.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty
+        }
+        #expect(remainedUnmutated)
+    }
+
+    @Test
+    func appControlLaunchStopsWaitingWhenTargetPanelCloses() async throws {
+        let socketPath = temporarySocketPath()
+        let terminalRouter = TestTerminalCommandRouter()
+        await MainActor.run {
+            terminalRouter.defaultPromptState = .unavailable
+        }
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath, terminalCommandRouter: terminalRouter)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let panelClosure = Task { @MainActor in
+            try await Task.sleep(for: .milliseconds(50))
+            _ = server.store.send(.closePanel(panelID: server.panelID))
+        }
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "app_control.run_action",
+                payload: [
+                    "id": .string("agent.launch"),
+                    "args": .object([
+                        "panelID": .string(server.panelID.uuidString),
+                        "profileID": .string(AgentKind.codex.rawValue),
+                    ]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        _ = await panelClosure.result
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "INVALID_PAYLOAD")
+        #expect(response.error?.message == "The target panel no longer exists.")
+        let remainedUnmutated = await MainActor.run {
+            terminalRouter.sentTextByPanelID.isEmpty
+                && server.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty
+        }
+        #expect(remainedUnmutated)
+    }
+
+    @Test
+    func appControlLaunchRejectsMalformedExplicitUUIDSelectors() async throws {
+        let socketPath = temporarySocketPath()
+        let terminalRouter = TestTerminalCommandRouter()
+        await MainActor.run {
+            terminalRouter.defaultPromptState = .idleAtPrompt
+        }
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath, terminalCommandRouter: terminalRouter)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        for selector in ["workspaceID", "panelID"] {
+            let response = try sendRequest(
+                AutomationRequestEnvelope(
+                    requestID: UUID().uuidString,
+                    command: "app_control.run_action",
+                    payload: [
+                        "id": .string("agent.launch"),
+                        "args": .object([
+                            selector: .string("undefined"),
+                            "profileID": .string(AgentKind.codex.rawValue),
+                        ]),
+                    ]
+                ),
+                socketPath: socketPath
+            )
+
+            #expect(response.ok == false)
+            #expect(response.error?.code == "INVALID_PAYLOAD")
+            #expect(response.error?.message == "\(selector) must be a UUID")
+        }
+
+        let remainedUnmutated = await MainActor.run {
+            terminalRouter.sentTextByPanelID.isEmpty
+                && server.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty
+        }
+        #expect(remainedUnmutated)
+    }
+
+    @Test
     func appControlRejectsUnsupportedReasoningBeforeManagedSessionOrTerminalMutation() async throws {
         let socketPath = temporarySocketPath()
         let terminalRouter = TestTerminalCommandRouter()

@@ -63,6 +63,15 @@ in your report.
 
 Toastty has windows, workspaces, workspace tabs, and panels. A terminal panel can host a managed agent session. App-control selectors target `windowID`, `workspaceID`, and `panelID`; many commands can infer a target, but robust workflows should pass explicit IDs from `terminal.state`, `workspace.snapshot`, or action results.
 
+Current split actions return the target `workspaceID` and the newly created
+terminal `panelID`. Check both fields before composing a follow-up
+`agent.launch`; never pass placeholders such as `undefined` or `null` through
+`--panel`. When controlling an older running Toastty version whose successful
+split response omits `panelID`, resolve the newly focused or newly added
+`slotPanelIDs` entry from `workspace.snapshot` before launching. A newly split
+terminal surface may take a moment to mount, so preserve a launch error rather
+than falling back to raw terminal input or another panel.
+
 To find an already-open browser, local document, or Scratchpad in the current
 workspace, query `terminal.state` to obtain the `workspaceID`, then query
 `workspace.snapshot` for that workspace. The snapshot's `rightPanel.tabs`

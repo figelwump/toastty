@@ -298,6 +298,31 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func actionRunRejectsMalformedUUIDSelectors() {
+        for selector in ["--window", "--workspace", "--panel"] {
+            do {
+                _ = try ToasttyCLI.parse(
+                    arguments: [
+                        "action", "run", "agent.launch",
+                        selector, "undefined",
+                        "profileID=codex",
+                    ],
+                    environment: [:]
+                )
+                Issue.record("expected parse failure for \(selector)")
+            } catch let error as ToasttyCLIError {
+                guard case .usage(let message) = error else {
+                    Issue.record("expected usage error for \(selector)")
+                    continue
+                }
+                #expect(message.contains("\(selector) must be a UUID"))
+            } catch {
+                Issue.record("unexpected error for \(selector): \(error)")
+            }
+        }
+    }
+
+    @Test
     func agentPrepareManagedLaunchBuildsStructuredRequest() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(

@@ -110,6 +110,9 @@ enum AgentLaunchError: LocalizedError, Equatable {
 
 @MainActor
 final class AgentLaunchService: ManagedAgentLaunchPlanning {
+    private static let asyncPromptReadinessTimeout: Duration = .seconds(1)
+    private static let asyncPromptReadinessPollInterval: Duration = .milliseconds(25)
+
     private weak var store: AppStore?
     private weak var terminalCommandRouter: (any TerminalCommandRouting)?
     private let agentCatalogProvider: any AgentCatalogProviding
@@ -268,7 +271,15 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             initialPrompt: initialPrompt,
             initialCommands: initialCommands,
             parentSessionID: parentSessionID,
-            focusPolicy: focusPolicy
+            focusPolicy: focusPolicy,
+            validatePromptState: false
+        )
+        guard let terminalCommandRouter else {
+            throw AgentLaunchError.serviceUnavailable
+        }
+        try await ensurePanelBecomesInteractive(
+            panelID: preparation.target.panelID,
+            terminalCommandRouter: terminalCommandRouter
         )
         let plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
             preparation.request,
@@ -288,7 +299,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         initialPrompt: String?,
         initialCommands: [String],
         parentSessionID: String?,
-        focusPolicy: TerminalInputFocusPolicy
+        focusPolicy: TerminalInputFocusPolicy,
+        validatePromptState: Bool = true
     ) throws -> AgentLaunchPreparation {
         guard let terminalCommandRouter else {
             throw AgentLaunchError.serviceUnavailable
@@ -319,7 +331,12 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         let validatedEnvironment = try validatedLaunchEnvironment(environment)
         let validatedCommands = try validatedInitialCommands(initialCommands)
         let target = try resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)
-        try ensurePanelAppearsInteractive(panelID: target.panelID, terminalCommandRouter: terminalCommandRouter)
+        if validatePromptState {
+            try ensurePanelAppearsInteractive(
+                panelID: target.panelID,
+                terminalCommandRouter: terminalCommandRouter
+            )
+        }
         return AgentLaunchPreparation(
             agent: agent,
             displayName: launchProfile.displayName,
@@ -713,6 +730,34 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     ) throws {
         guard terminalCommandRouter.promptState(panelID: panelID).isIdleAtPrompt else {
             throw AgentLaunchError.panelBusy(runningCommand: nil)
+        }
+    }
+
+    private func ensurePanelBecomesInteractive(
+        panelID: UUID,
+        terminalCommandRouter: any TerminalCommandRouting
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Self.asyncPromptReadinessTimeout)
+
+        while true {
+            guard let store else {
+                throw AgentLaunchError.serviceUnavailable
+            }
+            guard Self.locatePanel(panelID, in: store.state) != nil else {
+                throw AgentLaunchError.panelDoesNotExist
+            }
+            switch terminalCommandRouter.promptState(panelID: panelID) {
+            case .idleAtPrompt:
+                return
+            case .unavailable:
+                guard clock.now < deadline else {
+                    throw AgentLaunchError.panelBusy(runningCommand: nil)
+                }
+                try await Task.sleep(for: Self.asyncPromptReadinessPollInterval)
+            case .busy, .exited:
+                throw AgentLaunchError.panelBusy(runningCommand: nil)
+            }
         }
     }
 

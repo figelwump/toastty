@@ -387,6 +387,14 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `workspace.tab.move`
 - `workspace.tab.rename`
 - `workspace.tab.close`
+- `workspace.split.horizontal`
+- `workspace.split.vertical`
+- `workspace.split.right`
+- `workspace.split.down`
+- `workspace.split.left`
+- `workspace.split.up`
+- `workspace.split.right.with-profile`
+- `workspace.split.down.with-profile`
 - `panel.close`
 - `panel.create.browser`
 - `panel.create.local-document`
@@ -401,6 +409,10 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
 
 Descriptors can also advertise compatibility aliases. Those aliases are accepted by the socket executor, but canonical IDs are preferred for new integrations.
+
+Successful `workspace.split.*` actions return the target `workspaceID` and the
+new terminal `panelID`. Use that `panelID` for a subsequent `agent.launch`
+instead of inferring the target from workspace focus or a snapshot.
 
 `panel.close` is non-interactive when invoked through the CLI. It closes the
 focused panel in the selected workspace without presenting an AppKit alert. If
@@ -442,6 +454,10 @@ Scratchpad actions are intended for agent and automation integrations:
   to `variant`. Omit either selection to retain the configured argv/provider
   default. Explicit selections replace safely parseable equivalent profile
   flags; ambiguous executable, wrapper, or flag shapes fail without launch.
+  Explicit `--workspace` and `--panel` selectors must be UUIDs. Async
+  app-control launches briefly wait when the selected terminal surface has not
+  mounted yet, while terminals reported as busy or exited still fail
+  immediately.
   Values are syntax-checked (nonblank, at most 256 UTF-8 bytes, no control
   characters, and no leading dash), while the provider CLI makes the final
   upstream validity decision after delivery.

@@ -257,6 +257,14 @@ Notable action-specific behavior:
     in the target window.
   - Reorders the window's workspace list without changing the selected
     workspace ID.
+- `workspace.split.horizontal`, `workspace.split.vertical`,
+  `workspace.split.right`, `workspace.split.down`, `workspace.split.left`,
+  `workspace.split.up`, `workspace.split.right.with-profile`, and
+  `workspace.split.down.with-profile`
+  - successful `app_control.run_action` results include the target
+    `workspaceID` and the new terminal `panelID`.
+  - use the returned `panelID` to target a subsequent `agent.launch`; no
+    workspace snapshot diff is required.
 - `workspace.tab.move`
   - requires `args.index` and `args.toIndex`, both 1-based tab positions in the
     target workspace.
@@ -278,6 +286,9 @@ Notable action-specific behavior:
     action when the terminal should become the interactive keyboard target.
 - `agent.launch`
   - requires `args.profileID`.
+  - optional `args.workspaceID` and `args.panelID` values must be UUID strings;
+    malformed explicit selectors are rejected instead of being treated as
+    omitted.
   - accepts optional `args.cwd`, `args.initialCommands`, `args.model`,
     `args.reasoningEffort`, `args.initialPrompt`, and environment values as
     either `args.env` / `args.environment` string objects or flattened
@@ -285,6 +296,9 @@ Notable action-specific behavior:
   - app-control delivery preserves the current AppKit first responder; use a
     separate focus/select action when the terminal should become the interactive
     keyboard target.
+  - async launch briefly retries while the selected terminal surface is
+    unavailable, covering newly created split panels; terminals reported as
+    busy or exited are rejected immediately.
   - `cwd` must be an existing absolute or `~`-expanded directory and becomes the
     managed session working directory; Toastty renders the launched command as
     `cd <cwd> && ...`.
