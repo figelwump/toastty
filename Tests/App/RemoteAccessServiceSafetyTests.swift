@@ -180,6 +180,124 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func restorableClaudeSessionsRemainVisibleAcrossWorkspaceTabSelection() throws {
+        let workspaceID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+        let tabAID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+        let tabBID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
+        let panelAID = UUID(uuidString: "dddddddd-dddd-4ddd-8ddd-dddddddddddd")!
+        let panelBID = UUID(uuidString: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")!
+        let conversationA = RemoteConversationID(
+            rawValue: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        )
+        let conversationB = RemoteConversationID(
+            rawValue: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        )
+        let capturedAt = Date(timeIntervalSince1970: 1_787_500_000)
+        let runtimeHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-remote-access-background-tabs-\(UUID().uuidString)")
+        let transcriptA = runtimeHome.appendingPathComponent("claude-a.jsonl")
+        let transcriptB = runtimeHome.appendingPathComponent("claude-b.jsonl")
+        try FileManager.default.createDirectory(at: runtimeHome, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runtimeHome) }
+        try #"{"type":"user","sessionId":"native-claude-a","uuid":"user-a","parentUuid":null,"isSidechain":false,"timestamp":"2026-08-24T12:00:00Z","message":{"role":"user","content":"Resume A"}}"#
+            .write(to: transcriptA, atomically: true, encoding: .utf8)
+        try #"{"type":"user","sessionId":"native-claude-b","uuid":"user-b","parentUuid":null,"isSidechain":false,"timestamp":"2026-08-24T12:00:00Z","message":{"role":"user","content":"Resume B"}}"#
+            .write(to: transcriptB, atomically: true, encoding: .utf8)
+
+        let resumeRecordA = ManagedAgentResumeRecord(
+            agent: .claude,
+            nativeSessionID: "native-claude-a",
+            sessionFilePath: transcriptA.path,
+            cwd: "/repo/a",
+            capturedAt: capturedAt
+        )
+        let resumeRecordB = ManagedAgentResumeRecord(
+            agent: .claude,
+            nativeSessionID: "native-claude-b",
+            sessionFilePath: transcriptB.path,
+            cwd: "/repo/b",
+            capturedAt: capturedAt.addingTimeInterval(1)
+        )
+        let tabA = WorkspaceTabState(
+            id: tabAID,
+            layoutTree: .slot(slotID: UUID(uuidString: "33333333-3333-4333-8333-333333333333")!, panelID: panelAID),
+            panels: [
+                panelAID: .terminal(TerminalPanelState(
+                    title: "Claude A",
+                    shell: "zsh",
+                    cwd: "/repo/a",
+                    resumeRecord: resumeRecordA,
+                    remoteConversationID: conversationA
+                )),
+            ],
+            focusedPanelID: panelAID
+        )
+        let tabB = WorkspaceTabState(
+            id: tabBID,
+            layoutTree: .slot(slotID: UUID(uuidString: "44444444-4444-4444-8444-444444444444")!, panelID: panelBID),
+            panels: [
+                panelBID: .terminal(TerminalPanelState(
+                    title: "Claude B",
+                    shell: "zsh",
+                    cwd: "/repo/b",
+                    resumeRecord: resumeRecordB,
+                    remoteConversationID: conversationB
+                )),
+            ],
+            focusedPanelID: panelBID
+        )
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Claude Workspace",
+            selectedTabID: tabAID,
+            tabIDs: [tabAID, tabBID],
+            tabsByID: [tabAID: tabA, tabBID: tabB]
+        )
+        let windowID = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID,
+                frame: CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
+                workspaceIDs: [workspaceID],
+                selectedWorkspaceID: workspaceID
+            )],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        let server = RemoteAccessGatewayServerSpy()
+        let service = RemoteAccessService(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            runtimePaths: ToasttyRuntimePaths.resolve(
+                homeDirectoryPath: runtimeHome.path,
+                environment: [ToasttyRuntimePaths.environmentKey: runtimeHome.path]
+            ),
+            port: 42_996,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in server }
+        )
+        defer { service.setEnabled(false, persist: false) }
+
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_996)
+
+        let initialSnapshot = service.facadeSessionList(at: capturedAt)
+        #expect(store.state.workspacesByID[workspaceID]?.selectedTabID == tabAID)
+        #expect(initialSnapshot.conversations.count == 2)
+        #expect(Set(initialSnapshot.conversations.map(\.conversationID)) == Set([conversationA, conversationB]))
+
+        #expect(store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabBID)))
+        let afterSelectionSnapshot = service.facadeSessionList(at: capturedAt.addingTimeInterval(2))
+        #expect(store.state.workspacesByID[workspaceID]?.selectedTabID == tabBID)
+        #expect(afterSelectionSnapshot.conversations.count == 2)
+        #expect(Set(afterSelectionSnapshot.conversations.map(\.conversationID)) == Set([conversationA, conversationB]))
+    }
+
+    @MainActor
     @Test func desktopReadTransitionSchedulesFreshIdleSessionList() async throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
         defer { fixture.removeRuntimeFiles() }

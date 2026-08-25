@@ -1280,7 +1280,7 @@ final class RemoteAccessService: ObservableObject {
         var seenPanelIDs: Set<UUID> = []
 
         for workspace in store.state.workspacesByID.values {
-            for (panelID, panelState) in workspace.panels {
+            for (panelID, panelState) in workspace.allPanelsByID {
                 guard case .terminal(let terminalState) = panelState else { continue }
 
                 let activeSessionID = registry.activeSessionIDByPanelID[panelID]
