@@ -3,7 +3,7 @@
 **Branch name:** `feat/mobile-remote-access-ios`, stacked on `feat/mobile-remote-access`
 **Short name:** `mobile-ios`
 **Created:** 2026-08-07
-**Last revised:** 2026-08-14
+**Last revised:** 2026-08-24
 **Status:** Approved — implementation in progress
 **Depends on:** the revised mobile design doc (`toastty-mobile-design.md`, 2026-08-06). Its host Foundation → v0 → v0.5/v0.75 → v1 sequence is now implemented on `feat/mobile-remote-access` (gateway, pairing/auth, projection, Codex + Claude parsers, epoch-gated send, same-origin web client — ~10.2k lines with transport/race/security tests and smoke/QA evidence under `artifacts/remote-tests/` and `artifacts/remote-gui/`). The native entry gate below is therefore a short residual checklist, not a waiting game. Native code still does not become a second authority for the protocol: the host contract as implemented is the source of truth.
 
@@ -44,7 +44,7 @@ The implementation review retained the product scope while narrowing the highest
 
     ToasttyMobileApp (SwiftUI)
       RootView → SessionGate → Shell
-        HomeScreen        (Activity triage + grouped Workspaces modes)
+        HomeScreen        (grouped Workspaces + persisted All/Active filter)
         WorkspaceScreen   (session rows)
         ConversationScreen (transcript + composer)    ← NavigationStack push
         SettingsScreen    (connection, device, diagnostics)
@@ -204,7 +204,7 @@ Exit: macOS known-case encoders/decoders remain strict and fixture-identical; iO
 
 **Phase 2 — Native pairing + read-only app over Tailscale.**
 Needs the stable host gateway plus this plan's explicitly owned native-auth host slice.
-Implement host: native pairing-offer creation, QR/fallback-code presentation, separate `/v1/native-pairing/exchange` granting read+send, hashed device-credential store, additive optional `tailscaleLogin` migration for legacy browser records, Tailscale-login comparison, centralized cookie-vs-Bearer authentication across every data route and WebSocket upgrade, scope updates, active-stream revocation, device audit, native-auth tests, and optional pending-interaction/status-detail preview fields on `RemoteConversationSummary`. The hello/version exchange is already an entry-gate dependency. Implement client: in-app QR scanner + manual fallback, confirmation, Keychain credential, Home with default persisted Activity triage plus grouped Workspaces mode, Workspace screen, connection lifecycle/failure classification UX, Settings, and fixture UI tests.
+Implement host: native pairing-offer creation, QR/fallback-code presentation, separate `/v1/native-pairing/exchange` granting read+send, hashed device-credential store, additive optional `tailscaleLogin` migration for legacy browser records, Tailscale-login comparison, centralized cookie-vs-Bearer authentication across every data route and WebSocket upgrade, scope updates, active-stream revocation, device audit, native-auth tests, and optional pending-interaction/status-detail preview fields on `RemoteConversationSummary`. The hello/version exchange is already an entry-gate dependency. Implement client: in-app QR scanner + manual fallback, confirmation, Keychain credential, Home with grouped Workspaces and a persisted All/Active session filter, Workspace screen, connection lifecycle/failure classification UX, Settings, and fixture UI tests.
 Exit: a legacy browser device-store fixture upgrades and restarts without losing credentials; real phone over Tailscale Serve pairs through QR and manual fallback; reconnects cleanly; distinguishes Tailscale unavailable/wrong-tailnet DNS, Mac asleep or gateway down, TLS/hostname, auth/login-binding, and version failures; navigates real workspace/session organization; and proves the full cookie/Bearer/Origin matrix, `401` re-pair, `403` keep-credential, scope changes, revoke, revoke-all, and kill-switch behavior. Revocation closes an already-open stream. Capture the screenshot/evidence set.
 
 **Phase 3 — Transcript chat.**
@@ -226,7 +226,7 @@ Exit: TestFlight build on your phone, used against your real desktop over Tailsc
 - **Unit (Protocol/Domain):** both build graphs consume the entry-gate known-case fixtures and assert the extracted host encoding remains identical. Native-only compatibility fixtures inject an unknown top-level stream type, an unknown event between two known events, unknown state/input variants, and unknown result/error codes to verify the explicit ignore/read-only/fail-operation policies. Also test run/generation cursor invalidation, session seed → subscribe → fresh-full-snapshot ordering, conversation subscribe → buffered REST-page handoff, rejection of older connection-generation work, sequence gaps/duplicates/retention overflow, resnapshot, bounded state delivery, and strict-ID reconciliation including `duplicate` and terminal `deliveryUnconfirmed`. Stream and clock behavior use scripted fakes with handshake-based determinism (EmptyOS lesson).
 - **Unit (App):** one controller test file per screen with fake capability protocols (EmptyOS convention).
 - **Auth/security:** QR and manual success, expired/consumed/malformed offer, brute-force limits, browser/native endpoint separation, legacy device-store decoding, Keychain absent/corrupt/locked, missing/mismatched Tailscale login, 401 vs 403, scope changes, concurrent requests, mid-stream revoke, revoke-all, kill switch, and diagnostics/log redaction. Exercise the centralized route matrix for cookie only, cookie with absent/bad Origin, Bearer only, mixed Bearer+cookie, revoked Bearer, and every REST/WebSocket route. Verify the gateway remains loopback-only behind Serve and document that local processes are inside the host trust boundary.
-- **UI tests:** fixture mode — launch, QR and manual pairing against a stub, expected state/input combinations including a permanently read-only Claude conversation, Activity/Workspaces ordering and persistence, session card → sheet → composer locks, distinct-build deep-link routing, accessibility Dynamic Type coverage, and VoiceOver labels.
+- **UI tests:** fixture mode — launch, QR and manual pairing against a stub, expected state/input combinations including a permanently read-only Claude conversation, grouped Workspaces plus All/Active ordering and persistence, session card → sheet → composer locks, distinct-build deep-link routing, accessibility Dynamic Type coverage, and VoiceOver labels.
 - **Live integration:** `XCTSkip`-gated on `TOASTTY_MOBILE_LIVE_GATEWAY_URL` plus a runtime-injected paired credential. The secret is supplied through the repo's manifest-scoped secret workflow, never written into the Tuist scheme. Exercise hello/version handling, snapshot+subscribe handoff, paging, reconnect, login binding, open-socket revocation, stale-refresh rejection, and auth revocation against a real host.
 - **Script tests:** PATH-stubbed toolchain tests for `toastty-ios.mjs` and `native-device.sh` if a JS test runner is introduced; otherwise a minimal bash harness for `--dry-run` output assertions (decide in Phase 0 by effort; both EmptyOS and Plate run their script tests in CI — the pattern is proven either way).
 - **Gate integration:** extend `.agents/skills/toastty-verify/SKILL.md` with an `ios/` surface tier built on Plate's `scripts/remote/` pattern: baseline = `toastty-ios.mjs test` (+ `tuist generate` freshness), remote = disposable-worktree simulator tests on the remote Mac with artifact copy-back, user-surface = simulator screenshot pass or live phone check; handoff reports state simulator vs device vs fixture.
@@ -242,7 +242,7 @@ Covered by the host as implemented (client renders them): `resnapshotRequired` (
 
 - The gateway, projection, parsers, and input coordinator already exist on `feat/mobile-remote-access`; this plan does not re-own them. Mac surfaces this plan modifies: root `Project.swift` gains the `RemoteProtocol` target and the extraction moves ~wire-subset files out of `Sources/Core/RemoteAccess/` (import churn across Core/App/tests); the `AgentKind` value type splits from host resolver behavior; the device-summary mapping stays host-side; `Sources/App/RemoteAccess/` gains native pairing offers, centralized cookie/Bearer auth, additive legacy-safe device storage, scope updates, audit, active-stream revocation, and the optional summary preview field; the minimal hello lands at the entry gate; Remote Access preferences gains the QR/fallback-code UI; the first CI workflow covers both graphs; `toastty-verify`, AGENTS.md, CLAUDE.md, and build/release docs gain the iOS tier.
 - Add `docs/cleanup.md`-style entries when Phase 5 lands: decide v0 web client lifetime; remove any fixture data that duplicates the compatibility baseline.
-- The Scratchpad prototypes are design references only. The merged navigation prototype lives at `docs/design/toastty-mobile-merged.html`; the accepted home-card and Activity/Workspaces refinement lives at `docs/design/toastty-mobile-home-affordances.html`. App copy and behavior, not an ephemeral Scratchpad document, are the shipped source of truth.
+- The Scratchpad prototypes are historical design references only. The merged navigation prototype lives at `docs/design/toastty-mobile-merged.html`; the superseded Activity/Workspaces refinement lives at `docs/design/toastty-mobile-home-affordances.html`. The app's grouped Workspaces view with its persisted All/Active filter is the shipped source of truth.
 
 ## Over-engineering self-review
 
@@ -278,7 +278,7 @@ Cut from earlier drafts: early native implementation before web evidence; a clie
 - [ ] Phase 2 — Native pairing + read-only app over Tailscale
   - [x] 2.1 Host: native pairing offer (read+send grant), QR/fallback UI, exchange, additive legacy-safe Tailscale-login storage, centralized cookie/Bearer auth matrix, scope/revoke/audit, optional pending-interaction and status-detail previews
   - [x] 2.2 Client in-app QR scan + manual fallback + confirmation + Keychain
-  - [x] 2.3 Home: desktop-aligned Activity triage + grouped Workspaces modes + classified connection lifecycle
+  - [x] 2.3 Home: grouped Workspaces + persisted All/Active filter + classified connection lifecycle
   - [x] 2.4 Workspace and Settings screens + unpair
   - [ ] 2.5 Legacy store migration + auth/security/UI tests + real-phone read-only validation
 - [ ] Phase 3 — Transcript chat

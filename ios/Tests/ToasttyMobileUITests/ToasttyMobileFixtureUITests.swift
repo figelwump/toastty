@@ -23,13 +23,19 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         let home = app.descendants(matching: .any)["toastty-mobile-home"]
         XCTAssertTrue(home.waitForExistence(timeout: 10))
-        let mode = app.segmentedControls["toastty-mobile-home-mode"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        XCTAssertTrue(mode.buttons["Activity"].isSelected)
+        XCTAssertFalse(app.segmentedControls["toastty-mobile-home-mode"].exists)
+        let filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        let all = filter.buttons["All"]
+        let active = filter.buttons["Active"]
+        XCTAssertTrue(all.exists)
+        XCTAssertTrue(active.exists)
+        XCTAssertLessThan(all.frame.minX, active.frame.minX)
+        XCTAssertTrue(filter.buttons["All"].isSelected)
         XCTAssertFalse(app.staticTexts["toastty-mobile-ready-section"].exists)
         XCTAssertFalse(app.staticTexts["toastty-mobile-needs-approval-section"].exists)
         let readyCard = app.buttons[
-            "toastty-mobile-activity-card-\(openPromptConversationID)"
+            "toastty-mobile-grouped-card-\(openPromptConversationID)"
         ]
         XCTAssertTrue(scrollHomeTo(readyCard, in: app))
         XCTAssertTrue(readyCard.label.contains("Which build number should I use?"))
@@ -39,7 +45,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-home", of: app)
 
         let approvalCard = app.buttons[
-            "toastty-mobile-activity-card-\(pendingInteractionID)"
+            "toastty-mobile-grouped-card-\(pendingInteractionID)"
         ]
         XCTAssertTrue(scrollHomeTo(approvalCard, in: app))
         XCTAssertTrue(approvalCard.label.contains("Allow Toastty to run the focused iOS tests?"))
@@ -80,8 +86,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
     func testConnectingScenarioShowsUnifiedLoadingScreen() {
         let app = launchFixtureApp(
-            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "connecting"],
-            selectsActivityHomeMode: false
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "connecting"]
         )
 
         let loading = app.descendants(matching: .any)["toastty-mobile-session-connecting"]
@@ -106,7 +111,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertEqual(notice.value as? String, "In progress")
 
         let workingCard = app.buttons[
-            "toastty-mobile-activity-card-\(workingConversationID)"
+            "toastty-mobile-grouped-card-\(workingConversationID)"
         ]
         XCTAssertTrue(scrollHomeTo(workingCard, in: app))
         XCTAssertTrue(workingCard.label.contains("Last seen working. Updates paused."))
@@ -187,7 +192,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(home.waitForExistence(timeout: 10))
 
         let readyCard = app.buttons[
-            "toastty-mobile-activity-card-\(openPromptConversationID)"
+            "toastty-mobile-grouped-card-\(openPromptConversationID)"
         ]
         XCTAssertTrue(scrollHomeTo(readyCard, in: app))
         XCTAssertTrue(readyCard.label.contains("Which build number should I use?"))
@@ -242,13 +247,15 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-current-build-deep-link", of: app)
     }
 
-    func testFixtureWorkspacesModeShowsEverySessionWithoutInlineExpander() {
+    func testFixtureHomeShowsEverySessionWithoutInlineExpander() {
         let app = launchFixtureApp()
         let home = app.descendants(matching: .any)["toastty-mobile-home"]
         XCTAssertTrue(home.waitForExistence(timeout: 10))
 
-        XCTAssertFalse(app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"].exists)
-        selectWorkspacesMode(in: app)
+        XCTAssertTrue(
+            app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
+                .waitForExistence(timeout: 5)
+        )
 
         let fourthSession = app.buttons[
             "toastty-mobile-grouped-card-\(fourthToasttyConversationID)"
@@ -262,7 +269,6 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
     func testWorkspaceFilterDefaultsToAllAndIsSharedWithWorkspaceDetail() throws {
         let app = launchFixtureApp()
-        selectWorkspacesMode(in: app)
 
         var filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
         XCTAssertTrue(filter.waitForExistence(timeout: 5))
@@ -303,20 +309,26 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(scrollWorkspaceTo(detailIdle, in: app))
     }
 
-    func testFixtureHomeModePersistsAcrossRelaunch() {
+    func testFixtureWorkspaceFilterPersistsAcrossRelaunch() {
         var app = launchFixtureApp()
 
-        selectWorkspacesMode(in: app)
-        XCTAssertTrue(
-            app.segmentedControls["toastty-mobile-home-mode"].buttons["Workspaces"].isSelected
-        )
+        var filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 10))
+        XCTAssertTrue(filter.buttons["All"].isSelected)
+        filter.buttons["Active"].tap()
+        XCTAssertTrue(filter.buttons["Active"].isSelected)
         app.terminate()
 
-        app = launchFixtureApp(selectsActivityHomeMode: false)
-        let mode = app.segmentedControls["toastty-mobile-home-mode"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 10))
-        XCTAssertTrue(mode.buttons["Workspaces"].isSelected)
+        app = launchFixtureApp()
+        filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 10))
+        XCTAssertTrue(filter.buttons["Active"].isSelected)
+        XCTAssertFalse(
+            app.buttons["toastty-mobile-grouped-card-\(idleResearchConversationID)"].exists
+        )
         XCTAssertTrue(app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"].exists)
+
+        filter.buttons["All"].tap()
     }
 
     func testFixtureHomeAtEveryAccessibilityContentSize() {
@@ -336,7 +348,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
                 "Connection live to mac-studio"
             )
             let approvalCard = app.buttons[
-                "toastty-mobile-activity-card-\(pendingInteractionID)"
+                "toastty-mobile-grouped-card-\(pendingInteractionID)"
             ]
             XCTAssertTrue(scrollHomeTo(approvalCard, in: app))
             XCTAssertTrue(approvalCard.label.contains("needs approval"))
@@ -925,8 +937,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
     private func launchFixtureApp(
         launchArguments: [String] = [],
-        environment: [String: String] = [:],
-        selectsActivityHomeMode: Bool = true
+        environment: [String: String] = [:]
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
@@ -935,9 +946,6 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         }
         app.launchArguments += launchArguments
         app.launch()
-        if selectsActivityHomeMode {
-            selectActivityMode(in: app)
-        }
         return app
     }
 
@@ -968,7 +976,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
     private func openGatedSendConversation(in app: XCUIApplication) {
         let readyCard = app.buttons[
-            "toastty-mobile-activity-card-\(openPromptConversationID)"
+            "toastty-mobile-grouped-card-\(openPromptConversationID)"
         ]
         XCTAssertTrue(scrollHomeTo(readyCard, in: app))
         readyCard.tap()
@@ -984,7 +992,6 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     ) {
         let home = app.descendants(matching: .any)["toastty-mobile-home"]
         XCTAssertTrue(home.waitForExistence(timeout: 10))
-        selectWorkspacesMode(in: app)
 
         let workspace = app.buttons["toastty-mobile-workspace-\(workspaceID)"]
         for _ in 0..<attempts {
@@ -1021,28 +1028,6 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             app.swipeUp()
         }
         return element.exists && element.isHittable
-    }
-
-    private func selectWorkspacesMode(in app: XCUIApplication) {
-        let mode = app.segmentedControls["toastty-mobile-home-mode"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        let workspaces = mode.buttons["Workspaces"]
-        if workspaces.isSelected == false {
-            XCTAssertTrue(workspaces.isHittable)
-            workspaces.tap()
-        }
-        XCTAssertTrue(workspaces.isSelected)
-    }
-
-    private func selectActivityMode(in app: XCUIApplication) {
-        let mode = app.segmentedControls["toastty-mobile-home-mode"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 10))
-        let activity = mode.buttons["Activity"]
-        if activity.isSelected == false {
-            XCTAssertTrue(activity.isHittable)
-            activity.tap()
-        }
-        XCTAssertTrue(activity.isSelected)
     }
 
     private func scrollToOlder(

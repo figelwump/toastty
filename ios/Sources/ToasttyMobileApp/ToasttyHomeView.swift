@@ -1,31 +1,17 @@
 import SwiftUI
 import ToasttyMobileDomain
 
-enum ToasttyHomeListMode: String, CaseIterable {
-    case activity
-    case workspaces
-
-    static let defaultMode = ToasttyHomeListMode.workspaces
-
-    var title: String {
-        switch self {
-        case .activity: "Activity"
-        case .workspaces: "Workspaces"
-        }
-    }
-}
-
 enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
-    case active
     case all
+    case active
 
     static let defaultFilter = ToasttyWorkspaceSessionFilter.all
     static let preferenceKey = "toastty-mobile-workspace-session-filter"
 
     var title: String {
         switch self {
-        case .active: "Active"
         case .all: "All"
+        case .active: "Active"
         }
     }
 
@@ -49,13 +35,10 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
 }
 
 struct ToasttyHomeView: View {
-    static let listModePreferenceKey = "toastty-mobile-home-list-mode"
-
     let controller: HomeScreenController
     let refresh: () async -> Void
     let onSettings: () -> Void
 
-    @AppStorage private var storedListMode: String
     @AppStorage private var storedWorkspaceSessionFilter: String
     @State private var isRetryingConnection = false
 
@@ -68,11 +51,6 @@ struct ToasttyHomeView: View {
         self.controller = controller
         self.refresh = refresh
         self.onSettings = onSettings
-        _storedListMode = AppStorage(
-            wrappedValue: ToasttyHomeListMode.defaultMode.rawValue,
-            Self.listModePreferenceKey,
-            store: defaults
-        )
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
             ToasttyWorkspaceSessionFilter.preferenceKey,
@@ -83,12 +61,11 @@ struct ToasttyHomeView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
-                homeContent
+                workspaceContent
             }
-            .id(selectedListMode)
             // Reorders now happen only on status-bucket transitions, so
             // animating them keeps a moving card trackable instead of
-            // teleporting. Mode switches skip this via the .id reset above.
+            // teleporting.
             .animation(.default, value: orderedRowIDs)
             .padding(.horizontal, 14)
             .padding(.top, 8)
@@ -105,15 +82,12 @@ struct ToasttyHomeView: View {
         // queries with ambiguous matches.
         .accessibilityIdentifier("toastty-mobile-home")
         .safeAreaInset(edge: .top, spacing: 0) {
-            // Connection state and the active list mode stay visible while
+            // Connection state and the workspace filter stay visible while
             // sessions scroll underneath them.
             VStack(spacing: 10) {
                 header
                 connectionNotice
-                listModePicker
-                if selectedListMode == .workspaces {
-                    workspaceSessionFilterPicker
-                }
+                workspaceSessionFilterPicker
             }
             .padding(.horizontal, 14)
             .frame(maxWidth: 560)
@@ -127,9 +101,6 @@ struct ToasttyHomeView: View {
             new > old
         }
         .onAppear {
-            if ToasttyHomeListMode(rawValue: storedListMode) == nil {
-                storedListMode = ToasttyHomeListMode.defaultMode.rawValue
-            }
             if ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) == nil {
                 storedWorkspaceSessionFilter =
                     ToasttyWorkspaceSessionFilter.defaultFilter.rawValue
@@ -137,46 +108,10 @@ struct ToasttyHomeView: View {
         }
     }
 
-    @ViewBuilder
-    private var homeContent: some View {
-        switch selectedListMode {
-        case .activity:
-            activityContent
-        case .workspaces:
-            workspaceContent
-        }
-    }
-
-    private var selectedListMode: ToasttyHomeListMode {
-        ToasttyHomeListMode(rawValue: storedListMode) ?? .defaultMode
-    }
-
     private var orderedRowIDs: [UUID] {
-        switch selectedListMode {
-        case .activity:
-            controller.snapshot.activitySessions.map(\.id)
-        case .workspaces:
-            visibleWorkspaces.flatMap { workspace in
-                [workspace.id] + workspace.conversations.map(\.id)
-            }
+        visibleWorkspaces.flatMap { workspace in
+            [workspace.id] + workspace.conversations.map(\.id)
         }
-    }
-
-    private var listModeSelection: Binding<ToasttyHomeListMode> {
-        Binding(
-            get: { selectedListMode },
-            set: { storedListMode = $0.rawValue }
-        )
-    }
-
-    private var listModePicker: some View {
-        Picker("Session organization", selection: listModeSelection) {
-            ForEach(ToasttyHomeListMode.allCases, id: \.self) { mode in
-                Text(mode.title).tag(mode)
-            }
-        }
-        .pickerStyle(.segmented)
-        .accessibilityIdentifier("toastty-mobile-home-mode")
     }
 
     private var selectedWorkspaceSessionFilter: ToasttyWorkspaceSessionFilter {
@@ -198,24 +133,6 @@ struct ToasttyHomeView: View {
         }
         .pickerStyle(.segmented)
         .accessibilityIdentifier("toastty-mobile-workspace-session-filter")
-    }
-
-    @ViewBuilder
-    private var activityContent: some View {
-        if controller.snapshot.activitySessions.isEmpty {
-            emptyState
-        } else {
-            ForEach(controller.snapshot.activitySessions) { conversation in
-                ToasttySessionCard(
-                    conversation: conversation,
-                    freshness: controller.freshness,
-                    showsWorkspace: true,
-                    accessibilityIdentifier:
-                        "toastty-mobile-activity-card-\(conversation.id.uuidString)",
-                    onOpen: controller.open
-                )
-            }
-        }
     }
 
     @ViewBuilder
@@ -275,16 +192,6 @@ struct ToasttyHomeView: View {
         )
         .accessibilityHint("Opens the workspace")
         .accessibilityIdentifier("toastty-mobile-workspace-\(workspace.id.uuidString)")
-    }
-
-    private var emptyState: some View {
-        ContentUnavailableView(
-            "No sessions yet",
-            systemImage: "rectangle.stack",
-            description: Text("Open a session in Toastty on your Mac and it will appear here.")
-        )
-        .foregroundStyle(ToasttyDesignTokens.secondaryText)
-        .padding(.vertical, 32)
     }
 
     private var workspaceEmptyState: some View {

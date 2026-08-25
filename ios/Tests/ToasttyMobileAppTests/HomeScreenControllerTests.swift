@@ -2,15 +2,20 @@ import XCTest
 @testable import ToasttyMobileApp
 @testable import ToasttyMobileDomain
 
-final class ToasttyHomeListModeTests: XCTestCase {
-    func testWorkspacesIsTheDefaultMode() {
-        XCTAssertEqual(ToasttyHomeListMode.defaultMode, .workspaces)
-    }
-}
-
 final class ToasttyWorkspaceSessionFilterTests: XCTestCase {
     func testAllIsTheDefaultFilter() {
         XCTAssertEqual(ToasttyWorkspaceSessionFilter.defaultFilter, .all)
+    }
+
+    func testAllIsDeclaredBeforeActiveForSegmentedPickers() {
+        XCTAssertEqual(ToasttyWorkspaceSessionFilter.allCases, [.all, .active])
+    }
+
+    func testPreferenceKeyRemainsStable() {
+        XCTAssertEqual(
+            ToasttyWorkspaceSessionFilter.preferenceKey,
+            "toastty-mobile-workspace-session-filter"
+        )
     }
 
     func testActiveExcludesIdleSessionsAndEmptyWorkspaceGroups() throws {
