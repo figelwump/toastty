@@ -1,4 +1,5 @@
 import UIKit
+import Vision
 import XCTest
 
 @MainActor
@@ -198,7 +199,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(readyCard.label.contains("Which build number should I use?"))
         readyCard.tap()
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         let keyboard = app.keyboards.firstMatch
         XCTAssertFalse(
@@ -241,7 +242,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 10)
         )
-        XCTAssertTrue(app.textFields["toastty-mobile-composer-input"].exists)
+        XCTAssertTrue(composerInput(in: app).exists)
         XCTAssertFalse(app.keyboards.firstMatch.waitForExistence(timeout: 1))
         XCTAssertFalse(app.buttons["toastty-mobile-composer-send"].isEnabled)
         attachScreenshot(named: "fixture-current-build-deep-link", of: app)
@@ -618,7 +619,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
         openGatedSendConversation(in: app)
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         let send = app.buttons["toastty-mobile-composer-send"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         XCTAssertTrue(input.isEnabled)
@@ -659,7 +660,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         let send = app.buttons["toastty-mobile-composer-send"]
         XCTAssertTrue(input.isHittable)
         input.tap()
@@ -713,7 +714,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         dismiss.tap()
         XCTAssertTrue(receipt.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.textFields["toastty-mobile-composer-input"].isEnabled)
+        XCTAssertTrue(composerInput(in: app).isEnabled)
     }
 
     func testGatedSendTranscriptDragDismissesKeyboard() {
@@ -722,7 +723,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
         openGatedSendConversation(in: app)
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap()
@@ -756,7 +757,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
         openGatedSendConversation(in: app)
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         XCTAssertTrue(input.isHittable)
         let start = input.coordinate(
@@ -784,7 +785,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
         openGatedSendConversation(in: app)
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         XCTAssertTrue(input.isHittable)
@@ -810,6 +811,90 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
+    func testGatedSendComposerKeepsLatestLineVisibleAfterOverflow() throws {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let input = composerInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+
+        input.typeText("Line 01\nLine 02\nLine 03\nLine 04\nLine 05")
+        let cappedHeight = input.frame.height
+        input.typeText("\nLine 06\nLine 07\nZEBRA888")
+
+        XCTAssertEqual(
+            input.frame.height,
+            cappedHeight,
+            accuracy: 2,
+            "The composer should stop growing after five visible lines"
+        )
+        let screenshot = input.screenshot()
+        attachScreenshot(named: "fixture-gated-send-composer-overflow", screenshot: screenshot)
+        let visibleText = try recognizedText(in: screenshot)
+        XCTAssertTrue(
+            visibleText.contains("ZEBRA888"),
+            "The composer should scroll to reveal its latest line; visible text was: \(visibleText)"
+        )
+
+        input.swipeDown()
+        let oldestScreenshot = input.screenshot()
+        let oldestVisibleText = try recognizedText(in: oldestScreenshot)
+        XCTAssertTrue(
+            oldestVisibleText.contains("Line 01"),
+            "The focused composer should scroll to its oldest line; visible text was: \(oldestVisibleText)"
+        )
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+
+        input.swipeUp()
+        let latestScreenshot = input.screenshot()
+        let latestVisibleText = try recognizedText(in: latestScreenshot)
+        XCTAssertTrue(
+            latestVisibleText.contains("ZEBRA888"),
+            "The focused composer should scroll back to its latest line; visible text was: \(latestVisibleText)"
+        )
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+    }
+
+    func testGatedSendComposerKeepsLatestWrappedTextVisibleInLongDraft() throws {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let input = composerInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+
+        input.typeText(String(repeating: "alpha beta gamma delta ", count: 12))
+        let cappedHeight = input.frame.height
+        input.typeText(
+            String(repeating: "epsilon zeta eta theta ", count: 60)
+                + " ZEBRA888"
+        )
+
+        XCTAssertEqual(
+            input.frame.height,
+            cappedHeight,
+            accuracy: 2,
+            "A long naturally wrapping draft should keep the composer clamped"
+        )
+        let screenshot = input.screenshot()
+        attachScreenshot(
+            named: "fixture-gated-send-composer-long-wrapped-overflow",
+            screenshot: screenshot
+        )
+        let visibleText = try recognizedText(in: screenshot)
+        XCTAssertTrue(
+            visibleText.contains("ZEBRA888"),
+            "The long draft should keep its latest wrapped text visible; visible text was: \(visibleText)"
+        )
+    }
+
     func testGatedSendKeyboardPresentationKeepsLiveTailVisible() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
@@ -825,7 +910,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(jumpToLatest.exists)
         let tailMaxYBeforeKeyboard = newestRow.frame.maxY
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(input.isHittable)
         input.tap()
@@ -860,7 +945,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(input.isHittable)
         input.tap()
@@ -883,7 +968,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
         openGatedSendConversation(in: app)
 
-        let input = app.textFields["toastty-mobile-composer-input"]
+        let input = composerInput(in: app)
         let send = app.buttons["toastty-mobile-composer-send"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         let keyboard = app.keyboards.firstMatch
@@ -953,6 +1038,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let app = launchFixtureApp()
         openFixtureConversation(in: app)
         return app
+    }
+
+    private func composerInput(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["toastty-mobile-composer-input"]
     }
 
     private var accessibilityContentSizeCategories: [UIContentSizeCategory] {
@@ -1068,9 +1157,28 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     }
 
     private func attachScreenshot(named name: String, of app: XCUIApplication) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachScreenshot(named: name, screenshot: app.screenshot())
+    }
+
+    private func attachScreenshot(named name: String, screenshot: XCUIScreenshot) {
+        let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func recognizedText(in screenshot: XCUIScreenshot) throws -> String {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        guard let image = screenshot.image.cgImage else {
+            XCTFail("The composer screenshot did not contain a CGImage")
+            return ""
+        }
+
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        return (request.results ?? [])
+            .compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: " ")
     }
 }

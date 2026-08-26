@@ -3,9 +3,8 @@ import ToasttyMobileDomain
 
 struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @FocusState private var isComposerFocused: Bool
+    @State private var isComposerFocused = false
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
-    @State private var didRequestComposerFocusOnTouchDown = false
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -190,14 +189,16 @@ struct ToasttyConversationScreen: View {
     private func composerField(
         _ presentation: ToasttyComposerPresentation
     ) -> some View {
-        TextField(presentation.placeholder, text: $draft, axis: .vertical)
-            .focused($isComposerFocused)
-            .simultaneousGesture(composerFocusGesture(presentation))
-            .textFieldStyle(.plain)
-            .lineLimit(1...5)
-            .textInputAutocapitalization(.sentences)
-            .font(.body)
-            .foregroundStyle(ToasttyDesignTokens.primaryText)
+        ToasttyComposerTextView(
+            text: $draft,
+            isFocused: $isComposerFocused,
+            placeholder: presentation.placeholder,
+            isEnabled: presentation.gate.allowsInput,
+            accessibilityLabel: "Message \(presentation.agentDisplayName)",
+            accessibilityHint: presentation.gate.allowsInput
+                ? "Enter a message, then use the Send button"
+                : disabledAccessibilityHint(presentation)
+        )
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(minHeight: 44)
@@ -222,45 +223,6 @@ struct ToasttyConversationScreen: View {
             }
             .animation(.easeOut(duration: 0.18), value: isComposerFocused)
             .disabled(presentation.gate.allowsInput == false)
-            .accessibilityLabel("Message \(presentation.agentDisplayName)")
-            .accessibilityHint(
-                presentation.gate.allowsInput
-                    ? "Enter a message, then use the Send button"
-                    : disabledAccessibilityHint(presentation)
-            )
-            .accessibilityIdentifier("toastty-mobile-composer-input")
-    }
-
-    private func composerFocusGesture(
-        _ presentation: ToasttyComposerPresentation
-    ) -> some Gesture {
-        LongPressGesture(minimumDuration: 0)
-            .sequenced(before: DragGesture(minimumDistance: 10))
-            .onChanged { value in
-                guard case .first(true) = value else {
-                    if case .second(true, .some) = value,
-                       didRequestComposerFocusOnTouchDown {
-                        didRequestComposerFocusOnTouchDown = false
-                        isComposerFocused = false
-                    }
-                    return
-                }
-
-                // A sequenced drag always observes this phase before its
-                // movement phase, so an older completed tap cannot be
-                // mistaken for the current touch.
-                didRequestComposerFocusOnTouchDown = false
-                guard presentation.gate.allowsInput,
-                      isComposerFocused == false
-                else { return }
-                // Start first-responder setup on touch-down so a cold
-                // keyboard cannot postpone editing until tap completion.
-                didRequestComposerFocusOnTouchDown = true
-                isComposerFocused = true
-            }
-            .onEnded { _ in
-                didRequestComposerFocusOnTouchDown = false
-            }
     }
 
     private var composerKeyboardClearance: CGFloat {
