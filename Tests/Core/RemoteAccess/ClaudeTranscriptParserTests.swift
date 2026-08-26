@@ -67,6 +67,23 @@ struct ClaudeTranscriptParserTests {
         #expect(assistantMessages == ["Real answer."])
     }
 
+    @Test func skipsTaskNotificationsUsingOnlyStructuredOriginKind() {
+        let result = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.taskNotificationVariants)
+        #expect(result.malformedLineCount == 0)
+
+        let userMessages = result.observations.compactMap { observation -> String? in
+            guard case .transcript(.userMessage(let payload)) = observation.payload else { return nil }
+            return payload.text
+        }
+        #expect(userMessages == [
+            "<task-notification><task-id>typed-literally</task-id><status>completed</status></task-notification>",
+            "<task-notification>promptSource alone is not a discriminator</task-notification>",
+            "User message without origin",
+            "User message with malformed origin",
+            "User message with malformed origin kind",
+        ])
+    }
+
     @Test func neverEmitsCompletedTurnEnd() {
         // Claude transcripts carry no authoritative composer-open signal, so
         // the parser must not emit turnEnded(.completed) — that keeps Claude
@@ -97,6 +114,15 @@ struct ClaudeTranscriptParserTests {
         let first = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.basicSession)
         let second = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.basicSession)
         #expect(first.observations == second.observations)
+    }
+
+    @Test func taskNotificationEmitsNoUserMessage() {
+        let result = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.taskNotificationFollowedByActivity)
+        #expect(result.malformedLineCount == 0)
+        #expect(!result.observations.contains { observation in
+            if case .transcript(.userMessage) = observation.payload { return true }
+            return false
+        })
     }
 
     private static func describe(_ observation: ProviderTranscriptObservation) -> String {
@@ -198,5 +224,57 @@ struct ClaudeProjectionFidelityTests {
             return payload.outcome
         }
         #expect(toolFinished == [.failed])
+    }
+
+    @Test func filteredTaskNotificationPreservesFollowingTranscriptAndOpenPrompt() {
+        var projector = ConversationProjector(
+            conversationID: Self.conversationID,
+            provider: .claude,
+            bindingID: Self.bindingID,
+            at: Self.date
+        )
+        _ = projector.noteBinding(
+            reason: .runtimeResumed,
+            providerSessionFilePath: "/tmp/claude-task-notification.jsonl",
+            bindingID: Self.bindingID,
+            at: Self.date
+        )
+        _ = projector.bootstrapConfirmedOpenPrompt(at: Self.date.addingTimeInterval(1))
+        let stateBeforeNotice = projector.state
+        let availabilityBeforeNotice = projector.inputAvailability
+
+        let observations = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.taskNotificationFollowedByActivity).observations
+        let emitted = observations.flatMap { projector.ingest($0) }
+
+        #expect(!emitted.contains { event in
+            if case .userMessage = event.payload { return true }
+            return false
+        })
+
+        let preservedTranscript = projector.events.compactMap { event -> String? in
+            switch event.payload {
+            case .assistantMessage(let payload): return "assistant:\(payload.text)"
+            case .toolStarted(let payload): return "toolStarted:\(payload.callID)"
+            case .toolFinished(let payload): return "toolFinished:\(payload.callID)"
+            case .userMessage: return "user"
+            default: return nil
+            }
+        }
+        #expect(preservedTranscript == [
+            "toolStarted:toolu_task_only",
+            "toolFinished:toolu_task_only",
+            "assistant:Background task finished.",
+        ])
+
+        let followingTranscriptEvents = projector.events.filter { event in
+            switch event.payload {
+            case .assistantMessage, .toolStarted, .toolFinished: return true
+            default: return false
+            }
+        }
+        #expect(followingTranscriptEvents.count == 3)
+        #expect(followingTranscriptEvents.allSatisfy { $0.turnID == "prompt-task-only" })
+        #expect(projector.state == stateBeforeNotice)
+        #expect(projector.inputAvailability == availabilityBeforeNotice)
     }
 }

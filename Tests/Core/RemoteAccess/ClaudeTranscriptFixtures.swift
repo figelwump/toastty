@@ -45,6 +45,29 @@ enum ClaudeTranscriptFixtures {
         ])
     }
 
+    /// Claude Code task-completion notices use `user` records with string
+    /// content. The exact structured `origin.kind` is the discriminator; the
+    /// content is intentionally varied to ensure it is never pattern-matched.
+    static let taskNotificationVariants = lines([
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000004","uuid":"u-task-complete","parentUuid":null,"isSidechain":false,"timestamp":"2026-08-07T13:00:00.000Z","promptSource":"system","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification><task-id>task-1</task-id><status>completed</status></task-notification>"}}"#,
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000004","uuid":"u-task-partial","parentUuid":"u-task-complete","isSidechain":false,"timestamp":"2026-08-07T13:00:01.000Z","promptSource":"system","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification><task-id>task-2"}}"#,
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000004","uuid":"u-task-malformed","parentUuid":"u-task-partial","isSidechain":false,"timestamp":"2026-08-07T13:00:02.000Z","promptSource":42,"origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification><status>completed</status"}}"#,
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000004","uuid":"u-human-literal","parentUuid":"u-task-malformed","isSidechain":false,"timestamp":"2026-08-07T13:00:03.000Z","promptSource":"user","origin":{"kind":"human"},"message":{"role":"user","content":"<task-notification><task-id>typed-literally</task-id><status>completed</status></task-notification>"}}"#,
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000004","uuid":"u-prompt-source-only","parentUuid":"u-human-literal","isSidechain":false,"timestamp":"2026-08-07T13:00:04.000Z","promptSource":"system","message":{"role":"user","content":"<task-notification>promptSource alone is not a discriminator</task-notification>"}}"#,
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000004","uuid":"u-origin-absent","parentUuid":"u-prompt-source-only","isSidechain":false,"timestamp":"2026-08-07T13:00:05.000Z","message":{"role":"user","content":"User message without origin"}}"#,
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000004","uuid":"u-origin-malformed","parentUuid":"u-origin-absent","isSidechain":false,"timestamp":"2026-08-07T13:00:06.000Z","origin":"task-notification","message":{"role":"user","content":"User message with malformed origin"}}"#,
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000004","uuid":"u-origin-kind-malformed","parentUuid":"u-origin-malformed","isSidechain":false,"timestamp":"2026-08-07T13:00:07.000Z","origin":{"kind":true},"message":{"role":"user","content":"User message with malformed origin kind"}}"#,
+    ])
+
+    /// A task notification followed by normal assistant/tool activity that
+    /// reuses the notification's prompt ID.
+    static let taskNotificationFollowedByActivity = lines([
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000005","uuid":"u-task-only","parentUuid":null,"isSidechain":false,"timestamp":"2026-08-07T14:00:00.000Z","promptId":"prompt-task-only","promptSource":"system","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification><status>completed</status></task-notification>"}}"#,
+        #"{"type":"assistant","sessionId":"cf000000-0000-4000-8000-000000000005","uuid":"a-task-only","parentUuid":"u-task-only","isSidechain":false,"timestamp":"2026-08-07T14:00:01.000Z","message":{"role":"assistant","model":"claude-opus-5","stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_task_only","name":"Bash","input":{"command":"echo background task"}}]}}"#,
+        #"{"type":"user","sessionId":"cf000000-0000-4000-8000-000000000005","uuid":"u-task-result","parentUuid":"a-task-only","isSidechain":false,"timestamp":"2026-08-07T14:00:02.000Z","promptId":"prompt-task-only","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_task_only","is_error":false,"content":"background task complete"}]}}"#,
+        #"{"type":"assistant","sessionId":"cf000000-0000-4000-8000-000000000005","uuid":"a-task-final","parentUuid":"u-task-result","isSidechain":false,"timestamp":"2026-08-07T14:00:03.000Z","message":{"role":"assistant","model":"claude-opus-5","stop_reason":"end_turn","content":[{"type":"text","text":"Background task finished."}]}}"#,
+    ])
+
     /// The same session resumed: a later append with the same sessionId and a
     /// repeated identical short prompt across turns.
     static let resumeContinuation = lines([

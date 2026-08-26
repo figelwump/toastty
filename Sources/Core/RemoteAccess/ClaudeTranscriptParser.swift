@@ -8,9 +8,11 @@ import CryptoKit
 ///
 /// Sourcing decisions (from auditing real transcripts):
 /// - A "real" user turn is a `user` record that is not `isMeta` and not
-///   `isSidechain`, whose content is a string or an array of text/image blocks.
-///   `tool_result` blocks arriving as `user` records are tool completions, not
-///   user turns.
+///   `isSidechain`, and whose structured `origin.kind` is not
+///   `task-notification`, with content that is a string or an array of
+///   text/image blocks. `tool_result` blocks arriving as `user` records are
+///   tool completions, not user turns. Missing or malformed `origin` values
+///   preserve the normal user-record behavior.
 /// - Assistant turns come from `assistant` records' `text` blocks; `tool_use`
 ///   blocks become tool starts, `thinking` blocks are dropped.
 /// - Tool completion state comes from the matching `tool_result`'s `is_error`.
@@ -104,6 +106,10 @@ private extension ClaudeTranscriptParser {
 
     mutating func parseUserRecord(_ object: [String: Any], timestamp: Date) -> [ProviderTranscriptObservation] {
         if object["isMeta"] as? Bool == true {
+            return []
+        }
+        if let origin = object["origin"] as? [String: Any],
+           origin["kind"] as? String == "task-notification" {
             return []
         }
         guard let message = object["message"] as? [String: Any] else {
