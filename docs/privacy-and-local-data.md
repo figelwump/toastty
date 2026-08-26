@@ -105,11 +105,13 @@ Toastty is designed to run locally on your machine. The app itself does not send
     and any helper failure log. These files contain launch configuration and
     bounded telemetry context, but not a separate copy of the provider
     transcript.
-  - Hooks record the owning process ID in a private marker. Toastty removes a
-    directory only after its managed session is inactive, a grace period has
-    elapsed, and the recorded process ID is no longer present. A live or
-    ambiguous PID is preserved rather than guessed about, including possible
-    PID reuse. If this durable location cannot be used safely,
+  - Toastty records the owning process ID in a private marker: the launch shim
+    records the exact spawned Codex process, while Claude's launch helper uses
+    Claude's reported process ID. Toastty removes a directory only after its
+    managed session is inactive, a grace period has elapsed, and the recorded
+    process ID is no longer present. A live or ambiguous PID is preserved rather
+    than guessed about, including possible PID reuse. If this durable location
+    cannot be used safely,
     Toastty falls back to the system temporary directory and then, if
     preparation still fails, launches without instrumentation.
 - Toastty-owned files inside `$CODEX_HOME` (written automatically for supported managed Codex launches)

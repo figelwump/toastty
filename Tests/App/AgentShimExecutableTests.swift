@@ -31,6 +31,47 @@ struct AgentShimExecutableTests {
     }
 
     @Test
+    func typedCodexShimRecordsSpawnedProcessAsArtifactOwner() throws {
+        let fixture = try AgentShimExecutableFixture.make()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(preflightDecision: .runAnyway)
+
+        #expect(result.exitStatus == 7)
+        #expect(try fixture.recordedOwnerPID() == fixture.spawnedAgentPID())
+        #expect(try fixture.agentLogContents().contains("owner_file="))
+        #expect(
+            try fixture.agentLogContents().contains(
+                "owner_file=\(fixture.ownerRecordURL.path)"
+            ) == false
+        )
+        let attributes = try FileManager.default.attributesOfItem(atPath: fixture.ownerRecordURL.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test
+    func managedBypassCodexShimRecordsSpawnedProcessAsArtifactOwner() throws {
+        let fixture = try AgentShimExecutableFixture.make()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-direct",
+            managedShimBypass: true,
+            ownerRecordInInitialEnvironment: true
+        )
+
+        #expect(result.exitStatus == 7)
+        #expect(try fixture.recordedOwnerPID() == fixture.spawnedAgentPID())
+        #expect(try fixture.cliLogContents().isEmpty)
+        #expect(
+            try fixture.agentLogContents().contains(
+                "owner_file=\(fixture.ownerRecordURL.path)"
+            ) == false
+        )
+    }
+
+    @Test
     func typedCodexShimPreflightSetUpHooksCancelsWithoutLaunchingAgent() throws {
         let fixture = try AgentShimExecutableFixture.make()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -152,6 +193,7 @@ struct AgentShimExecutableTests {
 private struct AgentShimExecutableFixture {
     let rootURL: URL
     let panelID: UUID
+    let ownerRecordURL: URL
     private let shimLinkURL: URL
     private let fakeCLIURL: URL
     private let cliLogURL: URL
@@ -185,6 +227,7 @@ private struct AgentShimExecutableFixture {
         let fakeCLIURL = rootURL.appendingPathComponent("fake-toastty", isDirectory: false)
         let cliLogURL = rootURL.appendingPathComponent("cli.log", isDirectory: false)
         let agentLogURL = rootURL.appendingPathComponent("agent.log", isDirectory: false)
+        let ownerRecordURL = rootURL.appendingPathComponent("owner-pid", isDirectory: false)
         let shimLinkURL = shimDirectoryURL.appendingPathComponent(shimCommandName, isDirectory: false)
         let realBinaryName = realBinaryName ?? shimCommandName
 
@@ -221,6 +264,7 @@ private struct AgentShimExecutableFixture {
         return Self(
             rootURL: rootURL,
             panelID: UUID(),
+            ownerRecordURL: ownerRecordURL,
             shimLinkURL: shimLinkURL,
             fakeCLIURL: fakeCLIURL,
             cliLogURL: cliLogURL,
@@ -233,7 +277,9 @@ private struct AgentShimExecutableFixture {
     func run(
         preflightDecision: ManagedAgentLaunchPreflightDecisionKind,
         preflightDecisionMessage: String? = nil,
-        inheritedSessionID: String? = nil
+        inheritedSessionID: String? = nil,
+        managedShimBypass: Bool = false,
+        ownerRecordInInitialEnvironment: Bool = false
     ) throws -> AgentShimRunResult {
         let process = Process()
         process.executableURL = shimLinkURL
@@ -254,11 +300,14 @@ private struct AgentShimExecutableFixture {
         environment[ToasttyLaunchContextEnvironment.sessionIDKey] = inheritedSessionID
         environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = nil
         environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryURL.path
-        environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = nil
+        environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = managedShimBypass ? "1" : nil
+        environment[ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey] =
+            ownerRecordInInitialEnvironment ? ownerRecordURL.path : nil
         environment["ZDOTDIR"] = rootURL.path
         environment["TOASTTY_LOG_DISABLE"] = "1"
         environment["TOASTTY_FAKE_CLI_LOG"] = cliLogURL.path
         environment["TOASTTY_FAKE_AGENT_LOG"] = agentLogURL.path
+        environment["TOASTTY_FAKE_OWNER_FILE"] = ownerRecordURL.path
         environment["TOASTTY_FAKE_PREFLIGHT_DECISION"] = preflightDecision.rawValue
         environment["TOASTTY_FAKE_PREFLIGHT_DECISION_MESSAGE"] = preflightDecisionMessage
         process.environment = environment
@@ -293,6 +342,19 @@ private struct AgentShimExecutableFixture {
 
     func agentLogContents() throws -> String {
         try fileContentsIfPresent(at: agentLogURL)
+    }
+
+    func recordedOwnerPID() throws -> Int32 {
+        let value = try fileContentsIfPresent(at: ownerRecordURL)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try #require(Int32(value))
+    }
+
+    func spawnedAgentPID() throws -> Int32 {
+        let line = try #require(
+            agentLogContents().split(separator: "\n").first { $0.hasPrefix("pid=") }
+        )
+        return try #require(Int32(line.dropFirst("pid=".count)))
     }
 
     private static func writeExecutableScript(at url: URL, contents: String) throws {
@@ -371,7 +433,8 @@ private struct AgentShimExecutableFixture {
             "TOASTTY_SESSION_ID": "sess-preflight",
             "TOASTTY_PANEL_ID": "$panel",
             "TOASTTY_CWD": "/tmp/repo",
-            "TOASTTY_REPO_ROOT": "/tmp/repo"
+            "TOASTTY_REPO_ROOT": "/tmp/repo",
+            "TOASTTY_MANAGED_ARTIFACT_OWNER_FILE": "$TOASTTY_FAKE_OWNER_FILE"
           }
         }
         JSON
@@ -407,6 +470,8 @@ private struct AgentShimExecutableFixture {
           printf '\\n'
           printf 'session=%s\\n' "${TOASTTY_SESSION_ID:-}"
           printf 'panel=%s\\n' "${TOASTTY_PANEL_ID:-}"
+          printf 'pid=%s\\n' "$$"
+          printf 'owner_file=%s\\n' "${TOASTTY_MANAGED_ARTIFACT_OWNER_FILE:-}"
         } >> "$TOASTTY_FAKE_AGENT_LOG"
         exit 7
         """

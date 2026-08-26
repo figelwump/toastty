@@ -35,65 +35,17 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         let forwarder = try String(contentsOf: result.status.forwarderScriptURL, encoding: .utf8)
         XCTAssertTrue(forwarder.hasPrefix("#!/bin/sh\n# toastty-codex-forwarder-protocol: 1\n"))
         XCTAssertTrue(forwarder.contains("session ingest-agent-event --source codex-hooks"))
-        XCTAssertTrue(forwarder.contains("TOASTTY_MANAGED_ARTIFACT_OWNER_FILE"))
+        XCTAssertFalse(forwarder.contains("TOASTTY_MANAGED_ARTIFACT_OWNER_FILE"))
         XCTAssertTrue(forwarder.contains("exit 0"))
-    }
-
-    func testForwarderRecordsManagedAgentOwnerPID() throws {
-        let homeURL = try makeTemporaryHome()
-        let result = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).install()
-        let ownerURL = homeURL.appendingPathComponent("owner-pid", isDirectory: false)
-        let stubCLIURL = try writeStubCLI(homeURL: homeURL, body: "cat >/dev/null\nexit 0")
-
-        let status = try runForwarder(
-            at: result.status.forwarderScriptURL,
-            cliPath: stubCLIURL.path,
-            ownerFilePath: ownerURL.path
-        )
-
-        XCTAssertEqual(status, 0)
-        let ownerPID = try XCTUnwrap(Int32(
-            String(contentsOf: ownerURL, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        ))
-        XCTAssertGreaterThan(ownerPID, 1)
-        let attributes = try FileManager.default.attributesOfItem(atPath: ownerURL.path)
-        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0, 0o600)
-    }
-
-    func testInstalledHookExecReplacesCodexCommandShellBeforeRecordingOwner() throws {
-        let homeURL = try makeTemporaryHome()
-        let result = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).install()
-        let ownerURL = homeURL.appendingPathComponent("owner-pid-via-hook", isDirectory: false)
-        let stubCLIURL = try writeStubCLI(homeURL: homeURL, body: "cat >/dev/null\nexit 0")
-        let command = "exec /bin/sh '\(result.status.forwarderScriptURL.path)'"
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", command]
-        process.environment = [
-            "PATH": "/usr/bin:/bin",
-            "TOASTTY_SESSION_ID": "11111111-2222-3333-4444-555555555555",
-            "TOASTTY_PANEL_ID": "66666666-7777-8888-9999-000000000000",
-            "TOASTTY_SOCKET_PATH": "/tmp/unused.sock",
-            "TOASTTY_CLI_PATH": stubCLIURL.path,
-            "TOASTTY_MANAGED_ARTIFACT_OWNER_FILE": ownerURL.path,
-        ]
-        let stdinPipe = Pipe()
-        process.standardInput = stdinPipe
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        stdinPipe.fileHandleForWriting.write(Data("{}\n".utf8))
-        stdinPipe.fileHandleForWriting.closeFile()
-        process.waitUntilExit()
-
-        XCTAssertEqual(process.terminationStatus, 0)
-        let ownerPID = try XCTUnwrap(Int32(
-            String(contentsOf: ownerURL, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        ))
-        XCTAssertEqual(ownerPID, getpid())
+        let expectedCommand = "/bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
+        for eventName in eventNames {
+            XCTAssertEqual(
+                try toasttyHookEntries(for: eventName, in: object, homeURL: homeURL)
+                    .first?["command"] as? String,
+                expectedCommand,
+                eventName
+            )
+        }
     }
 
     func testInstallPreservesExistingHooks() throws {
@@ -163,7 +115,7 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         XCTAssertEqual(try toasttyHookEntries(for: "Stop", in: object, homeURL: homeURL).count, 1)
     }
 
-    func testWhitespaceWrappedCurrentToasttyHookNeedsAutomaticMaintenance() throws {
+    func testWhitespaceWrappedTransitionalExecToasttyHookNeedsAutomaticMaintenance() throws {
         let homeURL = try makeTemporaryHome()
         let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
         let variantCommand = "  exec /bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'\n"
@@ -377,6 +329,48 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         XCTAssertTrue(maintenanceResult.forwarderScriptChanged)
         XCTAssertEqual(maintenanceResult.status.state, .installed)
         XCTAssertTrue(FileManager.default.fileExists(atPath: maintenanceResult.status.forwarderScriptURL.path))
+    }
+
+    func testAutomaticMaintenanceUpdatesForwarderWithoutRewritingVersion080HookDefinitions() throws {
+        let homeURL = try makeTemporaryHome()
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+        let installResult = try installer.install()
+        let hooksFileURL = installResult.status.hooksFileURL
+        let originalHooksData = try Data(contentsOf: hooksFileURL)
+        let originalModificationDate = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: originalModificationDate],
+            ofItemAtPath: hooksFileURL.path
+        )
+        let transitionalForwarder = """
+        #!/bin/sh
+        # toastty-codex-forwarder-protocol: 1
+        if [ -n "${TOASTTY_MANAGED_ARTIFACT_OWNER_FILE:-}" ]; then
+          printf '%s\n' "$PPID" > "$TOASTTY_MANAGED_ARTIFACT_OWNER_FILE"
+        fi
+        cat >/dev/null
+        exit 0
+        """
+        try transitionalForwarder
+            .appending("\n")
+            .write(
+                to: installResult.status.forwarderScriptURL,
+                atomically: true,
+                encoding: .utf8
+            )
+
+        let maintenanceResult = try XCTUnwrap(installer.performAutomaticMaintenanceIfNeeded())
+
+        XCTAssertFalse(maintenanceResult.hooksFileChanged)
+        XCTAssertTrue(maintenanceResult.forwarderScriptChanged)
+        XCTAssertEqual(try Data(contentsOf: hooksFileURL), originalHooksData)
+        let attributes = try FileManager.default.attributesOfItem(atPath: hooksFileURL.path)
+        XCTAssertEqual(attributes[.modificationDate] as? Date, originalModificationDate)
+        let repairedForwarder = try String(
+            contentsOf: maintenanceResult.status.forwarderScriptURL,
+            encoding: .utf8
+        )
+        XCTAssertFalse(repairedForwarder.contains("TOASTTY_MANAGED_ARTIFACT_OWNER_FILE"))
     }
 
     func testAutomaticMaintenanceDoesNotInstallWhenNoToasttyHooksExist() throws {
@@ -612,23 +606,18 @@ final class CodexStatusHookInstallerTests: XCTestCase {
 
     private func runForwarder(
         at scriptURL: URL,
-        cliPath: String,
-        ownerFilePath: String? = nil
+        cliPath: String
     ) throws -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = [scriptURL.path]
-        var environment = [
+        process.environment = [
             "PATH": "/usr/bin:/bin",
             "TOASTTY_SESSION_ID": "11111111-2222-3333-4444-555555555555",
             "TOASTTY_PANEL_ID": "66666666-7777-8888-9999-000000000000",
             "TOASTTY_SOCKET_PATH": "/tmp/unused.sock",
             "TOASTTY_CLI_PATH": cliPath,
         ]
-        if let ownerFilePath {
-            environment["TOASTTY_MANAGED_ARTIFACT_OWNER_FILE"] = ownerFilePath
-        }
-        process.environment = environment
         let stdinPipe = Pipe()
         process.standardInput = stdinPipe
         process.standardOutput = FileHandle.nullDevice
@@ -731,7 +720,7 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         in object: [String: Any],
         homeURL: URL
     ) throws -> [[String: Any]] {
-        let expectedCommand = "exec /bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
+        let expectedCommand = "/bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
         return try hookEntries(for: eventName, in: object).filter { hook in
             (hook["command"] as? String) == expectedCommand &&
                 (hook["statusMessage"] as? String) == "Toastty Agent Status"

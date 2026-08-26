@@ -111,7 +111,9 @@ private enum AgentCommandShim {
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
-                environment: resolvedLaunchEnvironment
+                environment: resolvedLaunchEnvironment,
+                recordsManagedArtifactOwner: invocation.agent == .codex
+                    && passThroughReasons.contains("managed_agent_shim_bypass")
             )
         }
 
@@ -208,7 +210,8 @@ private enum AgentCommandShim {
         let exitStatus = spawnAndWait(
             executablePath: realBinaryPath,
             argv: plan.argv,
-            environment: childEnvironment
+            environment: childEnvironment,
+            recordsManagedArtifactOwner: invocation.agent == .codex
         )
         stopSession(
             cliPath: cliPath,
@@ -648,12 +651,14 @@ private enum AgentCommandShim {
     private static func spawnAndWait(
         executablePath: String,
         argv: [String],
-        environment: [String: String]
+        environment: [String: String],
+        recordsManagedArtifactOwner: Bool = false
     ) -> Int32 {
         let spawnedChildPID = spawnProcess(
             executablePath: executablePath,
             argv: argv,
-            environment: environment
+            environment: environment,
+            recordsManagedArtifactOwner: recordsManagedArtifactOwner
         )
         guard spawnedChildPID > 0 else {
             return 1
@@ -739,11 +744,18 @@ private enum AgentCommandShim {
     private static func spawnProcess(
         executablePath: String,
         argv: [String],
-        environment: [String: String]
+        environment: [String: String],
+        recordsManagedArtifactOwner: Bool = false
     ) -> pid_t {
+        var childEnvironment = environment
+        let ownerRecordPath = recordsManagedArtifactOwner
+            ? childEnvironment.removeValue(
+                forKey: ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey
+            )
+            : nil
         var pid = pid_t()
         let status = withCStringArray(argv) { argvPointers in
-            withCStringArray(environmentStrings(from: environment)) { envPointers in
+            withCStringArray(environmentStrings(from: childEnvironment)) { envPointers in
                 posix_spawn(
                     &pid,
                     executablePath,
@@ -757,7 +769,43 @@ private enum AgentCommandShim {
         guard status == 0 else {
             return -1
         }
+        if let ownerRecordPath = normalizedNonEmpty(ownerRecordPath) {
+            recordManagedArtifactOwner(processID: pid, atPath: ownerRecordPath)
+        }
         return pid
+    }
+
+    private static func recordManagedArtifactOwner(processID: pid_t, atPath path: String) {
+        guard processID > 1 else { return }
+
+        let fileManager = FileManager.default
+        let ownerURL = URL(fileURLWithPath: path).standardizedFileURL
+        let temporaryURL = ownerURL.deletingLastPathComponent().appendingPathComponent(
+            ".\(ownerURL.lastPathComponent).tmp.\(getpid()).\(UUID().uuidString)",
+            isDirectory: false
+        )
+
+        do {
+            try Data("\(processID)\n".utf8).write(to: temporaryURL)
+            try fileManager.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o600))],
+                ofItemAtPath: temporaryURL.path
+            )
+            guard rename(temporaryURL.path, ownerURL.path) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporaryURL)
+            ToasttyLog.warning(
+                "Failed to record managed agent artifact owner",
+                category: .terminal,
+                metadata: [
+                    "owner_file": ownerURL.path,
+                    "process_id": String(processID),
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
     }
 
     private static func environmentStrings(from environment: [String: String]) -> [String] {

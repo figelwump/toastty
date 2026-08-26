@@ -541,10 +541,10 @@ private extension CodexStatusHookInstaller {
         }
         let normalizedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedExpectedCommand = expectedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-        let legacyCommand = normalizedExpectedCommand.hasPrefix("exec ")
-            ? String(normalizedExpectedCommand.dropFirst("exec ".count))
-            : normalizedExpectedCommand
-        return normalizedCommand == normalizedExpectedCommand || normalizedCommand == legacyCommand
+        let transitionalExecCommand = normalizedExpectedCommand.hasPrefix("exec ")
+            ? normalizedExpectedCommand
+            : "exec \(normalizedExpectedCommand)"
+        return normalizedCommand == normalizedExpectedCommand || normalizedCommand == transitionalExecCommand
     }
 
     static func forwarderScriptIsCurrent(
@@ -577,10 +577,7 @@ private extension CodexStatusHookInstaller {
     }
 
     static func hookCommand(forwarderScriptURL: URL) -> String {
-        // Codex executes string hooks through `$SHELL -lc`. `exec` replaces
-        // that intermediate shell so the forwarder's PPID is the Codex
-        // process whose lifetime owns the per-launch artifacts.
-        "exec /bin/sh \(shellQuote(forwarderScriptURL.path))"
+        "/bin/sh \(shellQuote(forwarderScriptURL.path))"
     }
 
     static func forwarderScriptContents(logFilePath: String) -> String {
@@ -591,14 +588,6 @@ private extension CodexStatusHookInstaller {
             "if [ -z \"${TOASTTY_SESSION_ID:-}\" ] || [ -z \"${TOASTTY_PANEL_ID:-}\" ] || [ -z \"${TOASTTY_SOCKET_PATH:-}\" ] || [ -z \"${TOASTTY_CLI_PATH:-}\" ]; then",
             "  cat >/dev/null",
             "  exit 0",
-            "fi",
-            "if [ -n \"${TOASTTY_MANAGED_ARTIFACT_OWNER_FILE:-}\" ]; then",
-            "  umask 077",
-            "  owner_tmp=\"$TOASTTY_MANAGED_ARTIFACT_OWNER_FILE.tmp.$$\"",
-            "  if printf '%s\\n' \"$PPID\" > \"$owner_tmp\" 2>/dev/null; then",
-            "    chmod 600 \"$owner_tmp\" 2>/dev/null || :",
-            "    mv -f \"$owner_tmp\" \"$TOASTTY_MANAGED_ARTIFACT_OWNER_FILE\" 2>/dev/null || rm -f \"$owner_tmp\"",
-            "  fi",
             "fi",
             "log_dir=\(shellQuote(logDirectoryPath))",
             "log_file=\(shellQuote(logFilePath))",

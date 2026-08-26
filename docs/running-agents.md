@@ -388,7 +388,7 @@ When you trigger an agent launch (menu click, top-bar button, command palette su
 6. **Send to terminal** — The rendered command line is sent to the target terminal panel and submitted
 7. **Begin monitoring** — For Codex, trusted installed hooks report primary status, the session log watcher tracks root-turn context, and notify/session recording own telemetry for the full launch when hooks are untrusted or unsupported; for Claude, hooks report events back through the CLI; for OpenCode and MiMo Code, the temporary plugin reports status events back through the CLI; for Pi, the bundled extension reports events back through the CLI
 
-When the agent process exits and the session is stopped, Toastty cleans up OpenCode, MiMo Code, and Pi launch artifacts immediately. Claude and Codex per-launch directories are swept conservatively after the session becomes inactive: Toastty requires an owner marker, a grace period, and proof that the recorded process ID is no longer present. Live or ambiguous PIDs are preserved, including possible PID reuse.
+When the agent process exits and the session is stopped, Toastty cleans up OpenCode, MiMo Code, and Pi launch artifacts immediately. Claude and Codex per-launch directories are swept conservatively after the session becomes inactive: Toastty requires an owner marker, a grace period, and proof that the recorded process ID is no longer present. The managed launch shim records the exact Codex child PID without changing the installed hook command; Claude's launch helper records Claude's reported PID. Live or ambiguous PIDs are preserved, including possible PID reuse.
 
 ### Restore and native resume
 
@@ -511,7 +511,7 @@ Every agent launched through Toastty receives these environment variables, set i
 | `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |
 | `TOASTTY_SKILLS_ROOT` | Delivered shipped Toastty plugin `skills/` path for supported managed Codex, Claude Code, OpenCode, MiMo Code, and Pi launches (the verified Toastty-owned Codex plugin cache, or the immutable staged plugin copy also reused for Claude's `--plugin-dir`, pi's `--skill`, and OpenCode/MiMo Code's `skills.paths`); set only when the shipped tree was actually injected, absent when preparation, verification, or safe argument/config insertion is unavailable. Reserved and read-only for agents; never write into it |
 | `TOASTTY_USER_SKILLS_ROOT` | User skill-package source directory (the real `~/.toastty/skills` even for runtime-isolated instances). Advertised on managed launches so agents can create user skills there on request; the directory is not created automatically. Setting the same variable in the app's own environment overrides the source directory — the isolation escape hatch automated harnesses use |
-| `TOASTTY_MANAGED_ARTIFACT_OWNER_FILE` | Internal owner-marker path for Claude and Codex process-lifetime launch files. Toastty helpers maintain this marker for conservative cleanup. Reserved and read-only for agents. |
+| `TOASTTY_MANAGED_ARTIFACT_OWNER_FILE` | Internal owner-marker path for Claude and Codex process-lifetime launch files. Toastty's launch shim and agent helpers maintain this marker for conservative cleanup. Reserved and read-only for agents. |
 
 Agent-specific variables are added on top of these (for example, `CODEX_TUI_RECORD_SESSION` and `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT` for Codex launches).
 
