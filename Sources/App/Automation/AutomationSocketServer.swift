@@ -87,6 +87,7 @@ final class AutomationSocketServer: @unchecked Sendable {
         reloadConfigurationAction: (@MainActor () -> Void)? = nil,
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider = AgentLaunchUI.codexStatusHooksPreflightState,
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter = AgentLaunchUI.presentCodexStatusHooksWarningAsync,
+        codexStatusHooksInstallAction: @escaping CodexStatusHooksInstallAction = AgentLaunchUI.installCodexStatusHooks,
         recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
         testHooks: AutomationSocketServerTestHooks = .disabled
     ) throws {
@@ -110,6 +111,7 @@ final class AutomationSocketServer: @unchecked Sendable {
             reloadConfigurationAction: reloadConfigurationAction,
             codexStatusHooksPreflightProvider: codexStatusHooksPreflightProvider,
             codexStatusHooksWarningPresenter: codexStatusHooksWarningPresenter,
+            codexStatusHooksInstallAction: codexStatusHooksInstallAction,
             automationConfig: automationConfig
         )
         try startListening()

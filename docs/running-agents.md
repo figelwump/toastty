@@ -425,9 +425,11 @@ prepare the same managed-session context before handing off to the real binary.
 For Codex, the typed shim automatically prepares the same session-only skills
 as a UI launch and runs the same status-hook preflight. If hooks still need
 first-time setup or cannot be verified, Toastty shows the setup warning before
-the real Codex process starts. Skills provisioning itself never prompts or
-blocks the launch. Once Toastty owns the hook entries, routine hook maintenance
-runs automatically in the background.
+the real Codex process starts. Choosing **Set Up Hooks** in that warning installs
+the hooks and continues the original launch; an installation failure is reported
+without starting Codex. Skills provisioning itself never prompts or blocks the
+launch. Once Toastty owns the hook entries, routine hook maintenance runs
+automatically in the background.
 `manualCommandNames` only controls extra executable
 names Toastty should intercept; it does not control status-hook setup.
 

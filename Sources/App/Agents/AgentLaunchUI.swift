@@ -34,7 +34,8 @@ typealias CodexStatusHooksAsyncWarningPresenter = @MainActor (
     UUID?,
     @escaping @MainActor (CodexStatusHookWarningChoice) -> Void
 ) -> Void
-typealias AgentStatusHooksSetupPresenter = @MainActor (UUID?) -> Void
+typealias CodexStatusHooksInstallAction = @MainActor () throws -> Void
+typealias CodexStatusHooksInstallErrorPresenter = @MainActor (Error) -> Void
 
 @MainActor
 enum AgentLaunchUI {
@@ -46,7 +47,8 @@ enum AgentLaunchUI {
         agentLaunchService: AgentLaunchService,
         codexStatusHooksPreflightProvider: CodexStatusHooksPreflightProvider = AgentLaunchUI.codexStatusHooksPreflightState,
         codexStatusHooksWarningPresenter: CodexStatusHooksWarningPresenter = AgentLaunchUI.presentCodexStatusHooksWarning,
-        agentStatusHooksSetupPresenter: AgentStatusHooksSetupPresenter = AgentLaunchUI.presentAgentStatusHooksSetup
+        codexStatusHooksInstallAction: CodexStatusHooksInstallAction = AgentLaunchUI.installCodexStatusHooks,
+        codexStatusHooksInstallErrorPresenter: CodexStatusHooksInstallErrorPresenter = AgentLaunchUI.presentCodexStatusHooksInstallError
     ) -> Bool {
         let preflightState = codexStatusHooksPreflightProvider(profileID)
         switch preflightState {
@@ -55,11 +57,15 @@ enum AgentLaunchUI {
         case .needsSetup, .unavailable:
             switch codexStatusHooksWarningPresenter(
                 preflightState,
-                originWindowID != nil
+                true
             ) {
             case .setUpHooks:
-                agentStatusHooksSetupPresenter(originWindowID)
-                return false
+                do {
+                    try codexStatusHooksInstallAction()
+                } catch {
+                    codexStatusHooksInstallErrorPresenter(error)
+                    return false
+                }
             case .runAnyway:
                 break
             case .cancel:
@@ -142,9 +148,6 @@ enum AgentLaunchUI {
         alert.beginSheetModal(for: window) { response in
             Task { @MainActor in
                 let choice = codexStatusHooksWarningChoice(response: response, canOpenSetup: true)
-                if choice == .setUpHooks {
-                    presentAgentStatusHooksSetup(windowID: windowID)
-                }
                 completion(choice)
             }
         }
@@ -185,15 +188,17 @@ enum AgentLaunchUI {
         }
     }
 
-    private static func presentAgentStatusHooksSetup(windowID: UUID?) {
-        guard let windowID else { return }
-        NotificationCenter.default.post(
-            name: .toasttyShowAgentGetStartedFlow,
-            object: GettingStartedPanelRequest.open(
-                windowID: windowID,
-                anchor: "codex-hooks"
-            )
-        )
+    static func installCodexStatusHooks() throws {
+        _ = try CodexStatusHookInstaller().install()
+    }
+
+    private static func presentCodexStatusHooksInstallError(_ error: Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Unable to Set Up Codex Status Hooks"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private static func codexStatusHooksWarningAlert(

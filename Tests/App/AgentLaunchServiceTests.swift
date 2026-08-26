@@ -195,7 +195,7 @@ struct AgentLaunchServiceTests {
         let missingStatus = codexHookInstallStatus(state: .notInstalled)
         var observedWarningState: CodexStatusHookLaunchPreflightState?
         var observedCanOpenSetup: Bool?
-        var setupWindowID: UUID?
+        var didInstallHooks = false
 
         let launched = AgentLaunchUI.launch(
             profileID: "codex",
@@ -211,24 +211,24 @@ struct AgentLaunchServiceTests {
                 observedCanOpenSetup = canOpenSetup
                 return .cancel
             },
-            agentStatusHooksSetupPresenter: { windowID in
-                setupWindowID = windowID
+            codexStatusHooksInstallAction: {
+                didInstallHooks = true
             }
         )
 
         #expect(launched == false)
         #expect(observedWarningState == .needsSetup(missingStatus))
         #expect(observedCanOpenSetup == true)
-        #expect(setupWindowID == nil)
+        #expect(didInstallHooks == false)
         #expect(fixture.terminalRouter.sentTextByPanelID.isEmpty)
         #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty)
     }
 
     @Test
-    func agentLaunchUISetUpHooksOpensSetupWithoutLaunching() throws {
+    func agentLaunchUISetUpHooksInstallsAndLaunches() async throws {
         let fixture = try makeLaunchUITestFixture()
         let missingStatus = codexHookInstallStatus(state: .notInstalled)
-        var setupWindowID: UUID?
+        var didInstallHooks = false
 
         let launched = AgentLaunchUI.launch(
             profileID: "codex",
@@ -237,13 +237,49 @@ struct AgentLaunchServiceTests {
             agentLaunchService: fixture.service,
             codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
             codexStatusHooksWarningPresenter: { _, _ in .setUpHooks },
-            agentStatusHooksSetupPresenter: { windowID in
-                setupWindowID = windowID
+            codexStatusHooksInstallAction: {
+                didInstallHooks = true
+            }
+        )
+
+        #expect(launched)
+        #expect(didInstallHooks)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while fixture.terminalRouter.sentTextByPanelID[fixture.panelID] == nil,
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(fixture.terminalRouter.sentTextByPanelID[fixture.panelID] != nil)
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.count == 1)
+    }
+
+    @Test
+    func agentLaunchUISetUpHooksReportsInstallFailureWithoutLaunching() throws {
+        let fixture = try makeLaunchUITestFixture()
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+        var presentedError: String?
+
+        let launched = AgentLaunchUI.launch(
+            profileID: "codex",
+            workspaceID: fixture.workspaceID,
+            originWindowID: fixture.windowID,
+            agentLaunchService: fixture.service,
+            codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
+            codexStatusHooksWarningPresenter: { _, _ in .setUpHooks },
+            codexStatusHooksInstallAction: {
+                throw NSError(
+                    domain: "AgentLaunchServiceTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Hooks file is read-only"]
+                )
+            },
+            codexStatusHooksInstallErrorPresenter: { error in
+                presentedError = error.localizedDescription
             }
         )
 
         #expect(launched == false)
-        #expect(setupWindowID == fixture.windowID)
+        #expect(presentedError == "Hooks file is read-only")
         #expect(fixture.terminalRouter.sentTextByPanelID.isEmpty)
         #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty)
     }
@@ -260,8 +296,8 @@ struct AgentLaunchServiceTests {
             agentLaunchService: fixture.service,
             codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
             codexStatusHooksWarningPresenter: { _, _ in .runAnyway },
-            agentStatusHooksSetupPresenter: { _ in
-                Issue.record("Run Anyway should not open setup")
+            codexStatusHooksInstallAction: {
+                Issue.record("Run Anyway should not install hooks")
             }
         )
 

@@ -61,6 +61,7 @@ extension AutomationSocketServerTestSupport {
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter = { _, _, completion in
             completion(.cancel)
         },
+        codexStatusHooksInstallAction: @escaping CodexStatusHooksInstallAction = {},
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
         shouldConfirmPanelClose: Bool? = nil,
         terminalCloseAssessmentProvider: (@MainActor (UUID) -> TerminalCloseConfirmationAssessment?)? = nil,
@@ -120,6 +121,7 @@ extension AutomationSocketServerTestSupport {
             annotationStyleStore: annotationStyleStore,
             codexStatusHooksPreflightProvider: codexStatusHooksPreflightProvider,
             codexStatusHooksWarningPresenter: codexStatusHooksWarningPresenter,
+            codexStatusHooksInstallAction: codexStatusHooksInstallAction,
             recoveryPolicy: recoveryPolicy,
             testHooks: testHooks
         )

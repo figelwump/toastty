@@ -472,6 +472,10 @@ private enum AgentCommandShim {
                     environment: environment
                 )
             case .setUpHooks:
+                if let message = decision.message {
+                    fputs(message + "\n", stderr)
+                    return .cancelled(1)
+                }
                 fputs("Toastty opened Codex status hook setup. Launch cancelled.\n", stderr)
                 return .cancelled(0)
             case .cancel:

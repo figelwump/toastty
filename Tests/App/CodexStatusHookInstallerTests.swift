@@ -163,6 +163,67 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         XCTAssertEqual(try toasttyHookEntries(for: "Stop", in: object, homeURL: homeURL).count, 1)
     }
 
+    func testWhitespaceWrappedCurrentToasttyHookNeedsAutomaticMaintenance() throws {
+        let homeURL = try makeTemporaryHome()
+        let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        let variantCommand = "  exec /bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'\n"
+        try writeHooksObject(
+            [
+                "hooks": [
+                    "Stop": [
+                        [
+                            "hooks": [
+                                [
+                                    "type": "command",
+                                    "command": variantCommand,
+                                    "timeout": 5,
+                                    "statusMessage": "Toastty Agent Status",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            to: hooksFileURL
+        )
+
+        let status = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).installationStatus()
+
+        XCTAssertEqual(status.state, .needsUpdate)
+        XCTAssertEqual(status.setupRequirement, .automaticMaintenance)
+        XCTAssertFalse(status.requiresLaunchPreflightWarning)
+    }
+
+    func testUnrelatedHookMentioningForwarderPathIsNotToasttyOwned() throws {
+        let homeURL = try makeTemporaryHome()
+        let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        try writeHooksObject(
+            [
+                "hooks": [
+                    "Stop": [
+                        [
+                            "hooks": [
+                                [
+                                    "type": "command",
+                                    "command": "/bin/sh -c \"printf '%s' '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'\"",
+                                    "timeout": 5,
+                                    "statusMessage": "Existing Hook",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            to: hooksFileURL
+        )
+
+        let status = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).installationStatus()
+
+        XCTAssertEqual(status.state, .notInstalled)
+        XCTAssertEqual(status.setupRequirement, .userSetup)
+        XCTAssertTrue(status.requiresLaunchPreflightWarning)
+    }
+
     func testInstallRemovesLegacyToasttyPostToolUseHook() throws {
         let homeURL = try makeTemporaryHome()
         let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)

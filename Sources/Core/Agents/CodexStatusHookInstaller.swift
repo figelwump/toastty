@@ -539,8 +539,12 @@ private extension CodexStatusHookInstaller {
         guard let command = hook["command"] as? String else {
             return false
         }
-        return command == expectedCommand ||
-            command.hasPrefix("/bin/sh ") && command.contains("/.toastty/codex-hooks/forwarder.sh")
+        let normalizedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedExpectedCommand = expectedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        let legacyCommand = normalizedExpectedCommand.hasPrefix("exec ")
+            ? String(normalizedExpectedCommand.dropFirst("exec ".count))
+            : normalizedExpectedCommand
+        return normalizedCommand == normalizedExpectedCommand || normalizedCommand == legacyCommand
     }
 
     static func forwarderScriptIsCurrent(

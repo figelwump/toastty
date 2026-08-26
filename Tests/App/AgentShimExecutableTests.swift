@@ -50,6 +50,21 @@ struct AgentShimExecutableTests {
     }
 
     @Test
+    func typedCodexShimReportsHookSetupFailureFromSetupDecision() throws {
+        let fixture = try AgentShimExecutableFixture.make()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(
+            preflightDecision: .setUpHooks,
+            preflightDecisionMessage: "Unable to set up Codex status hooks: Hooks file is read-only"
+        )
+
+        #expect(result.exitStatus == 1)
+        #expect(result.stderr.contains("Unable to set up Codex status hooks: Hooks file is read-only"))
+        #expect(try fixture.agentLogContents().isEmpty)
+    }
+
+    @Test
     func typedMiMoCodeShimResolvesRealMimoBinaryWithoutProfileConfiguration() throws {
         let fixture = try AgentShimExecutableFixture.make(shimCommandName: "mimocode", realBinaryName: "mimo")
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -217,6 +232,7 @@ private struct AgentShimExecutableFixture {
 
     func run(
         preflightDecision: ManagedAgentLaunchPreflightDecisionKind,
+        preflightDecisionMessage: String? = nil,
         inheritedSessionID: String? = nil
     ) throws -> AgentShimRunResult {
         let process = Process()
@@ -244,6 +260,7 @@ private struct AgentShimExecutableFixture {
         environment["TOASTTY_FAKE_CLI_LOG"] = cliLogURL.path
         environment["TOASTTY_FAKE_AGENT_LOG"] = agentLogURL.path
         environment["TOASTTY_FAKE_PREFLIGHT_DECISION"] = preflightDecision.rawValue
+        environment["TOASTTY_FAKE_PREFLIGHT_DECISION_MESSAGE"] = preflightDecisionMessage
         process.environment = environment
 
         let stdoutPipe = Pipe()
@@ -362,6 +379,10 @@ private struct AgentShimExecutableFixture {
         fi
 
         if [ "${1:-}" = "agent" ] && [ "${2:-}" = "managed-launch-preflight-decision" ]; then
+          if [ -n "${TOASTTY_FAKE_PREFLIGHT_DECISION_MESSAGE:-}" ]; then
+            printf '{"kind":"%s","message":"%s"}\\n' "${TOASTTY_FAKE_PREFLIGHT_DECISION:-runAnyway}" "$TOASTTY_FAKE_PREFLIGHT_DECISION_MESSAGE"
+            exit 0
+          fi
           printf '{"kind":"%s"}\\n' "${TOASTTY_FAKE_PREFLIGHT_DECISION:-runAnyway}"
           exit 0
         fi

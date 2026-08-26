@@ -73,6 +73,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let codexStatusHooksPreflightProvider: CodexStatusHooksPreflightProvider
     private let codexStatusHooksWarningPresenter: CodexStatusHooksAsyncWarningPresenter
+    private let codexStatusHooksInstallAction: CodexStatusHooksInstallAction
     private let automationConfig: AutomationConfig?
     private let startedAt = Date()
     private let managedLaunchPreflightPollIntervalMilliseconds = 250
@@ -111,6 +112,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         reloadConfigurationAction: (@MainActor () -> Void)?,
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider,
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter,
+        codexStatusHooksInstallAction: @escaping CodexStatusHooksInstallAction,
         automationConfig: AutomationConfig?
     ) {
         self.store = store
@@ -124,6 +126,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         self.reloadConfigurationAction = reloadConfigurationAction
         self.codexStatusHooksPreflightProvider = codexStatusHooksPreflightProvider
         self.codexStatusHooksWarningPresenter = codexStatusHooksWarningPresenter
+        self.codexStatusHooksInstallAction = codexStatusHooksInstallAction
         self.automationConfig = automationConfig
         self.currentFixtureName = automationConfig?.fixtureName ?? "default"
     }
@@ -2634,10 +2637,15 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         guard var pending = pendingManagedLaunchPreflights[token] else { return }
         switch choice {
         case .setUpHooks:
-            pending.decision = ManagedAgentLaunchPreflightDecision(
-                kind: .setUpHooks,
-                message: "Toastty opened Codex status hook setup."
-            )
+            do {
+                try codexStatusHooksInstallAction()
+                pending.decision = ManagedAgentLaunchPreflightDecision(kind: .runAnyway)
+            } catch {
+                pending.decision = ManagedAgentLaunchPreflightDecision(
+                    kind: .setUpHooks,
+                    message: "Unable to set up Codex status hooks: \(error.localizedDescription)"
+                )
+            }
         case .runAnyway:
             pending.decision = ManagedAgentLaunchPreflightDecision(kind: .runAnyway)
         case .cancel:

@@ -348,4 +348,111 @@ struct AutomationSocketServerManagedLaunchTests: AutomationSocketServerTestSuppo
         #expect(launchState.hasEverLaunchedAgent)
     }
 
+    @Test
+    func prepareManagedLaunchSetUpHooksInstallsAndContinues() async throws {
+        let socketPath = temporarySocketPath()
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
+                codexStatusHooksWarningPresenter: { _, _, completion in
+                    completion(.setUpHooks)
+                },
+                codexStatusHooksInstallAction: {}
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let preflightResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "preflightPolicy": .string(ManagedAgentLaunchPreflightPolicy.interactive.rawValue),
+                    "argv": .array([.string("codex")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        let preflight = try #require(preflightResponse.result?.object("preflight"))
+        let token = try #require(preflight.string("token"))
+        let decisionResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.managed_launch_preflight_decision",
+                payload: ["token": .string(token)]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(decisionResponse.ok)
+        #expect(decisionResponse.result?.string("kind") == ManagedAgentLaunchPreflightDecisionKind.runAnyway.rawValue)
+    }
+
+    @Test
+    func prepareManagedLaunchSetUpHooksReportsInstallFailure() async throws {
+        let socketPath = temporarySocketPath()
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
+                codexStatusHooksWarningPresenter: { _, _, completion in
+                    completion(.setUpHooks)
+                },
+                codexStatusHooksInstallAction: {
+                    throw NSError(
+                        domain: "AutomationSocketServerManagedLaunchTests",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Hooks file is read-only"]
+                    )
+                }
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let preflightResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "preflightPolicy": .string(ManagedAgentLaunchPreflightPolicy.interactive.rawValue),
+                    "argv": .array([.string("codex")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        let preflight = try #require(preflightResponse.result?.object("preflight"))
+        let token = try #require(preflight.string("token"))
+        let decisionResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.managed_launch_preflight_decision",
+                payload: ["token": .string(token)]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(decisionResponse.ok)
+        #expect(decisionResponse.result?.string("kind") == ManagedAgentLaunchPreflightDecisionKind.setUpHooks.rawValue)
+        #expect(decisionResponse.result?.string("message")?.contains("Hooks file is read-only") == true)
+    }
+
 }
