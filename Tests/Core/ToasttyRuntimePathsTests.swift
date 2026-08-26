@@ -27,6 +27,7 @@ struct ToasttyRuntimePathsTests {
         #expect(paths.scratchpadDocumentsDirectoryURL.path == "/tmp/toastty-home/.toastty/scratchpad-documents")
         #expect(paths.userSkillsDirectoryURL.path == "/tmp/toastty-home/.toastty/skills")
         #expect(paths.agentPluginsDirectoryURL.path == "/tmp/toastty-home/.toastty/agent-plugins")
+        #expect(paths.managedAgentLaunchArtifactsDirectoryURL.path == "/tmp/toastty-home/.toastty/run/managed-agent-launches")
         #expect(paths.defaultLogFileURL.path == "/tmp/toastty-home/Library/Logs/Toastty/toastty.log")
         #expect(paths.automationSocketFileURL == nil)
         #expect(paths.userDefaultsSuiteName == nil)
@@ -63,6 +64,7 @@ struct ToasttyRuntimePathsTests {
         // home even for runtime-isolated instances.
         #expect(first.userSkillsDirectoryURL.path == "/tmp/ignored-home/.toastty/skills")
         #expect(first.agentPluginsDirectoryURL.path == "\(runtimeHomePath)/agent-plugins")
+        #expect(first.managedAgentLaunchArtifactsDirectoryURL.path == "\(runtimeHomePath)/run/managed-agent-launches")
         #expect(first.defaultLogFileURL.path == "\(runtimeHomePath)/logs/toastty.log")
         #expect(first.automationSocketFileURL?.path.hasSuffix("/events-v1.sock") == true)
         #expect(first.automationSocketFileURL?.path.contains("toastty-runtime-") == true)

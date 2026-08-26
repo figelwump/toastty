@@ -50,9 +50,11 @@ enum LaunchArtifactsCleanupPolicy {
 }
 
 struct PreparedAgentLaunchArtifacts {
-    let directoryURL: URL
+    let directory: ManagedAgentLaunchArtifactDirectory
     let codexSessionLogURL: URL?
     let cleanupPolicy: LaunchArtifactsCleanupPolicy
+
+    var directoryURL: URL { directory.directoryURL }
 }
 
 enum AgentLaunchInstrumentationError: LocalizedError {
@@ -100,6 +102,7 @@ enum AgentLaunchInstrumentation {
         sessionID: String,
         workingDirectory: String?,
         fileManager: FileManager,
+        artifactStore: ManagedAgentLaunchArtifactStore? = nil,
         launchEnvironment: [String: String] = [:],
         codexStatusTrackingSource: CodexStatusTrackingSource = .sessionLogFallback(reason: "default"),
         codexSkillsIntegration: CodexSkillsLaunchConfiguration? = nil,
@@ -113,6 +116,7 @@ enum AgentLaunchInstrumentation {
                 sessionID: sessionID,
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
+                artifactStore: artifactStore,
                 skillsIntegration: stagedSkillsIntegration,
                 userPluginRootPath: deliveredUserSkillsRootPath
             )
@@ -124,6 +128,7 @@ enum AgentLaunchInstrumentation {
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
                 fileManager: fileManager,
+                artifactStore: artifactStore,
                 launchEnvironment: launchEnvironment,
                 statusTrackingSource: codexStatusTrackingSource,
                 skillsIntegration: codexSkillsIntegration
@@ -177,14 +182,19 @@ enum AgentLaunchInstrumentation {
         sessionID: String,
         workingDirectory: String?,
         fileManager: FileManager,
+        artifactStore: ManagedAgentLaunchArtifactStore?,
         skillsIntegration: ClaudeSkillsLaunchConfiguration?,
         userPluginRootPath: String?
     ) throws -> PreparedAgentLaunchCommand {
-        let artifactsDirectoryURL = try makeArtifactsDirectory(
+        let artifactsDirectory = try makeArtifactsDirectory(
+            agent: .claude,
             prefix: "toastty-claude-launch",
             sessionID: sessionID,
-            fileManager: fileManager
+            fileManager: fileManager,
+            lifetime: .agentProcess,
+            artifactStore: artifactStore
         )
+        let artifactsDirectoryURL = artifactsDirectory.directoryURL
 
         do {
             let hookScriptURL = artifactsDirectoryURL.appendingPathComponent("claude-hook.sh", isDirectory: false)
@@ -195,7 +205,9 @@ enum AgentLaunchInstrumentation {
                     source: "claude-hooks",
                     telemetryErrorLogURL: telemetryErrorLogURL,
                     stderrFallbackURL: artifactsDirectoryURL.appendingPathComponent("claude-hook.stderr", isDirectory: false),
-                    inputMode: .stdinOrFirstArgument
+                    inputMode: .stdinOrFirstArgument,
+                    ownerRecordURL: artifactsDirectory.ownerRecordURL,
+                    ownerPIDEnvironmentKey: "CLAUDE_PID"
                 ),
                 to: hookScriptURL,
                 fileManager: fileManager
@@ -212,7 +224,7 @@ enum AgentLaunchInstrumentation {
             )
 
             let settingsURL = artifactsDirectoryURL.appendingPathComponent("claude-settings.json", isDirectory: false)
-            try writeJSONObject(mergedSettings, to: settingsURL)
+            try writeJSONObject(mergedSettings, to: settingsURL, fileManager: fileManager)
             let settingsInsertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(
                 for: .claude,
                 argv: existingSettings.argvWithoutSettings
@@ -222,6 +234,9 @@ enum AgentLaunchInstrumentation {
             )
             var launchArguments = ["--settings", settingsURL.path]
             var environment: [String: String] = [:]
+            if let ownerRecordURL = artifactsDirectory.ownerRecordURL {
+                environment[ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey] = ownerRecordURL.path
+            }
             if let skillsIntegration, skillsInsertionIndex != nil {
                 launchArguments += ["--plugin-dir", skillsIntegration.pluginRootPath]
                 environment[ToasttyLaunchContextEnvironment.skillsRootKey] = skillsIntegration.skillsRootPath
@@ -243,7 +258,7 @@ enum AgentLaunchInstrumentation {
                 ),
                 environment: environment,
                 artifacts: PreparedAgentLaunchArtifacts(
-                    directoryURL: artifactsDirectoryURL,
+                    directory: artifactsDirectory,
                     codexSessionLogURL: nil,
                     // Claude can still invoke hooks after Toastty has already
                     // stopped tracking the managed session.
@@ -261,19 +276,27 @@ enum AgentLaunchInstrumentation {
         cliExecutablePath: String,
         sessionID: String,
         fileManager: FileManager,
+        artifactStore: ManagedAgentLaunchArtifactStore?,
         launchEnvironment: [String: String],
         statusTrackingSource: CodexStatusTrackingSource,
         skillsIntegration: CodexSkillsLaunchConfiguration?
     ) throws -> PreparedAgentLaunchCommand {
-        let artifactsDirectoryURL = try makeArtifactsDirectory(
+        let artifactsDirectory = try makeArtifactsDirectory(
+            agent: .codex,
             prefix: "toastty-codex-launch",
             sessionID: sessionID,
-            fileManager: fileManager
+            fileManager: fileManager,
+            lifetime: .agentProcess,
+            artifactStore: artifactStore
         )
+        let artifactsDirectoryURL = artifactsDirectory.directoryURL
 
         do {
             let logURL = artifactsDirectoryURL.appendingPathComponent("codex-session.jsonl", isDirectory: false)
             var environment = baselineEnvironment(for: .codex)
+            if let ownerRecordURL = artifactsDirectory.ownerRecordURL {
+                environment[ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey] = ownerRecordURL.path
+            }
             environment["CODEX_TUI_RECORD_SESSION"] = "1"
             environment["CODEX_TUI_SESSION_LOG_PATH"] = logURL.path
             let safeExecutableIndex = safeCodexSkillsExecutableIndex(in: argv)
@@ -298,7 +321,8 @@ enum AgentLaunchInstrumentation {
                         source: "codex-notify",
                         telemetryErrorLogURL: telemetryErrorLogURL,
                         stderrFallbackURL: artifactsDirectoryURL.appendingPathComponent("codex-notify.stderr", isDirectory: false),
-                        inputMode: .stdinOrFirstArgument
+                        inputMode: .stdinOrFirstArgument,
+                        ownerRecordURL: artifactsDirectory.ownerRecordURL
                     ),
                     to: notifyScriptURL,
                     fileManager: fileManager
@@ -322,9 +346,9 @@ enum AgentLaunchInstrumentation {
                 argv: preparedArgv,
                 environment: environment,
                 artifacts: PreparedAgentLaunchArtifacts(
-                    directoryURL: artifactsDirectoryURL,
+                    directory: artifactsDirectory,
                     codexSessionLogURL: logURL,
-                    cleanupPolicy: .deleteImmediately
+                    cleanupPolicy: artifactStore == nil ? .deleteImmediately : .retainAfterSessionStop
                 ),
                 codexSkillsInjectionResult: skillsPreparation.result
             )
@@ -352,11 +376,15 @@ enum AgentLaunchInstrumentation {
             )
         }
 
-        let artifactsDirectoryURL = try makeArtifactsDirectory(
+        let artifactsDirectory = try makeArtifactsDirectory(
+            agent: runtime.agent,
             prefix: runtime.artifactsDirectoryPrefix,
             sessionID: sessionID,
-            fileManager: fileManager
+            fileManager: fileManager,
+            lifetime: .session,
+            artifactStore: nil
         )
+        let artifactsDirectoryURL = artifactsDirectory.directoryURL
 
         do {
             let pluginURL = artifactsDirectoryURL.appendingPathComponent(runtime.pluginFilename, isDirectory: false)
@@ -404,7 +432,7 @@ enum AgentLaunchInstrumentation {
                 argv: argv,
                 environment: environment,
                 artifacts: PreparedAgentLaunchArtifacts(
-                    directoryURL: artifactsDirectoryURL,
+                    directory: artifactsDirectory,
                     codexSessionLogURL: nil,
                     cleanupPolicy: .deleteImmediately
                 )
@@ -422,11 +450,15 @@ enum AgentLaunchInstrumentation {
         skillsIntegration: ClaudeSkillsLaunchConfiguration?,
         userSkillsRootPath: String?
     ) throws -> PreparedAgentLaunchCommand {
-        let artifactsDirectoryURL = try makeArtifactsDirectory(
+        let artifactsDirectory = try makeArtifactsDirectory(
+            agent: .pi,
             prefix: "toastty-pi-launch",
             sessionID: sessionID,
-            fileManager: fileManager
+            fileManager: fileManager,
+            lifetime: .session,
+            artifactStore: nil
         )
+        let artifactsDirectoryURL = artifactsDirectory.directoryURL
 
         let telemetryLogURL = artifactsDirectoryURL.appendingPathComponent("pi-telemetry.jsonl", isDirectory: false)
         var environment = [
@@ -439,7 +471,7 @@ enum AgentLaunchInstrumentation {
                 argv: argv,
                 environment: environment,
                 artifacts: PreparedAgentLaunchArtifacts(
-                    directoryURL: artifactsDirectoryURL,
+                    directory: artifactsDirectory,
                     codexSessionLogURL: nil,
                     cleanupPolicy: .deleteImmediately
                 )
@@ -473,7 +505,7 @@ enum AgentLaunchInstrumentation {
             ),
             environment: environment,
             artifacts: PreparedAgentLaunchArtifacts(
-                directoryURL: artifactsDirectoryURL,
+                directory: artifactsDirectory,
                 codexSessionLogURL: nil,
                 cleanupPolicy: .deleteImmediately
             )
@@ -595,14 +627,31 @@ private extension AgentLaunchInstrumentation {
     }
 
     static func makeArtifactsDirectory(
+        agent: AgentKind,
         prefix: String,
         sessionID: String,
-        fileManager: FileManager
-    ) throws -> URL {
+        fileManager: FileManager,
+        lifetime: ManagedAgentLaunchArtifactLifetime,
+        artifactStore: ManagedAgentLaunchArtifactStore?
+    ) throws -> ManagedAgentLaunchArtifactDirectory {
+        if let artifactStore {
+            return try artifactStore.makeDirectory(
+                agent: agent,
+                sessionID: sessionID,
+                lifetime: lifetime
+            )
+        }
         let url = fileManager.temporaryDirectory
             .appendingPathComponent("\(prefix)-\(sessionID)", isDirectory: true)
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        return ManagedAgentLaunchArtifactDirectory(
+            directoryURL: url,
+            ownerRecordURL: lifetime == .agentProcess
+                ? url.appendingPathComponent(ManagedAgentLaunchArtifactStore.ownerRecordFileName)
+                : nil,
+            lifetime: lifetime,
+            storage: .temporary
+        )
     }
 
     static func resolveClaudeSettingsArgument(
@@ -743,12 +792,17 @@ private extension AgentLaunchInstrumentation {
         fileManager: FileManager
     ) throws {
         try Data(script.appending("\n").utf8).write(to: url, options: .atomic)
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
     }
 
-    static func writeJSONObject(_ object: [String: Any], to url: URL) throws {
+    static func writeJSONObject(
+        _ object: [String: Any],
+        to url: URL,
+        fileManager: FileManager = .default
+    ) throws {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         try data.write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     static func telemetryErrorLogURL(in artifactsDirectoryURL: URL) -> URL {
@@ -2077,7 +2131,9 @@ private extension AgentLaunchInstrumentation {
         source: String,
         telemetryErrorLogURL: URL,
         stderrFallbackURL: URL,
-        inputMode: TelemetryInputMode
+        inputMode: TelemetryInputMode,
+        ownerRecordURL: URL? = nil,
+        ownerPIDEnvironmentKey: String? = nil
     ) -> String {
         let stderrTemplateURL = stderrFallbackURL.deletingLastPathComponent()
             .appendingPathComponent("telemetry-stderr.XXXXXX", isDirectory: false)
@@ -2112,6 +2168,11 @@ private extension AgentLaunchInstrumentation {
         return (
             [
                 "#!/bin/sh",
+                "umask 077",
+            ] + ownerRecordScriptLines(
+                ownerRecordURL: ownerRecordURL,
+                ownerPIDEnvironmentKey: ownerPIDEnvironmentKey
+            ) + [
                 "log_file=\(shellQuote(telemetryErrorLogURL.path))",
                 "stderr_file=\"$(mktemp \(shellQuote(stderrTemplateURL.path)) 2>/dev/null)\"",
                 "if [ -z \"$stderr_file\" ]; then",
@@ -2137,6 +2198,28 @@ private extension AgentLaunchInstrumentation {
                 "exit 0",
             ]
         ).joined(separator: "\n")
+    }
+
+    static func ownerRecordScriptLines(
+        ownerRecordURL: URL?,
+        ownerPIDEnvironmentKey: String?
+    ) -> [String] {
+        guard let ownerRecordURL else { return [] }
+        let ownerPIDExpression = ownerPIDEnvironmentKey.map { "${\($0):-$PPID}" } ?? "$PPID"
+        return [
+            "owner_file=\(shellQuote(ownerRecordURL.path))",
+            "owner_pid=\"\(ownerPIDExpression)\"",
+            "case \"$owner_pid\" in",
+            "  ''|*[!0-9]*) : ;;",
+            "  *)",
+            "    owner_tmp=\"$owner_file.tmp.$$\"",
+            "    if printf '%s\\n' \"$owner_pid\" > \"$owner_tmp\" 2>/dev/null; then",
+            "      chmod 600 \"$owner_tmp\" 2>/dev/null || :",
+            "      mv -f \"$owner_tmp\" \"$owner_file\" 2>/dev/null || rm -f \"$owner_tmp\"",
+            "    fi",
+            "    ;;",
+            "esac",
+        ]
     }
 
     static func jsonStringLiteral(_ value: String) -> String {

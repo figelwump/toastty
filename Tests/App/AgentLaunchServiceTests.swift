@@ -266,8 +266,10 @@ struct AgentLaunchServiceTests {
         )
 
         #expect(launched)
-        for _ in 0..<100 where fixture.terminalRouter.sentTextByPanelID[fixture.panelID] == nil {
-            await Task.yield()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while fixture.terminalRouter.sentTextByPanelID[fixture.panelID] == nil,
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
         }
         #expect(fixture.terminalRouter.sentTextByPanelID[fixture.panelID] != nil)
         #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.count == 1)
@@ -939,6 +941,12 @@ struct AgentLaunchServiceTests {
             _ = try service.launch(
                 profileID: "codex",
                 environment: ["TOASTTY_AGENT": "claude"]
+            )
+        }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_MANAGED_ARTIFACT_OWNER_FILE' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "codex",
+                environment: ["TOASTTY_MANAGED_ARTIFACT_OWNER_FILE": "/tmp/user-controlled"]
             )
         }
     }

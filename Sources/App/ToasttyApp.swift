@@ -969,6 +969,7 @@ struct ToasttyApp: App {
         let codexSkillsManager = CodexSkillsManager(runtimePaths: runtimePaths)
         let claudeSkillsBundleManager = ClaudeSkillsBundleManager(runtimePaths: runtimePaths)
         let userSkillCatalog = ToasttyUserSkillCatalog(runtimePaths: runtimePaths)
+        let managedAgentLaunchArtifactStore = ManagedAgentLaunchArtifactStore(runtimePaths: runtimePaths)
         // Startup-only GC of the append-only skill staging roots and Codex
         // cache swap litter. Dispatched here — before the launch service
         // exists and before the restored-launch planner is handed to the
@@ -999,7 +1000,8 @@ struct ToasttyApp: App {
             cliExecutablePathProvider: { cliExecutablePath },
             socketPathProvider: { socketPath },
             codexProcessPathProvider: { codexProcessPathStore.currentPath() },
-            codexProcessPathRefreshProvider: { codexProcessPathStore.refresh() }
+            codexProcessPathRefreshProvider: { codexProcessPathStore.refresh() },
+            managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
         )
         terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
         let preferredWorkspaceCommandWindowID: () -> UUID? = {

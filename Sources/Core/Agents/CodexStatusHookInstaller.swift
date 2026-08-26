@@ -573,7 +573,10 @@ private extension CodexStatusHookInstaller {
     }
 
     static func hookCommand(forwarderScriptURL: URL) -> String {
-        "/bin/sh \(shellQuote(forwarderScriptURL.path))"
+        // Codex executes string hooks through `$SHELL -lc`. `exec` replaces
+        // that intermediate shell so the forwarder's PPID is the Codex
+        // process whose lifetime owns the per-launch artifacts.
+        "exec /bin/sh \(shellQuote(forwarderScriptURL.path))"
     }
 
     static func forwarderScriptContents(logFilePath: String) -> String {
@@ -584,6 +587,14 @@ private extension CodexStatusHookInstaller {
             "if [ -z \"${TOASTTY_SESSION_ID:-}\" ] || [ -z \"${TOASTTY_PANEL_ID:-}\" ] || [ -z \"${TOASTTY_SOCKET_PATH:-}\" ] || [ -z \"${TOASTTY_CLI_PATH:-}\" ]; then",
             "  cat >/dev/null",
             "  exit 0",
+            "fi",
+            "if [ -n \"${TOASTTY_MANAGED_ARTIFACT_OWNER_FILE:-}\" ]; then",
+            "  umask 077",
+            "  owner_tmp=\"$TOASTTY_MANAGED_ARTIFACT_OWNER_FILE.tmp.$$\"",
+            "  if printf '%s\\n' \"$PPID\" > \"$owner_tmp\" 2>/dev/null; then",
+            "    chmod 600 \"$owner_tmp\" 2>/dev/null || :",
+            "    mv -f \"$owner_tmp\" \"$TOASTTY_MANAGED_ARTIFACT_OWNER_FILE\" 2>/dev/null || rm -f \"$owner_tmp\"",
+            "  fi",
             "fi",
             "log_dir=\(shellQuote(logDirectoryPath))",
             "log_file=\(shellQuote(logFilePath))",

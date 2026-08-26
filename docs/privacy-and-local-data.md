@@ -97,6 +97,21 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - A startup sweeper deletes only Toastty-owned artifacts under `~/.toastty/agent-plugins/` — superseded user snapshots and staged Claude plugin copies beyond the currently delivered one plus one previous verified fallback, and aged staging orphans. Receipts under `codex/homes/` are kept.
 - `~/.toastty/codex-hooks/` (created by `Toastty > Set Up Agent Status Hooks…`)
   - A stable Codex hook forwarder script plus `telemetry-failures.log` when the forwarder cannot deliver hook events back to Toastty.
+- `~/.toastty/run/managed-agent-launches/`
+  - Owner-only per-launch directories for Claude and Codex files that their
+    processes can revisit after startup. Claude directories contain the merged
+    settings JSON, hook script, and any helper failure log. Codex directories
+    contain the TUI session record, a fallback notification script when needed,
+    and any helper failure log. These files contain launch configuration and
+    bounded telemetry context, but not a separate copy of the provider
+    transcript.
+  - Hooks record the owning process ID in a private marker. Toastty removes a
+    directory only after its managed session is inactive, a grace period has
+    elapsed, and the recorded process ID is no longer present. A live or
+    ambiguous PID is preserved rather than guessed about, including possible
+    PID reuse. If this durable location cannot be used safely,
+    Toastty falls back to the system temporary directory and then, if
+    preparation still fails, launches without instrumentation.
 - Toastty-owned files inside `$CODEX_HOME` (written automatically for supported managed Codex launches)
   - `$CODEX_HOME/plugins/cache/toastty/toastty/` and, when user skills are accepted, `$CODEX_HOME/plugins/cache/toastty-user/toastty-user/`: Toastty's plugin cache subtrees, produced by installing the plugin into a throwaway Codex home with the local Codex CLI, digest-verifying the bytes, and swapping them in atomically. User-authored skill content is copied into the `toastty-user` subtree.
   - `$CODEX_HOME/toastty-managed.config.toml`: a Toastty-owned profile overlay that enables those cached plugins only for processes launched with `--profile toastty-managed`. Its exact full-line ownership marker may appear anywhere because Codex can prepend profile-scoped settings. Toastty preserves those settings and unrelated TOML content when it refreshes its plugin entries; an existing file without the marker is treated as foreign and is never overwritten. The user's `config.toml` is never written by skills delivery (the only exception is the one-time legacy cleanup edit below), and ordinary Codex sessions are unaffected.
@@ -127,6 +142,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/remote-access/devices.json`
   - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`
+  - `<runtime-home>/run/managed-agent-launches/`
   - `<runtime-home>/agent-plugins/` (user-skill snapshots, staging, and receipts stay isolated here; the user-skill SOURCE is not isolated — isolated instances read the real `~/.toastty/skills/` unless `TOASTTY_USER_SKILLS_ROOT` redirects it, the override automated harnesses use)
   - `<runtime-home>/scratchpad-documents/`
   - `<runtime-home>/history/pane-journals/`
@@ -150,7 +166,7 @@ timeouts, and launch failures to its structured local log. See
 
 ## What Toastty reads locally for agent status
 
-- For managed Codex sessions, Toastty reads the temporary TUI session record it
+- For managed Codex sessions, Toastty reads the per-launch TUI session record it
   requested through `CODEX_TUI_SESSION_LOG_PATH` for root-turn and approval
   context. After Codex identifies its native session file, Toastty also watches
   that rollout JSONL for collaboration-agent lifecycle and identity mapping.

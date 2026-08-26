@@ -631,8 +631,14 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
-    func testClaudeArtifactsRemainAfterSessionStops() async throws {
-        let fixture = try makePlannerFixture()
+    func testProcessLifetimeArtifactsRemainAfterSessionStopsWhenStoreOwnsCleanup() async throws {
+        let artifactRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "toastty-planner-artifact-store-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: artifactRoot) }
+        let artifactStore = ManagedAgentLaunchArtifactStore(rootDirectoryURL: artifactRoot)
+        let fixture = try makePlannerFixture(managedAgentLaunchArtifactStore: artifactStore)
         let claudePlan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
                 agent: .claude,
@@ -661,14 +667,42 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
 
         fixture.sessionRuntimeStore.stopSession(sessionID: claudePlan.sessionID, at: Date())
         fixture.sessionRuntimeStore.stopSession(sessionID: codexPlan.sessionID, at: Date())
-        await waitUntil {
-            fixture.fileManager.fileExists(atPath: codexArtifactsDirectoryURL.path) == false
-        }
+        await Task.yield()
 
         XCTAssertTrue(
             fixture.fileManager.fileExists(atPath: artifactsDirectoryURL.path),
             "Claude hook artifacts should remain available across later cleanup passes"
         )
+        XCTAssertTrue(
+            fixture.fileManager.fileExists(atPath: codexArtifactsDirectoryURL.path),
+            "Codex process-lifetime artifacts should remain until owner exit is proven"
+        )
+    }
+
+    func testDiscardedPreparedLaunchRemovesDurableArtifactsImmediately() async throws {
+        let artifactRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "toastty-planner-abandoned-artifacts-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: artifactRoot) }
+        let artifactStore = ManagedAgentLaunchArtifactStore(rootDirectoryURL: artifactRoot)
+        let fixture = try makePlannerFixture(managedAgentLaunchArtifactStore: artifactStore)
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try claudeArtifactsDirectory(from: plan)
+
+        fixture.planner.discardManagedLaunch(sessionID: plan.sessionID)
+        await waitUntil {
+            fixture.fileManager.fileExists(atPath: artifactsDirectoryURL.path) == false
+        }
+
+        XCTAssertFalse(fixture.fileManager.fileExists(atPath: artifactsDirectoryURL.path))
     }
 
     func testCodexArtifactsDeleteImmediatelyAfterSessionStops() async throws {
@@ -2936,7 +2970,8 @@ private func makePlannerFixture(
     codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
     claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
     userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil,
-    processEnvironmentProvider: (@Sendable () -> [String: String])? = nil
+    processEnvironmentProvider: (@Sendable () -> [String: String])? = nil,
+    managedAgentLaunchArtifactStore: ManagedAgentLaunchArtifactStore? = nil
 ) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
@@ -2982,7 +3017,8 @@ private func makePlannerFixture(
         claudeSkillsBundleManager: claudeSkillsBundleManager ?? TestClaudeSkillsBundleManager(configuration: nil),
         userSkillSnapshotProvider: userSkillSnapshotProvider
             ?? RecordingUserSkillSnapshotProvider(snapshot: nil),
-        processEnvironmentProvider: processEnvironmentProvider
+        processEnvironmentProvider: processEnvironmentProvider,
+        managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)

@@ -148,7 +148,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
         codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
         codexProcessPathProvider: @escaping @Sendable () -> String? = { nil },
-        codexProcessPathRefreshProvider: @escaping @Sendable () -> String? = { nil }
+        codexProcessPathRefreshProvider: @escaping @Sendable () -> String? = { nil },
+        managedAgentLaunchArtifactStore: ManagedAgentLaunchArtifactStore? = nil
     ) {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
@@ -189,7 +190,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             nativeSessionObserverRegistry: nativeSessionObserverRegistry,
             codexSkillsResolver: resolvedCodexSkillsResolver,
             claudeSkillsBundleManager: resolvedClaudeSkillsBundleManager,
-            userSkillSnapshotProvider: resolvedUserSkillCatalog
+            userSkillSnapshotProvider: resolvedUserSkillCatalog,
+            managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
         )
     }
 
@@ -536,6 +538,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         ToasttyLaunchContextEnvironment.cwdKey,
         ToasttyLaunchContextEnvironment.repoRootKey,
         ToasttyLaunchContextEnvironment.managedAgentShimBypassKey,
+        ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey,
         ToasttyLaunchContextEnvironment.skillsRootKey,
         ToasttyLaunchContextEnvironment.userSkillsRootKey,
         "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT",

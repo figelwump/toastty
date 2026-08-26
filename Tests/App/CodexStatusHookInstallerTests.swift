@@ -35,7 +35,65 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         let forwarder = try String(contentsOf: result.status.forwarderScriptURL, encoding: .utf8)
         XCTAssertTrue(forwarder.hasPrefix("#!/bin/sh\n# toastty-codex-forwarder-protocol: 1\n"))
         XCTAssertTrue(forwarder.contains("session ingest-agent-event --source codex-hooks"))
+        XCTAssertTrue(forwarder.contains("TOASTTY_MANAGED_ARTIFACT_OWNER_FILE"))
         XCTAssertTrue(forwarder.contains("exit 0"))
+    }
+
+    func testForwarderRecordsManagedAgentOwnerPID() throws {
+        let homeURL = try makeTemporaryHome()
+        let result = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).install()
+        let ownerURL = homeURL.appendingPathComponent("owner-pid", isDirectory: false)
+        let stubCLIURL = try writeStubCLI(homeURL: homeURL, body: "cat >/dev/null\nexit 0")
+
+        let status = try runForwarder(
+            at: result.status.forwarderScriptURL,
+            cliPath: stubCLIURL.path,
+            ownerFilePath: ownerURL.path
+        )
+
+        XCTAssertEqual(status, 0)
+        let ownerPID = try XCTUnwrap(Int32(
+            String(contentsOf: ownerURL, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        XCTAssertGreaterThan(ownerPID, 1)
+        let attributes = try FileManager.default.attributesOfItem(atPath: ownerURL.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0, 0o600)
+    }
+
+    func testInstalledHookExecReplacesCodexCommandShellBeforeRecordingOwner() throws {
+        let homeURL = try makeTemporaryHome()
+        let result = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).install()
+        let ownerURL = homeURL.appendingPathComponent("owner-pid-via-hook", isDirectory: false)
+        let stubCLIURL = try writeStubCLI(homeURL: homeURL, body: "cat >/dev/null\nexit 0")
+        let command = "exec /bin/sh '\(result.status.forwarderScriptURL.path)'"
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", command]
+        process.environment = [
+            "PATH": "/usr/bin:/bin",
+            "TOASTTY_SESSION_ID": "11111111-2222-3333-4444-555555555555",
+            "TOASTTY_PANEL_ID": "66666666-7777-8888-9999-000000000000",
+            "TOASTTY_SOCKET_PATH": "/tmp/unused.sock",
+            "TOASTTY_CLI_PATH": stubCLIURL.path,
+            "TOASTTY_MANAGED_ARTIFACT_OWNER_FILE": ownerURL.path,
+        ]
+        let stdinPipe = Pipe()
+        process.standardInput = stdinPipe
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        stdinPipe.fileHandleForWriting.write(Data("{}\n".utf8))
+        stdinPipe.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+
+        XCTAssertEqual(process.terminationStatus, 0)
+        let ownerPID = try XCTUnwrap(Int32(
+            String(contentsOf: ownerURL, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        XCTAssertEqual(ownerPID, getpid())
     }
 
     func testInstallPreservesExistingHooks() throws {
@@ -491,17 +549,25 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         return url
     }
 
-    private func runForwarder(at scriptURL: URL, cliPath: String) throws -> Int32 {
+    private func runForwarder(
+        at scriptURL: URL,
+        cliPath: String,
+        ownerFilePath: String? = nil
+    ) throws -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = [scriptURL.path]
-        process.environment = [
+        var environment = [
             "PATH": "/usr/bin:/bin",
             "TOASTTY_SESSION_ID": "11111111-2222-3333-4444-555555555555",
             "TOASTTY_PANEL_ID": "66666666-7777-8888-9999-000000000000",
             "TOASTTY_SOCKET_PATH": "/tmp/unused.sock",
             "TOASTTY_CLI_PATH": cliPath,
         ]
+        if let ownerFilePath {
+            environment["TOASTTY_MANAGED_ARTIFACT_OWNER_FILE"] = ownerFilePath
+        }
+        process.environment = environment
         let stdinPipe = Pipe()
         process.standardInput = stdinPipe
         process.standardOutput = FileHandle.nullDevice
@@ -604,7 +670,7 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         in object: [String: Any],
         homeURL: URL
     ) throws -> [[String: Any]] {
-        let expectedCommand = "/bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
+        let expectedCommand = "exec /bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
         return try hookEntries(for: eventName, in: object).filter { hook in
             (hook["command"] as? String) == expectedCommand &&
                 (hook["statusMessage"] as? String) == "Toastty Agent Status"

@@ -2119,6 +2119,81 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
+    func testProcessLifetimeLaunchesUseDurableArtifactsAndRecordOwnerPID() throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+            "toastty-durable-launch-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let artifactStore = ManagedAgentLaunchArtifactStore(
+            rootDirectoryURL: rootURL,
+            cleanupGraceInterval: 0
+        )
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let claudeLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude"],
+            cliExecutablePath: "/usr/bin/true",
+            sessionID: UUID().uuidString,
+            workingDirectory: nil,
+            fileManager: fileManager,
+            artifactStore: artifactStore
+        )
+        let codexLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: ["codex"],
+            cliExecutablePath: "/usr/bin/true",
+            sessionID: UUID().uuidString,
+            workingDirectory: nil,
+            fileManager: fileManager,
+            artifactStore: artifactStore
+        )
+
+        XCTAssertEqual(claudeLaunch.artifacts?.directory.storage, .durable)
+        XCTAssertEqual(codexLaunch.artifacts?.directory.storage, .durable)
+        XCTAssertTrue(try XCTUnwrap(claudeLaunch.artifacts?.directoryURL.path).hasPrefix(rootURL.path + "/"))
+        XCTAssertTrue(try XCTUnwrap(codexLaunch.artifacts?.directoryURL.path).hasPrefix(rootURL.path + "/"))
+        XCTAssertEqual(
+            claudeLaunch.environment[ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey],
+            claudeLaunch.artifacts?.directory.ownerRecordURL?.path
+        )
+        XCTAssertEqual(
+            codexLaunch.environment[ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey],
+            codexLaunch.artifacts?.directory.ownerRecordURL?.path
+        )
+
+        let claudeScriptURL = try XCTUnwrap(
+            claudeLaunch.artifacts?.directoryURL.appendingPathComponent("claude-hook.sh")
+        )
+        let result = try runScript(
+            at: claudeScriptURL,
+            environment: ["CLAUDE_PID": "45678"],
+            standardInput: Data(#"{"hook_event_name":"SessionStart"}"#.utf8)
+        )
+        XCTAssertEqual(result.exitCode, 0)
+        let ownerRecordURL = try XCTUnwrap(claudeLaunch.artifacts?.directory.ownerRecordURL)
+        XCTAssertEqual(
+            try String(contentsOf: ownerRecordURL, encoding: .utf8),
+            "45678\n"
+        )
+
+        let codexScriptURL = try XCTUnwrap(
+            codexLaunch.artifacts?.directoryURL.appendingPathComponent("codex-notify.sh")
+        )
+        let codexResult = try runScript(
+            at: codexScriptURL,
+            environment: ["CLAUDE_PID": "45678"],
+            arguments: [#"{"kind":"task_complete"}"#]
+        )
+        XCTAssertEqual(codexResult.exitCode, 0)
+        let codexOwnerRecordURL = try XCTUnwrap(codexLaunch.artifacts?.directory.ownerRecordURL)
+        let codexOwnerPID = try String(contentsOf: codexOwnerRecordURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertNotEqual(codexOwnerPID, "45678")
+        XCTAssertGreaterThan(Int(codexOwnerPID) ?? 0, 1)
+    }
+
     func testPreparedCodexNotifyScriptLogsTelemetryFailuresWithoutWritingToStdout() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"

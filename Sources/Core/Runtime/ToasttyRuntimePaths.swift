@@ -19,6 +19,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let paneJournalDirectoryName = "pane-journals"
     private static let scratchpadDocumentsDirectoryName = "scratchpad-documents"
     private static let managedAgentResumeDirectoryName = "managed-agent-resume"
+    private static let managedAgentLaunchArtifactsDirectoryName = "managed-agent-launches"
     private static let userSkillsDirectoryName = "skills"
     private static let agentPluginsDirectoryName = "agent-plugins"
     private static let artifactsDirectoryName = "artifacts"
@@ -156,6 +157,15 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
             path: Self.managedAgentResumeDirectoryName,
             directoryHint: .isDirectory
         )
+    }
+
+    /// Toastty-owned launch files that must remain available for the lifetime
+    /// of a managed agent process. Unlike `temporaryDirectory`, this location
+    /// is not eligible for macOS temporary-file purging.
+    public var managedAgentLaunchArtifactsDirectoryURL: URL {
+        configDirectoryURL
+            .appending(path: Self.runDirectoryName, directoryHint: .isDirectory)
+            .appending(path: Self.managedAgentLaunchArtifactsDirectoryName, directoryHint: .isDirectory)
     }
 
     /// The user's skill-package source directory. User skills are USER state,

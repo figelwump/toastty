@@ -65,6 +65,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
     private let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
     private let userSkillSnapshotProvider: any ToasttyUserSkillSnapshotProviding
+    private let managedAgentLaunchArtifactStore: ManagedAgentLaunchArtifactStore?
     /// App-process environment source for launch-scoped runtime-path
     /// resolution (the `TOASTTY_USER_SKILLS_ROOT` harness override lives
     /// here). Injectable for tests.
@@ -73,6 +74,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     /// the Codex skills operation budget. Settable for tests.
     var userSkillSnapshotPreparationTimeout: TimeInterval = CodexSkillsManager.operationTimeout
     private var sessionRegistryObservation: AnyCancellable?
+    private var lastSweptActiveSessionIDs: Set<String>?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
     private var codexRolloutWatchersBySessionID: [String: CodexRolloutSessionLogWatcherRegistration] = [:]
     private var desiredCodexRolloutLogURLsBySessionID: [String: URL] = [:]
@@ -102,7 +104,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
         claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
         userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil,
-        processEnvironmentProvider: (@Sendable () -> [String: String])? = nil
+        processEnvironmentProvider: (@Sendable () -> [String: String])? = nil,
+        managedAgentLaunchArtifactStore: ManagedAgentLaunchArtifactStore? = nil
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -130,6 +133,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             ?? ClaudeSkillsBundleManager(fileManager: fileManager)
         self.userSkillSnapshotProvider = userSkillSnapshotProvider
             ?? ToasttyUserSkillCatalog(fileManager: fileManager)
+        self.managedAgentLaunchArtifactStore = managedAgentLaunchArtifactStore
         self.processEnvironmentProvider = processEnvironmentProvider
             ?? { ProcessInfo.processInfo.environment }
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
@@ -624,10 +628,13 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         guard let sessionRuntimeStore else {
             return
         }
+        let abandonedArtifacts = managedArtifactsBySessionID.removeValue(forKey: sessionID)
         nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
         sessionRuntimeStore.stopSession(sessionID: sessionID, at: nowProvider())
         Task { @MainActor in
-            await cleanupManagedArtifacts(for: sessionID)
+            if let abandonedArtifacts {
+                await cleanup(abandonedArtifacts, abandoned: true)
+            }
             await cleanupCodexRolloutWatcher(for: sessionID)
             removeCodexSessionLogCursorStates(for: sessionID)
         }
@@ -690,6 +697,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 sessionID: sessionID,
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
+                artifactStore: managedAgentLaunchArtifactStore,
                 launchEnvironment: launchEnvironment,
                 codexStatusTrackingSource: codexStatusTrackingSource,
                 codexSkillsIntegration: codexSkillsIntegration,
@@ -891,7 +899,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         }
 
         let managedArtifacts = ManagedLaunchArtifacts(
-            directoryURL: preparedArtifacts.directoryURL,
+            directory: preparedArtifacts.directory,
             codexSessionLogWatcher: watcher,
             cleanupPolicy: preparedArtifacts.cleanupPolicy
         )
@@ -1657,13 +1665,18 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             await cleanupCodexRolloutWatcher(for: sessionID)
             removeCodexSessionLogCursorStates(for: sessionID)
         }
+        let activeSessionIDs = Set(registry.sessionsByID.values.filter(\.isActive).map(\.sessionID))
+        if activeSessionIDs != lastSweptActiveSessionIDs {
+            lastSweptActiveSessionIDs = activeSessionIDs
+            managedAgentLaunchArtifactStore?.sweep(activeSessionIDs: activeSessionIDs)
+        }
     }
 
-    private func cleanupManagedArtifacts(for sessionID: String) async {
+    private func cleanupManagedArtifacts(for sessionID: String, abandoned: Bool = false) async {
         guard let managedArtifacts = managedArtifactsBySessionID.removeValue(forKey: sessionID) else {
             return
         }
-        await cleanup(managedArtifacts)
+        await cleanup(managedArtifacts, abandoned: abandoned)
     }
 
     private func cleanupCodexRolloutWatcher(for sessionID: String) async {
@@ -1694,15 +1707,22 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         codexRolloutWatcherTransitionsBySessionID.removeValue(forKey: sessionID)
     }
 
-    private func cleanup(_ managedArtifacts: ManagedLaunchArtifacts) async {
+    private func cleanup(_ managedArtifacts: ManagedLaunchArtifacts, abandoned: Bool) async {
         await managedArtifacts.codexSessionLogWatcher?.stop()
-        // Claude hook files need to outlive session bookkeeping so late stop
-        // hooks turn into no-op telemetry delivery instead of missing-file
-        // shell errors.
+        if abandoned {
+            if let managedAgentLaunchArtifactStore {
+                managedAgentLaunchArtifactStore.removeAbandoned(managedArtifacts.directory)
+            } else {
+                try? fileManager.removeItem(at: managedArtifacts.directory.directoryURL)
+            }
+            return
+        }
+        // Process-lifetime helpers can outlive Toastty's session bookkeeping.
+        // Their store removes them only after owner liveness is proven false.
         guard managedArtifacts.cleanupPolicy == .deleteImmediately else {
             return
         }
-        try? fileManager.removeItem(at: managedArtifacts.directoryURL)
+        try? fileManager.removeItem(at: managedArtifacts.directory.directoryURL)
     }
 
     private func codexSessionLogCursorState(
@@ -1794,7 +1814,7 @@ private struct ManagedLaunchTarget {
 }
 
 private struct ManagedLaunchArtifacts {
-    let directoryURL: URL
+    let directory: ManagedAgentLaunchArtifactDirectory
     let codexSessionLogWatcher: CodexSessionLogWatcher?
     let cleanupPolicy: LaunchArtifactsCleanupPolicy
 }
