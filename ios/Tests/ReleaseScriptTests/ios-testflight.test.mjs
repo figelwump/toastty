@@ -385,6 +385,7 @@ test("workflow and names-only manifest expose all release inputs without enablin
   for (const configuredWorkflow of [workflow, mobileWorkflow]) {
     assert.match(configuredWorkflow, /node-version-file: \.node-version/);
     assert.match(configuredWorkflow, /mise install "tuist@\$TUIST_VERSION" --quiet/);
+    assert.ok(configuredWorkflow.includes('TUIST_BIN_DIR="$(dirname "$(mise exec "tuist@$TUIST_VERSION" -- which tuist)")"'));
     assert.match(configuredWorkflow, /echo "\$TUIST_BIN_DIR" >> "\$GITHUB_PATH"/);
     assert.match(configuredWorkflow, /test "\$\("\$TUIST_BIN_DIR\/tuist" version\)" = "\$TUIST_VERSION"/);
   }
