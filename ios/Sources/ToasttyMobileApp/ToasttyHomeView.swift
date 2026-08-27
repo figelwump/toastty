@@ -401,7 +401,8 @@ struct ToasttySessionCard: View {
         Text(conversation.lastActivity)
             .font(.subheadline)
             .foregroundStyle(ToasttyDesignTokens.secondaryText)
-            .lineLimit(2)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     private var statusHeader: some View {
@@ -467,7 +468,8 @@ struct ToasttySessionCard: View {
         Text(conversation.lastActivity)
             .font(bodyFont)
             .foregroundStyle(bodyForegroundStyle)
-            .lineLimit(2)
+            .lineLimit(1)
+            .truncationMode(.tail)
             .fixedSize(horizontal: false, vertical: true)
     }
 
