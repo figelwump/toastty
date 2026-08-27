@@ -697,7 +697,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         ]
         XCTAssertTrue(receipt.waitForExistence(timeout: 5))
         XCTAssertTrue(
-            app.staticTexts["Toastty could not correlate this send after reconnecting"]
+            app.staticTexts[
+                "The Mac accepted this send, but it did not appear in the session transcript"
+            ]
                 .waitForExistence(timeout: 5)
         )
         XCTAssertTrue(
