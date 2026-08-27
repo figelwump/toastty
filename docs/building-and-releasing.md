@@ -5,7 +5,7 @@ This guide covers building Toastty from source, running validation, and producin
 ## Requirements
 
 - macOS 14.0+
-- [Tuist](https://tuist.io) (build system)
+- [Mise](https://mise.jdx.dev/) (installs the Tuist version pinned in `.tool-versions`)
 - Xcode 16+ with Swift 6.0
 - An iOS 18+ Simulator runtime (for the native iOS client)
 - [sv](https://github.com/figelwump/sv) (secret vault for development credentials)
@@ -116,6 +116,9 @@ node ios/scripts/toastty-ios.mjs test
 Both commands select a compatible iPhone Simulator automatically. Pass
 `--dry-run` to any dispatcher command to inspect its plan without invoking
 Tuist or Xcode.
+
+For App Store Connect signing, validation, upload, and internal TestFlight
+distribution, see [iOS Release CI](ios-release-ci.md).
 
 ## Validate
 

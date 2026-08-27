@@ -11,6 +11,7 @@ const repositoryRoot = path.resolve(testDirectory, "../../..");
 const releaseScript = path.join(repositoryRoot, "scripts/ci/ios-testflight.sh");
 const projectManifest = path.join(repositoryRoot, "ios/Project.swift");
 const workflowPath = path.join(repositoryRoot, ".github/workflows/ios-testflight.yml");
+const mobileWorkflowPath = path.join(repositoryRoot, ".github/workflows/mobile-ios.yml");
 const secretsManifest = path.join(repositoryRoot, ".secrets");
 const iconSetDirectory = path.join(
   repositoryRoot,
@@ -356,6 +357,7 @@ test("asset catalog supplies the Toastty amber AccentColor expected by actool", 
 
 test("workflow and names-only manifest expose all release inputs without enabling push upload", () => {
   const workflow = fs.readFileSync(workflowPath, "utf8");
+  const mobileWorkflow = fs.readFileSync(mobileWorkflowPath, "utf8");
   const secrets = fs.readFileSync(secretsManifest, "utf8");
   const requiredSecrets = [
     "APP_STORE_CONNECT_API_KEY_ID",
@@ -367,6 +369,7 @@ test("workflow and names-only manifest expose all release inputs without enablin
   ];
 
   assert.match(workflow, /default: false/);
+  assert.match(workflow, /environment: testflight/);
   assert.match(workflow, /vars\.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true'/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main' && github\.event_name == 'workflow_dispatch' && inputs\.upload == true/);
   assert.match(workflow, /inputs\.upload && github\.ref != 'refs\/heads\/main'/);
@@ -377,6 +380,19 @@ test("workflow and names-only manifest expose all release inputs without enablin
   }
   assert.match(secrets, /^APP_STORE_CONNECT_API_PRIVATE_KEY\?$/m);
   assert.match(secrets, /^APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64\?$/m);
+  assert.equal(read(".node-version").trim(), "22.23.2");
+  assert.equal(read(".tool-versions").trim(), "tuist 4.202.6");
+  for (const configuredWorkflow of [workflow, mobileWorkflow]) {
+    assert.match(configuredWorkflow, /node-version-file: \.node-version/);
+    assert.match(configuredWorkflow, /mise install "tuist@\$TUIST_VERSION" --quiet/);
+    assert.match(configuredWorkflow, /echo "\$TUIST_BIN_DIR" >> "\$GITHUB_PATH"/);
+    assert.match(configuredWorkflow, /test "\$\("\$TUIST_BIN_DIR\/tuist" version\)" = "\$TUIST_VERSION"/);
+  }
+  assert.match(workflow, /Tests\/RemoteProtocol\/\*\*/);
+  assert.match(workflow, /\.node-version/);
+  assert.match(workflow, /\.tool-versions/);
+  assert.match(mobileWorkflow, /'\.node-version'/);
+  assert.match(mobileWorkflow, /'\.tool-versions'/);
 });
 
 test("privacy manifest declares required-reason APIs without tracking or collected data", () => {

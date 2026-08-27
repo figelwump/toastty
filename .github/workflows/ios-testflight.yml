@@ -20,8 +20,11 @@ on:
       - ".github/workflows/ios-testflight.yml"
       - "ios/**"
       - "Sources/RemoteProtocol/**"
+      - "Tests/RemoteProtocol/**"
       - "scripts/ci/ios-testflight.sh"
       - ".secrets"
+      - ".node-version"
+      - ".tool-versions"
 
 concurrency:
   group: ios-testflight-${{ github.ref }}
@@ -31,6 +34,7 @@ jobs:
   testflight:
     name: Validate or Upload
     if: ${{ github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true' }}
+    environment: testflight
     runs-on: macos-26
     timeout-minutes: 90
     permissions:
@@ -43,10 +47,16 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
 
-      - name: Install Tuist
-        run: brew install tuist
+      - name: Install pinned Tuist
+        run: |
+          brew install mise
+          TUIST_VERSION="$(awk '$1 == "tuist" { print $2 }' .tool-versions)"
+          mise install "tuist@$TUIST_VERSION" --quiet
+          TUIST_BIN_DIR="$(mise where "tuist@$TUIST_VERSION")/bin"
+          echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
+          test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
 
       - name: Test release script
         run: node --test ios/Tests/ReleaseScriptTests/*.test.mjs

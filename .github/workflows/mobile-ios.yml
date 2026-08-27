@@ -34,6 +34,8 @@ jobs:
               - 'Sources/RemoteProtocol/**'
               - 'Tests/RemoteProtocol/**'
               - 'scripts/remote/test.sh'
+              - '.node-version'
+              - '.tool-versions'
             macos:
               - '.github/workflows/mobile-ios.yml'
               - 'Project.swift'
@@ -46,6 +48,7 @@ jobs:
               - 'Tests/App/RemoteAccess*'
               - 'scripts/dev/**'
               - 'scripts/remote/test.sh'
+              - '.tool-versions'
 
   ios:
     name: iOS tests
@@ -64,10 +67,16 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
 
-      - name: Install Tuist
-        run: brew install tuist
+      - name: Install pinned Tuist
+        run: |
+          brew install mise
+          TUIST_VERSION="$(awk '$1 == "tuist" { print $2 }' .tool-versions)"
+          mise install "tuist@$TUIST_VERSION" --quiet
+          TUIST_BIN_DIR="$(mise where "tuist@$TUIST_VERSION")/bin"
+          echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
+          test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
 
       - name: Test dispatcher
         run: node --test ios/Tests/ScriptTests/*.test.mjs
@@ -97,8 +106,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install Tuist
-        run: brew install tuist
+      - name: Install pinned Tuist
+        run: |
+          brew install mise
+          TUIST_VERSION="$(awk '$1 == "tuist" { print $2 }' .tool-versions)"
+          mise install "tuist@$TUIST_VERSION" --quiet
+          TUIST_BIN_DIR="$(mise where "tuist@$TUIST_VERSION")/bin"
+          echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
+          test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
 
       - name: Generate macOS project
         run: ./scripts/dev/bootstrap-worktree.sh
