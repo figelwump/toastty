@@ -23,6 +23,8 @@ enum ToasttyDesignTokens {
     static let codeHeaderSurface = Color.white.opacity(0.025)
     static let amber = Color(red: 232 / 255, green: 147 / 255, blue: 12 / 255)
     static let amberText = Color(red: 232 / 255, green: 180 / 255, blue: 106 / 255)
+    /// Dark-mode system blue for external web links in assistant Markdown.
+    static let externalLink = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255)
     /// Foreground for text and glyphs placed on the amber accent.
     static let inkOnAmber = Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255)
     static let green = Color(red: 70 / 255, green: 165 / 255, blue: 126 / 255)

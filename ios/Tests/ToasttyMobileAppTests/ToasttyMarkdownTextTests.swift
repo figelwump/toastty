@@ -99,6 +99,50 @@ final class ToasttyMarkdownTextTests: XCTestCase {
         }, "Fenced code keeps the block-level styling only")
     }
 
+    func testOnlySemanticExternalWebLinksReceiveBlueTint() {
+        let source = """
+        [explicit](https://example.com/path) <HTTP://EXAMPLE.com/angle> \
+        https://foundation.example/bare [relative](docs/file.md) \
+        [file](file:///tmp/report.txt) [custom](toastty://conversation/1) \
+        [email](mailto:test@example.com) [phone](tel:+15555550123) \
+        [hostless](https:path) `https://inline-code.example`
+        """
+
+        let blocks = ToasttyMarkdownText.blocks(source)
+        XCTAssertEqual(blocks.count, 1)
+        let content = blocks[0].content
+
+        for link in [
+            "https://example.com/path",
+            "HTTP://EXAMPLE.com/angle",
+            "https://foundation.example/bare",
+        ] {
+            let run = content.runs.first { $0.link?.absoluteString == link }
+            XCTAssertEqual(run?.foregroundColor, ToasttyDesignTokens.externalLink, link)
+            XCTAssertEqual(run?.link?.absoluteString, link, "Semantic link metadata must remain")
+        }
+
+        for link in [
+            "docs/file.md",
+            "file:///tmp/report.txt",
+            "toastty://conversation/1",
+            "mailto:test@example.com",
+            "tel:+15555550123",
+            "https:path",
+        ] {
+            let run = content.runs.first { $0.link?.absoluteString == link }
+            XCTAssertNotNil(run, "Expected Foundation to preserve the semantic link: \(link)")
+            XCTAssertNil(run?.foregroundColor, link)
+        }
+
+        let inlineCode = content.runs.first {
+            $0.inlinePresentationIntent?.contains(.code) == true
+        }
+        XCTAssertEqual(inlineCode?.foregroundColor, ToasttyDesignTokens.amberText)
+        XCTAssertEqual(inlineCode?.backgroundColor, ToasttyDesignTokens.chipSurface)
+        XCTAssertNil(inlineCode?.link, "Inline code must not be promoted to an external link")
+    }
+
     private func inlineCodeRuns(in attributed: AttributedString) -> [String] {
         attributed.runs.compactMap { run in
             guard run.inlinePresentationIntent?.contains(.code) == true else { return nil }

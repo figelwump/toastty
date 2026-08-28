@@ -648,7 +648,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-gated-send-optimistic", of: app)
     }
 
-    func testGatedSendWhileScrolledUpJumpsToLiveEdgeAndFollowsAppendedTail() {
+    func testGatedSendWithChangingComposerHeightJumpsToLiveEdgeAndFollowsAppendedTail() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
         )
@@ -664,7 +664,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let send = app.buttons["toastty-mobile-composer-send"]
         XCTAssertTrue(input.isHittable)
         input.tap()
-        input.typeText("Send from the older transcript position")
+        input.typeText("Send from the older transcript position\nwith a changing composer height")
         XCTAssertTrue(send.isEnabled)
         send.tap()
 
@@ -672,6 +672,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "toastty-mobile-send-optimistic-fixture-enqueued-1"
         ]
         XCTAssertTrue(optimistic.waitForExistence(timeout: 5))
+        XCTAssertTrue(optimistic.label.contains("with a changing composer height"))
         XCTAssertTrue(
             jumpToLatest.waitForNonExistence(timeout: 5),
             "Sending must jump from a slow-reader position to the live edge"
@@ -681,6 +682,46 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "The newly appended optimistic message should remain visible at the live edge"
         )
         attachScreenshot(named: "fixture-gated-send-from-slow-reader", of: app)
+    }
+
+    func testGatedSendBackgroundResumeDoesNotRestoreKeyboard() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+
+        let input = composerInput(in: app)
+        let keyboard = app.keyboards.firstMatch
+        let draft = "Keep this unsent draft"
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        input.typeText(draft)
+
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(
+            app.wait(for: .runningBackground, timeout: 5)
+                || app.wait(for: .runningBackgroundSuspended, timeout: 5),
+            "The fixture app should leave the foreground"
+        )
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertFalse(
+            keyboard.waitForExistence(timeout: 2),
+            "Returning from the background must not restore composer focus"
+        )
+        XCTAssertEqual(
+            input.value as? String,
+            draft,
+            "Background focus suppression must preserve the draft"
+        )
+
+        input.tap()
+        XCTAssertTrue(
+            keyboard.waitForExistence(timeout: 5),
+            "The composer should focus normally after an explicit tap"
+        )
     }
 
     func testGatedSendUnconfirmedReceiptShowsAttemptedTextAndDismisses() {

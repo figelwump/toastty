@@ -54,6 +54,143 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         )
     }
 
+    func testScrollMetricsTreatContentAndViewportChangesAsLiveEdgeLayoutChanges() {
+        let baseline = TranscriptScrollMetrics(
+            contentHeight: 2_160,
+            visibleMaxY: 2_160,
+            visibleHeight: 800
+        )
+
+        XCTAssertFalse(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160.49,
+                visibleMaxY: 2_160,
+                visibleHeight: 799.51
+            ).hasLiveEdgeLayoutChange(comparedTo: baseline)
+        )
+        XCTAssertTrue(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160.5,
+                visibleMaxY: 2_160,
+                visibleHeight: 800
+            ).hasLiveEdgeLayoutChange(comparedTo: baseline)
+        )
+        XCTAssertTrue(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_160,
+                visibleHeight: 799.5
+            ).hasLiveEdgeLayoutChange(comparedTo: baseline)
+        )
+    }
+
+    func testSendOwnsStableLiveEdgeAndLayoutReinforcementKeepsThatOwner() {
+        var coordinator = TranscriptScrollCoordinator()
+
+        coordinator.requestSend(41)
+        let send = coordinator.command
+        XCTAssertEqual(send?.target, .liveEdge)
+        XCTAssertEqual(send?.motion, .stable)
+        XCTAssertEqual(send?.liveEdgeOwner, .send(41))
+        XCTAssertTrue(coordinator.ownsLiveEdge)
+
+        coordinator.reinforceLiveEdge()
+        XCTAssertEqual(coordinator.command?.target, .liveEdge)
+        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.liveEdgeOwner, .send(41))
+        XCTAssertGreaterThan(coordinator.command?.sequence ?? 0, send?.sequence ?? 0)
+    }
+
+    func testLatestExplicitLiveEdgeRequestWins() {
+        var coordinator = TranscriptScrollCoordinator()
+
+        coordinator.requestJump()
+        let jump = coordinator.command
+        XCTAssertEqual(jump?.motion, .animated)
+        XCTAssertEqual(jump?.liveEdgeOwner, .jump(1))
+
+        coordinator.reinforceLiveEdge()
+        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.liveEdgeOwner, .jump(1))
+
+        coordinator.requestSend(73)
+        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.liveEdgeOwner, .send(73))
+        XCTAssertGreaterThan(coordinator.command?.sequence ?? 0, jump?.sequence ?? 0)
+    }
+
+    func testDirectInteractionCancelsAutomaticScrollOwnership() {
+        var coordinator = TranscriptScrollCoordinator()
+        coordinator.requestSend(9)
+
+        coordinator.cancelForInteraction()
+
+        XCTAssertNil(coordinator.command)
+        XCTAssertFalse(coordinator.ownsLiveEdge)
+    }
+
+    func testTrackingWithoutDragStillResolvesFollowingAtIdle() {
+        XCTAssertTrue(TranscriptScrollCoordinator.shouldResolveFollowing(
+            oldPhase: .tracking,
+            newPhase: .idle
+        ))
+        XCTAssertFalse(TranscriptScrollCoordinator.shouldResolveFollowing(
+            oldPhase: .animating,
+            newPhase: .idle
+        ))
+        XCTAssertFalse(TranscriptScrollCoordinator.shouldResolveFollowing(
+            oldPhase: .tracking,
+            newPhase: .interacting
+        ))
+    }
+
+    func testFailedSendTailAcquisitionReleasesOwnershipForRecovery() {
+        var coordinator = TranscriptScrollCoordinator()
+        coordinator.requestSend(9)
+
+        XCTAssertFalse(coordinator.finishSend(atLiveEdge: false))
+
+        XCTAssertNil(coordinator.command)
+        XCTAssertFalse(coordinator.ownsLiveEdge)
+    }
+
+    func testSuccessfulSendTailAcquisitionReturnsToAutomaticFollowing() {
+        var coordinator = TranscriptScrollCoordinator()
+        coordinator.requestSend(9)
+
+        XCTAssertTrue(coordinator.finishSend(atLiveEdge: true))
+
+        XCTAssertNil(coordinator.command)
+        XCTAssertEqual(coordinator.liveEdgeOwner, .automatic)
+        XCTAssertTrue(coordinator.ownsLiveEdge)
+    }
+
+    func testHistoryAnchorDoesNotSupersedeExplicitLiveEdgeOwnership() {
+        var coordinator = TranscriptScrollCoordinator()
+        coordinator.requestSend(9)
+        let anchor = ToasttyTranscriptBlockID(rowID: rowID(sequence: 4))
+
+        XCTAssertFalse(coordinator.requestHistoryAnchor(anchor))
+
+        XCTAssertEqual(coordinator.command?.target, .liveEdge)
+        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.liveEdgeOwner, .send(9))
+        XCTAssertTrue(coordinator.ownsLiveEdge)
+    }
+
+    func testHistoryAnchorSupersedesAutomaticLiveEdgeFollowing() {
+        var coordinator = TranscriptScrollCoordinator()
+        coordinator.requestInitialLiveEdge()
+        let anchor = ToasttyTranscriptBlockID(rowID: rowID(sequence: 4))
+
+        XCTAssertTrue(coordinator.requestHistoryAnchor(anchor))
+
+        XCTAssertEqual(coordinator.command?.target, .transcript(anchor))
+        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertNil(coordinator.command?.liveEdgeOwner)
+        XCTAssertFalse(coordinator.ownsLiveEdge)
+    }
+
     func testVisibleLiveEdgeRequiresActiveLiveMeasuredNonemptyBoundary() {
         let boundary = rowID(sequence: 7)
 

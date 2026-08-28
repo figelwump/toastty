@@ -21,6 +21,7 @@ struct ToasttyTranscriptView: View {
     @State private var isVisible = false
     @State private var followsLiveEdge = true
     @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
+    @State private var scrollCoordinator = TranscriptScrollCoordinator()
 
     init(
         state: ToasttyConversationPresentationState,
@@ -94,34 +95,41 @@ struct ToasttyTranscriptView: View {
                     measuredBoundaryID = state.rows.last?.id
                     isAtLiveEdge = atLiveEdge
                     if hadMeasuredScrollGeometry,
-                       new.hasViewportHeightChange(comparedTo: old),
-                       followsLiveEdge,
-                       let target = lastScrollTarget {
-                        // Keep the live tail pinned while the keyboard, composer,
-                        // or another safe-area change resizes the viewport.
-                        var transaction = Transaction(animation: nil)
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            proxy.scrollTo(target, anchor: .bottom)
-                        }
+                       new.hasLiveEdgeLayoutChange(comparedTo: old),
+                       lastScrollTarget != nil,
+                       followsLiveEdge || scrollCoordinator.ownsLiveEdge {
+                        // Layout changes reinforce the current owner through
+                        // the same serialized command path as transcript
+                        // changes; they never race a separate scroll writer.
+                        scrollCoordinator.reinforceLiveEdge()
                     }
-                    if atLiveEdge, jumpToLiveEdgeRequest > 0 {
-                        jumpToLiveEdgeRequest = 0
-                        followsLiveEdge = true
+                    if atLiveEdge {
+                        if case .send(let request)? = scrollCoordinator.liveEdgeOwner,
+                           jumpToLiveEdgeRequest == request {
+                            jumpToLiveEdgeRequest = 0
+                            followsLiveEdge = true
+                            _ = scrollCoordinator.finishSend(atLiveEdge: true)
+                        }
+                        if scrollCoordinator.finishJump(atLiveEdge: true) {
+                            followsLiveEdge = true
+                        }
                     }
                 }
                 .onScrollPhaseChange { oldPhase, newPhase, context in
-                    if newPhase == .interacting {
-                        // A direct gesture owns the reader's position until it
-                        // settles, including any momentum after finger lift.
+                    if newPhase == .tracking || newPhase == .interacting {
+                        // Finger-down or a direct drag owns the reader's
+                        // position until it settles, including any momentum
+                        // after finger lift.
                         jumpToLiveEdgeRequest = 0
                         followsLiveEdge = false
+                        scrollCoordinator.cancelForInteraction()
                         return
                     }
 
-                    guard newPhase == .idle,
-                          oldPhase == .interacting
-                            || oldPhase == .decelerating
+                    guard TranscriptScrollCoordinator.shouldResolveFollowing(
+                        oldPhase: oldPhase,
+                        newPhase: newPhase
+                    )
                     else { return }
                     // Resolve only at rest so a short flick is classified after
                     // its momentum ends.
@@ -145,7 +153,7 @@ struct ToasttyTranscriptView: View {
                         Button {
                             // The affordance stays visible until the live edge
                             // is actually reached; each tap (re)starts a jump.
-                            jumpToLiveEdgeRequest &+= 1
+                            scrollCoordinator.requestJump()
                         } label: {
                             Label("Jump to latest", systemImage: "arrow.down")
                                 .font(.caption.weight(.semibold))
@@ -159,67 +167,58 @@ struct ToasttyTranscriptView: View {
                         .padding(14)
                     }
                 }
-                .task(id: jumpToLiveEdgeRequest) {
-                    guard jumpToLiveEdgeRequest > 0, let target = lastScrollTarget else { return }
-                    // Let the tap's state update settle before calculating the
-                    // live-edge scroll, without waiting on any layout change.
+                .onChange(of: jumpToLiveEdgeRequest) { _, request in
+                    guard request > 0, lastScrollTarget != nil else { return }
+                    scrollCoordinator.requestSend(request)
+                }
+                .onChange(of: scrollChangeKey, initial: true) { _, _ in
+                    reconcileScrollChange()
+                }
+                .task(id: scrollCoordinator.command) {
+                    guard let command = scrollCoordinator.command else { return }
+                    // Let the state update and text layout settle before
+                    // executing the latest command. A superseding command or
+                    // direct gesture cancels this task.
+                    await Task.yield()
                     await Task.yield()
                     guard Task.isCancelled == false else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(target, anchor: .bottom)
-                    }
+                    guard scrollCoordinator.command == command else { return }
+                    execute(command, using: proxy)
 
-                    // A single scroll can land short of the tail while lazily
-                    // measured cell heights are still being corrected; keep
-                    // re-targeting until the live edge is actually reached.
-                    // Success is observed by the scroll-geometry handler, which
-                    // clears the request and restores live-edge following.
-                    try? await Task.sleep(for: .milliseconds(250))
-                    for _ in 0 ..< 8 {
-                        guard Task.isCancelled == false, jumpToLiveEdgeRequest > 0 else { return }
+                    guard command.target == .liveEdge else { return }
+                    let initialDelay: Duration = command.motion == .animated
+                        ? .milliseconds(250)
+                        : .milliseconds(100)
+                    try? await Task.sleep(for: initialDelay)
+                    let retryCount = switch command.liveEdgeOwner {
+                    case .send?, .jump?: 8
+                    case .automatic?, nil: 2
+                    }
+                    for _ in 0 ..< retryCount {
+                        guard Task.isCancelled == false,
+                              scrollCoordinator.command == command
+                        else { return }
                         if isAtLiveEdge == false {
-                            var transaction = Transaction(animation: nil)
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) {
-                                proxy.scrollTo(target, anchor: .bottom)
-                            }
+                            scrollWithoutAnimation(
+                                to: ToasttyConversationScrollTarget.liveEdge,
+                                anchor: .bottom,
+                                using: proxy
+                            )
                         }
                         try? await Task.sleep(for: .milliseconds(150))
                     }
 
-                    guard Task.isCancelled == false, jumpToLiveEdgeRequest > 0 else { return }
-                    jumpToLiveEdgeRequest = 0
-                    followsLiveEdge = isAtLiveEdge
-                }
-                .task(id: scrollChangeKey) {
-                    await Task.yield()
-                    // A second turn lets text layout settle before choosing the
-                    // live-edge or preserved prepend anchor.
-                    await Task.yield()
-                    guard Task.isCancelled == false else { return }
-                    switch state.revision {
-                    case .initial, .rebuilt:
-                        if let target = lastScrollTarget {
-                            proxy.scrollTo(target, anchor: .bottom)
-                        }
-                    case .appended:
-                        if followsLiveEdge, let target = lastScrollTarget {
-                            proxy.scrollTo(target, anchor: .bottom)
-                        }
-                    case .prepended:
-                        let anchor = state.prependAnchorID
-                            .map { ToasttyTranscriptBlockID(rowID: $0) }
-                            ?? visibleBlockIDs.first
-                        if let anchor {
-                            proxy.scrollTo(
-                                ToasttyConversationScrollTarget.transcript(anchor),
-                                anchor: .top
-                            )
-                        }
-                    case .metadataOnly:
-                        if followsLiveEdge, let target = lastScrollTarget {
-                            proxy.scrollTo(target, anchor: .bottom)
-                        }
+                    guard Task.isCancelled == false,
+                          scrollCoordinator.command == command
+                    else { return }
+                    if case .send(let request)? = command.liveEdgeOwner,
+                       jumpToLiveEdgeRequest == request {
+                        jumpToLiveEdgeRequest = 0
+                        followsLiveEdge = isAtLiveEdge
+                        _ = scrollCoordinator.finishSend(atLiveEdge: isAtLiveEdge)
+                    } else if case .jump? = command.liveEdgeOwner {
+                        followsLiveEdge = isAtLiveEdge
+                        _ = scrollCoordinator.finishJump(atLiveEdge: isAtLiveEdge)
                     }
                 }
                 .onChange(of: liveEdgeVisibilityKey, initial: true) { _, key in
@@ -495,6 +494,65 @@ struct ToasttyTranscriptView: View {
         )
     }
 
+    private func reconcileScrollChange() {
+        switch state.revision {
+        case .initial, .rebuilt:
+            guard lastScrollTarget != nil else { return }
+            followsLiveEdge = true
+            scrollCoordinator.requestInitialLiveEdge()
+        case .appended, .metadataOnly:
+            guard lastScrollTarget != nil,
+                  followsLiveEdge || scrollCoordinator.ownsLiveEdge
+            else { return }
+            scrollCoordinator.reinforceLiveEdge()
+        case .prepended:
+            let anchor = state.prependAnchorID
+                .map { ToasttyTranscriptBlockID(rowID: $0) }
+                ?? visibleBlockIDs.first
+            if let anchor {
+                if scrollCoordinator.requestHistoryAnchor(anchor) {
+                    followsLiveEdge = false
+                }
+            }
+        }
+    }
+
+    private func execute(
+        _ command: TranscriptScrollCoordinator.Command,
+        using proxy: ScrollViewProxy
+    ) {
+        let target: ToasttyConversationScrollTarget
+        let anchor: UnitPoint
+        switch command.target {
+        case .liveEdge:
+            target = .liveEdge
+            anchor = .bottom
+        case .transcript(let blockID):
+            target = .transcript(blockID)
+            anchor = .top
+        }
+
+        if command.motion == .animated {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(target, anchor: anchor)
+            }
+        } else {
+            scrollWithoutAnimation(to: target, anchor: anchor, using: proxy)
+        }
+    }
+
+    private func scrollWithoutAnimation(
+        to target: ToasttyConversationScrollTarget,
+        anchor: UnitPoint,
+        using proxy: ScrollViewProxy
+    ) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(target, anchor: anchor)
+        }
+    }
+
     private var toolBatchActivity: [ToasttyToolBatchActivity] {
         ToasttyToolBatchActivity.make(from: state.blocks)
     }
@@ -561,12 +619,141 @@ struct TranscriptScrollMetrics: Equatable {
         abs(visibleHeight - other.visibleHeight) >= Self.viewportResizeThreshold
     }
 
+    func hasLiveEdgeLayoutChange(comparedTo other: Self) -> Bool {
+        hasViewportHeightChange(comparedTo: other)
+            || abs(contentHeight - other.contentHeight) >= Self.viewportResizeThreshold
+    }
+
     var distanceFromBottom: CGFloat {
         contentHeight - visibleMaxY
     }
 
     var isAtLiveEdge: Bool {
         distanceFromBottom < Self.liveEdgeThreshold
+    }
+}
+
+struct TranscriptScrollCoordinator: Equatable {
+    enum LiveEdgeOwner: Equatable {
+        case automatic
+        case send(UInt64)
+        case jump(UInt64)
+    }
+
+    enum Motion: Equatable {
+        case stable
+        case animated
+    }
+
+    enum Target: Equatable {
+        case liveEdge
+        case transcript(ToasttyTranscriptBlockID)
+    }
+
+    struct Command: Equatable {
+        let sequence: UInt64
+        let target: Target
+        let motion: Motion
+        let liveEdgeOwner: LiveEdgeOwner?
+    }
+
+    private(set) var liveEdgeOwner: LiveEdgeOwner?
+    private(set) var command: Command?
+    private var nextSequence: UInt64 = 0
+    private var nextJumpRequest: UInt64 = 0
+
+    var ownsLiveEdge: Bool {
+        liveEdgeOwner != nil
+    }
+
+    var hasExplicitLiveEdgeOwner: Bool {
+        switch liveEdgeOwner {
+        case .send?, .jump?: true
+        case .automatic?, nil: false
+        }
+    }
+
+    static func shouldResolveFollowing(
+        oldPhase: ScrollPhase,
+        newPhase: ScrollPhase
+    ) -> Bool {
+        guard newPhase == .idle else { return false }
+        return oldPhase == .tracking
+            || oldPhase == .interacting
+            || oldPhase == .decelerating
+    }
+
+    mutating func requestInitialLiveEdge() {
+        issueLiveEdge(owner: .automatic, motion: .stable)
+    }
+
+    mutating func requestSend(_ request: UInt64) {
+        issueLiveEdge(owner: .send(request), motion: .stable)
+    }
+
+    mutating func requestJump() {
+        nextJumpRequest &+= 1
+        issueLiveEdge(owner: .jump(nextJumpRequest), motion: .animated)
+    }
+
+    mutating func reinforceLiveEdge() {
+        issueLiveEdge(owner: liveEdgeOwner ?? .automatic, motion: .stable)
+    }
+
+    /// Returns false when an explicit send or jump still owns the live edge;
+    /// a late pagination result must not steal that user-requested movement.
+    @discardableResult
+    mutating func requestHistoryAnchor(_ blockID: ToasttyTranscriptBlockID) -> Bool {
+        guard hasExplicitLiveEdgeOwner == false else {
+            reinforceLiveEdge()
+            return false
+        }
+        liveEdgeOwner = nil
+        issue(target: .transcript(blockID), motion: .stable, liveEdgeOwner: nil)
+        return true
+    }
+
+    mutating func cancelForInteraction() {
+        liveEdgeOwner = nil
+        command = nil
+    }
+
+    /// Returns true when an active jump completed at the live edge.
+    @discardableResult
+    mutating func finishJump(atLiveEdge: Bool) -> Bool {
+        guard case .jump? = liveEdgeOwner else { return false }
+        liveEdgeOwner = atLiveEdge ? .automatic : nil
+        command = nil
+        return atLiveEdge
+    }
+
+    /// Returns true when an active send completed at the live edge. A failed
+    /// acquisition releases ownership so the recovery affordance can appear.
+    @discardableResult
+    mutating func finishSend(atLiveEdge: Bool) -> Bool {
+        guard case .send? = liveEdgeOwner else { return false }
+        liveEdgeOwner = atLiveEdge ? .automatic : nil
+        command = nil
+        return atLiveEdge
+    }
+
+    private mutating func issueLiveEdge(owner: LiveEdgeOwner, motion: Motion) {
+        liveEdgeOwner = owner
+        issue(target: .liveEdge, motion: motion, liveEdgeOwner: owner)
+    }
+
+    private mutating func issue(
+        target: Target,
+        motion: Motion,
+        liveEdgeOwner: LiveEdgeOwner?
+    ) {
+        nextSequence &+= 1
+        command = Command(
+            sequence: nextSequence,
+            target: target,
+            motion: motion,
+            liveEdgeOwner: liveEdgeOwner
+        )
     }
 }
 
@@ -1051,7 +1238,7 @@ struct ToasttyMarkdownText: View {
             let isCodeBlock = if case .code = currentStyle { true } else { false }
             blocks.append(ToasttyMarkdownBlock(
                 id: blocks.count,
-                content: isCodeBlock ? currentContent : stylingInlineCode(currentContent),
+                content: isCodeBlock ? currentContent : stylingInlineContent(currentContent),
                 style: currentStyle
             ))
             currentContent = AttributedString()
@@ -1079,12 +1266,13 @@ struct ToasttyMarkdownText: View {
         return blocks
     }
 
-    /// Tints inline code spans so they stand out from prose; SwiftUI `Text`
-    /// renders run-level foreground and background colors, which is as much
-    /// chip styling as attributed text allows.
-    private static func stylingInlineCode(_ content: AttributedString) -> AttributedString {
+    /// Tints inline code and semantic external web links. Inline code wins
+    /// when Markdown assigns both attributes, while the link itself remains
+    /// intact for SwiftUI interaction.
+    private static func stylingInlineContent(_ content: AttributedString) -> AttributedString {
         guard content.runs.contains(where: {
             $0.inlinePresentationIntent?.contains(.code) == true
+                || isExternalWebLink($0.link)
         }) else { return content }
 
         var styled = AttributedString()
@@ -1093,10 +1281,20 @@ struct ToasttyMarkdownText: View {
             if run.inlinePresentationIntent?.contains(.code) == true {
                 piece.foregroundColor = ToasttyDesignTokens.amberText
                 piece.backgroundColor = ToasttyDesignTokens.chipSurface
+            } else if isExternalWebLink(run.link) {
+                piece.foregroundColor = ToasttyDesignTokens.externalLink
             }
             styled.append(piece)
         }
         return styled
+    }
+
+    private static func isExternalWebLink(_ url: URL?) -> Bool {
+        guard let url,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https"
+        else { return false }
+        return url.host?.isEmpty == false
     }
 
     private static func style(

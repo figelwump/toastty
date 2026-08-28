@@ -3,7 +3,9 @@ import ToasttyMobileDomain
 
 struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
     @State private var isComposerFocused = false
+    @State private var composerFocusLifecycle = ToasttyComposerFocusLifecyclePolicy()
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
 
     let conversationID: UUID
@@ -76,6 +78,9 @@ struct ToasttyConversationScreen: View {
                     navigationBarHeader(conversation)
                 }
             }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            handleScenePhaseChange(newPhase)
         }
     }
 
@@ -267,6 +272,15 @@ struct ToasttyConversationScreen: View {
         }
     }
 
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        var lifecycle = composerFocusLifecycle
+        isComposerFocused = lifecycle.focus(
+            afterTransitionTo: newPhase,
+            currentFocus: isComposerFocused
+        )
+        composerFocusLifecycle = lifecycle
+    }
+
     private func canSubmit(_ presentation: ToasttyComposerPresentation) -> Bool {
         isSubmitting == false && presentation.canSubmit(draft: draft)
     }
@@ -317,6 +331,28 @@ struct ToasttyConversationScreen: View {
         switch reason {
         case .prompt(.starting), .prompt(.working): "In progress"
         default: ""
+        }
+    }
+}
+
+struct ToasttyComposerFocusLifecyclePolicy: Equatable {
+    private(set) var isAwaitingActivationAfterBackground = false
+
+    mutating func focus(
+        afterTransitionTo scenePhase: ScenePhase,
+        currentFocus: Bool
+    ) -> Bool {
+        switch scenePhase {
+        case .background:
+            isAwaitingActivationAfterBackground = true
+            return false
+        case .active where isAwaitingActivationAfterBackground:
+            isAwaitingActivationAfterBackground = false
+            return false
+        case .active, .inactive:
+            return currentFocus
+        @unknown default:
+            return currentFocus
         }
     }
 }
