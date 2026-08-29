@@ -31,6 +31,39 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         )
     }
 
+    func testScrollMetricsUseTightTolerantPhysicalCompletionThreshold() {
+        XCTAssertTrue(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_159.25,
+                visibleHeight: 800
+            ).hasReachedPhysicalLiveEdge
+        )
+        XCTAssertTrue(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_300.7,
+                visibleHeight: 800
+            ).hasReachedPhysicalLiveEdge,
+            "Inset-adjusted overshoot is still the physical tail"
+        )
+        XCTAssertFalse(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_158.75,
+                visibleHeight: 800
+            ).hasReachedPhysicalLiveEdge
+        )
+        XCTAssertTrue(
+            TranscriptScrollMetrics(
+                contentHeight: 2_160,
+                visibleMaxY: 2_089,
+                visibleHeight: 800
+            ).isNearLiveEdge,
+            "The broader threshold remains available for the user-facing state"
+        )
+    }
+
     func testScrollMetricsIgnoreSubpointViewportJitter() {
         let baseline = TranscriptScrollMetrics(
             contentHeight: 2_160,
@@ -84,21 +117,90 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         )
     }
 
-    func testSendOwnsStableLiveEdgeAndLayoutReinforcementKeepsThatOwner() {
+    func testEquivalentReinforcementsCoalesceBeforeExecution() {
         var coordinator = TranscriptScrollCoordinator()
 
         coordinator.requestSend(41)
         let send = coordinator.command
+        let initialCandidate = send.flatMap { coordinator.executionCandidate(for: $0) }
         XCTAssertEqual(send?.target, .liveEdge)
         XCTAssertEqual(send?.motion, .stable)
         XCTAssertEqual(send?.liveEdgeOwner, .send(41))
         XCTAssertTrue(coordinator.ownsLiveEdge)
 
         coordinator.reinforceLiveEdge()
+        let reinforcedCandidate = send.flatMap { coordinator.executionCandidate(for: $0) }
         XCTAssertEqual(coordinator.command?.target, .liveEdge)
         XCTAssertEqual(coordinator.command?.motion, .stable)
         XCTAssertEqual(coordinator.command?.liveEdgeOwner, .send(41))
-        XCTAssertGreaterThan(coordinator.command?.sequence ?? 0, send?.sequence ?? 0)
+        XCTAssertEqual(coordinator.command?.sequence, send?.sequence)
+        XCTAssertGreaterThan(
+            reinforcedCandidate?.layoutGeneration ?? 0,
+            initialCandidate?.layoutGeneration ?? 0
+        )
+        XCTAssertFalse(coordinator.markExecuted(initialCandidate!))
+        XCTAssertTrue(coordinator.markExecuted(reinforcedCandidate!))
+    }
+
+    func testStableSettlingExecutesAfterBoundDuringSustainedLayoutChanges() {
+        for completedCheck in 1 ..< TranscriptScrollCoordinator.maximumStableSettleChecks {
+            XCTAssertFalse(
+                TranscriptScrollCoordinator.shouldExecuteStableCandidate(
+                    isQuiet: false,
+                    completedSettleChecks: completedCheck
+                )
+            )
+        }
+        XCTAssertTrue(
+            TranscriptScrollCoordinator.shouldExecuteStableCandidate(
+                isQuiet: false,
+                completedSettleChecks: TranscriptScrollCoordinator.maximumStableSettleChecks
+            ),
+            "Continuous generation changes must not starve the first live-edge move"
+        )
+        XCTAssertTrue(
+            TranscriptScrollCoordinator.shouldExecuteStableCandidate(
+                isQuiet: true,
+                completedSettleChecks: 1
+            ),
+            "A quiet generation still executes after one 50ms interval"
+        )
+    }
+
+    func testLateReinforcementAfterExecutionSchedulesFollowUp() {
+        var coordinator = TranscriptScrollCoordinator()
+
+        coordinator.requestInitialLiveEdge()
+        let initialCommand = coordinator.command!
+        let initialCandidate = coordinator.executionCandidate(for: initialCommand)!
+        XCTAssertTrue(coordinator.markExecuted(initialCandidate))
+
+        coordinator.reinforceLiveEdge()
+
+        XCTAssertGreaterThan(coordinator.command?.sequence ?? 0, initialCommand.sequence)
+        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.liveEdgeOwner, .automatic)
+        XCTAssertNotNil(coordinator.command.flatMap { coordinator.executionCandidate(for: $0) })
+    }
+
+    func testSendOwnerSurvivesLayoutSettlingAndLateFollowUp() {
+        var coordinator = TranscriptScrollCoordinator()
+
+        coordinator.requestSend(41)
+        let sendCommand = coordinator.command!
+        coordinator.reinforceLiveEdge()
+        coordinator.reinforceLiveEdge()
+        let settledCandidate = coordinator.executionCandidate(for: sendCommand)!
+
+        XCTAssertEqual(coordinator.liveEdgeOwner, .send(41))
+        XCTAssertEqual(settledCandidate.command.liveEdgeOwner, .send(41))
+        XCTAssertTrue(coordinator.markExecuted(settledCandidate))
+
+        coordinator.reinforceLiveEdge()
+
+        XCTAssertEqual(coordinator.liveEdgeOwner, .send(41))
+        XCTAssertEqual(coordinator.command?.liveEdgeOwner, .send(41))
+        XCTAssertGreaterThan(coordinator.command?.sequence ?? 0, sendCommand.sequence)
     }
 
     func testLatestExplicitLiveEdgeRequestWins() {
@@ -110,7 +212,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertEqual(jump?.liveEdgeOwner, .jump(1))
 
         coordinator.reinforceLiveEdge()
-        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.motion, .animated)
         XCTAssertEqual(coordinator.command?.liveEdgeOwner, .jump(1))
 
         coordinator.requestSend(73)
@@ -147,6 +249,8 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
     func testFailedSendTailAcquisitionReleasesOwnershipForRecovery() {
         var coordinator = TranscriptScrollCoordinator()
         coordinator.requestSend(9)
+        let candidate = coordinator.executionCandidate(for: coordinator.command!)!
+        XCTAssertTrue(coordinator.markExecuted(candidate))
 
         XCTAssertFalse(coordinator.finishSend(atLiveEdge: false))
 
@@ -157,12 +261,24 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
     func testSuccessfulSendTailAcquisitionReturnsToAutomaticFollowing() {
         var coordinator = TranscriptScrollCoordinator()
         coordinator.requestSend(9)
+        let candidate = coordinator.executionCandidate(for: coordinator.command!)!
+        XCTAssertTrue(coordinator.markExecuted(candidate))
 
         XCTAssertTrue(coordinator.finishSend(atLiveEdge: true))
 
         XCTAssertNil(coordinator.command)
         XCTAssertEqual(coordinator.liveEdgeOwner, .automatic)
         XCTAssertTrue(coordinator.ownsLiveEdge)
+    }
+
+    func testPendingSendCannotCompleteBeforeSettledExecution() {
+        var coordinator = TranscriptScrollCoordinator()
+        coordinator.requestSend(9)
+        coordinator.reinforceLiveEdge()
+
+        XCTAssertFalse(coordinator.finishSend(atLiveEdge: true))
+        XCTAssertEqual(coordinator.liveEdgeOwner, .send(9))
+        XCTAssertNotNil(coordinator.command)
     }
 
     func testHistoryAnchorDoesNotSupersedeExplicitLiveEdgeOwnership() {

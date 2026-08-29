@@ -16,6 +16,7 @@ struct ToasttyTranscriptView: View {
     @State private var turnFold = ToasttyTurnFoldState()
     @State private var expandedSubagentIDs: Set<ToasttyTranscriptRowID> = []
     @State private var isAtLiveEdge = true
+    @State private var hasReachedPhysicalLiveEdge = true
     @State private var hasMeasuredScrollGeometry = false
     @State private var measuredBoundaryID: ToasttyTranscriptRowID?
     @State private var isVisible = false
@@ -90,10 +91,12 @@ struct ToasttyTranscriptView: View {
                     TranscriptScrollMetrics(geometry: geometry)
                 } action: { old, new in
                     let hadMeasuredScrollGeometry = hasMeasuredScrollGeometry
-                    let atLiveEdge = new.isAtLiveEdge
+                    let atLiveEdge = new.isNearLiveEdge
+                    let reachedPhysicalLiveEdge = new.hasReachedPhysicalLiveEdge
                     hasMeasuredScrollGeometry = true
                     measuredBoundaryID = state.rows.last?.id
                     isAtLiveEdge = atLiveEdge
+                    hasReachedPhysicalLiveEdge = reachedPhysicalLiveEdge
                     if hadMeasuredScrollGeometry,
                        new.hasLiveEdgeLayoutChange(comparedTo: old),
                        lastScrollTarget != nil,
@@ -103,12 +106,12 @@ struct ToasttyTranscriptView: View {
                         // changes; they never race a separate scroll writer.
                         scrollCoordinator.reinforceLiveEdge()
                     }
-                    if atLiveEdge {
+                    if reachedPhysicalLiveEdge {
                         if case .send(let request)? = scrollCoordinator.liveEdgeOwner,
-                           jumpToLiveEdgeRequest == request {
+                           jumpToLiveEdgeRequest == request,
+                           scrollCoordinator.finishSend(atLiveEdge: true) {
                             jumpToLiveEdgeRequest = 0
                             followsLiveEdge = true
-                            _ = scrollCoordinator.finishSend(atLiveEdge: true)
                         }
                         if scrollCoordinator.finishJump(atLiveEdge: true) {
                             followsLiveEdge = true
@@ -135,7 +138,7 @@ struct ToasttyTranscriptView: View {
                     // its momentum ends.
                     followsLiveEdge = TranscriptScrollMetrics(
                         geometry: context.geometry
-                    ).isAtLiveEdge
+                    ).isNearLiveEdge
                 }
                 .onScrollTargetVisibilityChange(
                     idType: ToasttyConversationScrollTarget.self,
@@ -176,12 +179,46 @@ struct ToasttyTranscriptView: View {
                 }
                 .task(id: scrollCoordinator.command) {
                     guard let command = scrollCoordinator.command else { return }
-                    // Let the state update and text layout settle before
-                    // executing the latest command. A superseding command or
-                    // direct gesture cancels this task.
-                    await Task.yield()
-                    await Task.yield()
-                    guard Task.isCancelled == false else { return }
+                    if command.motion == .stable {
+                        // Stable moves wait for one quiet layout interval. New
+                        // layout generations coalesce into this pending command
+                        // instead of repeatedly restarting its task. Sustained
+                        // growth is bounded so it cannot starve the first move;
+                        // any later generation schedules a follow-up command.
+                        var completedSettleChecks = 0
+                        while true {
+                            guard let candidate = scrollCoordinator.executionCandidate(
+                                for: command
+                            ) else { return }
+                            try? await Task.sleep(
+                                for: TranscriptScrollCoordinator.stableSettleInterval
+                            )
+                            guard Task.isCancelled == false else { return }
+                            guard let settled = scrollCoordinator.executionCandidate(
+                                for: command
+                            ) else { return }
+                            completedSettleChecks += 1
+                            let isQuiet = candidate.layoutGeneration
+                                == settled.layoutGeneration
+                            guard TranscriptScrollCoordinator.shouldExecuteStableCandidate(
+                                isQuiet: isQuiet,
+                                completedSettleChecks: completedSettleChecks
+                            ) else {
+                                continue
+                            }
+                            guard scrollCoordinator.markExecuted(settled) else { continue }
+                            break
+                        }
+                    } else {
+                        // A user-requested Jump to Latest keeps its immediate
+                        // animated response. Later layout growth is reinforced
+                        // through a new stable command.
+                        await Task.yield()
+                        guard Task.isCancelled == false,
+                              let candidate = scrollCoordinator.executionCandidate(for: command),
+                              scrollCoordinator.markExecuted(candidate)
+                        else { return }
+                    }
                     guard scrollCoordinator.command == command else { return }
                     execute(command, using: proxy)
 
@@ -198,7 +235,7 @@ struct ToasttyTranscriptView: View {
                         guard Task.isCancelled == false,
                               scrollCoordinator.command == command
                         else { return }
-                        if isAtLiveEdge == false {
+                        if hasReachedPhysicalLiveEdge == false {
                             scrollWithoutAnimation(
                                 to: ToasttyConversationScrollTarget.liveEdge,
                                 anchor: .bottom,
@@ -214,11 +251,15 @@ struct ToasttyTranscriptView: View {
                     if case .send(let request)? = command.liveEdgeOwner,
                        jumpToLiveEdgeRequest == request {
                         jumpToLiveEdgeRequest = 0
-                        followsLiveEdge = isAtLiveEdge
-                        _ = scrollCoordinator.finishSend(atLiveEdge: isAtLiveEdge)
+                        followsLiveEdge = hasReachedPhysicalLiveEdge
+                        _ = scrollCoordinator.finishSend(
+                            atLiveEdge: hasReachedPhysicalLiveEdge
+                        )
                     } else if case .jump? = command.liveEdgeOwner {
-                        followsLiveEdge = isAtLiveEdge
-                        _ = scrollCoordinator.finishJump(atLiveEdge: isAtLiveEdge)
+                        followsLiveEdge = hasReachedPhysicalLiveEdge
+                        _ = scrollCoordinator.finishJump(
+                            atLiveEdge: hasReachedPhysicalLiveEdge
+                        )
                     }
                 }
                 .onChange(of: liveEdgeVisibilityKey, initial: true) { _, key in
@@ -592,7 +633,8 @@ struct ToasttyTranscriptView: View {
 }
 
 struct TranscriptScrollMetrics: Equatable {
-    static let liveEdgeThreshold: CGFloat = 72
+    static let nearLiveEdgeThreshold: CGFloat = 72
+    static let physicalLiveEdgeEpsilon: CGFloat = 1
     static let viewportResizeThreshold: CGFloat = 0.5
 
     let contentHeight: CGFloat
@@ -628,12 +670,26 @@ struct TranscriptScrollMetrics: Equatable {
         contentHeight - visibleMaxY
     }
 
+    var isNearLiveEdge: Bool {
+        distanceFromBottom < Self.nearLiveEdgeThreshold
+    }
+
+    /// Completion is intentionally tighter than the user-facing near-tail
+    /// threshold. A negative distance is valid when the inset-adjusted visible
+    /// rect extends beyond the content at the physical bottom.
+    var hasReachedPhysicalLiveEdge: Bool {
+        distanceFromBottom <= Self.physicalLiveEdgeEpsilon
+    }
+
     var isAtLiveEdge: Bool {
-        distanceFromBottom < Self.liveEdgeThreshold
+        isNearLiveEdge
     }
 }
 
 struct TranscriptScrollCoordinator: Equatable {
+    static let stableSettleInterval: Duration = .milliseconds(50)
+    static let maximumStableSettleChecks = 4
+
     enum LiveEdgeOwner: Equatable {
         case automatic
         case send(UInt64)
@@ -657,10 +713,17 @@ struct TranscriptScrollCoordinator: Equatable {
         let liveEdgeOwner: LiveEdgeOwner?
     }
 
+    struct ExecutionCandidate: Equatable {
+        let command: Command
+        let layoutGeneration: UInt64
+    }
+
     private(set) var liveEdgeOwner: LiveEdgeOwner?
     private(set) var command: Command?
     private var nextSequence: UInt64 = 0
     private var nextJumpRequest: UInt64 = 0
+    private var liveEdgeLayoutGeneration: UInt64 = 0
+    private var executedCommandSequence: UInt64?
 
     var ownsLiveEdge: Bool {
         liveEdgeOwner != nil
@@ -683,6 +746,13 @@ struct TranscriptScrollCoordinator: Equatable {
             || oldPhase == .decelerating
     }
 
+    static func shouldExecuteStableCandidate(
+        isQuiet: Bool,
+        completedSettleChecks: Int
+    ) -> Bool {
+        isQuiet || completedSettleChecks >= maximumStableSettleChecks
+    }
+
     mutating func requestInitialLiveEdge() {
         issueLiveEdge(owner: .automatic, motion: .stable)
     }
@@ -697,7 +767,24 @@ struct TranscriptScrollCoordinator: Equatable {
     }
 
     mutating func reinforceLiveEdge() {
-        issueLiveEdge(owner: liveEdgeOwner ?? .automatic, motion: .stable)
+        let owner = liveEdgeOwner ?? .automatic
+        liveEdgeOwner = owner
+        advanceLiveEdgeLayoutGeneration()
+
+        if let command,
+           command.target == .liveEdge,
+           command.liveEdgeOwner == owner,
+           executedCommandSequence != command.sequence {
+            // Equivalent work that arrives before execution belongs to the
+            // same pending operation. The task observes the newer generation
+            // and waits for layout quiet again.
+            return
+        }
+
+        // Once the pending operation has executed, a later generation needs a
+        // fresh command so SwiftUI starts a follow-up task rather than losing
+        // late content growth.
+        issue(target: .liveEdge, motion: .stable, liveEdgeOwner: owner)
     }
 
     /// Returns false when an explicit send or jump still owns the live edge;
@@ -716,14 +803,18 @@ struct TranscriptScrollCoordinator: Equatable {
     mutating func cancelForInteraction() {
         liveEdgeOwner = nil
         command = nil
+        executedCommandSequence = nil
     }
 
     /// Returns true when an active jump completed at the live edge.
     @discardableResult
     mutating func finishJump(atLiveEdge: Bool) -> Bool {
-        guard case .jump? = liveEdgeOwner else { return false }
+        guard case .jump? = liveEdgeOwner,
+              currentCommandHasExecuted
+        else { return false }
         liveEdgeOwner = atLiveEdge ? .automatic : nil
         command = nil
+        executedCommandSequence = nil
         return atLiveEdge
     }
 
@@ -731,15 +822,49 @@ struct TranscriptScrollCoordinator: Equatable {
     /// acquisition releases ownership so the recovery affordance can appear.
     @discardableResult
     mutating func finishSend(atLiveEdge: Bool) -> Bool {
-        guard case .send? = liveEdgeOwner else { return false }
+        guard case .send? = liveEdgeOwner,
+              currentCommandHasExecuted
+        else { return false }
         liveEdgeOwner = atLiveEdge ? .automatic : nil
         command = nil
+        executedCommandSequence = nil
         return atLiveEdge
+    }
+
+    func executionCandidate(for command: Command) -> ExecutionCandidate? {
+        guard self.command == command,
+              executedCommandSequence != command.sequence
+        else { return nil }
+        return ExecutionCandidate(
+            command: command,
+            layoutGeneration: liveEdgeLayoutGeneration
+        )
+    }
+
+    /// Marks exactly the generation that was observed after the quiet period.
+    /// A newer generation must be settled instead of being silently consumed.
+    mutating func markExecuted(_ candidate: ExecutionCandidate) -> Bool {
+        guard command == candidate.command,
+              liveEdgeLayoutGeneration == candidate.layoutGeneration,
+              executedCommandSequence != candidate.command.sequence
+        else { return false }
+        executedCommandSequence = candidate.command.sequence
+        return true
+    }
+
+    private var currentCommandHasExecuted: Bool {
+        guard let command else { return false }
+        return executedCommandSequence == command.sequence
     }
 
     private mutating func issueLiveEdge(owner: LiveEdgeOwner, motion: Motion) {
         liveEdgeOwner = owner
+        advanceLiveEdgeLayoutGeneration()
         issue(target: .liveEdge, motion: motion, liveEdgeOwner: owner)
+    }
+
+    private mutating func advanceLiveEdgeLayoutGeneration() {
+        liveEdgeLayoutGeneration &+= 1
     }
 
     private mutating func issue(
@@ -748,6 +873,7 @@ struct TranscriptScrollCoordinator: Equatable {
         liveEdgeOwner: LiveEdgeOwner?
     ) {
         nextSequence &+= 1
+        executedCommandSequence = nil
         command = Command(
             sequence: nextSequence,
             target: target,

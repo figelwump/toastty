@@ -16,6 +16,7 @@ struct ToasttyMobileRootView: View {
     @State private var diagnosedSessionState: AppSessionState?
     private let forcesPairingPrivacyShield: Bool
     private let fixtureScenario: ToasttyMobileFixtureScenario?
+    private let delaysFixtureSubmission: Bool
     private let deepLinkParser: DeepLinkParser?
 
     init(configuration: ToasttyMobileAppConfiguration) {
@@ -25,6 +26,8 @@ struct ToasttyMobileRootView: View {
         ))
         forcesPairingPrivacyShield = configuration.fixtureScenario == .pairingPrivacy
         fixtureScenario = configuration.fixtureScenario
+        delaysFixtureSubmission = configuration.fixtureScenario == .gatedSend
+            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_DELAYED_SUBMIT"] == "1"
         deepLinkParser = configuration.urlScheme.flatMap(DeepLinkParser.init(scheme:))
     }
 
@@ -454,6 +457,24 @@ struct ToasttyMobileRootView: View {
             return false
         }
         let clientRequestID = "fixture-enqueued-\(fixtureSendItems.count + 1)"
+        if delaysFixtureSubmission {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                fixtureSendItems.append(ToasttySendPresentationItem(
+                    clientRequestID: clientRequestID,
+                    text: submission.text,
+                    content: .optimistic(response: .accepted)
+                ))
+                fixtureComposerIsReserved = true
+
+                try? await Task.sleep(for: .seconds(2))
+                finishSubmission(
+                    submission,
+                    outcome: .enqueued(clientRequestID: clientRequestID)
+                )
+            }
+            return true
+        }
         fixtureSendItems.append(ToasttySendPresentationItem(
             clientRequestID: clientRequestID,
             text: submission.text,

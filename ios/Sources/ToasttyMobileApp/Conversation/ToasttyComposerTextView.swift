@@ -27,7 +27,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         textView.tintColor = UIColor(ToasttyDesignTokens.amber)
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
-        textView.isScrollEnabled = true
+        // Let SwiftUI grow the composer before UIKit starts moving its internal
+        // viewport. Scrolling is enabled only after a capped height has settled.
+        textView.isScrollEnabled = false
         textView.contentInsetAdjustmentBehavior = .never
         textView.alwaysBounceVertical = false
         textView.showsVerticalScrollIndicator = false
@@ -72,17 +74,23 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         uiView textView: ToasttyComposerUIKitTextView,
         context: Context
     ) -> CGSize? {
-        guard let width = proposal.width else { return nil }
+        guard let width = proposal.width,
+              width.isFinite,
+              width > 0 else {
+            return nil
+        }
         _ = dynamicTypeSize
-        let lineHeight = textView.font?.lineHeight
-            ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
-        let naturalHeight = textView.sizeThatFits(CGSize(
-            width: width,
-            height: .greatestFiniteMagnitude
-        )).height
+        let lineHeight = Self.lineFragmentHeight(of: textView)
+        let naturalHeight = Self.naturalHeight(of: textView, width: width)
         let height = Self.clampedHeight(
             naturalHeight: naturalHeight,
             lineHeight: lineHeight
+        )
+        textView.updateLayoutMeasurement(
+            width: width,
+            naturalHeight: naturalHeight,
+            fittedHeight: height,
+            maximumHeight: Self.maximumHeight(lineHeight: lineHeight)
         )
         return CGSize(width: width, height: height)
     }
@@ -98,7 +106,45 @@ struct ToasttyComposerTextView: UIViewRepresentable {
     }
 
     static func clampedHeight(naturalHeight: CGFloat, lineHeight: CGFloat) -> CGFloat {
-        min(max(ceil(naturalHeight), ceil(lineHeight)), ceil(lineHeight * 5))
+        min(
+            max(ceil(naturalHeight), ceil(lineHeight)),
+            maximumHeight(lineHeight: lineHeight)
+        )
+    }
+
+    static func maximumHeight(lineHeight: CGFloat) -> CGFloat {
+        ceil(lineHeight * 5)
+    }
+
+    static func lineFragmentHeight(of textView: UITextView) -> CGFloat {
+        let font = textView.font ?? UIFont.preferredFont(forTextStyle: .body)
+        let layoutManager = textView.layoutManager
+        layoutManager.ensureLayout(for: textView.textContainer)
+        guard layoutManager.numberOfGlyphs > 0 else { return font.lineHeight }
+        return layoutManager.lineFragmentUsedRect(
+            forGlyphAt: 0,
+            effectiveRange: nil
+        ).height
+    }
+
+    static func naturalHeight(
+        of textView: UITextView,
+        width: CGFloat
+    ) -> CGFloat {
+        let fittingHeight = textView.sizeThatFits(CGSize(
+            width: width,
+            height: .greatestFiniteMagnitude
+        )).height
+        guard textView.isScrollEnabled,
+              abs(textView.bounds.width - width) <= 0.5 else {
+            return fittingHeight
+        }
+        let layoutManager = textView.layoutManager
+        layoutManager.ensureLayout(for: textView.textContainer)
+        let textKitHeight = layoutManager.usedRect(for: textView.textContainer).height
+            + textView.textContainerInset.top
+            + textView.textContainerInset.bottom
+        return max(fittingHeight, textKitHeight)
     }
 
     static func clampedSelection(_ selection: NSRange, utf16Count: Int) -> NSRange {
@@ -162,9 +208,20 @@ struct ToasttyComposerTextView: UIViewRepresentable {
 
 @MainActor
 final class ToasttyComposerUIKitTextView: UITextView {
+    private struct LayoutMeasurement {
+        let width: CGFloat
+        let naturalHeight: CGFloat
+        let fittedHeight: CGFloat
+        let maximumHeight: CGFloat
+    }
+
+    private static let layoutTolerance: CGFloat = 0.5
+
     private let placeholderLabel = UILabel()
     private var shouldRevealSelection = false
+    private var deferredSelectionRevealScheduled = false
     private var lastLayoutSize = CGSize.zero
+    private var layoutMeasurement: LayoutMeasurement?
 
     var placeholder = "" {
         didSet {
@@ -193,9 +250,22 @@ final class ToasttyComposerUIKitTextView: UITextView {
         super.layoutSubviews()
         placeholderLabel.frame = bounds
 
-        if bounds.size != lastLayoutSize {
-            lastLayoutSize = bounds.size
-            shouldRevealSelection = true
+        let didChangeSize = bounds.size != lastLayoutSize
+        lastLayoutSize = bounds.size
+        let didEnableScrolling = updateInternalScrolling()
+
+        guard isScrollEnabled else {
+            shouldRevealSelection = false
+            normalizeNonOverflowOffset()
+            return
+        }
+        shouldRevealSelection = shouldRevealSelection || didChangeSize
+        if didEnableScrolling {
+            // TextKit updates wrapped-line geometry after scrolling is enabled.
+            // Reveal from the following layout pass so the caret rect and
+            // content size both describe the scrollable viewport.
+            scheduleSelectionRevealAfterLayout()
+            return
         }
         guard shouldRevealSelection, markedTextRange == nil else { return }
         shouldRevealSelection = false
@@ -214,8 +284,23 @@ final class ToasttyComposerUIKitTextView: UITextView {
     }
 
     func requestSelectionVisibility() {
+        guard shouldRevealSelection == false else { return }
         shouldRevealSelection = true
         setNeedsLayout()
+    }
+
+    func updateLayoutMeasurement(
+        width: CGFloat,
+        naturalHeight: CGFloat,
+        fittedHeight: CGFloat,
+        maximumHeight: CGFloat
+    ) {
+        layoutMeasurement = LayoutMeasurement(
+            width: width,
+            naturalHeight: naturalHeight,
+            fittedHeight: fittedHeight,
+            maximumHeight: maximumHeight
+        )
     }
 
     func revealSelection() {
@@ -258,5 +343,48 @@ final class ToasttyComposerUIKitTextView: UITextView {
 
         let offsetY = min(max(requestedOffset, minimumOffset), maximumOffset)
         setContentOffset(CGPoint(x: contentOffset.x, y: offsetY), animated: false)
+    }
+
+    private func updateInternalScrolling() -> Bool {
+        guard let layoutMeasurement,
+              abs(bounds.width - layoutMeasurement.width) <= Self.layoutTolerance else {
+            return false
+        }
+        let shouldScroll: Bool
+        let hasSettledFittedHeight = abs(
+            bounds.height - layoutMeasurement.fittedHeight
+        ) <= Self.layoutTolerance
+        let isHeightCapped = abs(
+            layoutMeasurement.fittedHeight - layoutMeasurement.maximumHeight
+        ) <= Self.layoutTolerance
+        let hasOverflow = layoutMeasurement.naturalHeight
+            > layoutMeasurement.fittedHeight + Self.layoutTolerance
+        shouldScroll = hasSettledFittedHeight && isHeightCapped && hasOverflow
+
+        guard isScrollEnabled != shouldScroll else { return false }
+        isScrollEnabled = shouldScroll
+        return shouldScroll
+    }
+
+    private func scheduleSelectionRevealAfterLayout() {
+        guard deferredSelectionRevealScheduled == false else { return }
+        deferredSelectionRevealScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.deferredSelectionRevealScheduled = false
+            guard self.isScrollEnabled, self.markedTextRange == nil else { return }
+            self.shouldRevealSelection = true
+            self.setNeedsLayout()
+            self.layoutIfNeeded()
+        }
+    }
+
+    private func normalizeNonOverflowOffset() {
+        let minimumOffset = -adjustedContentInset.top
+        guard abs(contentOffset.y - minimumOffset) > Self.layoutTolerance else { return }
+        setContentOffset(
+            CGPoint(x: contentOffset.x, y: minimumOffset),
+            animated: false
+        )
     }
 }

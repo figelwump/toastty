@@ -15,6 +15,19 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
     private let openPromptConversationID = "B1000000-0000-0000-0000-000000000007"
 
+    private struct TranscriptStabilitySample {
+        enum Phase: String {
+            case awaitingOptimistic
+            case optimisticWithDraft
+            case collapsed
+        }
+
+        let phase: Phase
+        let rowMaxY: CGFloat
+        let composerMinY: CGFloat
+        var tailDistance: CGFloat { composerMinY - rowMaxY }
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -682,6 +695,116 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "The newly appended optimistic message should remain visible at the live edge"
         )
         attachScreenshot(named: "fixture-gated-send-from-slow-reader", of: app)
+    }
+
+    func testGatedSendDelayedOptimisticRowKeepsTranscriptStableWhileComposerCollapses() {
+        let app = launchFixtureApp(
+            environment: [
+                "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
+                "TOASTTY_MOBILE_FIXTURE_DELAYED_SUBMIT": "1",
+            ]
+        )
+        openGatedSendConversation(in: app)
+
+        let newestStableRow = app.descendants(matching: .any)[
+            "toastty-mobile-transcript-row-13"
+        ]
+        let optimistic = app.descendants(matching: .any)[
+            "toastty-mobile-send-optimistic-fixture-enqueued-1"
+        ]
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        let input = composerInput(in: app)
+        let send = app.buttons["toastty-mobile-composer-send"]
+        let draft = "Line 01\nLine 02\nLine 03\nLine 04\nLine 05"
+
+        XCTAssertTrue(newestStableRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.typeText(draft)
+        XCTAssertTrue(send.isEnabled)
+        XCTAssertTrue(newestStableRow.isHittable)
+        XCTAssertFalse(jumpToLatest.exists)
+        let expandedComposerHeight = input.frame.height
+
+        send.tap()
+
+        var samples: [TranscriptStabilitySample] = []
+        let deadline = Date().addingTimeInterval(7)
+        while Date() < deadline {
+            let hasOptimistic = optimistic.exists
+            let hasCollapsedDraft = (input.value as? String) != draft
+            let phase: TranscriptStabilitySample.Phase
+            if hasCollapsedDraft {
+                phase = .collapsed
+            } else if hasOptimistic {
+                phase = .optimisticWithDraft
+            } else {
+                phase = .awaitingOptimistic
+            }
+
+            XCTAssertTrue(
+                newestStableRow.isHittable,
+                "The stable transcript tail row must remain visible throughout delayed submission"
+            )
+            samples.append(TranscriptStabilitySample(
+                phase: phase,
+                rowMaxY: newestStableRow.frame.maxY,
+                composerMinY: input.frame.minY
+            ))
+
+            if phase == .collapsed,
+               samples.suffix(3).allSatisfy({ $0.phase == .collapsed }) {
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.06))
+        }
+
+        let phaseDescription = samples.map {
+            "\($0.phase.rawValue):row=\(String(format: "%.1f", $0.rowMaxY)),composer=\(String(format: "%.1f", $0.composerMinY)),distance=\(String(format: "%.1f", $0.tailDistance))"
+        }.joined(separator: " | ")
+        XCTAssertGreaterThanOrEqual(
+            samples.filter { $0.phase == .awaitingOptimistic }.count,
+            2,
+            "The fixture did not preserve the pre-optimistic phase long enough: \(phaseDescription)"
+        )
+        XCTAssertGreaterThanOrEqual(
+            samples.filter { $0.phase == .optimisticWithDraft }.count,
+            2,
+            "The fixture did not preserve the optimistic-before-collapse phase: \(phaseDescription)"
+        )
+        XCTAssertGreaterThanOrEqual(
+            samples.filter { $0.phase == .collapsed }.count,
+            3,
+            "The fixture did not reach a settled collapsed composer: \(phaseDescription)"
+        )
+
+        for (previous, current) in zip(samples, samples.dropFirst()) {
+            XCTAssertGreaterThanOrEqual(
+                current.tailDistance + 3,
+                previous.tailDistance,
+                "The transcript tail reversed direction during submit: \(phaseDescription)"
+            )
+        }
+
+        let settledSamples = samples.filter { $0.phase == .collapsed }
+        let settledDistances = settledSamples.map(\.tailDistance)
+        XCTAssertLessThanOrEqual(
+            (settledDistances.max() ?? 0) - (settledDistances.min() ?? 0),
+            3,
+            "The transcript tail jittered after composer collapse: \(phaseDescription)"
+        )
+        XCTAssertLessThan(
+            input.frame.height,
+            expandedComposerHeight - 20,
+            "The five-line draft should collapse only after the optimistic row is presented"
+        )
+        XCTAssertTrue(optimistic.exists)
+        XCTAssertTrue(optimistic.isHittable)
+        XCTAssertFalse(
+            jumpToLatest.exists,
+            "Delayed submission must finish at the live edge"
+        )
     }
 
     func testGatedSendBackgroundResumeDoesNotRestoreKeyboard() {
