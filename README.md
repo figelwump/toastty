@@ -1,3 +1,5 @@
+
+
 # Toastty
 
 <p align="center">
@@ -103,7 +105,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
 | `Cmd+Opt+<key>` | Launch agent profile (when profile defines `shortcutKey`) |
-| `Cmd+Opt+<key>` / `Cmd+Opt+Shift+<key>` | Profile split right / split down (when profile defines `shortcutKey`) |
+| `Cmd+Opt+<key>` / `Cmd+Opt+Shift+<key>` | Terminal profile split right / split down (when the terminal profile defines `shortcutKey`) |
 
 `Cmd+W` and `File > Close` use Toastty's panel-close behavior. Dirty local-document drafts ask before discard, local-document saves in progress block destructive close, and the native red close button still asks for confirmation before closing all terminals, tabs, and workspaces in that window.
 
