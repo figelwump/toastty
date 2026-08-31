@@ -145,6 +145,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`
   - `<runtime-home>/run/managed-agent-launches/`
+  - `<runtime-home>/run/managed-agent-helpers/` (one owner-only directory per Toastty process containing immutable copies of the bundled CLI and agent-launch shim; a later launch removes directories only when their recorded owner PID is proven absent)
   - `<runtime-home>/agent-plugins/` (user-skill snapshots, staging, and receipts stay isolated here; the user-skill SOURCE is not isolated — isolated instances read the real `~/.toastty/skills/` unless `TOASTTY_USER_SKILLS_ROOT` redirects it, the override automated harnesses use)
   - `<runtime-home>/scratchpad-documents/`
   - `<runtime-home>/history/pane-journals/`

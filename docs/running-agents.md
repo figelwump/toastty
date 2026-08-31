@@ -505,7 +505,7 @@ Every agent launched through Toastty receives these environment variables, set i
 | `TOASTTY_SESSION_ID` | Unique session UUID |
 | `TOASTTY_PANEL_ID` | UUID of the terminal panel the agent was launched into |
 | `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude, Codex, OpenCode, MiMo Code, and Pi helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
-| `TOASTTY_CLI_PATH` | Path to the bundled `toastty` CLI executable |
+| `TOASTTY_CLI_PATH` | Path to this Toastty instance's staged `toastty` CLI copy |
 | `TOASTTY_AGENT` | Managed provider ID. The `worktree-create` skill preserves `codex` or `claude` when it launches the handoff session. |
 | `TOASTTY_CWD` | Resolved launch working directory: explicit automation `cwd` when supplied, otherwise the target or restored panel working directory when available |
 | `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |

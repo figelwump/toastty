@@ -803,7 +803,7 @@ When Toastty launches an agent, these variables are injected into the agent's en
 
 | Variable | Description |
 |---|---|
-| `TOASTTY_CLI_PATH` | Absolute path to the bundled `toastty` CLI |
+| `TOASTTY_CLI_PATH` | Absolute path to this Toastty instance's staged `toastty` CLI copy |
 | `TOASTTY_SESSION_ID` | Session ID for the current agent run |
 | `TOASTTY_PANEL_ID` | Terminal panel UUID |
 | `TOASTTY_SOCKET_PATH` | Resolved automation socket path for the target app instance |

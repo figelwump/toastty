@@ -4,7 +4,7 @@ import XCTest
 @testable import ToasttyApp
 
 final class ManagedAgentHelperInstallerTests: XCTestCase {
-    func testResolvePathsStagesHelpersIntoRuntimeBinForRuntimeIsolatedRuns() throws {
+    func testResolvePathsStagesHelpersIntoInstanceDirectoryForRuntimeIsolatedRuns() throws {
         let fileManager = FileManager.default
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-managed-helpers")
         defer { try? fileManager.removeItem(at: rootURL) }
@@ -27,20 +27,25 @@ final class ManagedAgentHelperInstallerTests: XCTestCase {
             in: rootURL
         )
 
+        let instanceIdentifier = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let resolvedPaths = try ManagedAgentHelperInstaller(
             runtimePaths: runtimePaths,
             fileManager: fileManager,
             cliExecutablePathProvider: { sourceCLIURL.path },
-            agentShimExecutablePathProvider: { sourceShimURL.path }
+            agentShimExecutablePathProvider: { sourceShimURL.path },
+            processID: 41_001,
+            instanceIdentifier: instanceIdentifier
         ).resolvePaths()
 
+        let instanceDirectoryURL = runtimePaths.managedAgentHelperInstancesDirectoryURL
+            .appendingPathComponent("instance-\(instanceIdentifier.uuidString.lowercased())", isDirectory: true)
         XCTAssertEqual(
             resolvedPaths.cliExecutablePath,
-            runtimePaths.agentShimDirectoryURL.appendingPathComponent("toastty", isDirectory: false).path
+            instanceDirectoryURL.appendingPathComponent("toastty", isDirectory: false).path
         )
         XCTAssertEqual(
             resolvedPaths.agentShimExecutablePath,
-            runtimePaths.agentShimDirectoryURL
+            instanceDirectoryURL
                 .appendingPathComponent("toastty-agent-shim", isDirectory: false)
                 .path
         )
@@ -62,6 +67,153 @@ final class ManagedAgentHelperInstallerTests: XCTestCase {
             try String(contentsOfFile: try XCTUnwrap(resolvedPaths.agentShimExecutablePath), encoding: .utf8),
             try String(contentsOf: sourceShimURL, encoding: .utf8)
         )
+        XCTAssertEqual(
+            try String(
+                contentsOf: instanceDirectoryURL.appendingPathComponent(
+                    ManagedAgentHelperInstaller.ownerRecordFileName,
+                    isDirectory: false
+                ),
+                encoding: .utf8
+            ),
+            "41001\n"
+        )
+        XCTAssertEqual(
+            try String(
+                contentsOf: runtimePaths.agentShimDirectoryURL.appendingPathComponent("toastty", isDirectory: false),
+                encoding: .utf8
+            ),
+            try String(contentsOf: sourceCLIURL, encoding: .utf8)
+        )
+    }
+
+    func testConcurrentInstancesDoNotReplacePreviouslyResolvedHelpers() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-managed-helper-concurrency")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let runtimeHomeURL = rootURL.appendingPathComponent("runtime-home", isDirectory: true)
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: rootURL.path,
+            environment: ["TOASTTY_RUNTIME_HOME": runtimeHomeURL.path]
+        )
+        try runtimePaths.prepare(fileManager: fileManager)
+
+        let firstCLIURL = try makeExecutableScript(
+            named: "first-toastty",
+            contents: "#!/bin/sh\necho first-cli",
+            in: rootURL
+        )
+        let firstShimURL = try makeExecutableScript(
+            named: "first-toastty-agent-shim",
+            contents: "#!/bin/sh\necho first-shim",
+            in: rootURL
+        )
+        let secondCLIURL = try makeExecutableScript(
+            named: "second-toastty",
+            contents: "#!/bin/sh\necho second-cli",
+            in: rootURL
+        )
+        let secondShimURL = try makeExecutableScript(
+            named: "second-toastty-agent-shim",
+            contents: "#!/bin/sh\necho second-shim",
+            in: rootURL
+        )
+
+        let firstPaths = try ManagedAgentHelperInstaller(
+            runtimePaths: runtimePaths,
+            fileManager: fileManager,
+            cliExecutablePathProvider: { firstCLIURL.path },
+            agentShimExecutablePathProvider: { firstShimURL.path },
+            processID: 41_001,
+            instanceIdentifier: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            ownerProcessStateProvider: { _ in .alive }
+        ).resolvePaths()
+        let firstCLIContents = try String(
+            contentsOfFile: try XCTUnwrap(firstPaths.cliExecutablePath),
+            encoding: .utf8
+        )
+        let firstShimContents = try String(
+            contentsOfFile: try XCTUnwrap(firstPaths.agentShimExecutablePath),
+            encoding: .utf8
+        )
+
+        let secondPaths = try ManagedAgentHelperInstaller(
+            runtimePaths: runtimePaths,
+            fileManager: fileManager,
+            cliExecutablePathProvider: { secondCLIURL.path },
+            agentShimExecutablePathProvider: { secondShimURL.path },
+            processID: 41_002,
+            instanceIdentifier: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            ownerProcessStateProvider: { _ in .alive }
+        ).resolvePaths()
+
+        XCTAssertNotEqual(firstPaths, secondPaths)
+        XCTAssertEqual(
+            try String(contentsOfFile: try XCTUnwrap(firstPaths.cliExecutablePath), encoding: .utf8),
+            firstCLIContents
+        )
+        XCTAssertEqual(
+            try String(contentsOfFile: try XCTUnwrap(firstPaths.agentShimExecutablePath), encoding: .utf8),
+            firstShimContents
+        )
+        XCTAssertEqual(
+            try String(contentsOfFile: try XCTUnwrap(secondPaths.cliExecutablePath), encoding: .utf8),
+            try String(contentsOf: secondCLIURL, encoding: .utf8)
+        )
+        XCTAssertEqual(
+            try String(
+                contentsOf: runtimePaths.agentShimDirectoryURL.appendingPathComponent("toastty", isDirectory: false),
+                encoding: .utf8
+            ),
+            try String(contentsOf: secondCLIURL, encoding: .utf8)
+        )
+    }
+
+    func testResolvePathsRemovesHelperDirectoryOwnedByDeadProcess() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-managed-helper-cleanup")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let runtimeHomeURL = rootURL.appendingPathComponent("runtime-home", isDirectory: true)
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: rootURL.path,
+            environment: ["TOASTTY_RUNTIME_HOME": runtimeHomeURL.path]
+        )
+        try runtimePaths.prepare(fileManager: fileManager)
+        let sourceCLIURL = try makeExecutableScript(
+            named: "source-toastty",
+            contents: "#!/bin/sh\nexit 0",
+            in: rootURL
+        )
+        let sourceShimURL = try makeExecutableScript(
+            named: "source-toastty-agent-shim",
+            contents: "#!/bin/sh\nexit 0",
+            in: rootURL
+        )
+
+        let firstPaths = try ManagedAgentHelperInstaller(
+            runtimePaths: runtimePaths,
+            fileManager: fileManager,
+            cliExecutablePathProvider: { sourceCLIURL.path },
+            agentShimExecutablePathProvider: { sourceShimURL.path },
+            processID: 41_001,
+            instanceIdentifier: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            ownerProcessStateProvider: { _ in .alive }
+        ).resolvePaths()
+        let firstDirectoryURL = URL(fileURLWithPath: try XCTUnwrap(firstPaths.cliExecutablePath))
+            .deletingLastPathComponent()
+
+        _ = try ManagedAgentHelperInstaller(
+            runtimePaths: runtimePaths,
+            fileManager: fileManager,
+            cliExecutablePathProvider: { sourceCLIURL.path },
+            agentShimExecutablePathProvider: { sourceShimURL.path },
+            processID: 41_002,
+            instanceIdentifier: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            ownerProcessStateProvider: { processID in processID == 41_001 ? .dead : .alive }
+        ).resolvePaths()
+
+        XCTAssertFalse(fileManager.fileExists(atPath: firstDirectoryURL.path))
     }
 
     func testStagedCLIKeepsCodexNotifyScriptWorkingAfterOriginalSourceDisappears() throws {

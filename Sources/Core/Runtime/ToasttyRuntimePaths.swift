@@ -20,6 +20,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let scratchpadDocumentsDirectoryName = "scratchpad-documents"
     private static let managedAgentResumeDirectoryName = "managed-agent-resume"
     private static let managedAgentLaunchArtifactsDirectoryName = "managed-agent-launches"
+    private static let managedAgentHelperInstancesDirectoryName = "managed-agent-helpers"
     private static let userSkillsDirectoryName = "skills"
     private static let agentPluginsDirectoryName = "agent-plugins"
     private static let artifactsDirectoryName = "artifacts"
@@ -166,6 +167,15 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         configDirectoryURL
             .appending(path: Self.runDirectoryName, directoryHint: .isDirectory)
             .appending(path: Self.managedAgentLaunchArtifactsDirectoryName, directoryHint: .isDirectory)
+    }
+
+    /// Per-app copies of helpers captured by managed-agent launch environments.
+    /// Each running Toastty instance owns a distinct child directory so another
+    /// build using the same runtime home cannot replace an in-use executable.
+    public var managedAgentHelperInstancesDirectoryURL: URL {
+        configDirectoryURL
+            .appending(path: Self.runDirectoryName, directoryHint: .isDirectory)
+            .appending(path: Self.managedAgentHelperInstancesDirectoryName, directoryHint: .isDirectory)
     }
 
     /// The user's skill-package source directory. User skills are USER state,
