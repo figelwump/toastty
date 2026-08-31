@@ -21,7 +21,18 @@ cd toastty
 ./scripts/dev/bootstrap-worktree.sh
 ```
 
-`Project.swift` is the source of truth. `./scripts/dev/bootstrap-worktree.sh` runs `tuist install` and `tuist generate --no-open`, and in a fresh linked worktree it also reuses local Ghostty xcframeworks from another Toastty worktree when available. The generated `toastty.xcworkspace` is not committed, so rerun the bootstrap script or `tuist generate` after manifest or file-layout changes. Re-run `tuist install` whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes.
+Toastty has two independent Tuist graphs. Root `Project.swift` is the source of
+truth for the macOS app; `ios/Project.swift` and `ios/Workspace.swift` are the
+source of truth for the native iOS client. Run Tuist from the graph's own
+directory and never edit either graph's generated project or workspace files.
+
+`./scripts/dev/bootstrap-worktree.sh` prepares the macOS graph by running
+`tuist install` and `tuist generate --no-open`; in a fresh linked worktree it
+also reuses local Ghostty xcframeworks from another Toastty worktree when
+available. The generated `toastty.xcworkspace` is not committed, so rerun the
+bootstrap script or `tuist generate` after manifest or file-layout changes.
+Re-run `tuist install` whenever `Tuist/Package.swift` or
+`Tuist/Package.resolved` changes.
 
 ## Install sv
 
@@ -80,7 +91,7 @@ TUIST_DISABLE_GHOSTTY=1 ./scripts/dev/bootstrap-worktree.sh
 ## Build the macOS app
 
 ```bash
-ARCH="$(uname -m)"
+ARCH="${ARCH:-$(if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then echo arm64; else uname -m; fi)}"
 xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp \
   -configuration Debug \
   -destination "platform=macOS,arch=${ARCH}" \

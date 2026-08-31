@@ -245,17 +245,19 @@ timeouts, and launch failures to its structured local log. See
 When enabled, Toastty listens for Remote Access only on IPv4 loopback. The
 intended remote path is a private Tailscale Serve HTTPS origin that proxies to
 that local listener; Toastty does not configure Tailscale, publish a LAN
-listener, or enable Tailscale Funnel. The configured browser origin is an exact
+listener, or enable Tailscale Funnel. The configured Tailnet origin is an exact
 allowlist, and a presented non-matching Origin is rejected on every route.
 
-A paired browser or native client can receive normalized agent conversation
-content, status, a bounded desktop status-detail excerpt, workspace/panel
-placement, and working-directory metadata. New pairings have
-read and send scope by default; device send scope can be disabled or the device
-can be revoked from the Mac. Remote Access activity is not sent to a Toastty
-cloud service. Network transport and tailnet access remain subject to the
-user's Tailscale account, ACLs, DNS, and Serve configuration. See
-[Remote Access](remote-access.md) for setup and revocation guidance.
+A paired Toastty Mobile client, or a browser profile paired by an earlier
+Toastty build, can receive normalized agent conversation content, status, a
+bounded desktop status-detail excerpt, workspace/panel placement, and
+working-directory metadata. New native pairings have read and send scope by
+default. The current Mac UI can revoke one device, revoke all devices, or
+disable Remote Access; it does not expose device-scope changes. Remote Access
+activity is not sent to a Toastty cloud service. Network transport and tailnet
+access remain subject to the user's Tailscale account, ACLs, DNS, and Serve
+configuration. See [Remote Access](remote-access.md) for setup and revocation
+guidance.
 
 Native pairing offers are memory-only. Their QR secret and fallback code are
 discarded on success, cancellation, reissue, expiry, or when Remote Access is

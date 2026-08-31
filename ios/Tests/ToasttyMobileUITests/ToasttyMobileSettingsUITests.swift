@@ -21,7 +21,7 @@ final class ToasttyMobileSettingsUITests: XCTestCase {
             "Host, fixture-mac.example.ts.net"
         )
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-settings-device-name"].exists)
-        XCTAssertTrue(app.staticTexts["Device scopes and per-session remote input are managed on your Mac."].exists)
+        XCTAssertTrue(app.staticTexts["Access is granted by the paired Mac. Reply availability is determined automatically for each active session."].exists)
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "AAAAAAAAAAAA")).firstMatch.exists)
         attachScreenshot(named: "fixture-settings", of: app)
 

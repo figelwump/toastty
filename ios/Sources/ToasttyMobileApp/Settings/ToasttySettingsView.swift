@@ -77,7 +77,7 @@ struct ToasttySettingsView: View {
                 identifier: "credential-created"
             )
 
-            Text("Device scopes and per-session remote input are managed on your Mac.")
+            Text("Access is granted by the paired Mac. Reply availability is determined automatically for each active session.")
                 .font(.footnote)
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
