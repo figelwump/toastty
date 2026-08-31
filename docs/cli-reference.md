@@ -2,7 +2,7 @@
 
 Toastty bundles a `toastty` CLI that communicates with the running app over its automation Unix socket. The CLI is used both for agent/session reporting and for machine-first app control of a normal running Toastty instance.
 
-When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, pointing at the bundled executable. All examples below assume you invoke the CLI through that path.
+When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, pointing at that app instance's executable copy. Runtime-isolated builds stage an immutable per-instance copy; ordinary installed builds use the bundled executable directly. All examples below assume you invoke the CLI through that path.
 
 ## Global options
 

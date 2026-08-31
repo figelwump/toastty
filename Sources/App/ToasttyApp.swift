@@ -1331,14 +1331,68 @@ struct ToasttyApp: App {
         agentProfiles: AgentCatalog,
         helperExecutablePath: String?
     ) throws -> String? {
-        try AgentCommandShimInstaller(
+        let managedDirectoryURL = managedAgentCommandShimDirectoryURL(
             runtimePaths: runtimePaths,
+            helperExecutablePath: helperExecutablePath
+        )
+        let installation = try AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            installationDirectoryURL: managedDirectoryURL,
             managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles),
             helperExecutablePathProvider: { helperExecutablePath }
         )
-            .syncInstallation(enabled: enabled)?
-            .directoryURL
-            .path
+            .syncInstallation(enabled: enabled)
+        let compatibilityDirectoryURL = runtimePaths.agentShimDirectoryURL.standardizedFileURL
+        if managedDirectoryURL.standardizedFileURL != compatibilityDirectoryURL {
+            let compatibilityHelperPath = compatibilityDirectoryURL
+                .appendingPathComponent("toastty-agent-shim", isDirectory: false)
+                .path
+            do {
+                _ = try AgentCommandShimInstaller(
+                    runtimePaths: runtimePaths,
+                    installationDirectoryURL: compatibilityDirectoryURL,
+                    managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles),
+                    helperExecutablePathProvider: { compatibilityHelperPath }
+                ).syncInstallation(enabled: enabled)
+            } catch {
+                ToasttyLog.warning(
+                    "Failed to refresh compatibility agent command shims",
+                    category: .bootstrap,
+                    metadata: [
+                        "directory": compatibilityDirectoryURL.path,
+                        "enabled": enabled ? "true" : "false",
+                        "error": error.localizedDescription,
+                    ]
+                )
+            }
+        }
+        return installation?.directoryURL.path
+    }
+
+    nonisolated static func managedAgentCommandShimDirectoryURL(
+        runtimePaths: ToasttyRuntimePaths,
+        helperExecutablePath: String?
+    ) -> URL {
+        let fallbackURL = runtimePaths.agentShimDirectoryURL.standardizedFileURL
+        let normalizedHelperPath = helperExecutablePath?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard runtimePaths.isRuntimeHomeEnabled,
+              let normalizedHelperPath,
+              normalizedHelperPath.isEmpty == false else {
+            return fallbackURL
+        }
+
+        let directoryURL = URL(fileURLWithPath: normalizedHelperPath)
+            .standardizedFileURL
+            .deletingLastPathComponent()
+        let instancesRootURL = runtimePaths.managedAgentHelperInstancesDirectoryURL.standardizedFileURL
+        let instanceName = directoryURL.lastPathComponent
+        guard directoryURL.deletingLastPathComponent() == instancesRootURL,
+              instanceName.hasPrefix("instance-"),
+              UUID(uuidString: String(instanceName.dropFirst("instance-".count))) != nil else {
+            return fallbackURL
+        }
+        return directoryURL
     }
 
     nonisolated static func baseLaunchEnvironment(

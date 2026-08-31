@@ -43,7 +43,7 @@ When runtime sandboxing is enabled, Toastty stores mutable app state inside the 
 Toastty also prepares a few support paths inside the runtime home:
 
 - `run/`
-- `run/managed-agent-helpers/` for process-owned helper copies that remain immutable while an app instance is running
+- `run/managed-agent-helpers/` for process-owned helper copies and command links that remain immutable while an app instance is running
 - `runtime-version.txt`
 
 ## What stays outside

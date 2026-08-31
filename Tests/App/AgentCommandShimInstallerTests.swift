@@ -4,6 +4,38 @@ import Foundation
 import XCTest
 
 final class AgentCommandShimInstallerTests: XCTestCase {
+    func testSyncInstallationUsesExplicitInstanceDirectory() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: homeDirectoryURL) }
+        let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
+        let instanceDirectoryURL = homeDirectoryURL.appendingPathComponent("instance", isDirectory: true)
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        let installer = AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            installationDirectoryURL: instanceDirectoryURL,
+            managedCommandNames: ["codex"],
+            helperExecutablePathProvider: { helperURL.path }
+        )
+
+        let installation = try XCTUnwrap(installer.syncInstallation(enabled: true))
+
+        XCTAssertEqual(installation.directoryURL, instanceDirectoryURL)
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(
+                atPath: instanceDirectoryURL.appendingPathComponent("codex").path
+            ),
+            helperURL.path
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: runtimePaths.agentShimDirectoryURL.appendingPathComponent("codex").path
+            )
+        )
+    }
+
     func testSyncInstallationCreatesManagedLinksWhenEnabled() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let helperURL = try makeExecutableHelper(in: homeDirectoryURL)

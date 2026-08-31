@@ -28,19 +28,20 @@ final class AgentCommandShimInstaller {
     private static let defaultManagedCommandNames: Set<String> = ["codex", "cdx", "claude", "pi"]
     private static let managedCommandsManifestFileName = ".toastty-managed-agent-commands.json"
 
-    private let runtimePaths: ToasttyRuntimePaths
     private let fileManager: FileManager
+    private let installationDirectoryURL: URL
     private let helperExecutablePathProvider: @Sendable () -> String?
     private let managedCommandNames: Set<String>
 
     init(
         runtimePaths: ToasttyRuntimePaths,
         fileManager: FileManager = .default,
+        installationDirectoryURL: URL? = nil,
         managedCommandNames: Set<String> = AgentCommandShimInstaller.defaultManagedCommandNames,
         helperExecutablePathProvider: @escaping @Sendable () -> String? = ToasttyBundledExecutableLocator.defaultAgentShimExecutablePath
     ) {
-        self.runtimePaths = runtimePaths
         self.fileManager = fileManager
+        self.installationDirectoryURL = installationDirectoryURL ?? runtimePaths.agentShimDirectoryURL
         self.managedCommandNames = managedCommandNames
         self.helperExecutablePathProvider = helperExecutablePathProvider
     }
@@ -53,7 +54,7 @@ final class AgentCommandShimInstaller {
             throw AgentCommandShimInstallerError.helperUnavailable(path: helperPath)
         }
 
-        let directoryURL = runtimePaths.agentShimDirectoryURL
+        let directoryURL = installationDirectoryURL
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         try removeManagedLinks(
             named: previouslyInstalledManagedCommandNames(in: directoryURL)
@@ -90,7 +91,7 @@ final class AgentCommandShimInstaller {
     }
 
     func removeInstallationIfPresent() throws {
-        let directoryURL = runtimePaths.agentShimDirectoryURL
+        let directoryURL = installationDirectoryURL
         let commandNamesToRemove = managedCommandNames
             .union(previouslyInstalledManagedCommandNames(in: directoryURL))
         try removeManagedLinks(named: commandNamesToRemove, from: directoryURL)
