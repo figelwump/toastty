@@ -676,10 +676,14 @@ private enum AgentCommandShim {
         argv: [String],
         environment: [String: String]
     ) -> Int32 {
+        let childEnvironment = nestedAgentEnvironment(
+            from: environment,
+            invocation: invocation
+        )
         let spawnedChildPID = spawnProcess(
             executablePath: executablePath,
             argv: argv,
-            environment: environment
+            environment: childEnvironment
         )
         guard spawnedChildPID > 0 else {
             return 1
@@ -708,6 +712,37 @@ private enum AgentCommandShim {
             environment: environment
         )
         return exitStatus
+    }
+
+    /// A nested agent must not write to the managed root's Codex recorder. A
+    /// nested Codex also must not emit hooks using the root's Toastty identity.
+    /// The original parent environment remains available to the shim for its
+    /// explicit background-activity calls.
+    private static func nestedAgentEnvironment(
+        from environment: [String: String],
+        invocation: Invocation
+    ) -> [String: String] {
+        var childEnvironment = environment
+        childEnvironment.removeValue(forKey: "CODEX_TUI_RECORD_SESSION")
+        childEnvironment.removeValue(forKey: "CODEX_TUI_SESSION_LOG_PATH")
+
+        guard invocation.agent == .codex else { return childEnvironment }
+
+        let parentSessionKeys = [
+            ToasttyLaunchContextEnvironment.agentKey,
+            ToasttyLaunchContextEnvironment.sessionIDKey,
+            ToasttyLaunchContextEnvironment.panelIDKey,
+            ToasttyLaunchContextEnvironment.launchReasonKey,
+            ToasttyLaunchContextEnvironment.cwdKey,
+            ToasttyLaunchContextEnvironment.repoRootKey,
+            ToasttyLaunchContextEnvironment.socketPathKey,
+            ToasttyLaunchContextEnvironment.cliPathKey,
+            ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey,
+        ]
+        for key in parentSessionKeys {
+            childEnvironment.removeValue(forKey: key)
+        }
+        return childEnvironment
     }
 
     private static func waitForProcess(_ spawnedChildPID: pid_t) -> Int32 {
@@ -748,6 +783,12 @@ private enum AgentCommandShim {
         recordsManagedArtifactOwner: Bool = false
     ) -> pid_t {
         var childEnvironment = environment
+        // This marker applies only to the shim invocation that consumes a
+        // prepared managed launch. Forwarding it would disable interception of
+        // later nested agent commands for the lifetime of the root process.
+        childEnvironment.removeValue(
+            forKey: ToasttyLaunchContextEnvironment.managedAgentShimBypassKey
+        )
         let ownerRecordPath = recordsManagedArtifactOwner
             ? childEnvironment.removeValue(
                 forKey: ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey

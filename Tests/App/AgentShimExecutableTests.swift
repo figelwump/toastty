@@ -58,7 +58,11 @@ struct AgentShimExecutableTests {
             preflightDecision: .runAnyway,
             inheritedSessionID: "sess-direct",
             managedShimBypass: true,
-            ownerRecordInInitialEnvironment: true
+            ownerRecordInInitialEnvironment: true,
+            extraEnvironment: [
+                "CODEX_TUI_RECORD_SESSION": "1",
+                "CODEX_TUI_SESSION_LOG_PATH": "/tmp/parent-codex-session.jsonl",
+            ]
         )
 
         #expect(result.exitStatus == 7)
@@ -69,6 +73,11 @@ struct AgentShimExecutableTests {
                 "owner_file=\(fixture.ownerRecordURL.path)"
             ) == false
         )
+        let agentLog = try fixture.agentLogContents()
+        #expect(agentLog.contains("session=sess-direct"))
+        #expect(agentLog.contains("record_session=1"))
+        #expect(agentLog.contains("session_log=/tmp/parent-codex-session.jsonl"))
+        #expect(agentLog.contains("shim_bypass=\n"))
     }
 
     @Test
@@ -124,13 +133,23 @@ struct AgentShimExecutableTests {
     }
 
     @Test
-    func inheritedSessionPassThroughReportsBackgroundActivity() throws {
+    func inheritedCodexSessionTracksBackgroundActivityWithoutParentSessionContext() throws {
         let fixture = try AgentShimExecutableFixture.make()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
 
         let result = try fixture.run(
             preflightDecision: .runAnyway,
-            inheritedSessionID: "sess-parent"
+            inheritedSessionID: "sess-parent",
+            extraEnvironment: [
+                ToasttyLaunchContextEnvironment.agentKey: "codex",
+                ToasttyLaunchContextEnvironment.launchReasonKey: "managed",
+                ToasttyLaunchContextEnvironment.cwdKey: "/parent/cwd",
+                ToasttyLaunchContextEnvironment.repoRootKey: "/parent/repo",
+                ToasttyLaunchContextEnvironment.socketPathKey: "/tmp/parent.sock",
+                ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey: "/tmp/parent-owner",
+                "CODEX_TUI_RECORD_SESSION": "1",
+                "CODEX_TUI_SESSION_LOG_PATH": "/tmp/parent-codex-session.jsonl",
+            ]
         )
 
         #expect(result.exitStatus == 7)
@@ -147,8 +166,45 @@ struct AgentShimExecutableTests {
 
         let agentLog = try fixture.agentLogContents()
         #expect(agentLog.contains("agent --typed-in-terminal"))
+        #expect(agentLog.contains("session=\n"))
+        #expect(agentLog.contains("panel=\n"))
+        #expect(agentLog.contains("toastty_agent=\n"))
+        #expect(agentLog.contains("launch_reason=\n"))
+        #expect(agentLog.contains("toastty_cwd=\n"))
+        #expect(agentLog.contains("repo_root=\n"))
+        #expect(agentLog.contains("socket_path=\n"))
+        #expect(agentLog.contains("cli_path=\n"))
+        #expect(agentLog.contains("owner_file=\n"))
+        #expect(agentLog.contains("record_session=\n"))
+        #expect(agentLog.contains("session_log=\n"))
+    }
+
+    @Test
+    func inheritedNonCodexSessionPreservesParentLaunchContext() throws {
+        let fixture = try AgentShimExecutableFixture.make(
+            shimCommandName: "mimocode",
+            realBinaryName: "mimo"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-parent",
+            extraEnvironment: [
+                "CODEX_TUI_RECORD_SESSION": "1",
+                "CODEX_TUI_SESSION_LOG_PATH": "/tmp/parent-codex-session.jsonl",
+            ]
+        )
+
+        #expect(result.exitStatus == 7)
+        #expect(result.stderr.isEmpty)
+        #expect(try fixture.cliLogContents().contains("session background-activity start"))
+        let agentLog = try fixture.agentLogContents()
         #expect(agentLog.contains("session=sess-parent"))
         #expect(agentLog.contains("panel=\(fixture.panelID.uuidString)"))
+        #expect(agentLog.contains("cli_path=\(fixture.fakeCLIPath)"))
+        #expect(agentLog.contains("record_session=\n"))
+        #expect(agentLog.contains("session_log=\n"))
     }
 
     @Test
@@ -211,6 +267,10 @@ private struct AgentShimExecutableFixture {
 
     var expectedCodexProcessPath: String {
         [realBinURL.path, "/usr/bin", "/bin"].joined(separator: ":")
+    }
+
+    var fakeCLIPath: String {
+        fakeCLIURL.path
     }
 
     static func make(
@@ -279,7 +339,8 @@ private struct AgentShimExecutableFixture {
         preflightDecisionMessage: String? = nil,
         inheritedSessionID: String? = nil,
         managedShimBypass: Bool = false,
-        ownerRecordInInitialEnvironment: Bool = false
+        ownerRecordInInitialEnvironment: Bool = false,
+        extraEnvironment: [String: String] = [:]
     ) throws -> AgentShimRunResult {
         let process = Process()
         process.executableURL = shimLinkURL
@@ -310,6 +371,9 @@ private struct AgentShimExecutableFixture {
         environment["TOASTTY_FAKE_OWNER_FILE"] = ownerRecordURL.path
         environment["TOASTTY_FAKE_PREFLIGHT_DECISION"] = preflightDecision.rawValue
         environment["TOASTTY_FAKE_PREFLIGHT_DECISION_MESSAGE"] = preflightDecisionMessage
+        for (key, value) in extraEnvironment {
+            environment[key] = value
+        }
         process.environment = environment
 
         let stdoutPipe = Pipe()
@@ -470,6 +534,15 @@ private struct AgentShimExecutableFixture {
           printf '\\n'
           printf 'session=%s\\n' "${TOASTTY_SESSION_ID:-}"
           printf 'panel=%s\\n' "${TOASTTY_PANEL_ID:-}"
+          printf 'toastty_agent=%s\\n' "${TOASTTY_AGENT:-}"
+          printf 'launch_reason=%s\\n' "${TOASTTY_LAUNCH_REASON:-}"
+          printf 'toastty_cwd=%s\\n' "${TOASTTY_CWD:-}"
+          printf 'repo_root=%s\\n' "${TOASTTY_REPO_ROOT:-}"
+          printf 'socket_path=%s\\n' "${TOASTTY_SOCKET_PATH:-}"
+          printf 'cli_path=%s\\n' "${TOASTTY_CLI_PATH:-}"
+          printf 'shim_bypass=%s\\n' "${TOASTTY_MANAGED_AGENT_SHIM_BYPASS:-}"
+          printf 'record_session=%s\\n' "${CODEX_TUI_RECORD_SESSION:-}"
+          printf 'session_log=%s\\n' "${CODEX_TUI_SESSION_LOG_PATH:-}"
           printf 'pid=%s\\n' "$$"
           printf 'owner_file=%s\\n' "${TOASTTY_MANAGED_ARTIFACT_OWNER_FILE:-}"
         } >> "$TOASTTY_FAKE_AGENT_LOG"
