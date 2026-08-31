@@ -1893,6 +1893,8 @@ struct SidebarView: View {
         Text(SidebarSessionPresentation.sessionStatusChipLabel(for: kind))
             .font(ToastyTheme.fontWorkspaceSessionChip)
             .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: kind))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(

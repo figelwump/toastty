@@ -1047,6 +1047,23 @@ final class SidebarViewTests: XCTestCase {
         }
     }
 
+    func testNeedsApprovalSessionChildChipRemainsSingleLineAtMinimumSidebarWidth() throws {
+        let readyFrame = try measuredWorkspaceRowFrame(childStatusKind: .ready)
+        let approvalFrame = try measuredWorkspaceRowFrame(childStatusKind: .needsApproval)
+
+        XCTAssertEqual(
+            approvalFrame.height,
+            readyFrame.height,
+            accuracy: 0.5,
+            "The needs-approval child chip must not make the row taller than another single-line status chip"
+        )
+        XCTAssertLessThanOrEqual(
+            approvalFrame.maxX,
+            CGFloat(WindowState.minSidebarWidth) - 8 + 0.5,
+            "Protecting the approval chip width must not widen the sidebar contents"
+        )
+    }
+
     func testWorkspaceHeaderPaddingClickSelectsWorkspace() throws {
         let workspaces = (1...2).map { WorkspaceState.bootstrap(title: "Workspace \($0)") }
         let windowID = UUID()
@@ -1537,6 +1554,84 @@ final class SidebarViewTests: XCTestCase {
         _ = hostingView.fittingSize
         hostingView.layoutSubtreeIfNeeded()
         return recorder.width
+    }
+
+    private func measuredWorkspaceRowFrame(childStatusKind: SessionStatusKind) throws -> CGRect {
+        let state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let parentPanelID = try XCTUnwrap(workspace.focusedPanelID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let parentSessionID = "single-line-child-chip-parent"
+        let childSessionID = "single-line-child-chip-child"
+
+        sessionRuntimeStore.startSession(
+            sessionID: parentSessionID,
+            agent: .codex,
+            panelID: parentPanelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            cwd: "/repo/sidebar",
+            repoRoot: "/repo",
+            at: now
+        )
+        sessionRuntimeStore.startSession(
+            sessionID: childSessionID,
+            agent: .claude,
+            panelID: UUID(),
+            windowID: windowID,
+            workspaceID: workspaceID,
+            parentSessionID: parentSessionID,
+            displayTitleOverride: "long-running-review-agent",
+            cwd: "/repo/sidebar",
+            repoRoot: "/repo",
+            at: now.addingTimeInterval(1)
+        )
+        sessionRuntimeStore.updateStatus(
+            sessionID: childSessionID,
+            status: SessionStatus(
+                kind: childStatusKind,
+                summary: "Child status",
+                detail: "Review a command with intentionally long context"
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        defer { sessionRuntimeStore.reset() }
+
+        var workspaceRowFramesByID: [UUID: CGRect] = [:]
+        let sidebarWidth = CGFloat(WindowState.minSidebarWidth)
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
+            terminalRuntimeContext: runtimeContext,
+            workspaceRowFrameObserver: { workspaceRowFramesByID = $0 }
+        )
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+
+        let deadline = Date().addingTimeInterval(1)
+        while workspaceRowFramesByID[workspaceID] == nil, Date() < deadline {
+            pumpMainRunLoop(duration: 0.05)
+            hostingView.layoutSubtreeIfNeeded()
+        }
+
+        return try XCTUnwrap(workspaceRowFramesByID[workspaceID])
     }
 
     private func measuredAnnotationChipsFlowSize(
