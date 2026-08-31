@@ -121,13 +121,10 @@ final class ManagedAgentHelperInstaller {
                 [.posixPermissions: NSNumber(value: Int16(0o755))],
                 ofItemAtPath: temporaryURL.path
             )
-            if replacesExisting, pathExists(at: destinationURL.path) {
-                _ = try fileManager.replaceItemAt(
-                    destinationURL,
-                    withItemAt: temporaryURL,
-                    backupItemName: nil,
-                    options: []
-                )
+            if replacesExisting {
+                guard Darwin.rename(temporaryURL.path, destinationURL.path) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
             } else {
                 try fileManager.moveItem(at: temporaryURL, to: destinationURL)
             }
