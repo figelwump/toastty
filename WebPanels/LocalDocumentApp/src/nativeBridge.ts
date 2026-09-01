@@ -23,6 +23,7 @@ export type LocalDocumentPanelEvent =
   | { type: "searchControllerReady" }
   | { type: "searchControllerUnavailable" }
   | { type: "enterEdit" }
+  | { type: "copyFullPath" }
   | { type: "openInDefaultApp" }
   | { type: "draftDidChange"; content: string; baseContentRevision: number }
   | { type: "save"; baseContentRevision: number }
@@ -77,6 +78,9 @@ export const localDocumentNativeBridge = {
   },
   enterEdit() {
     postEvent({ type: "enterEdit" });
+  },
+  copyFullPath() {
+    postEvent({ type: "copyFullPath" });
   },
   openInDefaultApp() {
     postEvent({ type: "openInDefaultApp" });

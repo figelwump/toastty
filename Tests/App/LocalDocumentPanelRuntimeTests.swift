@@ -1296,7 +1296,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
     }
 
     func testOpenInDefaultAppUsesCurrentBackingFileURL() async throws {
-        let filePath = "/tmp/toastty/App.swift"
+        let filePath = "/tmp/toastty/Planning Notes/Résumé.swift"
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
         let openExpectation = expectation(description: "External open request arrives")
         let capturedURL = LockedBox<URL?>(nil)
@@ -1346,6 +1346,91 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         let openedURL = await capturedURL.snapshot()
         XCTAssertEqual(openedURL, URL(filePath: filePath))
+    }
+
+    func testCopyFullPathUsesCurrentBackingFilePath() async throws {
+        let filePath = "/tmp/toastty/App.swift"
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let copyExpectation = expectation(description: "Copy full path request arrives")
+        let capturedPath = LockedBox<String?>(nil)
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    format: .code,
+                    content: "struct App {}\n",
+                    diskRevision: nil
+                )
+            },
+            filePathCopier: { path in
+                Task {
+                    await capturedPath.set(path)
+                    copyExpectation.fulfill()
+                }
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "Résumé.swift",
+            localDocument: LocalDocumentState(
+                filePath: filePath,
+                format: .code
+            )
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.copyFullPath()
+        await fulfillment(of: [copyExpectation], timeout: 1)
+
+        let copiedPath = await capturedPath.snapshot()
+        XCTAssertEqual(copiedPath, filePath)
+    }
+
+    func testCopyFullPathIgnoresPanelsWithoutBackingFile() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let copyExpectation = expectation(description: "No copy full path request should arrive")
+        copyExpectation.isInverted = true
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Notes",
+                    diskRevision: nil
+                )
+            },
+            filePathCopier: { _ in
+                copyExpectation.fulfill()
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "Untitled",
+            localDocument: LocalDocumentState(filePath: nil, format: .markdown)
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.copyFullPath()
+        await fulfillment(of: [copyExpectation], timeout: 0.1)
     }
 
     func testOpenInDefaultAppIgnoresPanelsWithoutBackingFile() async throws {

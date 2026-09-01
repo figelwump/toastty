@@ -104,6 +104,7 @@ function useLocalDocumentPanelState(): {
   isDirty: boolean;
   canSave: boolean;
   canOverwrite: boolean;
+  copyFullPath: () => void;
   openInDefaultApp: () => void;
   enterEdit: () => void;
   saveEdit: () => void;
@@ -136,6 +137,14 @@ function useLocalDocumentPanelState(): {
     }
 
     localDocumentNativeBridge.openInDefaultApp();
+  }, [bootstrap?.filePath, bootstrap?.isEditing]);
+
+  const copyFullPath = React.useCallback(() => {
+    if (!bootstrap?.filePath || bootstrap.isEditing) {
+      return;
+    }
+
+    localDocumentNativeBridge.copyFullPath();
   }, [bootstrap?.filePath, bootstrap?.isEditing]);
 
   const enterEdit = React.useCallback(() => {
@@ -192,6 +201,7 @@ function useLocalDocumentPanelState(): {
     isDirty,
     canSave,
     canOverwrite,
+    copyFullPath,
     openInDefaultApp,
     enterEdit,
     saveEdit,
@@ -207,6 +217,7 @@ function Header(props: {
   isDirty: boolean;
   canSave: boolean;
   canOverwrite: boolean;
+  copyFullPath: () => void;
   openInDefaultApp: () => void;
   enterEdit: () => void;
   saveEdit: () => void;
@@ -219,6 +230,7 @@ function Header(props: {
     isDirty,
     canSave,
     canOverwrite,
+    copyFullPath,
     openInDefaultApp,
     enterEdit,
     saveEdit,
@@ -230,6 +242,33 @@ function Header(props: {
     () => `${computeLineCount(content)} lines`,
     [content]
   );
+  const [copyFeedback, setCopyFeedback] = React.useState<{
+    filePath: string;
+    requestID: number;
+  } | null>(null);
+  const didCopyFullPath = copyFeedback?.filePath === bootstrap.filePath;
+
+  const handleCopyFullPath = React.useCallback(() => {
+    const filePath = bootstrap.filePath;
+    if (!filePath) {
+      return;
+    }
+
+    copyFullPath();
+    setCopyFeedback((current) => ({
+      filePath,
+      requestID: (current?.requestID ?? 0) + 1
+    }));
+  }, [bootstrap.filePath, copyFullPath]);
+
+  React.useEffect(() => {
+    if (!copyFeedback) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setCopyFeedback(null), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copyFeedback]);
 
   return (
     <header className="local-document-panel-header">
@@ -266,14 +305,34 @@ function Header(props: {
         ) : (
           <>
             {bootstrap.filePath && (
-              <button
-                className="local-document-action-button local-document-action-button-secondary local-document-action-button-icon"
-                onClick={openInDefaultApp}
-                aria-label="Open in Default App"
-                title="Open in Default App"
-              >
-                <ExternalOpenIcon />
-              </button>
+              <>
+                <button
+                  className="local-document-action-button local-document-action-button-secondary local-document-action-button-icon"
+                  onClick={handleCopyFullPath}
+                  aria-label="Copy Full Path"
+                  title={didCopyFullPath ? "Path Copied" : "Copy Full Path"}
+                >
+                  {didCopyFullPath ? <CheckIcon /> : <CopyIcon />}
+                </button>
+                {didCopyFullPath && copyFeedback && (
+                  <span
+                    key={copyFeedback.requestID}
+                    className="local-document-visually-hidden"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    Full path copied
+                  </span>
+                )}
+                <button
+                  className="local-document-action-button local-document-action-button-secondary local-document-action-button-icon"
+                  onClick={openInDefaultApp}
+                  aria-label="Open in Default App"
+                  title="Open in Default App"
+                >
+                  <ExternalOpenIcon />
+                </button>
+              </>
             )}
             <button
               className="local-document-action-button"
@@ -287,6 +346,52 @@ function Header(props: {
         )}
       </div>
     </header>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="local-document-action-icon"
+      viewBox="0 0 16 16"
+      fill="none"
+    >
+      <rect
+        x="5.5"
+        y="5.5"
+        width="8"
+        height="8"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M10.5 5.5V4C10.5 3.17157 9.82843 2.5 9 2.5H4C3.17157 2.5 2.5 3.17157 2.5 4V9C2.5 9.82843 3.17157 10.5 4 10.5H5.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="local-document-action-icon"
+      viewBox="0 0 16 16"
+      fill="none"
+    >
+      <path
+        d="M3 8.5L6.5 12L13 4.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -1053,6 +1158,7 @@ export function LocalDocumentPanelApp() {
     isDirty,
     canSave,
     canOverwrite,
+    copyFullPath,
     openInDefaultApp,
     enterEdit,
     saveEdit,
@@ -1091,6 +1197,7 @@ export function LocalDocumentPanelApp() {
       isDirty={isDirty}
       canSave={canSave}
       canOverwrite={canOverwrite}
+      copyFullPath={copyFullPath}
       openInDefaultApp={openInDefaultApp}
       enterEdit={enterEdit}
       saveEdit={saveEdit}
@@ -1107,6 +1214,7 @@ function LoadedLocalDocumentPanelApp(props: {
   isDirty: boolean;
   canSave: boolean;
   canOverwrite: boolean;
+  copyFullPath: () => void;
   openInDefaultApp: () => void;
   enterEdit: () => void;
   saveEdit: () => void;
@@ -1135,6 +1243,7 @@ function LoadedLocalDocumentPanelApp(props: {
         isDirty={props.isDirty}
         canSave={props.canSave}
         canOverwrite={props.canOverwrite}
+        copyFullPath={props.copyFullPath}
         openInDefaultApp={props.openInDefaultApp}
         enterEdit={props.enterEdit}
         saveEdit={props.saveEdit}

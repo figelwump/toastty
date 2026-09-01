@@ -308,6 +308,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     typealias DocumentSaver = @Sendable (String, String) async throws -> Void
     typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
     typealias ExternalFileOpener = @Sendable (URL) -> Bool
+    typealias FilePathCopier = @MainActor @Sendable (String) -> Void
     typealias BridgeScriptCompletion = @MainActor @Sendable (Any?, Error?) -> Void
     typealias BridgeScriptEvaluator = @MainActor (String, @escaping BridgeScriptCompletion) -> Void
     typealias SearchExecutor = @MainActor (FocusAwareWKWebView, LocalDocumentSearchCommand, @escaping (Bool?) -> Void) -> Void
@@ -325,6 +326,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private let documentSaver: DocumentSaver
     private let savedDocumentReader: SavedDocumentReader
     private let externalFileOpener: ExternalFileOpener
+    private let filePathCopier: FilePathCopier
     private let bridgeScriptEvaluator: BridgeScriptEvaluator
     private let searchExecutor: SearchExecutor
     private let searchSessionResetter: SearchSessionResetter
@@ -364,6 +366,11 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         documentSaver: @escaping DocumentSaver = { try await LocalDocumentPanelRuntime.writeLocalDocument(at: $0, content: $1) },
         savedDocumentReader: @escaping SavedDocumentReader = { try await LocalDocumentPanelRuntime.readLocalDocument(at: $0, displayName: $1, format: $2) },
         externalFileOpener: @escaping ExternalFileOpener = { NSWorkspace.shared.open($0) },
+        filePathCopier: @escaping FilePathCopier = { filePath in
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            _ = pasteboard.setString(filePath, forType: .string)
+        },
         bridgeScriptEvaluator: BridgeScriptEvaluator? = nil,
         searchExecutor: @escaping SearchExecutor = { webView, command, completion in
             guard let script = LocalDocumentPanelRuntime.searchJavaScript(for: command) else {
@@ -404,6 +411,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.documentSaver = documentSaver
         self.savedDocumentReader = savedDocumentReader
         self.externalFileOpener = externalFileOpener
+        self.filePathCopier = filePathCopier
         self.searchExecutor = searchExecutor
         self.searchSessionResetter = searchSessionResetter
         self.diagnosticLogger = diagnosticLogger
@@ -737,6 +745,14 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         }
 
         _ = externalFileOpener(URL(filePath: filePath))
+    }
+
+    func copyFullPath() {
+        guard let filePath = session?.filePath else {
+            return
+        }
+
+        filePathCopier(filePath)
     }
 
     @discardableResult
@@ -1172,6 +1188,7 @@ private extension LocalDocumentPanelRuntime {
 
     enum BridgeEvent {
         case enterEdit
+        case copyFullPath
         case openInDefaultApp
         case draftDidChange(content: String, baseContentRevision: Int)
         case save(baseContentRevision: Int)
@@ -1218,6 +1235,8 @@ private extension LocalDocumentPanelRuntime {
             switch type {
             case "enterEdit":
                 self = .enterEdit
+            case "copyFullPath":
+                self = .copyFullPath
             case "openInDefaultApp":
                 self = .openInDefaultApp
             case "draftDidChange":
@@ -1291,6 +1310,8 @@ private extension LocalDocumentPanelRuntime {
         switch event {
         case .enterEdit:
             enterEditMode()
+        case .copyFullPath:
+            copyFullPath()
         case .openInDefaultApp:
             openInDefaultApp()
         case .draftDidChange(let content, let baseContentRevision):

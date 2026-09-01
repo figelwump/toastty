@@ -398,6 +398,26 @@ test("read mode exposes an Open in Default App action through the native bridge"
   assert.match(bridgeSource, /openInDefaultApp\(\)/);
 });
 
+test("read mode exposes a Copy Full Path action with confirmation feedback", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+  const bridgeSource = await readFile(
+    resolve(packageRoot, "src/nativeBridge.ts"),
+    "utf8"
+  );
+
+  assert.match(source, /aria-label="Copy Full Path"/);
+  assert.match(source, /title=\{didCopyFullPath \? "Path Copied" : "Copy Full Path"\}/);
+  assert.match(source, /didCopyFullPath \? <CheckIcon \/> : <CopyIcon \/>/);
+  assert.match(source, /role="status"/);
+  assert.match(source, /aria-live="polite"/);
+  assert.match(source, /window\.setTimeout\(\(\) => setCopyFeedback\(null\), 1500\)/);
+  assert.match(bridgeSource, /type: "copyFullPath"/);
+  assert.match(bridgeSource, /copyFullPath\(\)/);
+});
+
 test("native bridge forwards local-document diagnostics and render lifecycle events", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/nativeBridge.ts"),
