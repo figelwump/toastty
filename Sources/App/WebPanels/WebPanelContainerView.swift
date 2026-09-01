@@ -3,6 +3,14 @@ import CoreState
 import Foundation
 import WebKit
 
+private final class HistoryContextMenuEventMonitorToken: @unchecked Sendable {
+    let value: Any
+
+    init(value: Any) {
+        self.value = value
+    }
+}
+
 final class FocusAwareWKWebView: WKWebView {
     nonisolated static let historyBackMenuItemIdentifier = NSUserInterfaceItemIdentifier(
         "dev.toastty.web-panel.history.back"
@@ -10,28 +18,28 @@ final class FocusAwareWKWebView: WKWebView {
     nonisolated static let historyForwardMenuItemIdentifier = NSUserInterfaceItemIdentifier(
         "dev.toastty.web-panel.history.forward"
     )
+    private nonisolated static let historyContextMenuAugmentationTimeout: TimeInterval = 2
 
     var interactionDidRequestFocus: (() -> Void)?
-    var showsHistoryContextMenuItems = false
+    var showsHistoryContextMenuItems = false {
+        didSet {
+            guard showsHistoryContextMenuItems != oldValue else { return }
+            updateHistoryContextMenuEventMonitor()
+        }
+    }
 
     private var isObservingPendingContextMenu = false
+    private var historyContextMenuCancellationWorkItem: DispatchWorkItem?
+    nonisolated(unsafe) private var historyContextMenuEventMonitor: HistoryContextMenuEventMonitorToken?
 
     override func mouseDown(with event: NSEvent) {
         interactionDidRequestFocus?()
-        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control) else {
-            super.mouseDown(with: event)
-            return
-        }
-        prepareToAugmentNextContextMenu()
         super.mouseDown(with: event)
-        cancelPendingContextMenuAugmentation()
     }
 
     override func rightMouseDown(with event: NSEvent) {
         interactionDidRequestFocus?()
-        prepareToAugmentNextContextMenu()
         super.rightMouseDown(with: event)
-        cancelPendingContextMenuAugmentation()
     }
 
     override func otherMouseDown(with event: NSEvent) {
@@ -71,6 +79,19 @@ final class FocusAwareWKWebView: WKWebView {
     // the next mouse move, so leave the outer host without its own rects.
     override func resetCursorRects() {
         logCursorDiagnostic("reset-cursor-rects-suppressed", event: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSMenu.didBeginTrackingNotification,
+            object: nil
+        )
+        if let historyContextMenuEventMonitor {
+            DispatchQueue.main.async {
+                NSEvent.removeMonitor(historyContextMenuEventMonitor.value)
+            }
+        }
     }
 
     func augmentHistoryContextMenu(_ menu: NSMenu) {
@@ -156,6 +177,8 @@ final class FocusAwareWKWebView: WKWebView {
     }
 
     func cancelPendingContextMenuAugmentation() {
+        historyContextMenuCancellationWorkItem?.cancel()
+        historyContextMenuCancellationWorkItem = nil
         if isObservingPendingContextMenu {
             NotificationCenter.default.removeObserver(
                 self,
@@ -164,6 +187,118 @@ final class FocusAwareWKWebView: WKWebView {
             )
             isObservingPendingContextMenu = false
         }
+    }
+
+    func handleHistoryContextMenuGesture(
+        eventType: NSEvent.EventType,
+        modifierFlags: NSEvent.ModifierFlags,
+        eventWindow: NSWindow?,
+        hitView: NSView?
+    ) {
+        guard showsHistoryContextMenuItems else { return }
+
+        // Any newer mouse gesture supersedes a pending WebKit menu. This keeps
+        // a delayed context-menu response scoped to the click that requested it.
+        cancelPendingContextMenuAugmentation()
+
+        guard Self.shouldPrepareHistoryContextMenu(
+            eventType: eventType,
+            modifierFlags: modifierFlags,
+            eventWindow: eventWindow,
+            webViewWindow: window,
+            hitView: hitView,
+            webView: self
+        ) else {
+            return
+        }
+
+        interactionDidRequestFocus?()
+        prepareToAugmentNextContextMenu()
+
+        // WebKit may need an asynchronous content-process hit test before it
+        // starts tracking the native menu. Keep the observer alive briefly,
+        // then clear it if the page suppresses the menu or WebKit never replies.
+        let cancellationWorkItem = DispatchWorkItem { [weak self] in
+            self?.cancelPendingContextMenuAugmentation()
+        }
+        historyContextMenuCancellationWorkItem = cancellationWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.historyContextMenuAugmentationTimeout,
+            execute: cancellationWorkItem
+        )
+    }
+
+    static func shouldPrepareHistoryContextMenu(
+        eventType: NSEvent.EventType,
+        modifierFlags: NSEvent.ModifierFlags,
+        eventWindow: NSWindow?,
+        webViewWindow: NSWindow?,
+        hitView: NSView?,
+        webView: NSView
+    ) -> Bool {
+        let isContextMenuGesture: Bool
+        switch eventType {
+        case .rightMouseDown:
+            isContextMenuGesture = true
+        case .leftMouseDown:
+            isContextMenuGesture = modifierFlags
+                .intersection(.deviceIndependentFlagsMask)
+                .contains(.control)
+        default:
+            isContextMenuGesture = false
+        }
+
+        guard isContextMenuGesture,
+              let eventWindow,
+              eventWindow === webViewWindow,
+              let hitView else {
+            return false
+        }
+
+        return hitView === webView || hitView.isDescendant(of: webView)
+    }
+
+    private func updateHistoryContextMenuEventMonitor() {
+        if showsHistoryContextMenuItems {
+            installHistoryContextMenuEventMonitorIfNeeded()
+        } else {
+            removeHistoryContextMenuEventMonitor()
+            cancelPendingContextMenuAugmentation()
+        }
+    }
+
+    private func installHistoryContextMenuEventMonitorIfNeeded() {
+        guard historyContextMenuEventMonitor == nil else { return }
+
+        let eventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] event in
+            guard let self,
+                  let eventWindow = event.window,
+                  let contentView = eventWindow.contentView else {
+                return event
+            }
+
+            let location = contentView.convert(event.locationInWindow, from: nil)
+            self.handleHistoryContextMenuGesture(
+                eventType: event.type,
+                modifierFlags: event.modifierFlags,
+                eventWindow: eventWindow,
+                hitView: contentView.hitTest(location)
+            )
+            return event
+        }
+        if let eventMonitor {
+            historyContextMenuEventMonitor = HistoryContextMenuEventMonitorToken(
+                value: eventMonitor
+            )
+        }
+    }
+
+    private func removeHistoryContextMenuEventMonitor() {
+        guard let historyContextMenuEventMonitor else { return }
+        NSEvent.removeMonitor(historyContextMenuEventMonitor.value)
+        self.historyContextMenuEventMonitor = nil
     }
 
     private func logCursorDiagnostic(_ phase: String, event: NSEvent?) {
