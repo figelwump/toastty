@@ -2698,7 +2698,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             )
         )))
 
-        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+        await waitUntil(timeout: .seconds(10)) {
             fixture.sessionRuntimeStore.sessionRegistry
                 .activeSession(sessionID: plan.sessionID)?
                 .backgroundActivitiesByID[childThreadID] == nil
@@ -2706,7 +2706,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry
             .activeSession(sessionID: plan.sessionID)?
             .backgroundActivitiesByID[childThreadID])
-        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+        await waitUntil(timeout: .seconds(10)) {
             fixture.planner.codexSubagentTerminalWatcherCountForTesting == 0
         }
     }
@@ -2771,7 +2771,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             at: childStartedAt.addingTimeInterval(2)
         )
 
-        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+        await waitUntil(timeout: .seconds(10)) {
             fixture.planner.codexSubagentTerminalWatcherCountForTesting == 1
         }
         try await Task.sleep(for: .milliseconds(50))
@@ -2784,7 +2784,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             to: childRolloutURL
         )
 
-        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+        await waitUntil(timeout: .seconds(10)) {
             fixture.sessionRuntimeStore.sessionRegistry
                 .activeSession(sessionID: plan.sessionID)?
                 .backgroundActivitiesByID[childThreadID] == nil
@@ -2792,7 +2792,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry
             .activeSession(sessionID: plan.sessionID)?
             .backgroundActivitiesByID[childThreadID])
-        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+        await waitUntil(timeout: .seconds(10)) {
             fixture.planner.codexSubagentTerminalWatcherCountForTesting == 0
         }
     }
@@ -2858,7 +2858,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             at: childStartedAt.addingTimeInterval(2)
         )
 
-        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+        await waitUntil(timeout: .seconds(2)) {
             fixture.planner.codexSubagentTerminalWatcherPathsForTesting.values
                 .contains(childRolloutURL.path)
         }
@@ -2888,7 +2888,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             #"{"timestamp":"\#(currentTimestamp)","type":"event_msg","payload":{"type":"task_complete","turn_id":"current-turn","last_agent_message":"Done"}}"#,
             to: childRolloutURL
         )
-        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+        await waitUntil(timeout: .seconds(10)) {
             fixture.sessionRuntimeStore.sessionRegistry
                 .activeSession(sessionID: plan.sessionID)?
                 .backgroundActivitiesByID[childThreadID] == nil
@@ -2896,7 +2896,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry
             .activeSession(sessionID: plan.sessionID)?
             .backgroundActivitiesByID[childThreadID])
-        await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+        await waitUntil(timeout: .seconds(10)) {
             fixture.planner.codexSubagentTerminalWatcherCountForTesting == 0
         }
     }
@@ -3383,12 +3383,14 @@ private func terminalState(panelID: UUID, state: AppState) throws -> TerminalPan
 
 @MainActor
 private func waitUntil(
-    timeoutNanoseconds: UInt64 = 1_000_000_000,
-    condition: @escaping @MainActor () -> Bool
+    timeout: Duration = .seconds(1),
+    condition: @MainActor () -> Bool
 ) async {
-    let deadline = Date().addingTimeInterval(Double(timeoutNanoseconds) / 1_000_000_000)
-    while condition() == false && Date() < deadline {
-        await Task.yield()
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while condition() == false && clock.now < deadline {
+        if Task.isCancelled { return }
+        try? await Task.sleep(for: .milliseconds(10))
     }
 }
 

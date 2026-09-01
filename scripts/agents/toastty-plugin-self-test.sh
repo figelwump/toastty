@@ -7,8 +7,12 @@ VALIDATOR="$ROOT_DIR/scripts/agents/validate-toastty-plugin.py"
 "$VALIDATOR" --repo-root "$ROOT_DIR"
 
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/toastty-plugin-cache.XXXXXX")"
+claude_fixture_root=""
 cleanup() {
   rm -rf "$fixture_root"
+  if [[ -n "$claude_fixture_root" ]]; then
+    rm -rf "$claude_fixture_root"
+  fi
 }
 trap cleanup EXIT
 
@@ -40,8 +44,13 @@ else
 fi
 
 if command -v claude >/dev/null 2>&1; then
+  # Claude Code 2.1.251 misclassifies skill directories as symlinks when an
+  # ancestor contains a backslash. Recheck this isolation on CLI upgrades;
+  # the hostile path remains covered above by Toastty and Codex validation.
+  claude_fixture_root="$(mktemp -d /tmp/toastty-claude-plugin.XXXXXX)"
+  cp -R "$ROOT_DIR/plugins/toastty" "$claude_fixture_root/toastty"
   HOME="$isolated_home" CLAUDE_CONFIG_DIR="$isolated_claude_home" \
-    claude plugin validate --strict "$cache_root/plugins/toastty" >/dev/null
+    claude plugin validate --strict "$claude_fixture_root/toastty" >/dev/null
 else
   printf 'warning: claude is unavailable; skipped live Claude plugin validation\n' >&2
 fi
