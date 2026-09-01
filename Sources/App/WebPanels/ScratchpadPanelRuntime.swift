@@ -116,6 +116,7 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         let webViewCreationDuration = CFAbsoluteTimeGetCurrent() - webViewCreationStartTime
         webView.setValue(false, forKey: "drawsBackground")
+        webView.showsHistoryContextMenuItems = true
         #if DEBUG
         webView.isInspectable = true
         #endif

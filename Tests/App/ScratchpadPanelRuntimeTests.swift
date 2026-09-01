@@ -6,6 +6,23 @@ import XCTest
 
 @MainActor
 final class ScratchpadPanelRuntimeTests: XCTestCase {
+    func testScratchpadRuntimeOptsIntoHistoryContextMenuItems() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(),
+            documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            diagnosticLogger: { _, _, _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+
+        runtime.attachHost(to: container, attachment: PanelHostAttachmentToken.next())
+
+        let webView = try XCTUnwrap(container.subviews.first as? FocusAwareWKWebView)
+        XCTAssertTrue(webView.showsHistoryContextMenuItems)
+    }
+
     func testLocalOnlyCapabilityProfileUsesNonPersistentWebsiteDataStore() {
         let configuration = ScratchpadPanelRuntime.makeWebViewConfiguration(for: .localOnly)
 

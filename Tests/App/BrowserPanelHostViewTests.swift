@@ -6,6 +6,107 @@ import XCTest
 
 @MainActor
 final class BrowserPanelHostViewTests: XCTestCase {
+    func testHistoryContextMenuItemsExposeNavigationState() {
+        let webView = FocusAwareWKWebView(
+            frame: .zero,
+            configuration: WKWebViewConfiguration()
+        )
+
+        let items = FocusAwareWKWebView.historyContextMenuItems(
+            target: webView,
+            canGoBack: true,
+            canGoForward: false
+        )
+
+        XCTAssertEqual(items.map(\.title), ["Back", "Forward"])
+        XCTAssertEqual(
+            items.map(\.identifier),
+            [
+                FocusAwareWKWebView.historyBackMenuItemIdentifier,
+                FocusAwareWKWebView.historyForwardMenuItemIdentifier,
+            ]
+        )
+        XCTAssertTrue(items[0].isEnabled)
+        XCTAssertFalse(items[1].isEnabled)
+        XCTAssertTrue(items.allSatisfy { $0.target === webView })
+    }
+
+    func testHistoryContextMenuAugmentationIsOptInAndPreservesExistingItems() {
+        let webView = FocusAwareWKWebView(
+            frame: .zero,
+            configuration: WKWebViewConfiguration()
+        )
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Copy", action: nil, keyEquivalent: "")
+
+        webView.augmentHistoryContextMenu(menu)
+        XCTAssertEqual(menu.items.map(\.title), ["Copy"])
+
+        webView.showsHistoryContextMenuItems = true
+        webView.augmentHistoryContextMenu(menu)
+        webView.augmentHistoryContextMenu(menu)
+
+        XCTAssertEqual(menu.items.map(\.title), ["Copy", "", "Back", "Forward"])
+        XCTAssertTrue(menu.items[1].isSeparatorItem)
+        XCTAssertFalse(menu.items[2].isEnabled)
+        XCTAssertFalse(menu.items[3].isEnabled)
+    }
+
+    func testPendingHistoryContextMenuAugmentationOnlyMutatesNextTrackedMenu() {
+        let webView = FocusAwareWKWebView(
+            frame: .zero,
+            configuration: WKWebViewConfiguration()
+        )
+        webView.showsHistoryContextMenuItems = true
+        let firstMenu = NSMenu()
+        let secondMenu = NSMenu()
+
+        webView.prepareToAugmentNextContextMenu()
+        NotificationCenter.default.post(
+            name: NSMenu.didBeginTrackingNotification,
+            object: firstMenu
+        )
+        NotificationCenter.default.post(
+            name: NSMenu.didBeginTrackingNotification,
+            object: secondMenu
+        )
+
+        XCTAssertEqual(firstMenu.items.map(\.title), ["Back", "Forward"])
+        XCTAssertTrue(secondMenu.items.isEmpty)
+    }
+
+    func testCancelledHistoryContextMenuAugmentationDoesNotMutateLaterMenu() {
+        let webView = FocusAwareWKWebView(
+            frame: .zero,
+            configuration: WKWebViewConfiguration()
+        )
+        webView.showsHistoryContextMenuItems = true
+        let unrelatedMenu = NSMenu()
+
+        webView.prepareToAugmentNextContextMenu()
+        webView.cancelPendingContextMenuAugmentation()
+        NotificationCenter.default.post(
+            name: NSMenu.didBeginTrackingNotification,
+            object: unrelatedMenu
+        )
+
+        XCTAssertTrue(unrelatedMenu.items.isEmpty)
+    }
+
+    func testBrowserRuntimeOptsIntoHistoryContextMenuItems() throws {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+
+        runtime.attachHost(to: container, attachment: PanelHostAttachmentToken.next())
+
+        let webView = try XCTUnwrap(container.subviews.first as? FocusAwareWKWebView)
+        XCTAssertTrue(webView.showsHistoryContextMenuItems)
+    }
+
     func testCoordinatorDefersBrowserStateApplyUntilScheduledCallbackRuns() {
         let recorder = ScheduledBrowserPanelApplyRecorder()
         let runtime = BrowserPanelRuntime(

@@ -4,16 +4,34 @@ import Foundation
 import WebKit
 
 final class FocusAwareWKWebView: WKWebView {
+    nonisolated static let historyBackMenuItemIdentifier = NSUserInterfaceItemIdentifier(
+        "dev.toastty.web-panel.history.back"
+    )
+    nonisolated static let historyForwardMenuItemIdentifier = NSUserInterfaceItemIdentifier(
+        "dev.toastty.web-panel.history.forward"
+    )
+
     var interactionDidRequestFocus: (() -> Void)?
+    var showsHistoryContextMenuItems = false
+
+    private var isObservingPendingContextMenu = false
 
     override func mouseDown(with event: NSEvent) {
         interactionDidRequestFocus?()
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control) else {
+            super.mouseDown(with: event)
+            return
+        }
+        prepareToAugmentNextContextMenu()
         super.mouseDown(with: event)
+        cancelPendingContextMenuAugmentation()
     }
 
     override func rightMouseDown(with event: NSEvent) {
         interactionDidRequestFocus?()
+        prepareToAugmentNextContextMenu()
         super.rightMouseDown(with: event)
+        cancelPendingContextMenuAugmentation()
     }
 
     override func otherMouseDown(with event: NSEvent) {
@@ -53,6 +71,99 @@ final class FocusAwareWKWebView: WKWebView {
     // the next mouse move, so leave the outer host without its own rects.
     override func resetCursorRects() {
         logCursorDiagnostic("reset-cursor-rects-suppressed", event: nil)
+    }
+
+    func augmentHistoryContextMenu(_ menu: NSMenu) {
+        guard showsHistoryContextMenuItems else { return }
+
+        let historyItems = Self.historyContextMenuItems(
+            target: self,
+            canGoBack: canGoBack,
+            canGoForward: canGoForward
+        )
+
+        let existingItemCount = menu.items.count
+        if menu.items.contains(where: { $0.identifier == Self.historyBackMenuItemIdentifier }) == false {
+            menu.addItem(historyItems[0])
+        }
+        if menu.items.contains(where: { $0.identifier == Self.historyForwardMenuItemIdentifier }) == false {
+            menu.addItem(historyItems[1])
+        }
+        if existingItemCount > 0,
+           menu.items.count > existingItemCount,
+           menu.items[existingItemCount - 1].isSeparatorItem == false {
+            menu.insertItem(.separator(), at: existingItemCount)
+        }
+    }
+
+    static func historyContextMenuItems(
+        target: AnyObject,
+        canGoBack: Bool,
+        canGoForward: Bool
+    ) -> [NSMenuItem] {
+        let backItem = NSMenuItem(
+            title: "Back",
+            action: #selector(navigateBackFromContextMenu(_:)),
+            keyEquivalent: ""
+        )
+        backItem.identifier = historyBackMenuItemIdentifier
+        backItem.target = target
+        backItem.isEnabled = canGoBack
+
+        let forwardItem = NSMenuItem(
+            title: "Forward",
+            action: #selector(navigateForwardFromContextMenu(_:)),
+            keyEquivalent: ""
+        )
+        forwardItem.identifier = historyForwardMenuItemIdentifier
+        forwardItem.target = target
+        forwardItem.isEnabled = canGoForward
+        return [backItem, forwardItem]
+    }
+
+    @objc private func navigateBackFromContextMenu(_ sender: Any?) {
+        _ = sender
+        guard canGoBack else { return }
+        goBack()
+    }
+
+    @objc private func navigateForwardFromContextMenu(_ sender: Any?) {
+        _ = sender
+        guard canGoForward else { return }
+        goForward()
+    }
+
+    func prepareToAugmentNextContextMenu() {
+        guard showsHistoryContextMenuItems else { return }
+
+        cancelPendingContextMenuAugmentation()
+        isObservingPendingContextMenu = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(contextMenuDidBeginTracking(_:)),
+            name: NSMenu.didBeginTrackingNotification,
+            object: nil
+        )
+    }
+
+    @objc private func contextMenuDidBeginTracking(_ notification: Notification) {
+        guard isObservingPendingContextMenu,
+              let menu = notification.object as? NSMenu else {
+            return
+        }
+        cancelPendingContextMenuAugmentation()
+        augmentHistoryContextMenu(menu)
+    }
+
+    func cancelPendingContextMenuAugmentation() {
+        if isObservingPendingContextMenu {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSMenu.didBeginTrackingNotification,
+                object: nil
+            )
+            isObservingPendingContextMenu = false
+        }
     }
 
     private func logCursorDiagnostic(_ phase: String, event: NSEvent?) {
