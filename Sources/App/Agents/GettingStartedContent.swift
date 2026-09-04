@@ -13,5 +13,5 @@ enum GettingStartedContent {
     static let shellIntegrationManualRowBody = "Enable live titles, restored pane history, and manually started agent tracking—including inside tmux and zmx."
     static let shellIntegrationRestartNotice = "After applying, open a new Toastty pane to load the integration; existing nested shells and tmux or zmx sessions may need to restart first."
 
-    static let supportedAgentNames = ["codex", "claude", "pi", "opencode", "mimo"]
+    static let supportedAgentNames = ["codex", "claude", "cursor-agent", "pi", "opencode", "mimo"]
 }

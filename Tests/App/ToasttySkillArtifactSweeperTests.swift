@@ -408,14 +408,31 @@ private extension ToasttySkillArtifactSweeperTests {
             try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
             let codexManifestURL = rootURL.appendingPathComponent(".codex-plugin", isDirectory: true)
             let claudeManifestURL = rootURL.appendingPathComponent(".claude-plugin", isDirectory: true)
+            let cursorManifestURL = rootURL.appendingPathComponent(".cursor-plugin", isDirectory: true)
+            let hooksURL = rootURL.appendingPathComponent("hooks", isDirectory: true)
             try FileManager.default.createDirectory(at: codexManifestURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: claudeManifestURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: cursorManifestURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: hooksURL, withIntermediateDirectories: true)
             try """
             {"name":"toastty","version":"\(version)","skills":"./skills/"}
             """.write(to: codexManifestURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
             try """
             {"name":"toastty","version":"\(version)"}
             """.write(to: claudeManifestURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+            try """
+            {"name":"toastty","version":"\(version)","skills":"./skills/","hooks":"./hooks/hooks.json"}
+            """.write(to: cursorManifestURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+            try "{}\n".write(
+                to: hooksURL.appendingPathComponent("hooks.json"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try "#!/bin/sh\nexit 0\n".write(
+                to: hooksURL.appendingPathComponent("forwarder.sh"),
+                atomically: true,
+                encoding: .utf8
+            )
             for skill in ToasttyAgentPluginBundle.skills {
                 let skillURL = rootURL.appendingPathComponent("skills/\(skill.name)", isDirectory: true)
                 try FileManager.default.createDirectory(at: skillURL, withIntermediateDirectories: true)

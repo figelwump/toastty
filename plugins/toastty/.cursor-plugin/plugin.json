@@ -1,0 +1,10 @@
+{
+  "name": "toastty",
+  "version": "0.4.0",
+  "description": "Managed-session workflows and lifecycle updates for controlling and supporting Toastty from Cursor.",
+  "author": {
+    "name": "Giant Things"
+  },
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}

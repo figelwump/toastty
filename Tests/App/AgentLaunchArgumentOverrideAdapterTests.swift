@@ -141,6 +141,50 @@ struct AgentLaunchArgumentOverrideAdapterTests {
     }
 
     @Test
+    func cursorModelOverrideUsesCanonicalExecutableAndDocumentedLongFlag() throws {
+        let result = try AgentLaunchArgumentOverrideAdapter.applying(
+            model: "composer-next",
+            reasoningEffort: nil,
+            to: ["cursor-agent", "--model=profile-model", "--force"],
+            agent: .cursor,
+            profileID: "cursor"
+        )
+
+        #expect(result == ["cursor-agent", "--model", "composer-next", "--force"])
+    }
+
+    @Test
+    func cursorRejectsStandaloneReasoningEffort() {
+        #expect(
+            throws: AgentLaunchError.launchOverrideUnsupported(
+                parameter: "reasoningEffort",
+                profileID: "cursor"
+            )
+        ) {
+            _ = try AgentLaunchArgumentOverrideAdapter.applying(
+                model: nil,
+                reasoningEffort: "high",
+                to: ["cursor-agent"],
+                agent: .cursor,
+                profileID: "cursor"
+            )
+        }
+    }
+
+    @Test
+    func cursorModelOverrideDoesNotTreatGenericAgentAsCursor() {
+        #expect(throws: (any Error).self) {
+            _ = try AgentLaunchArgumentOverrideAdapter.applying(
+                model: "composer-next",
+                reasoningEffort: nil,
+                to: ["agent"],
+                agent: .cursor,
+                profileID: "cursor"
+            )
+        }
+    }
+
+    @Test
     func openCodeAndMiMoMapOnlyModel() throws {
         let openCode = try AgentLaunchArgumentOverrideAdapter.applying(
             model: "openai/gpt-next",

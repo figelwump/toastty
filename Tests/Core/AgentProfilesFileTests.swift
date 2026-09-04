@@ -33,6 +33,18 @@ struct AgentProfilesFileTests {
     }
 
     @Test
+    func templateContentsUsesCanonicalCursorCommand() {
+        let contents = AgentProfilesFile.templateContents()
+
+        #expect(contents.contains("# [cursor]"))
+        #expect(contents.contains("# displayName = \"Cursor\""))
+        #expect(contents.contains("# argv = [\"cursor-agent\"]"))
+        #expect(contents.contains("Toastty uses Cursor's collision-safe cursor-agent"))
+        #expect(contents.contains("never add the generic agent alias"))
+        #expect(contents.contains("the desktop cursor command"))
+    }
+
+    @Test
     func loadDefaultsTopBarButtonsToVisible() throws {
         let contents = """
         [codex]
@@ -129,6 +141,11 @@ struct AgentProfilesFileTests {
         displayName = "MiMo Code"
         argv = ["agent-safehouse", "mimo"]
         manualCommandNames = ["safe-mimo"]
+
+        [cursor]
+        displayName = "Cursor"
+        argv = ["cursor-agent"]
+        manualCommandNames = ["safe-cursor"]
         """
 
         let fileManager = InMemoryFileManager(templateContents: contents)
@@ -141,6 +158,7 @@ struct AgentProfilesFileTests {
             ["agent-safehouse", "pi-safe"],
             ["safe-open"],
             ["safe-mimo"],
+            ["safe-cursor"],
         ])
     }
 
@@ -274,7 +292,7 @@ struct AgentProfilesFileTests {
         #expect(
             throws: AgentProfilesParseError(
                 line: 1,
-                message: "[gemini] manualCommandNames is supported only for [codex], [claude], [opencode], [mimocode], and [pi]"
+                message: "[gemini] manualCommandNames is supported only for [codex], [claude], [cursor], [opencode], [mimocode], and [pi]"
             )
         ) {
             _ = try AgentProfilesFile.load(
@@ -350,6 +368,31 @@ struct AgentProfilesFileTests {
                 fileManager: fileManager.fileManager,
                 homeDirectoryPath: fileManager.rootURL.path
             )
+        }
+    }
+
+    @Test
+    func loadRejectsCanonicalAndCollisionProneCursorCommandsInManualCommandNames() throws {
+        for commandName in ["cursor-agent", "agent", "cursor"] {
+            let contents = """
+            [cursor]
+            displayName = "Cursor"
+            argv = ["cursor-agent"]
+            manualCommandNames = ["\(commandName)"]
+            """
+            let fileManager = InMemoryFileManager(templateContents: contents)
+
+            #expect(
+                throws: AgentProfilesParseError(
+                    line: 1,
+                    message: "[cursor] manualCommandNames must not include built-in agent commands"
+                )
+            ) {
+                _ = try AgentProfilesFile.load(
+                    fileManager: fileManager.fileManager,
+                    homeDirectoryPath: fileManager.rootURL.path
+                )
+            }
         }
     }
 

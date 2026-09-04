@@ -270,9 +270,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         return plan
     }
 
-    /// Runtime-specific projection of one user skills snapshot: Claude takes
-    /// the generated plugin root, and the other additive runtimes take the
-    /// plain skills tree inside it.
+    /// Runtime-specific projection of one user skills snapshot: Claude and
+    /// Cursor take the generated plugin root, and the other additive runtimes
+    /// take the plain skills tree inside it.
     private func deliveredUserSkillsRootPath(
         for agent: AgentKind,
         resolution: UserSkillSnapshotResolution?
@@ -298,7 +298,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         for agent: AgentKind,
         snapshot: UserSkillPluginSnapshot
     ) -> String {
-        agent == .claude ? snapshot.pluginRootURL.path : snapshot.skillsRootURL.path
+        agent == .claude || agent == .cursor
+            ? snapshot.pluginRootURL.path
+            : snapshot.skillsRootURL.path
     }
 
     /// Builds (or reuses) the user skills snapshot off the main actor,

@@ -20,7 +20,7 @@ Tell the user what will happen:
 
 - Shell integration comes first because it keeps Toastty's launcher shim ahead of later shell startup changes.
 - You will dry-run, show the plan, then ask before writing files.
-- Codex may need global status hooks; other supported managed agents get status integration at launch.
+- Codex may need global status hooks; other supported managed agents get status integration at launch. Cursor receives a launch-scoped plugin, so Toastty does not change `~/.cursor/hooks.json`.
 - Toastty makes five shipped skills available automatically to new supported managed agent launches. User-authored skills can be added under `~/.toastty/skills`.
 
 ## Available Setup Commands In This Build
@@ -51,7 +51,7 @@ If the agent is Codex, dry-run status hooks next and warn that Codex may ask the
 "$TOASTTY_CLI_PATH" setup install-hooks --agent codex --dry-run
 ```
 
-After approval, apply with `--apply`. For Claude Code, OpenCode, MiMo Code, and Pi, explain that Toastty injects status integration when those agents are launched through Toastty; no global hook install is needed.
+After approval, apply with `--apply`. For Claude Code, Cursor, OpenCode, MiMo Code, and Pi, explain that Toastty injects status integration when those agents are launched through Toastty; no global hook install is needed. For Cursor, use the unique `cursor-agent` command rather than the generic `agent` alias.
 
 Offer Terminal profiles as optional manual setup. Ask whether the user wants quick launchers for common terminal actions such as tmux, zellij, ssh, or REPLs with environment loaded. Do not block the setup flow if the user skips profiles.
 
@@ -59,13 +59,13 @@ Confirm that setup is live by launching an agent in a fresh Toastty pane. Suppor
 
 ## Phase 2: Review Automatic Skills
 
-No skills installation is required. List what Toastty will make available to new supported managed Codex, Claude Code, OpenCode, MiMo Code, and Pi launches:
+No skills installation is required. List what Toastty will make available to new supported managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi launches:
 
 ```bash
 "$TOASTTY_CLI_PATH" setup skills list
 ```
 
-The shipped set is `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, `toastty-send-diagnostics`, and `worktree-create`. Toastty delivers these only for the new managed process and does not write them into `~/.codex/skills`, `~/.claude/skills`, or `~/.agents/skills`.
+The shipped set is `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, `toastty-send-diagnostics`, and `worktree-create`. Toastty delivers these only for the new managed process and does not write them into `~/.codex/skills`, `~/.claude/skills`, `~/.cursor/skills`, or `~/.agents/skills`.
 
 To add a user skill, create `~/.toastty/skills/<name>/SKILL.md` with `name` and `description` YAML frontmatter, then rerun `setup skills list`. Fix any exclusion diagnostic before launching a new agent. `Toastty > Manage Toastty Skills…` offers the same inventory plus folder and rescan controls.
 

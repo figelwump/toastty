@@ -9,7 +9,7 @@ public extension AgentKind {
     /// managed profile overlay instead.
     var usesStagedSkillsTree: Bool {
         switch self {
-        case .claude, .mimocode, .opencode, .pi:
+        case .claude, .cursor, .mimocode, .opencode, .pi:
             return true
         default:
             return false
@@ -22,6 +22,8 @@ public extension AgentKind {
             return "Claude Code"
         case .codex:
             return "Codex"
+        case .cursor:
+            return "Cursor"
         case .mimocode:
             return "MiMo Code"
         case .opencode:
@@ -59,6 +61,9 @@ public enum ManagedAgentCommandResolver {
 
     public static func inferManagedAgent(commandName: String, argv: [String]) -> AgentKind? {
         let normalizedCommandName = commandBasename(commandName)
+        guard protectedCursorCommandNames.contains(normalizedCommandName) == false else {
+            return nil
+        }
         if let exactAgent = exactBuiltInAgent(for: normalizedCommandName) {
             return exactAgent
         }
@@ -71,6 +76,7 @@ public enum ManagedAgentCommandResolver {
             AgentKind.codex.rawValue,
             "cdx",
             AgentKind.claude.rawValue,
+            "cursor-agent",
             "mimo",
             AgentKind.mimocode.rawValue,
             AgentKind.opencode.rawValue,
@@ -83,7 +89,14 @@ public enum ManagedAgentCommandResolver {
                 continue
             }
 
-            commandNames.formUnion(profile.manualCommandNames)
+            // Cursor also ships a collision-prone generic `agent` alias, while
+            // `cursor` belongs to the desktop app. Neither may become a Toastty
+            // shim, even when an in-memory catalog bypasses agents.toml validation.
+            commandNames.formUnion(
+                profile.manualCommandNames.filter {
+                    protectedCursorCommandNames.contains(commandBasename($0)) == false
+                }
+            )
 
             guard let executable = profile.argv.first else {
                 continue
@@ -95,6 +108,9 @@ public enum ManagedAgentCommandResolver {
             let shimCommandName = URL(fileURLWithPath: executable).lastPathComponent
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard shimCommandName.isEmpty == false else {
+                continue
+            }
+            guard protectedCursorCommandNames.contains(shimCommandName.lowercased()) == false else {
                 continue
             }
 
@@ -111,8 +127,17 @@ public enum ManagedAgentCommandResolver {
 }
 
 private extension ManagedAgentCommandResolver {
+    /// Cursor's generic `agent` alias is collision-prone, while `cursor` is
+    /// the separate desktop shell command. Neither identifies Cursor Agent.
+    static let protectedCursorCommandNames: Set<String> = ["agent", "cursor"]
+
     static func isBuiltIn(_ agent: AgentKind) -> Bool {
-        agent == .codex || agent == .claude || agent == .mimocode || agent == .opencode || agent == .pi
+        agent == .codex
+            || agent == .claude
+            || agent == .cursor
+            || agent == .mimocode
+            || agent == .opencode
+            || agent == .pi
     }
 
     static func launchCommandBasenames(for agent: AgentKind) -> Set<String> {
@@ -121,6 +146,8 @@ private extension ManagedAgentCommandResolver {
             return ["codex", "cdx"]
         case .claude:
             return ["claude", "cc"]
+        case .cursor:
+            return ["cursor-agent"]
         case .mimocode:
             return ["mimo", "mimocode"]
         case .opencode:
@@ -138,6 +165,8 @@ private extension ManagedAgentCommandResolver {
             return .codex
         case AgentKind.claude.rawValue:
             return .claude
+        case "cursor-agent":
+            return .cursor
         case "mimo", AgentKind.mimocode.rawValue:
             return .mimocode
         case AgentKind.opencode.rawValue:
@@ -190,6 +219,8 @@ private extension ManagedAgentCommandResolver {
             return .codex
         case "claude":
             return .claude
+        case "cursor-agent":
+            return .cursor
         case "mimo", "mimocode":
             return .mimocode
         case "opencode":

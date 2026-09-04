@@ -741,6 +741,60 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func launchUsesImplicitCursorProfileWithModelAndTrailingPrompt() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(profiles: []),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let result = try service.launch(
+            profileID: "cursor",
+            model: "composer-next",
+            initialPrompt: "Review this change"
+        )
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(result.agent == .cursor)
+        #expect(result.displayName == "Cursor")
+        #expect(command.contains("cursor-agent --model composer-next 'Review this change'"))
+        #expect(command.contains(" agent --model") == false)
+    }
+
+    @Test
+    func implicitCursorProfileSeparatesLeadingDashPromptFromOptions() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(profiles: []),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let result = try service.launch(
+            profileID: "cursor",
+            initialPrompt: "--help me refactor"
+        )
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(command.contains("cursor-agent -- '--help me refactor'"))
+    }
+
+    @Test
     func launchWithExplicitCWDAndEnvironmentRendersStructuredShellPrefix() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -1031,6 +1085,30 @@ struct AgentLaunchServiceTests {
         #expect(throws: AgentLaunchError.initialPromptUnsupported(profileID: "codex")) {
             _ = try service.launch(profileID: "codex", initialPrompt: "start")
         }
+    }
+
+    @Test
+    func launchRejectsImplicitCursorPromptSemanticsForGenericAgentExecutable() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(
+                profiles: [AgentProfile(id: "cursor", displayName: "Cursor", argv: ["agent"])]
+            ),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        #expect(throws: AgentLaunchError.initialPromptUnsupported(profileID: "cursor")) {
+            _ = try service.launch(profileID: "cursor", initialPrompt: "start")
+        }
+        #expect(terminalRouter.sentTextByPanelID.isEmpty)
     }
 
     @Test

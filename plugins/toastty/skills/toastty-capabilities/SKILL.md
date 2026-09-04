@@ -172,10 +172,11 @@ user requests either selection:
 
 Current provider translations are:
 
-- `model`: Codex, Claude Code, OpenCode, MiMo Code, and Pi (`--model`).
+- `model`: Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi (`--model`).
 - `reasoningEffort`: Codex (`--config model_reasoning_effort=<TOML string>`),
-  Claude Code (`--effort`), and Pi (`--thinking`). OpenCode and MiMo Code do not
-  support it; never translate reasoning to `variant`.
+  Claude Code (`--effort`), and Pi (`--thinking`). Cursor, OpenCode, and MiMo
+  Code do not support it; never translate reasoning to `variant` or another
+  provider flag.
 
 Pass requested values unchanged in the structured action arguments and let the
 provider CLI make the final upstream validity decision after Toastty delivers

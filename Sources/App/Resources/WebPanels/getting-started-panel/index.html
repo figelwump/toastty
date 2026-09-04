@@ -219,7 +219,7 @@
       </div>
 
       <p class="agents">Need an agent first? Open a pane and start
-        <code>codex</code> <code>claude</code> <code>pi</code> <code>opencode</code> <code>mimo</code>
+        <code>codex</code> <code>claude</code> <code>cursor-agent</code> <code>pi</code> <code>opencode</code> <code>mimo</code>
       </p>
 
       <button class="btn-primary" id="copy-prompt">Copy onboarding prompt</button>
@@ -248,7 +248,7 @@ Read the guide, narrate each step, dry-run every setup installer first (pass --d
       <div class="setup" id="codex-hooks">
         <div class="rowhead">
           <div><b>Codex status hooks</b>
-          <div class="why">Codex may ask you to trust the hook once. Claude Code hooks are automatic for Toastty launches.</div></div>
+          <div class="why">Codex may ask you to trust the hook once. Claude Code and Cursor hooks are automatic for Toastty launches.</div></div>
           <button class="copy" data-copy-target="cmd-hooks">Copy</button>
         </div>
         <pre class="snippet" id="cmd-hooks">"$TOASTTY_CLI_PATH" setup install-hooks --agent codex --dry-run</pre>

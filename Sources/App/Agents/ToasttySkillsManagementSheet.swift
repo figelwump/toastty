@@ -406,7 +406,7 @@ struct ToasttySkillsManagementSheet: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Toastty Skills")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Toastty provides its five built-in skills, plus your user-created skills, to managed Codex, Claude Code, Pi, OpenCode, and MiMo Code sessions. Ordinary sessions are unaffected.")
+                Text("Toastty provides its five built-in skills, plus your user-created skills, to managed Codex, Claude Code, Cursor, Pi, OpenCode, and MiMo Code sessions. Ordinary sessions are unaffected.")
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -577,14 +577,14 @@ struct ToasttySkillsManagementSheet: View {
         .accessibilityIdentifier("sheet.codex-skills.details")
     }
 
-    /// Claude Code, Pi, OpenCode, and MiMo Code all consume the same staged
-    /// skills tree, so one row reports the shared `claudeModel` status.
+    /// Claude Code, Cursor, Pi, OpenCode, and MiMo Code all consume the same
+    /// staged skills tree, so one row reports the shared `claudeModel` status.
     private var launchProvidedRow: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 Image(systemName: claudeStatusSymbolName)
                     .foregroundStyle(claudeStatusColor)
-                Text("Claude Code · Pi · OpenCode · MiMo Code")
+                Text("Claude Code · Cursor · Pi · OpenCode · MiMo Code")
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
                 statusPill(claudeStatusTitle, color: claudeStatusColor)
@@ -904,7 +904,7 @@ struct ToasttySkillsManagementSheet: View {
         }
     }
 
-    static let duplicateSkillsGuidanceText = "Toastty never changes global skill folders. If duplicate Toastty skills appear, remove the separately installed copies from ~/.codex/skills, ~/.claude/skills, or ~/.agents/skills."
+    static let duplicateSkillsGuidanceText = "Toastty never changes global skill folders. If duplicate Toastty skills appear, remove the separately installed copies from ~/.codex/skills, ~/.claude/skills, ~/.cursor/skills, or ~/.agents/skills."
 }
 
 struct ManagedAgentSkillsProvisionedBanner: View {

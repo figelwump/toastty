@@ -92,9 +92,9 @@ enum AgentLaunchInstrumentation {
 
     /// `stagedSkillsIntegration` is the staged shipped-skills payload shared by
     /// every additive runtime, and `deliveredUserSkillsRootPath` is the caller's
-    /// runtime-specific projection of the user skills snapshot (Claude consumes
-    /// the plugin root; the other additive runtimes consume the plain skills
-    /// tree). Codex takes both through its profile overlay instead.
+    /// runtime-specific projection of the user skills snapshot (Claude and
+    /// Cursor consume the plugin root; the other additive runtimes consume the
+    /// plain skills tree). Codex takes both through its profile overlay instead.
     static func prepare(
         agent: AgentKind,
         argv: [String],
@@ -117,6 +117,14 @@ enum AgentLaunchInstrumentation {
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
                 artifactStore: artifactStore,
+                skillsIntegration: stagedSkillsIntegration,
+                userPluginRootPath: deliveredUserSkillsRootPath
+            )
+        }
+
+        if agent == .cursor {
+            return prepareCursorLaunch(
+                argv: argv,
                 skillsIntegration: stagedSkillsIntegration,
                 userPluginRootPath: deliveredUserSkillsRootPath
             )
@@ -174,6 +182,42 @@ enum AgentLaunchInstrumentation {
         }
 
         return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
+    }
+
+    /// Cursor's documented `--plugin-dir` flag is repeatable, so Toastty can
+    /// add its immutable shipped plugin and the generated user-skills plugin
+    /// without rewriting the user's global Cursor hooks or plugin settings.
+    /// Injection is deliberately limited to an unambiguous `cursor-agent`
+    /// executable; Cursor's generic `agent` alias is too collision-prone to
+    /// identify as a managed Cursor launch on its own.
+    private static func prepareCursorLaunch(
+        argv: [String],
+        skillsIntegration: ClaudeSkillsLaunchConfiguration?,
+        userPluginRootPath: String?
+    ) -> PreparedAgentLaunchCommand {
+        guard let insertionIndex = safeCursorPluginExecutableIndex(in: argv) else {
+            return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
+        }
+
+        var launchArguments: [String] = []
+        var environment: [String: String] = [:]
+        if let skillsIntegration {
+            launchArguments += ["--plugin-dir", skillsIntegration.pluginRootPath]
+            environment[ToasttyLaunchContextEnvironment.skillsRootKey] = skillsIntegration.skillsRootPath
+        }
+        if let userPluginRootPath = normalizedNonEmptyValue(userPluginRootPath) {
+            launchArguments += ["--plugin-dir", userPluginRootPath]
+        }
+
+        return PreparedAgentLaunchCommand(
+            argv: insertingArguments(
+                launchArguments,
+                into: argv,
+                afterIndex: insertionIndex
+            ),
+            environment: environment,
+            artifacts: nil
+        )
     }
 
     private static func prepareClaudeLaunch(
@@ -2431,6 +2475,32 @@ extension AgentLaunchInstrumentation {
                   commandName: argv[0],
                   argv: argv
               ) == .claude else {
+            return nil
+        }
+        return executableIndex
+    }
+
+    private static func safeCursorPluginExecutableIndex(in argv: [String]) -> Int? {
+        guard argv.isEmpty == false else { return nil }
+        if URL(fileURLWithPath: argv[0]).lastPathComponent.lowercased() == "cursor-agent" {
+            return 0
+        }
+        let boundaryIndex = argv.firstIndex(of: "--") ?? argv.endIndex
+        let candidates = argv.indices.filter { index in
+            guard index < boundaryIndex else { return false }
+            let basename = URL(fileURLWithPath: argv[index]).lastPathComponent.lowercased()
+            return basename == "cursor-agent"
+        }
+        guard candidates.count == 1, let executableIndex = candidates.first else { return nil }
+        guard executableIndex > 0 else { return executableIndex }
+
+        let wrapperBasename = URL(fileURLWithPath: argv[0]).lastPathComponent.lowercased()
+        let supportedWrappers: Set<String> = ["agent-safehouse", "run-sandboxed.sh"]
+        guard supportedWrappers.contains(wrapperBasename),
+              ManagedAgentCommandResolver.inferManagedAgent(
+                  commandName: argv[0],
+                  argv: argv
+              ) == .cursor else {
             return nil
         }
         return executableIndex

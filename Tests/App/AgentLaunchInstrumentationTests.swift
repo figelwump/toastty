@@ -219,6 +219,125 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertFalse(preparedLaunch.argv.contains("--plugin-dir"))
     }
 
+    func testPrepareCursorLaunchAddsShippedAndUserPluginsWithoutReplacingCallerPlugins() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty cursor plugin",
+            skillsRootPath: "/tmp/toastty cursor plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .cursor,
+            argv: [
+                "/Users/test/.local/bin/cursor-agent",
+                "--plugin-dir", "/tmp/caller-one",
+                "--plugin-dir=/tmp/caller-two",
+                "--model", "composer-1.5",
+            ],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration,
+            deliveredUserSkillsRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+
+        let pluginDirIndices = preparedLaunch.argv.indices.filter {
+            preparedLaunch.argv[$0] == "--plugin-dir"
+        }
+        XCTAssertEqual(pluginDirIndices.count, 3)
+        XCTAssertEqual(preparedLaunch.argv[safe: pluginDirIndices[0] + 1], configuration.pluginRootPath)
+        XCTAssertEqual(
+            preparedLaunch.argv[safe: pluginDirIndices[1] + 1],
+            "/tmp/user-plugin-root/toastty-user"
+        )
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/caller-one"))
+        XCTAssertTrue(preparedLaunch.argv.contains("--plugin-dir=/tmp/caller-two"))
+        XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+        XCTAssertNil(preparedLaunch.artifacts)
+    }
+
+    func testPrepareCursorLaunchAddsPluginAfterSupportedWrapperCommand() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-cursor-plugin",
+            skillsRootPath: "/tmp/toastty-cursor-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .cursor,
+            argv: ["agent-safehouse", "--cwd", "/tmp/repo", "cursor-agent", "--model", "composer-1.5"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration
+        )
+
+        let cursorIndex = try XCTUnwrap(preparedLaunch.argv.firstIndex(of: "cursor-agent"))
+        XCTAssertEqual(preparedLaunch.argv[safe: cursorIndex + 1], "--plugin-dir")
+        XCTAssertEqual(preparedLaunch.argv[safe: cursorIndex + 2], configuration.pluginRootPath)
+    }
+
+    func testPrepareCursorLaunchRefusesGenericAgentAndOpaqueWrapper() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-cursor-plugin",
+            skillsRootPath: "/tmp/toastty-cursor-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+
+        for argv in [
+            ["agent", "--model", "composer-1.5"],
+            ["custom-wrapper", "cursor-agent", "--model", "composer-1.5"],
+        ] {
+            let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+                agent: .cursor,
+                argv: argv,
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default,
+                stagedSkillsIntegration: configuration,
+                deliveredUserSkillsRootPath: "/tmp/user-plugin-root/toastty-user"
+            )
+
+            XCTAssertEqual(preparedLaunch.argv, argv)
+            XCTAssertTrue(preparedLaunch.environment.isEmpty)
+            XCTAssertNil(preparedLaunch.artifacts)
+        }
+    }
+
+    func testPrepareDirectCursorLaunchDoesNotConfusePromptWithExecutable() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-cursor-plugin",
+            skillsRootPath: "/tmp/toastty-cursor-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .cursor,
+            argv: ["cursor-agent", "cursor-agent"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration
+        )
+
+        XCTAssertEqual(
+            preparedLaunch.argv,
+            [
+                "cursor-agent",
+                "--plugin-dir", "/tmp/toastty-cursor-plugin",
+                "cursor-agent",
+            ]
+        )
+    }
+
     func testPrepareCodexLaunchGainsOnlyTheProfileFlagForSkills() throws {
         let configuration = CodexSkillsLaunchConfiguration(
             profileName: "toastty-managed",

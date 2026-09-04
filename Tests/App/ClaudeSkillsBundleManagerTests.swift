@@ -33,6 +33,16 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
             .appendingPathComponent("toastty-open-markdown/scripts/open.sh")
             .path
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: scriptPath))
+        let cursorForwarderPath = URL(fileURLWithPath: first.pluginRootPath)
+            .appendingPathComponent("hooks/forwarder.sh")
+            .path
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: cursorForwarderPath))
+        XCTAssertFalse(
+            FileManager.default.isExecutableFile(
+                atPath: URL(fileURLWithPath: first.pluginRootPath)
+                    .appendingPathComponent("hooks/hooks.json").path
+            )
+        )
         XCTAssertTrue(
             FileManager.default.fileExists(
                 atPath: URL(fileURLWithPath: first.skillsRootPath)
@@ -78,6 +88,49 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
         let deliveryStatus = await manager.deliveryStatus()
         guard case .unavailable = deliveryStatus else {
             return XCTFail("Expected unavailable delivery status")
+        }
+    }
+
+    func testPluginReaderRejectsBundleWithoutCursorAssets() throws {
+        let rootURL = temporaryDirectory(named: "missing-cursor-assets")
+        let sourceURL = rootURL.appendingPathComponent("source/toastty", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try makePlugin(at: sourceURL, version: "1.2.3")
+        try FileManager.default.removeItem(
+            at: sourceURL.appendingPathComponent(".cursor-plugin", isDirectory: true)
+        )
+        try FileManager.default.removeItem(
+            at: sourceURL.appendingPathComponent("hooks", isDirectory: true)
+        )
+
+        let manifestPath = sourceURL
+            .appendingPathComponent(".cursor-plugin/plugin.json", isDirectory: false)
+            .path
+        XCTAssertThrowsError(try ToasttyAgentPluginBundle.read(pluginRootURL: sourceURL)) { error in
+            XCTAssertEqual(
+                error as? ToasttyAgentPluginBundleError,
+                .unreadableManifest(manifestPath)
+            )
+        }
+    }
+
+    func testPluginReaderRejectsMissingCursorHookAssets() throws {
+        let rootURL = temporaryDirectory(named: "missing-cursor-hook-assets")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        for (index, relativePath) in ["hooks/hooks.json", "hooks/forwarder.sh"].enumerated() {
+            let sourceURL = rootURL.appendingPathComponent("case-\(index)/toastty", isDirectory: true)
+            try makePlugin(at: sourceURL, version: "1.2.3")
+            let missingURL = sourceURL.appendingPathComponent(relativePath, isDirectory: false)
+            try FileManager.default.removeItem(at: missingURL)
+
+            XCTAssertThrowsError(try ToasttyAgentPluginBundle.read(pluginRootURL: sourceURL)) { error in
+                XCTAssertEqual(
+                    error as? ToasttyAgentPluginBundleError,
+                    .unreadablePlugin(missingURL.path),
+                    relativePath
+                )
+            }
         }
     }
 
@@ -221,18 +274,35 @@ private extension ClaudeSkillsBundleManagerTests {
         try FileManager.default.createDirectory(at: scriptsURL, withIntermediateDirectories: true)
         try "#!/bin/sh\nexit 0\n"
             .write(to: scriptsURL.appendingPathComponent("open.sh"), atomically: true, encoding: .utf8)
+        let hooksURL = rootURL.appendingPathComponent("hooks", isDirectory: true)
+        try FileManager.default.createDirectory(at: hooksURL, withIntermediateDirectories: true)
+        try "{}\n".write(
+            to: hooksURL.appendingPathComponent("hooks.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "#!/bin/sh\nexit 0\n".write(
+            to: hooksURL.appendingPathComponent("forwarder.sh"),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     func makeManifest(at rootURL: URL, version: String) throws {
         let codexURL = rootURL.appendingPathComponent(".codex-plugin", isDirectory: true)
         let claudeURL = rootURL.appendingPathComponent(".claude-plugin", isDirectory: true)
+        let cursorURL = rootURL.appendingPathComponent(".cursor-plugin", isDirectory: true)
         try FileManager.default.createDirectory(at: codexURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: claudeURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cursorURL, withIntermediateDirectories: true)
         try """
         {"name":"toastty","version":"\(version)","skills":"./skills/"}
         """.write(to: codexURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
         try """
         {"name":"toastty","version":"\(version)"}
         """.write(to: claudeURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+        try """
+        {"name":"toastty","version":"\(version)","skills":"./skills/","hooks":"./hooks/hooks.json"}
+        """.write(to: cursorURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
     }
 }

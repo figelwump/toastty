@@ -27,7 +27,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 ### Agents
 
 - **Run agents your usual way** — run CLIs from the command line and Toastty picks up live status automatically for supported agents; or launch from the `Agent` menu, top bar, command palette, or keyboard shortcut
-- **Live sidebar status** — working, needs-approval, ready, or error state for Codex, Claude, OpenCode, MiMo Code, and Pi sessions
+- **Live sidebar status** — working, ready, or error state for Cursor sessions, plus working, needs-approval, ready, or error state for Codex, Claude, OpenCode, MiMo Code, and Pi sessions
 - **Nested agent visibility** — orchestrating sessions show child agents and background work as expandable sidebar rows, including waiting and attention states
 - **Unread badges and notifications** — sidebar badges and macOS notifications when an agent needs you
 - **Jump to the next session that needs you** — `Cmd+Shift+A` rotates through unreads, approval/error sessions, then active work
@@ -126,7 +126,7 @@ documents, and Scratchpads. Open the list from the empty right-panel view or
 the right-panel Add menu to reopen supporting material without navigating back
 to its original workspace tab.
 
-`Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. Supported managed Codex, Claude Code, OpenCode, MiMo Code, and Pi sessions receive the `toastty-scratchpad` skill automatically, so you can usually ask the agent for a visual and let it create and bind its own Scratchpad on demand.
+`Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. Supported managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions receive the `toastty-scratchpad` skill automatically, so you can usually ask the agent for a visual and let it create and bind its own Scratchpad on demand.
 
 Browser panel header actions can open the current page in the default browser, copy or save the visible page screenshot, insert a temporary PNG path into an active Toastty-managed agent session in the same workspace tab, or annotate the page with numbered comments and send that visual feedback to an active agent.
 
@@ -140,7 +140,7 @@ Terminal command-click integrations use Toastty for common supporting files: sup
   <img src="website/assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and live agent status rows" width="320">
 </p>
 
-Run agents the way you usually do — type `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, or `pi` in any terminal pane and Toastty's command shims pick up live status automatically. Or launch from the `Agent` menu, the top bar, the command palette, or a keyboard shortcut. Either way, built-in session telemetry drives sidebar status, unread badges, and desktop notifications, and later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed.
+Run agents the way you usually do — type `codex`, `cdx`, `claude`, `cursor-agent`, `opencode`, `mimo`, `mimocode`, or `pi` in any terminal pane and Toastty's command shims pick up live status automatically. Or launch from the `Agent` menu, the top bar, the command palette, or a keyboard shortcut. Either way, built-in session telemetry drives sidebar status, unread badges, and desktop notifications, and later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed. Toastty intentionally does not intercept Cursor's generic `agent` alias because that name is not unique to Cursor.
 
 Use `Cmd+Shift+L` to mark a managed session for later follow-up without pinning it; later-flagged sessions join the active `Cmd+Shift+A` rotation after urgent unread or approval/error work, and the flag clears automatically when the session meaningfully advances.
 
@@ -164,6 +164,10 @@ shortcutKey = "c"
 displayName = "Claude Code"
 argv = ["claude"]
 
+[cursor]
+displayName = "Cursor"
+argv = ["cursor-agent"]
+
 [opencode]
 displayName = "OpenCode"
 argv = ["opencode"]
@@ -181,10 +185,11 @@ Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the c
 
 ### Profile IDs and special behavior
 
-The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes five well-known IDs that receive first-party instrumentation:
+The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes six well-known IDs that receive first-party instrumentation:
 
 - **`codex`** — Automatically enables five Toastty skills only for managed sessions, and uses installed Codex status hooks when set up, with notify and session-recording fallback paths for compatibility. Typed `cdx` launches are treated as Codex too.
 - **`claude`** — Automatically adds the same five Toastty skills for the managed process and injects lifecycle hooks that report session state back to the sidebar
+- **`cursor`** — Adds the same five Toastty skills and Cursor lifecycle hooks through launch-only `--plugin-dir` arguments; typed `cursor-agent` launches are treated as Cursor, while the generic `agent` alias is deliberately not shimmed
 - **`opencode`** — Automatically adds the same five Toastty skills and injects a temporary OpenCode-compatible status plugin through `OPENCODE_CONFIG_CONTENT`
 - **`mimocode`** — Automatically adds the same five Toastty skills and injects a temporary OpenCode-compatible status plugin through `MIMOCODE_CONFIG_CONTENT`; typed `mimo` launches are treated as MiMo Code too
 - **`pi`** — Automatically adds the same five Toastty skills and injects Toastty's bundled Pi extension for session, tool, and changed-file telemetry while preserving user Pi extensions
@@ -202,11 +207,11 @@ argv = ["/my/codex-wrapper"]  # (ID is "codex", regardless of argv)
 argv = ["codex"]              # (ID is "my-codex", not "codex")
 ```
 
-For Pi, Toastty adds its own `--extension <toastty-pi-extension.js>` argument after the actual `pi` executable. User `--extension` arguments remain additive; `pi --no-extensions` or `pi -ne` disables Toastty's injected extension for that launch too. Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the instance-specific CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
+For Cursor, Toastty injects its plugin for a direct `cursor-agent` launch or when it can identify one unambiguous `cursor-agent` executable inside a supported wrapper; opaque wrappers still launch but receive only the base session context. For Pi, Toastty adds its own `--extension <toastty-pi-extension.js>` argument after the actual `pi` executable. User `--extension` arguments remain additive; `pi --no-extensions` or `pi -ne` disables Toastty's injected extension for that launch too. Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the instance-specific CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
 
-No skills setup is required. Supported managed Codex launches receive Toastty's five-skill plugin through a Toastty-owned plugin cache and profile overlay inside `CODEX_HOME` plus an injected `--profile toastty-managed` flag; the user's `config.toml` is never written and ordinary Codex sessions see no Toastty skills. Claude Code receives an immutable Toastty plugin copy through a session-only `--plugin-dir` argument, OpenCode and MiMo Code receive the same staged skills through launch-only config content, and Pi receives them through additive `--skill` flags. You can also add your own skills under `~/.toastty/skills/<name>/SKILL.md`; accepted packages are delivered to newly launched managed sessions alongside the built-in skills — see [User-created skills](docs/running-agents.md#user-created-skills). Run `"$TOASTTY_CLI_PATH" setup skills list` for a read-only inventory and exclusion diagnostics. After an app update, Toastty prepares the current bundled skills before restored supported sessions resume. Provisioning failures never block launch. Each supported agent shows a one-time nonblocking notice with `View Skills…`; the shared sheet lists built-in and user skills, explains the delivery models, and provides Codex status and repair controls.
+No skills setup is required. Supported managed Codex launches receive Toastty's five-skill plugin through a Toastty-owned plugin cache and profile overlay inside `CODEX_HOME` plus an injected `--profile toastty-managed` flag; the user's `config.toml` is never written and ordinary Codex sessions see no Toastty skills. Claude Code and Cursor receive immutable Toastty plugin copies through session-only `--plugin-dir` arguments, OpenCode and MiMo Code receive the same staged skills through launch-only config content, and Pi receives them through additive `--skill` flags. Cursor's plugin also carries its managed-session lifecycle hooks; Toastty does not rewrite `~/.cursor/hooks.json`. You can also add your own skills under `~/.toastty/skills/<name>/SKILL.md`; accepted packages are delivered to newly launched managed sessions alongside the built-in skills — see [User-created skills](docs/running-agents.md#user-created-skills). Run `"$TOASTTY_CLI_PATH" setup skills list` for a read-only inventory and exclusion diagnostics. After an app update, Toastty prepares the current bundled skills before restored supported sessions resume. Provisioning failures never block launch. Each supported agent shows a one-time nonblocking notice with `View Skills…`; the shared sheet lists built-in and user skills, explains the delivery models, and provides Codex status and repair controls.
 
-Toastty never changes separately installed skills under `~/.codex/skills`, `~/.claude/skills`, or `~/.agents/skills`. If old unnamespaced Toastty skills appear alongside the `toastty:` plugin entries, remove those global copies manually.
+Toastty never changes separately installed skills under `~/.codex/skills`, `~/.claude/skills`, `~/.cursor/skills`, or `~/.agents/skills`. If old unnamespaced Toastty skills appear alongside the `toastty:` plugin entries, remove those global copies manually.
 
 Status hooks are separate from skills. For the most complete Codex progress and approval status, run `Toastty > Set Up Agent Status Hooks…` once. Toastty installs a stable hook forwarder under `~/.toastty/codex-hooks/` and adds it to `~/.codex/hooks.json`, so Codex can ask you to review and trust the same command instead of a new temporary script each session.
 
@@ -240,7 +245,7 @@ For the full command reference including all flags, environment variables, JSON 
 
 The CLI can also drive higher-level workflows against a normal running Toastty instance. This repo's `worktree-create` skill is one example: it resolves the current Toastty window, scopes the current parent session when needed, creates a background workspace, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and launches the new agent with structured `agent.launch` arguments for `cwd`, environment, `initialPrompt`, and optional setup commands. Fully custom startup commands remain available through the helper's explicit `--startup-command` path.
 
-For development, repo-local skills can be linked into Claude and generic-agent skill directories with `scripts/agents/link-global-skills.sh`. Normal managed Codex, Claude Code, OpenCode, MiMo Code, and Pi sessions use Toastty's automatic launch-scoped delivery instead. Run the script with `--help` to list its supported targets, selected skills, and cleanup options.
+For development, repo-local skills can be linked into Claude and generic-agent skill directories with `scripts/agents/link-global-skills.sh`. Normal managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions use Toastty's automatic launch-scoped delivery instead. Run the script with `--help` to list its supported targets, selected skills, and cleanup options.
 
 If you want to point an agent at that pattern and have it adapt the workflow for another repo, use this prompt:
 
@@ -263,7 +268,7 @@ Use `Toastty > Manage Config…` to open or create the live config file inside T
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local terminal UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
-- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations (`codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, and `pi`) inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. `manualCommandNames` is only for extra wrapper executable names; Codex integration checks apply to managed Codex launches from typed shims and UI launches. Set this flag to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
+- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations (`codex`, `cdx`, `claude`, `cursor-agent`, `opencode`, `mimo`, `mimocode`, and `pi`) inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. The generic `agent` command is never shimmed. `manualCommandNames` is only for extra wrapper executable names; Codex integration checks apply to managed Codex launches from typed shims and UI launches. Set this flag to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
 - the `View` menu uses contextual labels for this shortcut family: focused terminals and local documents show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
 
 Example:

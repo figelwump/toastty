@@ -186,7 +186,7 @@ final class ToasttyUserSkillCatalog: ToasttyUserSkillSnapshotProviding, @uncheck
 
     /// Reuse of the newest already-built snapshot without scanning sources or
     /// staging anything. Every call performs structural existence checks
-    /// (receipt decode, both plugin manifests, the skills root, and each
+    /// (receipt decode, all plugin manifests, the skills root, and each
     /// accepted package directory). The receipt's recorded content digest is
     /// additionally recomputed once per process per snapshot identity and the
     /// verdict memoized, so half-deleted or tampered snapshots are rejected
@@ -526,6 +526,13 @@ private extension ToasttyUserSkillCatalog {
             description: Self.pluginDescription,
             author: AuthorPayload(name: Self.authorName)
         )
+        let cursorManifest = CursorManifestPayload(
+            name: UserSkillPluginSnapshot.pluginName,
+            version: version,
+            description: Self.pluginDescription,
+            author: AuthorPayload(name: Self.authorName),
+            skills: "./skills/"
+        )
         let marketplace = MarketplacePayload(
             name: UserSkillPluginSnapshot.pluginName,
             interface: MarketplaceInterfacePayload(displayName: Self.displayName),
@@ -549,12 +556,16 @@ private extension ToasttyUserSkillCatalog {
         let claudeManifestURL = pluginRootURL
             .appendingPathComponent(".claude-plugin", isDirectory: true)
             .appendingPathComponent("plugin.json")
+        let cursorManifestURL = pluginRootURL
+            .appendingPathComponent(".cursor-plugin", isDirectory: true)
+            .appendingPathComponent("plugin.json")
         let marketplaceManifestURL = marketplaceRootURL
             .appendingPathComponent(".agents/plugins", isDirectory: true)
             .appendingPathComponent("marketplace.json")
         for (url, data) in [
             (codexManifestURL, try encodeJSON(codexManifest)),
             (claudeManifestURL, try encodeJSON(claudeManifest)),
+            (cursorManifestURL, try encodeJSON(cursorManifest)),
             (marketplaceManifestURL, try encodeJSON(marketplace)),
         ] {
             try fileManager.createDirectory(
@@ -657,13 +668,14 @@ private extension ToasttyUserSkillCatalog {
     // MARK: - Existing-snapshot verification
 
     /// Structural existence checks run on every `existingSnapshot()` call:
-    /// both plugin manifests, the skills root, and each accepted package
+    /// all plugin manifests, the skills root, and each accepted package
     /// directory named in the receipt.
     func hasIntactStructure(pluginRootURL: URL, receipt: SnapshotReceipt) -> Bool {
         let skillsRootURL = pluginRootURL.appendingPathComponent("skills", isDirectory: true)
         var requiredPaths = [
             pluginRootURL.appendingPathComponent(".codex-plugin/plugin.json").path,
             pluginRootURL.appendingPathComponent(".claude-plugin/plugin.json").path,
+            pluginRootURL.appendingPathComponent(".cursor-plugin/plugin.json").path,
             skillsRootURL.path,
         ]
         requiredPaths += receipt.acceptedPackageNames.map { name in
@@ -748,6 +760,14 @@ private extension ToasttyUserSkillCatalog {
         let version: String
         let description: String
         let author: AuthorPayload
+    }
+
+    struct CursorManifestPayload: Encodable {
+        let name: String
+        let version: String
+        let description: String
+        let author: AuthorPayload
+        let skills: String
     }
 
     struct MarketplaceInterfacePayload: Encodable {

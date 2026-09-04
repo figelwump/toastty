@@ -38,6 +38,7 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
 
     public static let claude = Self(rawValue: "claude")!
     public static let codex = Self(rawValue: "codex")!
+    public static let cursor = Self(rawValue: "cursor")!
     public static let mimocode = Self(rawValue: "mimocode")!
     public static let opencode = Self(rawValue: "opencode")!
     public static let pi = Self(rawValue: "pi")!

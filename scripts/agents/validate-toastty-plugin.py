@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the repo-owned Toastty Codex plugin and its bundled copy."""
+"""Validate the repo-owned Toastty agent plugin and its bundled copy."""
 
 from __future__ import annotations
 
@@ -17,6 +17,16 @@ EXPECTED_SKILLS = [
     "toastty-send-diagnostics",
     "worktree-create",
 ]
+
+EXPECTED_CURSOR_HOOKS = [
+    "sessionStart",
+    "beforeSubmitPrompt",
+    "preToolUse",
+    "postToolUseFailure",
+    "stop",
+    "sessionEnd",
+]
+EXPECTED_CURSOR_HOOK_COMMAND = '"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh"'
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,6 +89,9 @@ def relative_files(root: Path) -> list[Path]:
 def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]) -> None:
     codex_manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     claude_manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
+    cursor_manifest_path = plugin_root / ".cursor-plugin" / "plugin.json"
+    cursor_hooks_path = plugin_root / "hooks" / "hooks.json"
+    cursor_forwarder_path = plugin_root / "hooks" / "forwarder.sh"
     skills_root = plugin_root / "skills"
 
     marketplace = load_json(marketplace_path, errors)
@@ -95,14 +108,26 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
 
     codex_manifest = load_json(codex_manifest_path, errors)
     claude_manifest = load_json(claude_manifest_path, errors)
+    cursor_manifest = load_json(cursor_manifest_path, errors)
     if codex_manifest.get("name") != "toastty":
         errors.append("Codex plugin manifest name must be exactly `toastty`")
     if claude_manifest.get("name") != "toastty":
         errors.append("Claude plugin manifest name must be exactly `toastty`")
-    if codex_manifest.get("version") != claude_manifest.get("version"):
-        errors.append("Codex and Claude plugin manifest versions must match")
+    if cursor_manifest.get("name") != "toastty":
+        errors.append("Cursor plugin manifest name must be exactly `toastty`")
+    manifest_versions = {
+        codex_manifest.get("version"),
+        claude_manifest.get("version"),
+        cursor_manifest.get("version"),
+    }
+    if None in manifest_versions or len(manifest_versions) != 1:
+        errors.append("Codex, Claude, and Cursor plugin manifest versions must match")
     if codex_manifest.get("skills") != "./skills/":
-        errors.append("plugin manifest skills path must be `./skills/`")
+        errors.append("Codex plugin manifest skills path must be `./skills/`")
+    if cursor_manifest.get("skills") != "./skills/":
+        errors.append("Cursor plugin manifest skills path must be `./skills/`")
+    if cursor_manifest.get("hooks") != "./hooks/hooks.json":
+        errors.append("Cursor plugin manifest hooks path must be `./hooks/hooks.json`")
     for host, manifest in (("Codex", codex_manifest), ("Claude", claude_manifest)):
         forbidden_components = sorted(
             {"agents", "apps", "hooks", "mcpServers", "commands"}.intersection(manifest)
@@ -112,12 +137,56 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
                 f"{host} skills-only manifest declares forbidden components: {forbidden_components}"
             )
 
+    cursor_hooks = load_json(cursor_hooks_path, errors)
+    if cursor_hooks.get("version") != 1:
+        errors.append("Cursor hooks config version must be exactly `1`")
+    hook_definitions = cursor_hooks.get("hooks")
+    if not isinstance(hook_definitions, dict):
+        errors.append("Cursor hooks config must contain a `hooks` object")
+        hook_definitions = {}
+    if sorted(hook_definitions) != sorted(EXPECTED_CURSOR_HOOKS):
+        errors.append(
+            f"Cursor hook allowlist mismatch: found {sorted(hook_definitions)}"
+        )
+    for hook_name in EXPECTED_CURSOR_HOOKS:
+        entries = hook_definitions.get(hook_name)
+        if not isinstance(entries, list) or len(entries) != 1 or not isinstance(entries[0], dict):
+            errors.append(f"Cursor hook {hook_name} must contain exactly one command definition")
+            continue
+        definition = entries[0]
+        if definition.get("command") != EXPECTED_CURSOR_HOOK_COMMAND:
+            errors.append(
+                f"Cursor hook {hook_name} must invoke the plugin-root forwarder"
+            )
+        timeout = definition.get("timeout")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or timeout <= 0
+            or timeout > 2
+        ):
+            errors.append(f"Cursor hook {hook_name} timeout must be at most 2 seconds")
+        if definition.get("failClosed") is not False:
+            errors.append(f"Cursor hook {hook_name} must explicitly fail open")
+
+    try:
+        if cursor_forwarder_path.stat().st_mode & 0o111 == 0:
+            errors.append(f"Cursor hook forwarder is not executable: {cursor_forwarder_path}")
+    except OSError as error:
+        errors.append(f"unable to inspect Cursor hook forwarder at {cursor_forwarder_path}: {error}")
+
     try:
         top_level_entries = sorted(path.name for path in plugin_root.iterdir())
     except OSError as error:
         errors.append(f"unable to enumerate {plugin_root}: {error}")
         return
-    if top_level_entries != [".claude-plugin", ".codex-plugin", "skills"]:
+    if top_level_entries != [
+        ".claude-plugin",
+        ".codex-plugin",
+        ".cursor-plugin",
+        "hooks",
+        "skills",
+    ]:
         errors.append(f"plugin top-level allowlist mismatch: found {top_level_entries}")
     unexpected_metadata = sorted(
         path.relative_to(plugin_root).as_posix()
@@ -292,7 +361,7 @@ def main() -> int:
         for error in errors:
             print(f"error: {error}", file=sys.stderr)
         return 1
-    print("Toastty dual-host plugin validation passed")
+    print("Toastty three-host plugin validation passed")
     return 0
 
 

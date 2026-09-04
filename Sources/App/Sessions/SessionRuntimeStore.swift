@@ -64,6 +64,12 @@ final class SessionRuntimeStore: ObservableObject {
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
     private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
+    private struct CursorHookCorrelationState: Equatable {
+        var conversationID: String
+        var generationID: String?
+        var cloudHandoff: Bool
+    }
+    private var cursorHookCorrelationBySessionID: [String: CursorHookCorrelationState] = [:]
     private var nativeBindingConfirmationBySessionID: [
         String: ManagedNativeSessionBindingConfirmation
     ] = [:]
@@ -1739,6 +1745,180 @@ final class SessionRuntimeStore: ObservableObject {
         return true
     }
 
+    /// Reconciles Cursor's process-global hook stream with one managed root
+    /// session. Cursor invokes each hook in a fresh process, and nested Cursor
+    /// launches inherit the parent's Toastty environment, so session and panel
+    /// IDs alone are not enough to prove that a terminal status belongs to the
+    /// root turn.
+    @discardableResult
+    func handleCursorHookEvent(
+        sessionID: String,
+        event: CursorHookEvent,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .cursor else {
+            return false
+        }
+
+        let conversationID = normalizedNonEmpty(event.conversationID)
+        let generationID = normalizedNonEmpty(event.generationID)
+
+        switch event.hookEventName {
+        case "sessionStart":
+            guard let conversationID,
+                  let status = event.status,
+                  status.kind == .idle else {
+                return false
+            }
+            if cursorHookCorrelationBySessionID[sessionID] != nil {
+                // A later nested Cursor process must not replace the root
+                // conversation claimed by this managed session.
+                return false
+            }
+            cursorHookCorrelationBySessionID[sessionID] = CursorHookCorrelationState(
+                conversationID: conversationID,
+                generationID: nil,
+                cloudHandoff: false
+            )
+            updateStatus(sessionID: sessionID, status: status, at: now)
+            return true
+
+        case "beforeSubmitPrompt":
+            guard let conversationID,
+                  let generationID,
+                  let correlation = cursorHookCorrelationBySessionID[sessionID],
+                  correlation.conversationID == conversationID else {
+                return false
+            }
+
+            cursorHookCorrelationBySessionID[sessionID] = CursorHookCorrelationState(
+                conversationID: conversationID,
+                generationID: generationID,
+                cloudHandoff: event.cloudHandoff
+            )
+            let reportedStatus = event.status?.kind == .working ? event.status : nil
+            updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(
+                    kind: .working,
+                    summary: reportedStatus?.summary ?? "Working",
+                    detail: reportedStatus?.detail
+                        ?? (event.cloudHandoff
+                            ? "Handing off to Cursor Cloud"
+                            : "Responding to your prompt")
+                ),
+                at: now
+            )
+            return true
+
+        case "preToolUse", "postToolUseFailure":
+            guard cursorHookEventMatchesActiveRootTurn(
+                sessionID: sessionID,
+                conversationID: conversationID,
+                generationID: generationID
+            ), let status = event.status, status.kind == .working else {
+                return false
+            }
+            updateStatus(sessionID: sessionID, status: status, at: now)
+            return true
+
+        case "stop":
+            guard cursorHookEventMatchesActiveRootTurn(
+                sessionID: sessionID,
+                conversationID: conversationID,
+                generationID: generationID
+            ), let status = event.status else {
+                return false
+            }
+
+            let correlation = cursorHookCorrelationBySessionID[sessionID]
+            let reconciledStatus: SessionStatus
+            switch status.kind {
+            case .ready where correlation?.cloudHandoff == true:
+                // Cursor's local loop completed the documented `&` handoff;
+                // that is not evidence that the remote Cloud agent completed.
+                reconciledStatus = SessionStatus(
+                    kind: .idle,
+                    summary: "Waiting",
+                    detail: "Handed off to Cursor Cloud"
+                )
+            case .ready, .idle, .error:
+                reconciledStatus = status
+            case .working, .needsApproval:
+                return false
+            }
+
+            clearCursorActiveGeneration(sessionID: sessionID)
+            updateStatus(sessionID: sessionID, status: reconciledStatus, at: now)
+            return true
+
+        case "sessionEnd":
+            // SessionEnd describes the whole Cursor conversation, not a turn.
+            // Retire the root latch so `/clear` and its aliases can establish
+            // the next documented composer conversation. If the conversation
+            // ends while a turn is still active, clear Working without
+            // fabricating a completion.
+            guard cursorHookEventMatchesRootConversation(
+                sessionID: sessionID,
+                conversationID: conversationID
+            ) else {
+                return false
+            }
+            let hadActiveGeneration = cursorHookCorrelationBySessionID[sessionID]?.generationID != nil
+            cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
+            if let status = event.status, status.kind == .error {
+                updateStatus(sessionID: sessionID, status: status, at: now)
+            } else if hadActiveGeneration {
+                updateStatus(
+                    sessionID: sessionID,
+                    status: SessionStatus(
+                        kind: .idle,
+                        summary: "Stopped",
+                        detail: "Cursor session ended before the turn completed"
+                    ),
+                    at: now
+                )
+            }
+            return true
+
+        default:
+            return false
+        }
+    }
+
+    private func cursorHookEventMatchesActiveRootTurn(
+        sessionID: String,
+        conversationID: String?,
+        generationID: String?
+    ) -> Bool {
+        guard let conversationID,
+              let generationID,
+              let correlation = cursorHookCorrelationBySessionID[sessionID] else {
+            return false
+        }
+        return correlation.conversationID == conversationID
+            && correlation.generationID == generationID
+    }
+
+    private func cursorHookEventMatchesRootConversation(
+        sessionID: String,
+        conversationID: String?
+    ) -> Bool {
+        guard let conversationID,
+              let correlation = cursorHookCorrelationBySessionID[sessionID] else {
+            return false
+        }
+        return correlation.conversationID == conversationID
+    }
+
+    private func clearCursorActiveGeneration(sessionID: String) {
+        guard var correlation = cursorHookCorrelationBySessionID[sessionID] else { return }
+        correlation.generationID = nil
+        correlation.cloudHandoff = false
+        cursorHookCorrelationBySessionID[sessionID] = correlation
+    }
+
     @discardableResult
     func handleCodexSubagentRolloutObservation(
         sessionID: String,
@@ -1995,6 +2175,7 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+        cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)

@@ -70,8 +70,8 @@ enum AgentHookTemplateFile {
         # https://github.com/figelwump/toastty/blob/main/docs/agent-hooks.md
         #
         # How Toastty calls this script:
-        # - One global hook for every managed session (codex, claude, opencode,
-        #   mimocode, pi, and process watch). There is no per-agent hook
+        # - One global hook for every managed session (codex, claude, cursor,
+        #   opencode, mimocode, pi, and process watch). There is no per-agent hook
         #   configuration and no raw provider-event passthrough.
         # - The event JSON (schema v1) is written to stdin, then stdin is
         #   closed. The same values arrive as TOASTTY_* environment variables,

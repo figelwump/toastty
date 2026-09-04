@@ -8,6 +8,7 @@ enum AgentLaunchArgumentOverrideAdapter {
     static let modelSupportedAgents: [AgentKind] = [
         .codex,
         .claude,
+        .cursor,
         .opencode,
         .mimocode,
         .pi,
@@ -108,6 +109,16 @@ enum AgentLaunchArgumentOverrideAdapter {
                 arguments += ["--effort", validatedReasoningEffort]
             }
             return editor.inserting(arguments)
+
+        case .cursor:
+            if validatedModel != nil {
+                try editor.removeValueFlags(
+                    longName: "--model",
+                    shortName: nil,
+                    parameter: "model"
+                )
+            }
+            return editor.inserting(validatedModel.map { ["--model", $0] } ?? [])
 
         case .opencode, .mimocode:
             if validatedModel != nil {
@@ -431,6 +442,8 @@ private struct ProviderArgvEditor {
             return ["codex", "cdx"]
         case .claude:
             return ["claude", "cc"]
+        case .cursor:
+            return ["cursor-agent"]
         case .opencode:
             return ["opencode"]
         case .mimocode:

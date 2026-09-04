@@ -7,9 +7,15 @@ struct AgentKindTests {
     func displayNameUsesKnownAgentLabels() {
         #expect(AgentKind.codex.displayName == "Codex")
         #expect(AgentKind.claude.displayName == "Claude Code")
+        #expect(AgentKind.cursor.displayName == "Cursor")
         #expect(AgentKind.opencode.displayName == "OpenCode")
         #expect(AgentKind.mimocode.displayName == "MiMo Code")
         #expect(AgentKind.pi.displayName == "Pi")
+    }
+
+    @Test
+    func cursorUsesStagedSkillsTree() {
+        #expect(AgentKind.cursor.usesStagedSkillsTree)
     }
 
     @Test
@@ -67,6 +73,18 @@ struct AgentKindTests {
                 argv: ["agent-safehouse", "mimocode"]
             ) == 1
         )
+        #expect(
+            ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .cursor,
+                argv: ["agent-safehouse", "cursor-agent", "--model", "auto"]
+            ) == 1
+        )
+        #expect(
+            ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .cursor,
+                argv: ["agent-safehouse", "agent", "--model", "auto"]
+            ) == 0
+        )
     }
 
     @Test
@@ -118,6 +136,36 @@ struct AgentKindTests {
                 commandName: "agent-safehouse",
                 argv: ["agent-safehouse", "--cwd", "/tmp/repo", "mimo"]
             ) == .mimocode
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "cursor-agent",
+                argv: ["cursor-agent"]
+            ) == .cursor
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "agent-safehouse",
+                argv: ["agent-safehouse", "--cwd", "/tmp/repo", "cursor-agent"]
+            ) == .cursor
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "agent",
+                argv: ["agent", "cursor-agent"]
+            ) == nil
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "cursor",
+                argv: ["cursor", "cursor-agent"]
+            ) == nil
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "agent-safehouse",
+                argv: ["agent-safehouse", "agent"]
+            ) == nil
         )
         #expect(
             ManagedAgentCommandResolver.inferManagedAgent(
@@ -190,6 +238,12 @@ struct AgentKindTests {
                     manualCommandNames: ["safe-mimo"]
                 ),
                 AgentProfile(
+                    id: "cursor",
+                    displayName: "Cursor",
+                    argv: ["safe-cursor", "cursor-agent"],
+                    manualCommandNames: ["safe-cursor"]
+                ),
+                AgentProfile(
                     id: "gemini",
                     displayName: "Gemini",
                     argv: ["sandbox-wrapper", "gemini"],
@@ -210,6 +264,8 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("mimocode"))
         #expect(shimCommandNames.contains("safe-open"))
         #expect(shimCommandNames.contains("safe-mimo"))
+        #expect(shimCommandNames.contains("cursor-agent"))
+        #expect(shimCommandNames.contains("safe-cursor"))
         #expect(shimCommandNames.contains("agent-safehouse"))
         #expect(shimCommandNames.contains("sandbox-wrapper") == false)
     }
@@ -221,10 +277,38 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("codex"))
         #expect(shimCommandNames.contains("cdx"))
         #expect(shimCommandNames.contains("claude"))
+        #expect(shimCommandNames.contains("cursor-agent"))
+        #expect(shimCommandNames.contains("cursor") == false)
+        #expect(shimCommandNames.contains("agent") == false)
         #expect(shimCommandNames.contains("opencode"))
         #expect(shimCommandNames.contains("mimo"))
         #expect(shimCommandNames.contains("mimocode"))
         #expect(shimCommandNames.contains("pi"))
+    }
+
+    @Test
+    func managedCommandResolverNeverShimsGenericAgentForCursorProfile() {
+        let catalog = AgentCatalog(
+            profiles: [
+                AgentProfile(
+                    id: "cursor",
+                    displayName: "Cursor",
+                    argv: ["agent", "cursor-agent"],
+                    manualCommandNames: ["agent"]
+                ),
+                AgentProfile(
+                    id: "cursor",
+                    displayName: "Cursor",
+                    argv: ["cursor", "cursor-agent"]
+                )
+            ]
+        )
+
+        let shimCommandNames = ManagedAgentCommandResolver.shimCommandNames(for: catalog)
+
+        #expect(shimCommandNames.contains("cursor-agent"))
+        #expect(shimCommandNames.contains("agent") == false)
+        #expect(shimCommandNames.contains("cursor") == false)
     }
 
     @Test

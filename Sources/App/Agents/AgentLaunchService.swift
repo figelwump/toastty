@@ -460,7 +460,12 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     }
 
     private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {
-        agent == .codex || agent == .claude || agent == .mimocode || agent == .opencode || agent == .pi
+        agent == .codex
+            || agent == .claude
+            || agent == .cursor
+            || agent == .mimocode
+            || agent == .opencode
+            || agent == .pi
     }
 
     private static func implicitProfile(for agent: AgentKind) -> AgentProfile {
@@ -468,12 +473,16 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             id: agent.rawValue,
             displayName: agent.displayName,
             argv: [implicitExecutableName(for: agent)],
-            initialPromptPlacement: (agent == .codex || agent == .claude) ? .trailing : nil
+            initialPromptPlacement: (agent == .codex || agent == .claude || agent == .cursor)
+                ? .trailing
+                : nil
         )
     }
 
     private static func implicitExecutableName(for agent: AgentKind) -> String {
         switch agent {
+        case .cursor:
+            return "cursor-agent"
         case .mimocode:
             return "mimo"
         default:
@@ -603,6 +612,11 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         guard initialPromptPlacement(for: profile, agent: agent) == .trailing else {
             throw AgentLaunchError.initialPromptUnsupported(profileID: profile.id)
         }
+        if agent == .cursor,
+           Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent),
+           prompt.hasPrefix("-") {
+            return overrideArgv + ["--", prompt]
+        }
         return overrideArgv + [prompt]
     }
 
@@ -631,7 +645,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         if let placement = profile.initialPromptPlacement {
             return placement
         }
-        guard agent == .codex || agent == .claude else {
+        guard agent == .codex || agent == .claude || agent == .cursor else {
             return nil
         }
         return Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent) ? .trailing : nil
@@ -648,6 +662,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             commandNames = ["codex", "cdx"]
         case .claude:
             commandNames = ["claude"]
+        case .cursor:
+            commandNames = ["cursor-agent"]
         default:
             return false
         }

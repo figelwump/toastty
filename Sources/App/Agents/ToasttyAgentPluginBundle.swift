@@ -41,6 +41,15 @@ enum ToasttyAgentPluginBundle {
         let claudeManifestURL = resolvedRoot
             .appendingPathComponent(".claude-plugin", isDirectory: true)
             .appendingPathComponent("plugin.json", isDirectory: false)
+        let cursorManifestURL = resolvedRoot
+            .appendingPathComponent(".cursor-plugin", isDirectory: true)
+            .appendingPathComponent("plugin.json", isDirectory: false)
+        let cursorHooksURL = resolvedRoot
+            .appendingPathComponent("hooks", isDirectory: true)
+            .appendingPathComponent("hooks.json", isDirectory: false)
+        let cursorForwarderURL = resolvedRoot
+            .appendingPathComponent("hooks", isDirectory: true)
+            .appendingPathComponent("forwarder.sh", isDirectory: false)
 
         let codexManifest: CodexManifest = try decodeManifest(at: codexManifestURL)
         let claudeManifest: ClaudeManifest = try decodeManifest(at: claudeManifestURL)
@@ -51,6 +60,16 @@ enum ToasttyAgentPluginBundle {
               codexManifest.skills == "./skills/" else {
             throw ToasttyAgentPluginBundleError.invalidManifest(codexManifestURL.path)
         }
+
+        let cursorManifest: CursorManifest = try decodeManifest(at: cursorManifestURL)
+        guard cursorManifest.name == pluginName,
+              cursorManifest.version == codexManifest.version,
+              cursorManifest.skills == "./skills/",
+              cursorManifest.hooks == "./hooks/hooks.json" else {
+            throw ToasttyAgentPluginBundleError.invalidManifest(cursorManifestURL.path)
+        }
+        try requireRegularFile(at: cursorHooksURL)
+        try requireRegularFile(at: cursorForwarderURL)
 
         let skillsRootURL = resolvedRoot.appendingPathComponent("skills", isDirectory: true)
         let discoveredNames = try discoveredSkillNames(
@@ -166,6 +185,13 @@ private extension ToasttyAgentPluginBundle {
         let version: String
     }
 
+    struct CursorManifest: Decodable {
+        let name: String
+        let version: String
+        let skills: String
+        let hooks: String
+    }
+
     static func decodeManifest<T: Decodable>(at url: URL) throws -> T {
         let data: Data
         do {
@@ -177,6 +203,21 @@ private extension ToasttyAgentPluginBundle {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
             throw ToasttyAgentPluginBundleError.invalidManifest(url.path)
+        }
+    }
+
+    static func requireRegularFile(at url: URL) throws {
+        let values: URLResourceValues
+        do {
+            values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        } catch {
+            throw ToasttyAgentPluginBundleError.unreadablePlugin(url.path)
+        }
+        guard values.isSymbolicLink != true else {
+            throw ToasttyAgentPluginBundleError.symbolicLink(url.path)
+        }
+        guard values.isRegularFile == true else {
+            throw ToasttyAgentPluginBundleError.unreadablePlugin(url.path)
         }
     }
 

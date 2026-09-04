@@ -250,6 +250,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         // the note stays short enough to read at a glance in the sheet.
         XCTAssertTrue(guidance.contains("~/.codex/skills"))
         XCTAssertTrue(guidance.contains("~/.claude/skills"))
+        XCTAssertTrue(guidance.contains("~/.cursor/skills"))
         XCTAssertTrue(guidance.contains("~/.agents/skills"))
         XCTAssertTrue(guidance.contains("never changes global skill folders"))
         XCTAssertFalse(guidance.contains(".pi/skills"))

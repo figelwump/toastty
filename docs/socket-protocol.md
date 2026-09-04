@@ -16,9 +16,11 @@ Important scope note:
 CLI note:
 
 - The repo ships a `toastty` CLI wrapper for app control (`action` / `query`), notifications, and the `session` subcommands.
-- Toastty-managed Claude, Codex, OpenCode, MiMo Code, and Pi launches primarily use
+- Toastty-managed Claude, Codex, Cursor, OpenCode, MiMo Code, and Pi launches primarily use
   `session ingest-agent-event` to translate provider events into session
-  events. Most provider events become `session.status` updates. Codex status
+  events. Most provider events become `session.status` updates. Cursor hooks
+  become `session.cursor_hook_event` so the app can correlate the active local
+  conversation and generation. Codex status
   hooks become `session.codex_hook_event`, and Codex notify completions become
   `session.codex_notify_completion`, so Toastty can preserve thread metadata
   and ignore child-thread completions. That ingest command is handled locally
@@ -314,12 +316,14 @@ Notable action-specific behavior:
     cannot be overridden. Environment keys must use shell variable syntax,
     values must not contain NUL bytes, and duplicate definitions across
     `env.NAME`, `env`, and `environment` payloads are rejected.
-  - `initialPrompt` is appended only for implicit Codex/Claude automation
-    profiles, built-in Codex/Claude profiles whose argv is exactly one direct
+  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor automation
+    profiles, built-in Codex/Claude/Cursor profiles whose argv is exactly one direct
     first-party command, or profiles that declare
     `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
     prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
-  - `model` is supported for `codex`, `claude`, `opencode`, `mimocode`, and
+    A direct Cursor launch inserts `--` before a prompt that begins
+    with `-`, preventing the prompt from being parsed as a Cursor CLI option.
+  - `model` is supported for `codex`, `claude`, `cursor`, `opencode`, `mimocode`, and
     `pi`. `reasoningEffort` is supported for `codex`, `claude`, and `pi`.
     OpenCode and MiMo Code reject `reasoningEffort` before target or panel
     mutation and never map it to `variant`.
@@ -816,7 +820,7 @@ Validation:
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
 - if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
-- explicit `profileID=codex`, `profileID=claude`, `profileID=opencode`,
+- explicit `profileID=codex`, `profileID=claude`, `profileID=cursor`, `profileID=opencode`,
   `profileID=mimocode`, and `profileID=pi` can be launched by automation even
   when no `agents.toml` profile exists.
 - `initialCommands` entries must be non-blank single-line strings with no NUL
@@ -1089,7 +1093,7 @@ Validation:
 
 - `panelID` must refer to a live panel
 - `agent` must be a valid lowercase agent ID
-- Built-in examples include `claude`, `codex`, `opencode`, `mimocode`, and `pi`
+- Built-in examples include `claude`, `codex`, `cursor`, `opencode`, `mimocode`, and `pi`
 
 Result:
 
@@ -1224,6 +1228,59 @@ Result:
 
 - `eventType`
 - `status: "accepted" | "noop"`
+- `stateVersion`
+
+### `session.cursor_hook_event`
+
+Internal event used by Toastty's launch-scoped Cursor plugin. Manual wrappers
+should generally use `session.status` instead.
+
+Required:
+
+- top-level `sessionID`
+- payload `hookEventName`
+
+Optional top-level fields:
+
+- `panelID?: UUID string`
+
+Accepted payload keys:
+
+- `hookEventName: String`
+- `conversationID?: String`
+- `generationID?: String`
+- `cloudHandoff?: Bool` (defaults to `false`)
+- `kind?: "idle" | "working" | "needs_approval" | "ready" | "error"`
+- `summary?: String`
+- `detail?: String`
+
+The normalized identifiers are each limited to 512 UTF-8 bytes. If any status
+field is present, `kind` and a nonblank `summary` are required. Status summary
+and detail text have control characters and repeated whitespace removed and are
+limited to 80 and 240 characters, respectively. Although the shared status
+schema can decode `needs_approval`, the Cursor reducer rejects that kind because
+Cursor's provider hook contract does not prove an approval wait.
+
+Behavior:
+
+- `sessionID` must identify an active managed Cursor session
+- `panelID` is optional; when present it must match the active session
+- `sessionStart` requires an Idle status, claims the root conversation, and
+  cannot claim a turn
+- `beforeSubmitPrompt` is accepted only for that root conversation and latches
+  its current `generationID`; later tool and terminal events must match both
+- `stop` never establishes identity, and an unidentified, nested, or stale
+  completion is ignored instead of clearing newer work
+- a matching completed `stop` after a `cloudHandoff` prompt becomes
+  non-actionable **Idle / Handed off to Cursor Cloud**, not local completion
+- a matching error-ending `sessionEnd` reports Error; a matching non-error
+  ending retires the root correlation and, when a turn is still active, clears
+  Working to **Idle / Stopped** without claiming completion
+
+Result:
+
+- `eventType`
+- `status: "accepted" | "ignored"`
 - `stateVersion`
 
 ### `session.codex_hook_event`

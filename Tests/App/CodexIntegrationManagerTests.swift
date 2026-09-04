@@ -1920,6 +1920,7 @@ private extension CodexSkillsManagerTests {
             for relativePath in [
                 ".codex-plugin/plugin.json",
                 ".claude-plugin/plugin.json",
+                ".cursor-plugin/plugin.json",
             ] {
                 let url = sourcePluginURL.appendingPathComponent(relativePath)
                 var object = try XCTUnwrap(

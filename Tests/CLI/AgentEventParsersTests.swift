@@ -1897,4 +1897,302 @@ struct AgentEventParsersTests {
             )
         }
     }
+
+    @Test
+    func cursorSessionStartMapsToWaitingAndCarriesConversationIdentity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"sessionStart","conversation_id":"conv-root","session_id":"conv-root"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCursorHookEvent(
+                sessionID: "sess-123",
+                panelID: nil,
+                event: CursorHookEvent(
+                    hookEventName: "sessionStart",
+                    conversationID: "conv-root",
+                    generationID: nil,
+                    cloudHandoff: false,
+                    status: SessionStatus(
+                        kind: .idle,
+                        summary: "Waiting",
+                        detail: "Cursor is ready"
+                    )
+                )
+            ),
+        ])
+    }
+
+    @Test
+    func cursorPromptMapsToCorrelatedWorkingStatusWithoutPromptText() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-root","generation_id":"gen-2","prompt":"Fix the secret launch command","user_email":"person@example.com"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCursorHookEvent(
+                sessionID: "sess-123",
+                panelID: nil,
+                event: CursorHookEvent(
+                    hookEventName: "beforeSubmitPrompt",
+                    conversationID: "conv-root",
+                    generationID: "gen-2",
+                    cloudHandoff: false,
+                    status: SessionStatus(
+                        kind: .working,
+                        summary: "Working",
+                        detail: "Responding to your prompt"
+                    )
+                )
+            ),
+        ])
+
+        let envelope = try #require(commands.first?.makeEventEnvelope(requestID: "req-1"))
+        #expect(envelope.eventType == "session.cursor_hook_event")
+        #expect(envelope.payload.string("conversationID") == "conv-root")
+        #expect(envelope.payload.string("generationID") == "gen-2")
+        #expect(envelope.payload["prompt"] == nil)
+        #expect(envelope.payload["user_email"] == nil)
+    }
+
+    @Test
+    func cursorDoesNotSubstituteSessionIDForConversationIdentity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"beforeSubmitPrompt","session_id":"cursor-session","generation_id":"gen-2","prompt":"Continue"}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.conversationID == nil)
+        #expect(event.generationID == "gen-2")
+    }
+
+    @Test
+    func cursorAmpersandPromptMarksCloudHandoffWithoutClaimingCompletion() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-root","generation_id":"gen-cloud","prompt":" \n\t & investigate remotely"}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.conversationID == "conv-root")
+        #expect(event.generationID == "gen-cloud")
+        #expect(event.cloudHandoff)
+        #expect(event.status == SessionStatus(
+            kind: .working,
+            summary: "Handing off",
+            detail: "Cursor Cloud handoff requested"
+        ))
+        #expect(event.status?.kind != .ready)
+    }
+
+    @Test
+    func cursorPreToolUseMapsToWorkingWithoutApprovalState() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"preToolUse","conversation_id":"conv-root","generation_id":"gen-2","tool_name":"Shell","tool_input":{"command":"secret command"}}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.status == SessionStatus(
+            kind: .working,
+            summary: "Working",
+            detail: "Running a shell command"
+        ))
+        #expect(event.status?.kind != .needsApproval)
+    }
+
+    @Test
+    func cursorIndividualToolFailureRemainsWorking() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"postToolUseFailure","conversation_id":"conv-root","generation_id":"gen-2","tool_name":"Shell","failure_type":"timeout","error_message":"Command timed out after 30s"}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.status == SessionStatus(
+            kind: .working,
+            summary: "Working",
+            detail: "Shell timed out"
+        ))
+    }
+
+    @Test
+    func cursorCompletedStopCarriesCorrelatedReadyCandidate() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"stop","conversation_id":"conv-root","generation_id":"gen-2","status":"completed"}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.conversationID == "conv-root")
+        #expect(event.generationID == "gen-2")
+        #expect(event.status == SessionStatus(kind: .ready, summary: "Ready", detail: "Turn complete"))
+    }
+
+    @Test
+    func cursorAbortedStopMapsToIdleStoppedStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"stop","conversation_id":"conv-root","generation_id":"gen-2","status":"aborted"}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.status == SessionStatus(
+            kind: .idle,
+            summary: "Stopped",
+            detail: "Cursor stopped the turn"
+        ))
+    }
+
+    @Test
+    func cursorErrorStopMapsToErrorStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"stop","conversation_id":"conv-root","generation_id":"gen-2","status":"error","error_message":"Model unavailable"}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.status == SessionStatus(kind: .error, summary: "Error", detail: "Model unavailable"))
+    }
+
+    @Test
+    func cursorErrorSessionEndMapsToErrorStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"sessionEnd","conversation_id":"conv-root","generation_id":"gen-2","reason":"error","error_message":"Connection lost"}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.status == SessionStatus(kind: .error, summary: "Error", detail: "Connection lost"))
+    }
+
+    @Test
+    func cursorNonErrorSessionEndHasNoStatusProjection() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"sessionEnd","conversation_id":"conv-root","reason":"user_close"}"#.utf8
+            )
+        )
+
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor hook event")
+            return
+        }
+        #expect(event.status == nil)
+    }
+
+    @Test
+    func cursorIgnoresUnknownEventsAndStopsWithoutKnownStatus() throws {
+        let unknownCommands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"afterAgentResponse"}"#.utf8)
+        )
+        let incompleteStopCommands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"stop","status":"mystery"}"#.utf8)
+        )
+
+        #expect(unknownCommands.isEmpty)
+        #expect(incompleteStopCommands.isEmpty)
+    }
+
+    @Test
+    func cursorRejectsMalformedPayload() throws {
+        #expect(throws: CursorHookEventParserError.malformedPayload) {
+            _ = try AgentEventIngestor.commands(
+                for: .cursorHooks,
+                sessionID: "sess-123",
+                panelID: nil,
+                payload: Data(#"{"hook_event_name":"stop""#.utf8)
+            )
+        }
+    }
+
+    @Test
+    func cursorRejectsOversizedPayload() throws {
+        let payload = Data(String(repeating: "x", count: 64 * 1024 + 1).utf8)
+
+        #expect(throws: CursorHookEventParserError.payloadTooLarge) {
+            _ = try AgentEventIngestor.commands(
+                for: .cursorHooks,
+                sessionID: "sess-123",
+                panelID: nil,
+                payload: payload
+            )
+        }
+    }
 }

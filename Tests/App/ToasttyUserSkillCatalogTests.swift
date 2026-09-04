@@ -351,6 +351,7 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
             "marketplace/.agents/plugins/marketplace.json",
             "marketplace/plugins/toastty-user/.codex-plugin/plugin.json",
             "marketplace/plugins/toastty-user/.claude-plugin/plugin.json",
+            "marketplace/plugins/toastty-user/.cursor-plugin/plugin.json",
             "marketplace/plugins/toastty-user/skills/alpha-skill/SKILL.md",
             "marketplace/plugins/toastty-user/skills/beta-skill/SKILL.md",
             "receipt.json",
@@ -372,6 +373,13 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
             with: Data(contentsOf: first.pluginRootURL.appendingPathComponent(".claude-plugin/plugin.json"))
         ) as? [String: Any]
         XCTAssertEqual(claudeManifest?["version"] as? String, first.version)
+        let cursorManifest = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: first.pluginRootURL.appendingPathComponent(".cursor-plugin/plugin.json"))
+        ) as? [String: Any]
+        XCTAssertEqual(cursorManifest?["name"] as? String, "toastty-user")
+        XCTAssertEqual(cursorManifest?["version"] as? String, first.version)
+        XCTAssertEqual(cursorManifest?["skills"] as? String, "./skills/")
+        XCTAssertNil(cursorManifest?["hooks"])
 
         // Rebuilding without source changes reuses the immutable snapshot.
         // The receipt's modification date is intentionally refreshed on reuse
@@ -551,6 +559,7 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
         for missingRelativePath in [
             "marketplace/plugins/toastty-user/.claude-plugin",
             "marketplace/plugins/toastty-user/.codex-plugin",
+            "marketplace/plugins/toastty-user/.cursor-plugin",
             "marketplace/plugins/toastty-user/skills/alpha-skill",
         ] {
             let fixture = try makeFixture(named: "half-deleted")

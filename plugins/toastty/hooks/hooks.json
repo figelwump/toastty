@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "timeout": 2,
+        "failClosed": false
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "timeout": 2,
+        "failClosed": false
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "timeout": 2,
+        "failClosed": false
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "timeout": 2,
+        "failClosed": false
+      }
+    ],
+    "stop": [
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "timeout": 2,
+        "failClosed": false
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "timeout": 2,
+        "failClosed": false
+      }
+    ]
+  }
+}

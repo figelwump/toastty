@@ -126,7 +126,7 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
         let modelParameter = agentLaunchParameters.first { $0.string("name") == "model" }
         let reasoningParameter = agentLaunchParameters.first { $0.string("name") == "reasoningEffort" }
         #expect(modelParameter?.stringArray("supportedProfileIDs") == [
-            "codex", "claude", "opencode", "mimocode", "pi",
+            "codex", "claude", "cursor", "opencode", "mimocode", "pi",
         ])
         #expect(reasoningParameter?.stringArray("supportedProfileIDs") == [
             "codex", "claude", "pi",

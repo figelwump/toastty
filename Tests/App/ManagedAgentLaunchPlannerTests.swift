@@ -373,7 +373,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         let configuration = makeStagedSkillsConfigurationFixture()
         let snapshot = makeUserSkillSnapshotFixture()
 
-        for agent in [AgentKind.pi, .opencode, .mimocode] {
+        for agent in [AgentKind.cursor, .pi, .opencode, .mimocode] {
             let provider = RecordingUserSkillSnapshotProvider(snapshot: snapshot)
             let fixture = try makePlannerFixture(
                 claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: configuration),
@@ -383,7 +383,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 ManagedAgentLaunchRequest(
                     agent: agent,
                     panelID: fixture.panelID,
-                    argv: [agent.rawValue],
+                    argv: agent == .cursor ? ["cursor-agent"] : [agent.rawValue],
                     cwd: "/tmp/repo"
                 )
             )
@@ -393,6 +393,10 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             XCTAssertEqual(provider.prepareSnapshotCallCount, 0)
             XCTAssertEqual(provider.existingSnapshotCallCount, 1)
             XCTAssertEqual(plan.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+            XCTAssertEqual(
+                plan.environment[ToasttyLaunchContextEnvironment.agentKey],
+                agent.rawValue
+            )
 
             guard agent != .pi else {
                 XCTAssertEqual(
@@ -405,6 +409,20 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                         configuration.skillsRootPath,
                         "--skill",
                         snapshot.skillsRootURL.path,
+                    ]
+                )
+                continue
+            }
+
+            if agent == .cursor {
+                XCTAssertEqual(
+                    plan.argv,
+                    [
+                        "cursor-agent",
+                        "--plugin-dir",
+                        configuration.pluginRootPath,
+                        "--plugin-dir",
+                        snapshot.pluginRootURL.path,
                     ]
                 )
                 continue
@@ -500,7 +518,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         defer { AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil }
         let snapshot = makeUserSkillSnapshotFixture()
 
-        for agent in [AgentKind.pi, .opencode, .mimocode] {
+        for agent in [AgentKind.cursor, .pi, .opencode, .mimocode] {
             let recorder = SkillsProvisionedNoticeRecorder()
             let observer = NotificationCenter.default.addObserver(
                 forName: .toasttyManagedAgentSkillsProvisioned,
@@ -521,7 +539,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 ManagedAgentLaunchRequest(
                     agent: agent,
                     panelID: fixture.panelID,
-                    argv: [agent.rawValue],
+                    argv: agent == .cursor ? ["cursor-agent"] : [agent.rawValue],
                     cwd: "/tmp/repo"
                 )
             )
@@ -762,6 +780,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         for (agent, argv) in [
             (AgentKind.codex, ["codex"]),
             (.claude, ["claude"]),
+            (.cursor, ["cursor-agent"]),
             (.opencode, ["opencode"]),
             (.mimocode, ["mimocode"]),
             (.pi, ["pi"]),

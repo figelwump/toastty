@@ -47,10 +47,14 @@ if command -v claude >/dev/null 2>&1; then
   # Claude Code 2.1.251 misclassifies skill directories as symlinks when an
   # ancestor contains a backslash. Recheck this isolation on CLI upgrades;
   # the hostile path remains covered above by Toastty and Codex validation.
+  # Claude also scans Cursor's documented lower-camel-case hooks file and
+  # warns that those event names are not Claude hook events. Non-strict mode
+  # still fails on manifest or skill errors while allowing those expected
+  # cross-host warnings.
   claude_fixture_root="$(mktemp -d /tmp/toastty-claude-plugin.XXXXXX)"
   cp -R "$ROOT_DIR/plugins/toastty" "$claude_fixture_root/toastty"
   HOME="$isolated_home" CLAUDE_CONFIG_DIR="$isolated_claude_home" \
-    claude plugin validate --strict "$claude_fixture_root/toastty" >/dev/null
+    claude plugin validate "$claude_fixture_root/toastty" >/dev/null
 else
   printf 'warning: claude is unavailable; skipped live Claude plugin validation\n' >&2
 fi
@@ -61,7 +65,13 @@ cat > "$fake_cli" <<'EOF'
 set -euo pipefail
 
 joined=" $* "
-if [[ "$joined" == *" query run terminal.state "* ]]; then
+if [[ "$joined" == *" session ingest-agent-event --source cursor-hooks "* ]]; then
+  cat > "${TOASTTY_FORWARDER_CAPTURE_PREFIX}.payload"
+  printf '%s\n' "$@" > "${TOASTTY_FORWARDER_CAPTURE_PREFIX}.args"
+  if [[ "${TOASTTY_FAKE_CLI_FAIL:-}" == "1" ]]; then
+    exit 7
+  fi
+elif [[ "$joined" == *" query run terminal.state "* ]]; then
   printf '%s\n' '{"ok":true,"result":{"workspaceID":"11111111-1111-1111-1111-111111111111"}}'
 elif [[ "$joined" == *" action run panel.create.local-document "* ]]; then
   printf '%s\n' '{"ok":true,"result":{}}'
@@ -74,6 +84,72 @@ else
 fi
 EOF
 chmod +x "$fake_cli"
+
+cursor_forwarder="$cache_root/plugins/toastty/hooks/forwarder.sh"
+capture_prefix="$fixture_root/cursor-forwarder"
+cursor_payload='{"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-1","generation_id":"gen-1","prompt":"test"}'
+forwarder_output="$(
+  printf '%s' "$cursor_payload" | \
+    TOASTTY_AGENT=cursor \
+    TOASTTY_SESSION_ID="session-1" \
+    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+    TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+    "$cursor_forwarder"
+)"
+if [[ "$forwarder_output" != '{}' ]]; then
+  printf 'error: Cursor forwarder emitted a decision-changing response: %s\n' "$forwarder_output" >&2
+  exit 1
+fi
+if [[ "$(cat "$capture_prefix.payload")" != "$cursor_payload" ]]; then
+  printf 'error: Cursor forwarder did not preserve the hook payload\n' >&2
+  exit 1
+fi
+expected_cursor_args="$fixture_root/cursor-forwarder-expected.args"
+printf '%s\n' \
+  --socket-path "$fixture_root/toastty.sock" \
+  session ingest-agent-event \
+  --source cursor-hooks \
+  --session session-1 \
+  --panel 33333333-3333-3333-3333-333333333333 \
+  > "$expected_cursor_args"
+if ! cmp -s "$expected_cursor_args" "$capture_prefix.args"; then
+  printf 'error: Cursor forwarder invoked Toastty with unexpected arguments\n' >&2
+  exit 1
+fi
+
+rm -f "$capture_prefix.payload" "$capture_prefix.args"
+inert_output="$(
+  printf '%s' "$cursor_payload" | \
+    TOASTTY_AGENT=claude \
+    TOASTTY_SESSION_ID="session-1" \
+    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+    TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+    "$cursor_forwarder"
+)"
+if [[ "$inert_output" != '{}' ]] || [[ -e "$capture_prefix.payload" ]] || [[ -e "$capture_prefix.args" ]]; then
+  printf 'error: Cursor forwarder was not inert outside a managed Cursor session\n' >&2
+  exit 1
+fi
+
+failure_output="$(
+  printf '%s' "$cursor_payload" | \
+    TOASTTY_AGENT=cursor \
+    TOASTTY_SESSION_ID="session-1" \
+    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+    TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+    TOASTTY_FAKE_CLI_FAIL=1 \
+    "$cursor_forwarder"
+)"
+if [[ "$failure_output" != '{}' ]]; then
+  printf 'error: Cursor forwarder did not suppress a Toastty CLI failure\n' >&2
+  exit 1
+fi
 
 export TOASTTY_SKILLS_ROOT="$cache_root/plugins/toastty/skills"
 export TOASTTY_CLI_PATH="$fake_cli"
@@ -89,4 +165,4 @@ printf '# Review\n' > "$markdown_file"
 "$TOASTTY_SKILLS_ROOT/worktree-create/scripts/create-toastty-worktree.sh" --help >/dev/null 2>&1
 "$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" --help >/dev/null 2>&1
 
-printf 'Toastty dual-host plugin copied-cache self-test passed\n'
+printf 'Toastty three-host plugin copied-cache self-test passed\n'

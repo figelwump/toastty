@@ -1132,6 +1132,29 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.cursor_hook_event":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            let hookEvent = try cursorHookEvent(from: event.payload)
+            let accepted = sessionRuntimeStore.handleCursorHookEvent(
+                sessionID: sessionID,
+                event: hookEvent,
+                at: now
+            )
+            if accepted {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(accepted ? "accepted" : "ignored"),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.codex_hook_event":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
@@ -2496,6 +2519,12 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         from payload: [String: AutomationJSONValue]
     ) throws -> CodexHookEvent {
         try CodexHookEventPayloadDecoder.decode(payload)
+    }
+
+    private func cursorHookEvent(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> CursorHookEvent {
+        try CursorHookEventPayloadDecoder.decode(payload)
     }
 
     private func codexHookResumeRecord(
