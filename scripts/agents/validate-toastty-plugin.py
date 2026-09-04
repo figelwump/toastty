@@ -26,7 +26,10 @@ EXPECTED_CURSOR_HOOKS = [
     "stop",
     "sessionEnd",
 ]
-EXPECTED_CURSOR_HOOK_COMMAND = '"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh"'
+EXPECTED_CURSOR_HOOK_COMMANDS = {
+    hook_name: f'"${{CURSOR_PLUGIN_ROOT}}/hooks/forwarder.sh" {hook_name}'
+    for hook_name in EXPECTED_CURSOR_HOOKS
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -154,9 +157,10 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
             errors.append(f"Cursor hook {hook_name} must contain exactly one command definition")
             continue
         definition = entries[0]
-        if definition.get("command") != EXPECTED_CURSOR_HOOK_COMMAND:
+        if definition.get("command") != EXPECTED_CURSOR_HOOK_COMMANDS[hook_name]:
             errors.append(
-                f"Cursor hook {hook_name} must invoke the plugin-root forwarder"
+                f"Cursor hook {hook_name} must invoke the plugin-root forwarder "
+                "with its event name"
             )
         timeout = definition.get("timeout")
         if (

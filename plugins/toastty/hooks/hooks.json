@@ -3,42 +3,42 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\" sessionStart",
         "timeout": 2,
         "failClosed": false
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\" beforeSubmitPrompt",
         "timeout": 2,
         "failClosed": false
       }
     ],
     "preToolUse": [
       {
-        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\" preToolUse",
         "timeout": 2,
         "failClosed": false
       }
     ],
     "postToolUseFailure": [
       {
-        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\" postToolUseFailure",
         "timeout": 2,
         "failClosed": false
       }
     ],
     "stop": [
       {
-        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\" stop",
         "timeout": 2,
         "failClosed": false
       }
     ],
     "sessionEnd": [
       {
-        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\"",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/hooks/forwarder.sh\" sessionEnd",
         "timeout": 2,
         "failClosed": false
       }

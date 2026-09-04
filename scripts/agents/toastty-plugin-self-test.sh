@@ -96,7 +96,7 @@ forwarder_output="$(
     TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
     TOASTTY_CLI_PATH="$fake_cli" \
     TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
-    "$cursor_forwarder"
+    "$cursor_forwarder" beforeSubmitPrompt
 )"
 if [[ "$forwarder_output" != '{}' ]]; then
   printf 'error: Cursor forwarder emitted a decision-changing response: %s\n' "$forwarder_output" >&2
@@ -120,6 +120,53 @@ if ! cmp -s "$expected_cursor_args" "$capture_prefix.args"; then
 fi
 
 rm -f "$capture_prefix.payload" "$capture_prefix.args"
+session_payload='{"hook_event_name":"sessionStart","conversation_id":"conv-1","generation_id":"gen-1"}'
+session_output="$(
+  printf '%s' "$session_payload" | \
+    TOASTTY_AGENT=cursor \
+    TOASTTY_SESSION_ID="session-1" \
+    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+    TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_SKILLS_ROOT="$cache_root/plugins/toastty/skills" \
+    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+    "$cursor_forwarder" sessionStart
+)"
+expected_session_output='{"additional_context":"Toastty-managed skills shown in the available skills list are already installed. When using one, copy its supplied fullPath exactly. If reading it fails, resolve the skill through the TOASTTY_SKILLS_ROOT environment variable and retry before reporting that the skill is unavailable."}'
+if [[ "$session_output" != "$expected_session_output" ]]; then
+  printf 'error: Cursor session-start hook omitted its skill path recovery context: %s\n' "$session_output" >&2
+  exit 1
+fi
+if [[ "$(cat "$capture_prefix.payload")" != "$session_payload" ]]; then
+  printf 'error: Cursor session-start hook did not preserve the hook payload\n' >&2
+  exit 1
+fi
+
+for passive_event in beforeSubmitPrompt preToolUse postToolUseFailure stop sessionEnd; do
+  rm -f "$capture_prefix.payload" "$capture_prefix.args"
+  passive_payload="{\"hook_event_name\":\"$passive_event\",\"conversation_id\":\"conv-1\",\"generation_id\":\"gen-1\"}"
+  passive_output="$(
+    printf '%s' "$passive_payload" | \
+      TOASTTY_AGENT=cursor \
+      TOASTTY_SESSION_ID="session-1" \
+      TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+      TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+      TOASTTY_CLI_PATH="$fake_cli" \
+      TOASTTY_SKILLS_ROOT="$cache_root/plugins/toastty/skills" \
+      TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+      "$cursor_forwarder" "$passive_event"
+  )"
+  if [[ "$passive_output" != '{}' ]]; then
+    printf 'error: Cursor %s hook emitted unexpected context: %s\n' "$passive_event" "$passive_output" >&2
+    exit 1
+  fi
+  if [[ "$(cat "$capture_prefix.payload")" != "$passive_payload" ]]; then
+    printf 'error: Cursor %s hook did not preserve the hook payload\n' "$passive_event" >&2
+    exit 1
+  fi
+done
+
+rm -f "$capture_prefix.payload" "$capture_prefix.args"
 inert_output="$(
   printf '%s' "$cursor_payload" | \
     TOASTTY_AGENT=claude \
@@ -127,11 +174,61 @@ inert_output="$(
     TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
     TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
     TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_SKILLS_ROOT="$cache_root/plugins/toastty/skills" \
     TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
-    "$cursor_forwarder"
+    "$cursor_forwarder" sessionStart
 )"
 if [[ "$inert_output" != '{}' ]] || [[ -e "$capture_prefix.payload" ]] || [[ -e "$capture_prefix.args" ]]; then
   printf 'error: Cursor forwarder was not inert outside a managed Cursor session\n' >&2
+  exit 1
+fi
+
+missing_root_output="$(
+  printf '%s' "$session_payload" | \
+    TOASTTY_AGENT=cursor \
+    TOASTTY_SESSION_ID="session-1" \
+    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+    TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+    "$cursor_forwarder" sessionStart
+)"
+if [[ "$missing_root_output" != '{}' ]]; then
+  printf 'error: Cursor session-start hook emitted context without a skills root\n' >&2
+  exit 1
+fi
+
+non_directory_skills_root="$fixture_root/not-a-skills-directory"
+printf 'not a directory\n' > "$non_directory_skills_root"
+invalid_root_output="$(
+  printf '%s' "$session_payload" | \
+    TOASTTY_AGENT=cursor \
+    TOASTTY_SESSION_ID="session-1" \
+    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+    TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_SKILLS_ROOT="$non_directory_skills_root" \
+    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+    "$cursor_forwarder" sessionStart
+)"
+if [[ "$invalid_root_output" != '{}' ]]; then
+  printf 'error: Cursor session-start hook emitted context for a non-directory skills root\n' >&2
+  exit 1
+fi
+
+missing_event_output="$(
+  printf '%s' "$session_payload" | \
+    TOASTTY_AGENT=cursor \
+    TOASTTY_SESSION_ID="session-1" \
+    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+    TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_SKILLS_ROOT="$cache_root/plugins/toastty/skills" \
+    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+    "$cursor_forwarder"
+)"
+if [[ "$missing_event_output" != '{}' ]]; then
+  printf 'error: Cursor forwarder emitted context without an event argument\n' >&2
   exit 1
 fi
 
@@ -144,10 +241,28 @@ failure_output="$(
     TOASTTY_CLI_PATH="$fake_cli" \
     TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
     TOASTTY_FAKE_CLI_FAIL=1 \
-    "$cursor_forwarder"
+    "$cursor_forwarder" beforeSubmitPrompt
 )"
 if [[ "$failure_output" != '{}' ]]; then
   printf 'error: Cursor forwarder did not suppress a Toastty CLI failure\n' >&2
+  exit 1
+fi
+
+rm -f "$capture_prefix.payload" "$capture_prefix.args"
+failure_session_output="$(
+  printf '%s' "$session_payload" | \
+    TOASTTY_AGENT=cursor \
+    TOASTTY_SESSION_ID="session-1" \
+    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+    TOASTTY_CLI_PATH="$fake_cli" \
+    TOASTTY_SKILLS_ROOT="$cache_root/plugins/toastty/skills" \
+    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+    TOASTTY_FAKE_CLI_FAIL=1 \
+    "$cursor_forwarder" sessionStart
+)"
+if [[ "$failure_session_output" != "$expected_session_output" ]]; then
+  printf 'error: Cursor session-start hook lost recovery context after a Toastty CLI failure\n' >&2
   exit 1
 fi
 
