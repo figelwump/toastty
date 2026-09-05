@@ -39,6 +39,36 @@ if command -v codex >/dev/null 2>&1; then
   fi
   HOME="$isolated_home" CODEX_HOME="$isolated_codex_home" \
     codex plugin add toastty@toastty --json >/dev/null
+  # Installing a plugin alone does not exercise Codex's startup hook discovery.
+  HOME="$isolated_home" CODEX_HOME="$isolated_codex_home" \
+    python3 - "$ROOT_DIR" "$fixture_root" <<'PY'
+import os
+import runpy
+import shutil
+import sys
+from pathlib import Path
+
+repo_root, working_directory = map(Path, sys.argv[1:])
+probe = runpy.run_path(str(repo_root / "scripts/agents/probe-agent-plugin-capabilities.py"))
+validator = runpy.run_path(str(repo_root / "scripts/agents/validate-toastty-plugin.py"))
+with probe["AppServer"](shutil.which("codex"), dict(os.environ), working_directory) as server:
+    hooks = server.request("hooks/list", {"cwds": [str(working_directory)]})["data"]
+    if len(hooks) != 1 or any(hooks[0][key] for key in ("hooks", "warnings", "errors")):
+        raise SystemExit(f"error: skills-only Codex plugin loaded hooks or diagnostics: {hooks}")
+    skills = server.request(
+        "skills/list", {"cwds": [str(working_directory)], "forceReload": True}
+    )["data"]
+    expected = {f"toastty:{name}" for name in validator["EXPECTED_SKILLS"]}
+    loaded = {
+        skill["name"]
+        for entry in skills
+        for skill in entry["skills"]
+        if skill.get("pluginId") == "toastty@toastty" and skill["enabled"]
+    }
+    if loaded != expected or any(entry["errors"] for entry in skills):
+        raise SystemExit(f"error: Codex did not load the expected Toastty skills: {skills}")
+print("Codex loaded all Toastty skills without plugin hooks or hook diagnostics")
+PY
 else
   printf 'warning: codex is unavailable; skipped live marketplace acceptance check\n' >&2
 fi
@@ -47,14 +77,11 @@ if command -v claude >/dev/null 2>&1; then
   # Claude Code 2.1.251 misclassifies skill directories as symlinks when an
   # ancestor contains a backslash. Recheck this isolation on CLI upgrades;
   # the hostile path remains covered above by Toastty and Codex validation.
-  # Claude also scans Cursor's documented lower-camel-case hooks file and
-  # warns that those event names are not Claude hook events. Non-strict mode
-  # still fails on manifest or skill errors while allowing those expected
-  # cross-host warnings.
+  # Cursor hooks now live outside default discovery, so strict validation must pass.
   claude_fixture_root="$(mktemp -d /tmp/toastty-claude-plugin.XXXXXX)"
   cp -R "$ROOT_DIR/plugins/toastty" "$claude_fixture_root/toastty"
   HOME="$isolated_home" CLAUDE_CONFIG_DIR="$isolated_claude_home" \
-    claude plugin validate "$claude_fixture_root/toastty" >/dev/null
+    claude plugin validate --strict "$claude_fixture_root/toastty" >/dev/null
 else
   printf 'warning: claude is unavailable; skipped live Claude plugin validation\n' >&2
 fi
@@ -85,7 +112,7 @@ fi
 EOF
 chmod +x "$fake_cli"
 
-cursor_forwarder="$cache_root/plugins/toastty/hooks/forwarder.sh"
+cursor_forwarder="$cache_root/plugins/toastty/cursor-hooks/forwarder.sh"
 capture_prefix="$fixture_root/cursor-forwarder"
 cursor_payload='{"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-1","generation_id":"gen-1","prompt":"test"}'
 forwarder_output="$(

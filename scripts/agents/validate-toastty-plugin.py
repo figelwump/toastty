@@ -27,7 +27,7 @@ EXPECTED_CURSOR_HOOKS = [
     "sessionEnd",
 ]
 EXPECTED_CURSOR_HOOK_COMMANDS = {
-    hook_name: f'"${{CURSOR_PLUGIN_ROOT}}/hooks/forwarder.sh" {hook_name}'
+    hook_name: f'"${{CURSOR_PLUGIN_ROOT}}/cursor-hooks/forwarder.sh" {hook_name}'
     for hook_name in EXPECTED_CURSOR_HOOKS
 }
 
@@ -93,8 +93,11 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
     codex_manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     claude_manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
     cursor_manifest_path = plugin_root / ".cursor-plugin" / "plugin.json"
-    cursor_hooks_path = plugin_root / "hooks" / "hooks.json"
-    cursor_forwarder_path = plugin_root / "hooks" / "forwarder.sh"
+    cursor_hooks_path = plugin_root / "cursor-hooks" / "hooks.json"
+    cursor_forwarder_path = plugin_root / "cursor-hooks" / "forwarder.sh"
+    # Codex and Claude discover this path even without a manifest hooks entry.
+    if (plugin_root / "hooks" / "hooks.json").exists():
+        errors.append("skills-only hosts must not discover a default hooks/hooks.json")
     skills_root = plugin_root / "skills"
 
     marketplace = load_json(marketplace_path, errors)
@@ -129,8 +132,8 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
         errors.append("Codex plugin manifest skills path must be `./skills/`")
     if cursor_manifest.get("skills") != "./skills/":
         errors.append("Cursor plugin manifest skills path must be `./skills/`")
-    if cursor_manifest.get("hooks") != "./hooks/hooks.json":
-        errors.append("Cursor plugin manifest hooks path must be `./hooks/hooks.json`")
+    if cursor_manifest.get("hooks") != "./cursor-hooks/hooks.json":
+        errors.append("Cursor plugin manifest hooks path must be `./cursor-hooks/hooks.json`")
     for host, manifest in (("Codex", codex_manifest), ("Claude", claude_manifest)):
         forbidden_components = sorted(
             {"agents", "apps", "hooks", "mcpServers", "commands"}.intersection(manifest)
@@ -188,7 +191,7 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
         ".claude-plugin",
         ".codex-plugin",
         ".cursor-plugin",
-        "hooks",
+        "cursor-hooks",
         "skills",
     ]:
         errors.append(f"plugin top-level allowlist mismatch: found {top_level_entries}")

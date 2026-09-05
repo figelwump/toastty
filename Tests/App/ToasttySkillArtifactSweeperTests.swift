@@ -409,7 +409,7 @@ private extension ToasttySkillArtifactSweeperTests {
             let codexManifestURL = rootURL.appendingPathComponent(".codex-plugin", isDirectory: true)
             let claudeManifestURL = rootURL.appendingPathComponent(".claude-plugin", isDirectory: true)
             let cursorManifestURL = rootURL.appendingPathComponent(".cursor-plugin", isDirectory: true)
-            let hooksURL = rootURL.appendingPathComponent("hooks", isDirectory: true)
+            let hooksURL = rootURL.appendingPathComponent("cursor-hooks", isDirectory: true)
             try FileManager.default.createDirectory(at: codexManifestURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: claudeManifestURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: cursorManifestURL, withIntermediateDirectories: true)
@@ -421,7 +421,7 @@ private extension ToasttySkillArtifactSweeperTests {
             {"name":"toastty","version":"\(version)"}
             """.write(to: claudeManifestURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
             try """
-            {"name":"toastty","version":"\(version)","skills":"./skills/","hooks":"./hooks/hooks.json"}
+            {"name":"toastty","version":"\(version)","skills":"./skills/","hooks":"./cursor-hooks/hooks.json"}
             """.write(to: cursorManifestURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
             try "{}\n".write(
                 to: hooksURL.appendingPathComponent("hooks.json"),

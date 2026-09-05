@@ -74,6 +74,39 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.operations, [])
     }
 
+    func testRestoredLaunchReplacesLegacyCursorHookCache() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let legacyURL = fixture.cacheRootURL(runtime: runtime).appendingPathComponent("0.4.0")
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: fixture.sourcePluginURL, to: legacyURL)
+        try FileManager.default.moveItem(
+            at: legacyURL.appendingPathComponent("cursor-hooks"),
+            to: legacyURL.appendingPathComponent("hooks")
+        )
+        for host in ["codex", "claude", "cursor"] {
+            let manifestURL = legacyURL.appendingPathComponent(".\(host)-plugin/plugin.json")
+            var manifest = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any]
+            )
+            manifest["version"] = "0.4.0"
+            if host == "cursor" { manifest["hooks"] = "./hooks/hooks.json" }
+            try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
+        }
+
+        let preparation = try fixture.manager.prepareForRestoredManagedLaunch(runtime: runtime)
+
+        let configuration = try XCTUnwrap(preparation.configuration)
+        let activeURL = URL(fileURLWithPath: configuration.skillsRootPath).deletingLastPathComponent()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: activeURL.appendingPathComponent("hooks").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeURL.appendingPathComponent("cursor-hooks/hooks.json").path))
+        XCTAssertEqual(try fixture.cacheVersionDirectories(runtime: runtime).count, 1)
+    }
+
     func testUpdateIsAppliedImmediatelyAndKeepsSingleVersionCache() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

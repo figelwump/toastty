@@ -35,6 +35,11 @@ enum ToasttyAgentPluginBundle {
         fileManager: FileManager = .default
     ) throws -> ToasttyAgentPluginDescriptor {
         let resolvedRoot = pluginRootURL.standardizedFileURL.resolvingSymlinksInPath()
+        // Both skills-only hosts discover this file without a manifest hooks entry.
+        let defaultHooksURL = resolvedRoot.appendingPathComponent("hooks/hooks.json")
+        guard !fileManager.fileExists(atPath: defaultHooksURL.path) else {
+            throw ToasttyAgentPluginBundleError.unexpectedDefaultHooks(defaultHooksURL.path)
+        }
         let codexManifestURL = resolvedRoot
             .appendingPathComponent(".codex-plugin", isDirectory: true)
             .appendingPathComponent("plugin.json", isDirectory: false)
@@ -45,10 +50,10 @@ enum ToasttyAgentPluginBundle {
             .appendingPathComponent(".cursor-plugin", isDirectory: true)
             .appendingPathComponent("plugin.json", isDirectory: false)
         let cursorHooksURL = resolvedRoot
-            .appendingPathComponent("hooks", isDirectory: true)
+            .appendingPathComponent("cursor-hooks", isDirectory: true)
             .appendingPathComponent("hooks.json", isDirectory: false)
         let cursorForwarderURL = resolvedRoot
-            .appendingPathComponent("hooks", isDirectory: true)
+            .appendingPathComponent("cursor-hooks", isDirectory: true)
             .appendingPathComponent("forwarder.sh", isDirectory: false)
 
         let codexManifest: CodexManifest = try decodeManifest(at: codexManifestURL)
@@ -65,7 +70,7 @@ enum ToasttyAgentPluginBundle {
         guard cursorManifest.name == pluginName,
               cursorManifest.version == codexManifest.version,
               cursorManifest.skills == "./skills/",
-              cursorManifest.hooks == "./hooks/hooks.json" else {
+              cursorManifest.hooks == "./cursor-hooks/hooks.json" else {
             throw ToasttyAgentPluginBundleError.invalidManifest(cursorManifestURL.path)
         }
         try requireRegularFile(at: cursorHooksURL)
@@ -98,6 +103,7 @@ enum ToasttyAgentPluginBundleError: LocalizedError, Equatable {
     case symbolicLink(String)
     case invalidSkill(String)
     case unexpectedSkills([String])
+    case unexpectedDefaultHooks(String)
 
     var errorDescription: String? {
         switch self {
@@ -113,6 +119,8 @@ enum ToasttyAgentPluginBundleError: LocalizedError, Equatable {
             return "The Toastty agent plugin contains an invalid skill at \(path)."
         case .unexpectedSkills(let names):
             return "The Toastty agent plugin contains an unexpected skill set: \(names.joined(separator: ", "))."
+        case .unexpectedDefaultHooks(let path):
+            return "The Toastty skills plugin contains hooks that Codex and Claude would discover at \(path)."
         }
     }
 }

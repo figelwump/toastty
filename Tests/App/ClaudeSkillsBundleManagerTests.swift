@@ -34,13 +34,26 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
             .path
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: scriptPath))
         let cursorForwarderPath = URL(fileURLWithPath: first.pluginRootPath)
-            .appendingPathComponent("hooks/forwarder.sh")
+            .appendingPathComponent("cursor-hooks/forwarder.sh")
             .path
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: cursorForwarderPath))
         XCTAssertFalse(
-            FileManager.default.isExecutableFile(
+            FileManager.default.fileExists(
                 atPath: URL(fileURLWithPath: first.pluginRootPath)
                     .appendingPathComponent("hooks/hooks.json").path
+            ),
+            "Cursor hooks must not be discovered as Codex or Claude plugin hooks"
+        )
+        XCTAssertFalse(
+            FileManager.default.isExecutableFile(
+                atPath: URL(fileURLWithPath: first.pluginRootPath)
+                    .appendingPathComponent("cursor-hooks/hooks.json").path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: URL(fileURLWithPath: first.pluginRootPath)
+                    .appendingPathComponent("cursor-hooks/hooks.json").path
             )
         )
         XCTAssertTrue(
@@ -91,6 +104,53 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
         }
     }
 
+    func testPluginReaderRejectsLeftoverDefaultHooks() throws {
+        let rootURL = temporaryDirectory(named: "leftover-default-hooks")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try makePlugin(at: rootURL, version: "0.4.1")
+        let defaultHooksURL = rootURL.appendingPathComponent("hooks/hooks.json")
+        try FileManager.default.createDirectory(
+            at: defaultHooksURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try "{}".write(to: defaultHooksURL, atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(try ToasttyAgentPluginBundle.read(pluginRootURL: rootURL)) { error in
+            XCTAssertEqual(
+                error as? ToasttyAgentPluginBundleError,
+                .unexpectedDefaultHooks(defaultHooksURL.path)
+            )
+        }
+    }
+
+    func testStagesCurrentBundleBesideLegacyCursorHookLayout() async throws {
+        let rootURL = temporaryDirectory(named: "legacy-cursor-upgrade")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let sourceURL = rootURL.appendingPathComponent("source/toastty")
+        let stagingURL = rootURL.appendingPathComponent("staged")
+        let legacyURL = stagingURL.appendingPathComponent("0.4.0-legacy/toastty")
+        try makePlugin(at: legacyURL, version: "0.4.0")
+        try FileManager.default.moveItem(
+            at: legacyURL.appendingPathComponent("cursor-hooks"),
+            to: legacyURL.appendingPathComponent("hooks")
+        )
+        let cursorManifestURL = legacyURL.appendingPathComponent(".cursor-plugin/plugin.json")
+        let legacyManifest = try String(contentsOf: cursorManifestURL, encoding: .utf8)
+            .replacingOccurrences(of: "./cursor-hooks/hooks.json", with: "./hooks/hooks.json")
+        try legacyManifest.write(to: cursorManifestURL, atomically: true, encoding: .utf8)
+        try makePlugin(at: sourceURL, version: "0.4.1")
+        let manager = ClaudeSkillsBundleManager(
+            sourcePluginURLProvider: { sourceURL }, stagingRootURL: stagingURL
+        )
+
+        let result = await manager.prepareForManagedLaunch()
+        let configuration = try XCTUnwrap(result)
+        let activeURL = URL(fileURLWithPath: configuration.pluginRootPath)
+        XCTAssertEqual(configuration.version, "0.4.1")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: activeURL.appendingPathComponent("hooks").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeURL.appendingPathComponent("cursor-hooks/hooks.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.appendingPathComponent("hooks/hooks.json").path))
+    }
+
     func testPluginReaderRejectsBundleWithoutCursorAssets() throws {
         let rootURL = temporaryDirectory(named: "missing-cursor-assets")
         let sourceURL = rootURL.appendingPathComponent("source/toastty", isDirectory: true)
@@ -100,7 +160,7 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
             at: sourceURL.appendingPathComponent(".cursor-plugin", isDirectory: true)
         )
         try FileManager.default.removeItem(
-            at: sourceURL.appendingPathComponent("hooks", isDirectory: true)
+            at: sourceURL.appendingPathComponent("cursor-hooks", isDirectory: true)
         )
 
         let manifestPath = sourceURL
@@ -118,7 +178,7 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
         let rootURL = temporaryDirectory(named: "missing-cursor-hook-assets")
         defer { try? FileManager.default.removeItem(at: rootURL) }
 
-        for (index, relativePath) in ["hooks/hooks.json", "hooks/forwarder.sh"].enumerated() {
+        for (index, relativePath) in ["cursor-hooks/hooks.json", "cursor-hooks/forwarder.sh"].enumerated() {
             let sourceURL = rootURL.appendingPathComponent("case-\(index)/toastty", isDirectory: true)
             try makePlugin(at: sourceURL, version: "1.2.3")
             let missingURL = sourceURL.appendingPathComponent(relativePath, isDirectory: false)
@@ -274,7 +334,7 @@ private extension ClaudeSkillsBundleManagerTests {
         try FileManager.default.createDirectory(at: scriptsURL, withIntermediateDirectories: true)
         try "#!/bin/sh\nexit 0\n"
             .write(to: scriptsURL.appendingPathComponent("open.sh"), atomically: true, encoding: .utf8)
-        let hooksURL = rootURL.appendingPathComponent("hooks", isDirectory: true)
+        let hooksURL = rootURL.appendingPathComponent("cursor-hooks", isDirectory: true)
         try FileManager.default.createDirectory(at: hooksURL, withIntermediateDirectories: true)
         try "{}\n".write(
             to: hooksURL.appendingPathComponent("hooks.json"),
@@ -302,7 +362,7 @@ private extension ClaudeSkillsBundleManagerTests {
         {"name":"toastty","version":"\(version)"}
         """.write(to: claudeURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
         try """
-        {"name":"toastty","version":"\(version)","skills":"./skills/","hooks":"./hooks/hooks.json"}
+        {"name":"toastty","version":"\(version)","skills":"./skills/","hooks":"./cursor-hooks/hooks.json"}
         """.write(to: cursorURL.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
     }
 }

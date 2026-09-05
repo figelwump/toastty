@@ -236,7 +236,7 @@ private extension ClaudeSkillsBundleManager {
         }
         for case let url as URL in enumerator {
             let isExecutablePayload = url.pathComponents.contains("scripts")
-                || (url.pathComponents.contains("hooks") && url.pathExtension == "sh")
+                || (url.pathComponents.contains("cursor-hooks") && url.pathExtension == "sh")
             guard isExecutablePayload,
                   (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true else {
                 continue

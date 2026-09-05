@@ -1,6 +1,6 @@
 {
   "name": "toastty",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Managed-session workflows for controlling and supporting Toastty from coding agents.",
   "author": {
     "name": "Giant Things"
