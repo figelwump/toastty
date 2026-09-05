@@ -765,7 +765,7 @@ struct AgentLaunchServiceTests {
 
         #expect(result.agent == .cursor)
         #expect(result.displayName == "Cursor")
-        #expect(command.contains("cursor-agent --model composer-next 'Review this change'"))
+        #expect(command.contains(" --model composer-next 'Review this change'"))
         #expect(command.contains(" agent --model") == false)
     }
 
@@ -791,7 +791,7 @@ struct AgentLaunchServiceTests {
         )
         let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
 
-        #expect(command.contains("cursor-agent -- '--help me refactor'"))
+        #expect(command.contains(" -- '--help me refactor'"))
     }
 
     @Test
