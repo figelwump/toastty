@@ -185,13 +185,14 @@ fi
 
 missing_root_output="$(
   printf '%s' "$session_payload" | \
-    TOASTTY_AGENT=cursor \
-    TOASTTY_SESSION_ID="session-1" \
-    TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
-    TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
-    TOASTTY_CLI_PATH="$fake_cli" \
-    TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
-    "$cursor_forwarder" sessionStart
+    env -u TOASTTY_SKILLS_ROOT \
+      TOASTTY_AGENT=cursor \
+      TOASTTY_SESSION_ID="session-1" \
+      TOASTTY_PANEL_ID="33333333-3333-3333-3333-333333333333" \
+      TOASTTY_SOCKET_PATH="$fixture_root/toastty.sock" \
+      TOASTTY_CLI_PATH="$fake_cli" \
+      TOASTTY_FORWARDER_CAPTURE_PREFIX="$capture_prefix" \
+      "$cursor_forwarder" sessionStart
 )"
 if [[ "$missing_root_output" != '{}' ]]; then
   printf 'error: Cursor session-start hook emitted context without a skills root\n' >&2
