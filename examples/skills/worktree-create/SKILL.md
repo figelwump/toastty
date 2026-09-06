@@ -5,7 +5,7 @@ description: Use this skill when the user asks for /worktree-create or wants to 
 
 # Worktree Create
 
-Use this workflow when the current thread should continue in a fresh git worktree and Toastty workspace.
+This example personal skill continues the current thread in a fresh Git worktree and Toastty workspace. Customize its branch naming, goal, review, and human-testing workflow for your own projects. It uses Toastty’s built-in app-control and Scratchpad skills. PRs carry the shared handoff; a project coordinator or a later finishing session can take over without keeping the original parent alive.
 
 ## Core flow
 
@@ -19,21 +19,18 @@ Use this workflow when the current thread should continue in a fresh git worktre
    - Use `refactor` for internal restructuring without intended behavior changes.
    - Use `test`, `docs`, or `chore` when the branch is primarily test-only, documentation-only, or maintenance work.
    - If the user explicitly provides a prefix or branch name, honor it when it fits the repo's branch naming style.
-3. Confirm the Toastty-managed environment is present before using the launch helper.
-   - `TOASTTY_SKILLS_ROOT` must point to the copied Toastty plugin's `skills`
-     directory. If it is absent or does not contain `worktree-create`, stop
-     with `error: worktree-create must run inside a Toastty-managed agent session`.
-     Do not guess `.agents/skills`, `~/.agents/skills`,
-     `~/.codex/skills`, a repository checkout, or a versioned plugin cache.
+3. Resolve this personal skill's helper directory and confirm the managed environment.
+   - Resolve `scripts/` relative to the path of this loaded `SKILL.md`, not the current repository or shell directory. Set `WORKTREE_CREATE_SKILL_DIR` to that absolute skill directory for the examples below. This is a shell variable you set, not an environment value injected by Toastty.
+   - Use the scripts from this package, including when the skill is loaded from a copied user-plugin snapshot. Do not look for them under `TOASTTY_SKILLS_ROOT`, which belongs to the shipped Toastty skills, or guess a versioned plugin cache path.
+   - `TOASTTY_CLI_PATH` must be set and executable. If the managed environment is missing, stop with `error: worktree-create must run inside a Toastty-managed agent session`.
 
 ```bash
-if [[ -z "${TOASTTY_SKILLS_ROOT:-}" || ! -d "$TOASTTY_SKILLS_ROOT/worktree-create" ]]; then
+if [[ -z "${TOASTTY_CLI_PATH:-}" || ! -x "$TOASTTY_CLI_PATH" ]]; then
   echo "error: worktree-create must run inside a Toastty-managed agent session" >&2
   exit 1
 fi
 ```
 
-   - `TOASTTY_CLI_PATH` must be set.
    - `TOASTTY_PANEL_ID` must be set for the default structured launch because parent `set-current` needs the current panel. It may be omitted only when using `--startup-command`, or when combining `--window-id` with `--no-scope-parent`.
    - `TOASTTY_SESSION_ID` must be set for the default structured launch because the helper scopes the current parent session before it creates the child workspace.
    - The skill is designed for a Toastty-managed agent session, not an arbitrary shell.
@@ -48,7 +45,7 @@ fi
 5. Create the new worktree with the bundled helper, passing the selected branch prefix explicitly:
 
 ```bash
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/create-worktree.sh" \
+"$WORKTREE_CREATE_SKILL_DIR/scripts/create-worktree.sh" \
   --slug browser-link-routing \
   --branch-prefix feat \
   --json
@@ -82,6 +79,10 @@ fi
    - If lookup succeeds but export fails, retry once. If export still fails, do not pretend there was no Scratchpad; include the lookup metadata and export failure in the handoff and final status. Continue unless the Scratchpad was the explicit source of truth for the delegated task.
 9. Persist the handoff inside the new worktree before launching the next session.
    - Write `WORKTREE_HANDOFF.md` in the new worktree root.
+   - Assign a local status-note path, such as `WORKTREE_STATUS.md` beside the handoff, for the child to use if there is no PR. Include that path in the handoff and the launch record. Keep these task artifacts out of product commits.
+   - Record the canonical parent checkout path, parent workspace/session IDs, task branch/path, base commit, and intended landing branch when known. Resolve paths through symlinks. Do not assume the landing branch is `main` or that the starting branch is the landing branch.
+   - For implementation tasks, record whether the repository uses PR delivery and the intended remote/repository and base branch. Carry forward any local-only or publishing restrictions and required approvals; do not guess a publication destination.
+   - Include the child workflow below and identify an assigned project coordinator when one exists. The child maintains its PR handoff or a durable local task note; its own Scratchpad is optional. Keep machine paths, session metadata, and this launch handoff out of public PRs and product commits.
    - If a linked Scratchpad was exported, include a `Linked Scratchpad` section with the exported HTML path, title, panel ID, document ID, and revision.
    - If the current thread already has a concrete plan/design file in the repo, reference that file explicitly in the handoff.
    - If the current thread already produced a detailed implementation plan in-chat but that plan is not yet persisted in the repo, copy that plan into `WORKTREE_HANDOFF.md` with enough detail for the next session to execute directly.
@@ -97,7 +98,7 @@ fi
    - If you intentionally need to leave the parent session unrestricted, pass `--no-scope-parent` and mention that exception in the handoff.
 
 ```bash
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" \
+"$WORKTREE_CREATE_SKILL_DIR/scripts/open-toastty-worktree-session.sh" \
   --workspace-name browser-link-routing \
   --worktree-path /abs/path/to/repo-browser-link-routing \
   --handoff-file /abs/path/to/repo-browser-link-routing/WORKTREE_HANDOFF.md \
@@ -105,10 +106,26 @@ fi
 ```
 
 11. Parse the launch helper output to get `workspace_id`, `panel_id`, `session_id`, `scope_set`, and `parent_scope_status`.
+    - Retain these IDs with the repository, task name, branch, canonical worktree path, handoff path, and assigned status-note path in a durable local launch note outside the child worktree, using an ignored artifact location or a directory outside Git. When a project coordinator is assigned, make the note location available in its local coordination record. This lets a later session discover the task without the original parent or its Scratchpad. Do not rewrite the child's handoff after launch to add IDs. Workspace assignment and control scope must still be established before that session acts on the child.
     - `session_id` is present and `scope_set` is `true` for structured managed launches.
     - `parent_scope_status` is `set_current` when the helper scoped an unscoped parent, `already_scoped` when it preserved an existing parent scope, `disabled` when `--no-scope-parent` was used, and `startup_command` for explicit startup-command launches.
     - `session_id` is absent and `scope_set` is `false` only for `--startup-command` or fallback `terminal.send-text` launches; use those paths only for explicit validation or fully custom shell setup.
 12. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, parent scope status, child scope status, handoff file path, Scratchpad export path/status, and whether setup was skipped or which explicit setup commands ran.
+
+## Child workflow
+
+Include these expectations in the handoff so the launched agent can execute them:
+
+- Use the agent runtime's native persistent goal, when available and permitted, to implement the agreed task, complete repository-required review and automated verification, and prepare it for human testing. A goal is the runtime's own continued-work mechanism; writing a literal `/goal` in a startup prompt is not proof that one was created. If unavailable, continue through the normal agent workflow and report that limitation. Bounded waits for this task's CI are permitted; do not add a permanent watcher, supervisor, or background runner.
+- Read the target repository's instructions and use its setup, review, and verification workflows. Continue through routine fixes within the approved scope; preserve real approval and input requirements.
+- For implementation tasks in repositories that use PRs, deliver one draft PR for this worktree's task once the change is coherent enough to review. Reuse an existing PR for the same task branch. Follow the authorized remote and base branch; if publication requires missing authorization or access, continue useful local work and report the PR step as pending. Local-only tasks do not require a PR. Propose independently landable splits to the parent/user for separate child tasks/worktrees; do not create sibling tasks or a stack of dependent PRs by default.
+- Own the PR's implementation and fixes. Describe the resulting behavior, scope, validation, and known limitations in the PR, following the repository's template. Complete repository-required agent review and check CI for the actual PR head before declaring automated readiness. Address failures within scope. If required automated checks cannot run while the PR is a draft, report them as pending draft status, not failures or completed verification. Hand back any needed approval, access, or PR-state transition using the runtime's blocked/input behavior; do not silently promote the PR or claim the goal is complete. External reviewer approvals remain separate merge gates: record them as pending without making the child wait for coordinator review or human testing before handing back its work. This is part of the active task, not a permanent background monitor.
+- Keep the PR as the shared task record, following the repository's template. Include the agreed intent and constraints, resulting behavior, important design decisions, validation results and limitations, human testing steps, dependencies or known overlaps, and deployment implications. Name affected targets, migrations, compatibility/order requirements, or why no deployment appears needed. The coordinator verifies these claims against the diff and release rules. Do not depend on the original conversation or a Scratchpad to explain the task.
+- Add a concise coordinator handoff to the PR when it is ready for assessment. Explicitly distinguish working, ready for assessment, pending checks/approvals, and validated work. Commit task changes as required by the repository. Once repository-required agent review and automated checks cover the committed task tip, record `ValidatedCommit: <full SHA>` with the evidence. The live PR head and local task tip must match it before integration. Use the PR's native repository/base/head metadata rather than duplicating it throughout the prose. Human testing and external approvals remain separately identified gates. A draft or an idle agent alone is not a readiness signal.
+- If there is no PR or publishing is blocked, maintain the same handoff at the status-note path assigned in `WORKTREE_HANDOFF.md` and report that path in the handback. The launcher has already recorded it; do not require the child to edit the launcher's private note. Label the missing publication/checks explicitly; do not claim remote delivery. Optional session-linked Scratchpads can show progress, previews, and visual explanations through `toastty-scratchpad`, but the task record must contain all required handoff evidence.
+- Any subsequent change to the local tip or live PR head invalidates prior readiness, regardless of author. Before editing, mark the handoff as working when possible; otherwise mark the local record and report the stale remote handoff. Update the PR and affected review/checks for the new head before declaring it validated. Never assert that human testing or coordinator review happened without evidence.
+- End the implementation goal at readiness for coordinator assessment and human testing, subject to the pending-check behavior above. Leave the workspace, optional Scratchpad, worktree, branch, and PR available. Do not merge or clean up as part of this goal. An assigned `project-orchestrator` can discover the handoff during its watch; without one, report it to the user for later `worktree-done`. The original parent need not remain active, and no coordinator is launched implicitly. Handoff or review does not authorize integration, publication, or cleanup.
+- When resumed, first verify the task still exists and has not already landed; report removed or integrated work instead of recreating it. For accepted coordinator findings or user feedback, keep ownership of fixes and update the same PR/task record. Record the new head and rerun affected review and verification before setting a new `ValidatedCommit`. Update human testing steps and identify which previous human checks need repeating. New behavior outside the agreed scope still needs the user.
 
 ## Handoff file contents
 
@@ -180,7 +197,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 - For validation or debugging, you can override the startup command:
 
 ```bash
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" \
+"$WORKTREE_CREATE_SKILL_DIR/scripts/open-toastty-worktree-session.sh" \
   --workspace-name smoke-slug \
   --worktree-path /abs/path/to/repo-smoke-slug \
   --handoff-file /abs/path/to/repo-smoke-slug/WORKTREE_HANDOFF.md \

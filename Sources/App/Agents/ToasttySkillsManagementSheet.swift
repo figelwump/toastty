@@ -406,7 +406,7 @@ struct ToasttySkillsManagementSheet: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Toastty Skills")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Toastty provides its five built-in skills, plus your user-created skills, to managed Codex, Claude Code, Cursor, Pi, OpenCode, and MiMo Code sessions. Ordinary sessions are unaffected.")
+                Text("Toastty provides its built-in skills, plus your user-created skills, to managed Codex, Claude Code, Cursor, Pi, OpenCode, and MiMo Code sessions. Ordinary sessions are unaffected.")
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)

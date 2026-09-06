@@ -8,7 +8,6 @@ DEFAULT_SKILLS=(
   "toastty-open-markdown"
   "toastty-scratchpad"
   "toastty-send-diagnostics"
-  "worktree-create"
 )
 
 declare -a REQUESTED_TARGETS=()

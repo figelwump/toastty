@@ -49,36 +49,6 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "feat/pop-1234")
     }
 
-    func testCreateToasttyWorktreeCompatibilityWrapperUsesRequestedRepoRoot() throws {
-        let fileManager = FileManager.default
-        let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-wrapper")
-        defer { try? fileManager.removeItem(at: rootURL) }
-
-        let repoURL = try makeGitRepository(named: "emptyos", in: rootURL)
-
-        let result = try runScript(
-            at: skillScriptURL(named: "create-toastty-worktree.sh"),
-            environment: [:],
-            arguments: [
-                "--repo-root", repoURL.path,
-                "--slug", "Review Flow",
-                "--branch-prefix", "debug",
-                "--parent-dir", rootURL.path,
-                "--json",
-            ]
-        )
-
-        XCTAssertEqual(result.exitCode, 0)
-        XCTAssertTrue(result.stderr.contains("create-toastty-worktree.sh is deprecated"))
-
-        let payload = try jsonObject(from: result.stdout)
-        XCTAssertEqual(payload["branch_name"] as? String, "debug/review-flow")
-        XCTAssertEqual(payload["worktree_name"] as? String, "emptyos-review-flow")
-        let expectedWorktreeURL = URL(fileURLWithPath: try realPath(rootURL), isDirectory: true)
-            .appendingPathComponent("emptyos-review-flow", isDirectory: true)
-        XCTAssertEqual(payload["worktree_path"] as? String, expectedWorktreeURL.path)
-    }
-
     func testCreateWorktreeScriptRejectsMissingSlug() throws {
         let fileManager = FileManager.default
         let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-missing-slug")
@@ -1000,7 +970,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent(".agents/skills/worktree-create/scripts/\(scriptName)", isDirectory: false)
+            .appendingPathComponent("examples/skills/worktree-create/scripts/\(scriptName)", isDirectory: false)
     }
 
     private func makeTemporaryDirectory(prefix: String) throws -> URL {

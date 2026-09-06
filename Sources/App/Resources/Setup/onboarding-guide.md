@@ -21,7 +21,7 @@ Tell the user what will happen:
 - Shell integration comes first because it keeps Toastty's launcher shim ahead of later shell startup changes.
 - You will dry-run, show the plan, then ask before writing files.
 - Codex may need global status hooks; other supported managed agents get status integration at launch. Cursor receives a launch-scoped plugin, so Toastty does not change `~/.cursor/hooks.json`.
-- Toastty makes five shipped skills available automatically to new supported managed agent launches. User-authored skills can be added under `~/.toastty/skills`.
+- Toastty makes four shipped skills available automatically to new supported managed agent launches. User-authored skills can be added under `~/.toastty/skills`.
 
 ## Available Setup Commands In This Build
 
@@ -65,7 +65,7 @@ No skills installation is required. List what Toastty will make available to new
 "$TOASTTY_CLI_PATH" setup skills list
 ```
 
-The shipped set is `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, `toastty-send-diagnostics`, and `worktree-create`. Toastty delivers these only for the new managed process and does not write them into `~/.codex/skills`, `~/.claude/skills`, `~/.cursor/skills`, or `~/.agents/skills`.
+The shipped set is `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, and `toastty-send-diagnostics`. Toastty delivers these only for the new managed process and does not write them into `~/.codex/skills`, `~/.claude/skills`, `~/.cursor/skills`, or `~/.agents/skills`.
 
 To add a user skill, create `~/.toastty/skills/<name>/SKILL.md` with `name` and `description` YAML frontmatter, then rerun `setup skills list`. Fix any exclusion diagnostic before launching a new agent. `Toastty > Manage Toastty Skills…` offers the same inventory plus folder and rescan controls.
 

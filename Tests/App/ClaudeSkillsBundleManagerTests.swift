@@ -224,7 +224,7 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
         let configuration = try XCTUnwrap(preparedConfiguration)
         try "invalid".write(
             to: URL(fileURLWithPath: configuration.skillsRootPath)
-                .appendingPathComponent("worktree-create/SKILL.md"),
+                .appendingPathComponent("toastty-capabilities/SKILL.md"),
             atomically: true,
             encoding: .utf8
         )
