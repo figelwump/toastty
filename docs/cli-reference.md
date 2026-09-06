@@ -75,7 +75,7 @@ List the skills Toastty can make available to new supported managed agent launch
 toastty setup skills list
 ```
 
-The read-only inventory includes Toastty's five shipped skills and accepted
+The read-only inventory includes Toastty's six shipped skills and accepted
 user-authored packages under `~/.toastty/skills`. Invalid user packages appear
 in an excluded section with the same diagnostic used by `Toastty > Manage
 Toastty Skills…`. A missing user-skills directory is an empty catalog and is

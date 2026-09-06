@@ -1,5 +1,10 @@
 # Managed Codex and Claude Skills Plan
 
+> September 2026 update: Plugin 0.4.2 adds a generic `worktree-done` beside
+> `worktree-create`. Its repository-specific assumptions were removed; the
+> earlier exclusion and rollout notes below are historical. See
+> [the current workflow](../running-agents.md#worktree-tasks).
+
 ## Goal
 
 Ship Toastty's user-facing skills automatically to managed Codex and Claude

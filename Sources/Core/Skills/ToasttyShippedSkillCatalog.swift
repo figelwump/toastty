@@ -32,5 +32,9 @@ public enum ToasttyShippedSkillCatalog {
             name: "worktree-create",
             summary: "Move work into an isolated Git worktree and Toastty workspace."
         ),
+        ToasttyShippedSkillDescriptor(
+            name: "worktree-done",
+            summary: "Land verified work and clean up its task workspace with user approval."
+        ),
     ]
 }

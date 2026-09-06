@@ -16,6 +16,7 @@ EXPECTED_SKILLS = [
     "toastty-scratchpad",
     "toastty-send-diagnostics",
     "worktree-create",
+    "worktree-done",
 ]
 
 EXPECTED_CURSOR_HOOKS = [
@@ -287,11 +288,12 @@ def validate_repo_layout(repo_root: Path, errors: list[str]) -> None:
         if compatibility_path.resolve() != canonical_path.resolve():
             errors.append(f"compatibility link does not resolve to canonical skill: {compatibility_path}")
 
-    worktree_done_path = compatibility_root / "worktree-done"
-    if worktree_done_path.is_symlink() or not (worktree_done_path / "SKILL.md").is_file():
-        errors.append("worktree-done must be a real repo-local skill directory")
-    if (canonical_root / "worktree-done").exists():
-        errors.append("worktree-done must not be present in the shared plugin")
+    catalog_text = (
+        repo_root / "Sources/Core/Skills/ToasttyShippedSkillCatalog.swift"
+    ).read_text(encoding="utf-8")
+    catalog_names = re.findall(r'name: "([a-z0-9-]+)"', catalog_text)
+    if catalog_names != EXPECTED_SKILLS:
+        errors.append(f"native shipped skill catalog mismatch: found {catalog_names}")
 
     link_script = (repo_root / "scripts" / "agents" / "link-global-skills.sh").read_text(
         encoding="utf-8"
@@ -305,8 +307,6 @@ def validate_repo_layout(repo_root: Path, errors: list[str]) -> None:
             errors.append(f"global skill linker omits {skill_name}")
     if 'fail "--target is required for development links"' not in link_script:
         errors.append("global skill linker must require an explicit development target")
-    if '"worktree-done"' in link_script:
-        errors.append("global skill linker must not expose repo-local worktree-done")
 
     project_text = (repo_root / "Project.swift").read_text(encoding="utf-8")
     resource_markers = [

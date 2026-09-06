@@ -82,6 +82,8 @@ fi
    - If lookup succeeds but export fails, retry once. If export still fails, do not pretend there was no Scratchpad; include the lookup metadata and export failure in the handoff and final status. Continue unless the Scratchpad was the explicit source of truth for the delegated task.
 9. Persist the handoff inside the new worktree before launching the next session.
    - Write `WORKTREE_HANDOFF.md` in the new worktree root.
+   - Record the canonical parent checkout path, parent workspace/session IDs, task branch/path, base commit, and intended landing branch when known. Resolve paths through symlinks. Do not assume the landing branch is `main` or that the starting branch is the landing branch.
+   - Include the child workflow below. The parent owns the handoff; the child keeps progress in its own Scratchpad. Keep the handoff out of product commits.
    - If a linked Scratchpad was exported, include a `Linked Scratchpad` section with the exported HTML path, title, panel ID, document ID, and revision.
    - If the current thread already has a concrete plan/design file in the repo, reference that file explicitly in the handoff.
    - If the current thread already produced a detailed implementation plan in-chat but that plan is not yet persisted in the repo, copy that plan into `WORKTREE_HANDOFF.md` with enough detail for the next session to execute directly.
@@ -105,10 +107,21 @@ fi
 ```
 
 11. Parse the launch helper output to get `workspace_id`, `panel_id`, `session_id`, `scope_set`, and `parent_scope_status`.
+    - Retain these IDs together with the task name, branch, canonical worktree path, and handoff path in a durable note in the parent checkout or parent Scratchpad. This lets the parent resolve a later request such as “merge the browser-link-routing task” without asking the user for a SHA. Do not rewrite the child's handoff after launch to add IDs.
     - `session_id` is present and `scope_set` is `true` for structured managed launches.
     - `parent_scope_status` is `set_current` when the helper scoped an unscoped parent, `already_scoped` when it preserved an existing parent scope, `disabled` when `--no-scope-parent` was used, and `startup_command` for explicit startup-command launches.
     - `session_id` is absent and `scope_set` is `false` only for `--startup-command` or fallback `terminal.send-text` launches; use those paths only for explicit validation or fully custom shell setup.
 12. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, parent scope status, child scope status, handoff file path, Scratchpad export path/status, and whether setup was skipped or which explicit setup commands ran.
+
+## Child workflow
+
+Include these expectations in the handoff so the launched agent can execute them:
+
+- Use the agent runtime's native persistent goal, when available and permitted, to implement the agreed task, complete repository-required review and automated verification, and prepare it for human testing. A goal is the runtime's own continued-work mechanism; writing a literal `/goal` in a startup prompt is not proof that one was created. If unavailable, continue through the normal agent workflow and report that limitation. Do not add a polling loop, supervisor, or background runner.
+- Read the target repository's instructions and use its setup, review, and verification workflows. Continue through routine fixes within the approved scope; preserve real approval and input requirements.
+- Create a session-linked Scratchpad using `toastty-scratchpad` in the child workspace. Keep it current at meaningful milestones and after feedback: show what is being built, a visual explanation or preview when useful, decisions, progress or blockers, review and automated test evidence, and concrete steps for the user to try it. Use an HTML dashboard when useful; keep implementation details proportionate to the task.
+- When ready for human testing, commit the task changes as required by the repository and show `ValidatedCommit: <full SHA>` with the branch, worktree path, checks, results, and any remaining limitations in the Scratchpad. Distinguish automated verification from human testing; never mark the latter complete without the user's feedback. If a later edit changes the commit, invalidate readiness until review and verification cover the new tip.
+- The goal ends when the work is ready for human testing. Leave the workspace, Scratchpad, worktree, and branch available for the user to inspect and request changes. Do not merge or clean up as part of this goal. The user initiates integration from the parent with `worktree-done`, which discovers the validated commit and performs only the authorized landing and cleanup.
 
 ## Handoff file contents
 
