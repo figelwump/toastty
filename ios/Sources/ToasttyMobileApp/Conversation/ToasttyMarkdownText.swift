@@ -48,6 +48,8 @@ struct ToasttyMarkdownText: View {
                     .font(.body)
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
             }
+        case .table(let table):
+            ToasttyMarkdownTableView(table: table)
         case .code(let language):
             VStack(alignment: .leading, spacing: 0) {
                 if let language, language.isEmpty == false {
@@ -107,6 +109,17 @@ struct ToasttyMarkdownText: View {
 
     private static func styledBlocks(_ blocks: [ToasttyMarkdownBlock]) -> [ToasttyMarkdownBlock] {
         blocks.map { block in
+            if case .table(let table) = block.style {
+                let styled = ToasttyMarkdownTable(columns: table.columns, rows: table.rows.map { row in
+                    .init(id: row.id, cells: row.cells.map(stylingInlineContent))
+                })
+                return ToasttyMarkdownBlock(
+                    id: block.id,
+                    content: block.content,
+                    style: .table(styled),
+                    isContinuation: block.isContinuation
+                )
+            }
             guard case .code = block.style else {
                 return ToasttyMarkdownBlock(
                     id: block.id,

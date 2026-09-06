@@ -220,6 +220,33 @@ enum ToasttyConversationFixture {
         )
     }
 
+    static func tablePresentation(
+        for conversationID: UUID
+    ) -> ToasttyConversationPresentationState {
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        let markdown = """
+        ## Responsibility overview
+
+        | Component | Responsibility |
+        | :--- | :--- |
+        | Gateway | Routes authenticated requests to the correct workspace. |
+        | Mobile | Renders **conversation** updates and `send` results. |
+
+        ## Wide comparison
+
+        | Name | State | Count | Details |
+        | :--- | :---: | ---: | :--- |
+        | Alpha | Ready | 12 | Final column is readable. |
+        | Beta | Waiting | 7 | All cells stay aligned. |
+        """
+        return ToasttyConversationPresentationState(
+            rows: [row(conversationID, 1, timestamp, .assistantMessage(text: markdown, phase: .final))],
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+
     static func toolActivityPresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {

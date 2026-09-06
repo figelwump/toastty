@@ -12,7 +12,11 @@ enum ToasttyMarkdownChunking {
 
     static func split(_ text: String) -> [ToasttyMarkdownChunk] {
         let blocks = ToasttyMarkdownParser.parse(text)
-        guard text.count > chunkThreshold else { return [.init(blocks: blocks)] }
+        let hasTallTable = blocks.contains { block in
+            guard case .table(let table) = block.style else { return false }
+            return table.rows.count - 1 > ToasttyMarkdownTable.maximumBodyRowsPerChunk
+        }
+        guard text.count > chunkThreshold || hasTallTable else { return [.init(blocks: blocks)] }
         var chunks: [ToasttyMarkdownChunk] = []
         var current: [ToasttyMarkdownBlock] = []
         var currentCount = 0
@@ -47,6 +51,9 @@ enum ToasttyMarkdownChunking {
                 ))
                 nextPieceID += 1
                 currentCount += count
+                // Sparse table sections need their own layout cell even when
+                // their text fits together within the character budget.
+                if case .table = piece.style { flush() }
             }
         }
         flush()
@@ -54,6 +61,16 @@ enum ToasttyMarkdownChunking {
     }
 
     private static func splitBlock(_ block: ToasttyMarkdownBlock) -> [ToasttyMarkdownBlock] {
+        if case .table(let table) = block.style {
+            return table.split(rowBudget: chunkBudget).enumerated().map { index, part in
+                ToasttyMarkdownBlock(
+                    id: block.id,
+                    content: part.content,
+                    style: .table(part),
+                    isContinuation: index > 0
+                )
+            }
+        }
         let content = block.content
         let characters = content.characters
         var start = characters.startIndex
@@ -98,6 +115,7 @@ enum ToasttyMarkdownParser {
         var currentPresentationIdentity: Int?
         var currentContent = AttributedString()
         var currentStyle = ToasttyMarkdownBlock.Style.paragraph
+        var currentTable: ToasttyMarkdownTableBuilder?
 
         func flushCurrentBlock() {
             guard currentContent.characters.isEmpty == false else { return }
@@ -109,8 +127,29 @@ enum ToasttyMarkdownParser {
             currentContent = AttributedString()
         }
 
+        func flushTable() {
+            guard let table = currentTable?.table else { return }
+            blocks.append(ToasttyMarkdownBlock(
+                id: blocks.count,
+                content: table.content,
+                style: .table(table)
+            ))
+            currentTable = nil
+        }
+
         for run in attributed.runs {
             let intent = run.presentationIntent
+            if let position = ToasttyMarkdownTableBuilder.Position(intent) {
+                flushCurrentBlock()
+                currentPresentationIdentity = nil
+                if currentTable?.id != position.tableID {
+                    flushTable()
+                    currentTable = ToasttyMarkdownTableBuilder(position: position)
+                }
+                currentTable?.append(AttributedString(attributed[run.range]), at: position)
+                continue
+            }
+            flushTable()
             let identity = intent?.components.first?.identity
             if identity != currentPresentationIdentity {
                 flushCurrentBlock()
@@ -120,6 +159,7 @@ enum ToasttyMarkdownParser {
             currentContent.append(AttributedString(attributed[run.range]))
         }
         flushCurrentBlock()
+        flushTable()
 
         if blocks.isEmpty, text.isEmpty == false {
             return [ToasttyMarkdownBlock(
@@ -198,6 +238,7 @@ struct ToasttyMarkdownBlock: Identifiable, Equatable, Sendable {
         case list(marker: ListMarker, depth: Int)
         case blockQuote
         case code(language: String?)
+        case table(ToasttyMarkdownTable)
     }
 
     let id: Int

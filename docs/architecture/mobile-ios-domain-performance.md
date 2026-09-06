@@ -49,10 +49,17 @@ Use repeated clean remote runs when calibrating this provisional gate. Keep the 
 
 ## Transcript preparation
 
-`LiveConversationController` shares immutable rows, Markdown blocks, and turns across connection and send-delivery metadata updates. A regression test applies these updates to 5,000 events and verifies that the prepared transcript is reused; an appended event requires new preparation. Long messages are parsed as one Markdown document before attributed blocks are split for layout, preserving code fences and reference links across cells.
+`LiveConversationController` shares immutable rows, Markdown blocks, and turns across connection and send-delivery metadata updates. A regression test applies these updates to 5,000 events and verifies that the prepared transcript is reused; an appended event requires new preparation. Long messages are parsed as one Markdown document before attributed blocks are split for layout, preserving code fences and reference links across cells. Markdown tables retain their header, row, column alignment, and inline attributes from Foundation’s parser. Wide tables scroll horizontally; long tables split only between rows and repeat their header, with at most 24 body rows per table section. A single oversized row stays intact even when it exceeds the soft chunk budget. Foundation omits entirely empty trailing table rows, so those rows cannot be reconstructed from attributed content.
 
 The fixture UI readiness measurement starts before opening the conversation and ends when the 5,000-row readiness marker appears. It includes fixture navigation and presentation preparation, but does not measure frame timing, sustained streaming, or peak memory. Conversation history remains in memory for the open runtime; these changes do not impose a retention limit or establish a physical-device performance budget.
 
 `LiveConversationControllerTests.testSustainedSmallAppendsPreserveAllRowsAndReportPreparationTime` starts with 5,000 events, then applies 200 updates of five events each. It verifies that all 6,000 rows remain ordered and records elapsed time, including fixture-state construction and main-actor preparation. This measurement excludes SwiftUI rendering and network transport and has no calibrated timing threshold yet.
 
 A remote Debug run on 2026-09-05 recorded 1.9807 seconds for those 200 updates in `artifacts/remote-tests/ios-audit-final-debug/`, with the timing attachment exported under `artifacts/reviews/ios-audit-append-measurement/`. This is one simulator observation, not a physical-device frame-time guarantee.
+
+
+## Transcript send scrolling
+
+Submitting acquires the transcript’s bottom immediately without animation, including when the user was reading older messages. SwiftUI’s size-change anchor then keeps that bottom fixed through keyboard dismissal, composer collapse, and appended content. Bottom detection excludes the keyboard, composer, and navigation insets from the usable viewport. A direct user drag cancels following so older history remains readable. Initial positioning and history restoration still use the existing layout-settling coordinator.
+
+The opt-in Debug fixture environment value `TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE=1` exposes coherent scroll geometry samples to UI tests. Send regression tests inspect every recorded geometry change after reaching the bottom, rather than comparing accessibility frames captured at different points during a keyboard animation. This is simulator layout evidence; it does not measure physical-device frame timing.

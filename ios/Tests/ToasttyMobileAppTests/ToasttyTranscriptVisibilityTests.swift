@@ -5,14 +5,58 @@ import XCTest
 @testable import ToasttyMobileApp
 
 final class ToasttyTranscriptVisibilityTests: XCTestCase {
-    func testScrollMetricsUseInsetAdjustedVisibleRectAtLiveEdge() {
+    func testScrollGeometryExcludesComposerAndKeyboardInsetsFromVisibleBottom() {
+        let metrics = TranscriptScrollMetrics(geometry: ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: 1_316),
+            contentSize: CGSize(width: 402, height: 1_701),
+            contentInsets: EdgeInsets(top: 114, leading: 0, bottom: 489, trailing: 0),
+            containerSize: CGSize(width: 402, height: 874)
+        ))
+
+        XCTAssertEqual(metrics.visibleMaxY, 1_701)
+        XCTAssertEqual(metrics.visibleHeight, 271)
+        XCTAssertEqual(metrics.distanceFromBottom, 0)
+        XCTAssertTrue(metrics.hasReachedPhysicalLiveEdge)
+
+        let hiddenTail = TranscriptScrollMetrics(geometry: ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: 1_216),
+            contentSize: CGSize(width: 402, height: 1_701),
+            contentInsets: EdgeInsets(top: 114, leading: 0, bottom: 489, trailing: 0),
+            containerSize: CGSize(width: 402, height: 874)
+        ))
+        XCTAssertEqual(hiddenTail.distanceFromBottom, 100)
+        XCTAssertFalse(hiddenTail.hasReachedPhysicalLiveEdge)
+        XCTAssertFalse(hiddenTail.isNearLiveEdge, "Content hidden behind the keyboard is not visible")
+    }
+
+    func testInsetOnlyComposerCollapseChangesViewportWhilePinnedBottomRemainsZero() {
+        let expanded = TranscriptScrollMetrics(geometry: ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: 1_316),
+            contentSize: CGSize(width: 402, height: 1_701),
+            contentInsets: EdgeInsets(top: 114, leading: 0, bottom: 489, trailing: 0),
+            containerSize: CGSize(width: 402, height: 874)
+        ))
+        let collapsed = TranscriptScrollMetrics(geometry: ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: 951),
+            contentSize: CGSize(width: 402, height: 1_701),
+            contentInsets: EdgeInsets(top: 114, leading: 0, bottom: 124, trailing: 0),
+            containerSize: CGSize(width: 402, height: 874)
+        ))
+
+        XCTAssertEqual(expanded.distanceFromBottom, 0)
+        XCTAssertEqual(collapsed.distanceFromBottom, 0)
+        XCTAssertTrue(collapsed.hasViewportHeightChange(comparedTo: expanded))
+        XCTAssertTrue(collapsed.hasLiveEdgeLayoutChange(comparedTo: expanded))
+    }
+
+    func testScrollMetricsAllowOverscrollAndUseExclusiveNearBottomThreshold() {
         XCTAssertTrue(
             TranscriptScrollMetrics(
                 contentHeight: 2_160,
                 visibleMaxY: 2_300.7,
                 visibleHeight: 800
             ).isAtLiveEdge,
-            "The inset-adjusted visible rect can extend beyond content at the physical bottom"
+            "Bottom overscroll can extend the viewport beyond the content"
         )
         XCTAssertTrue(
             TranscriptScrollMetrics(
@@ -45,7 +89,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
                 visibleMaxY: 2_300.7,
                 visibleHeight: 800
             ).hasReachedPhysicalLiveEdge,
-            "Inset-adjusted overshoot is still the physical tail"
+            "Bottom overscroll is still the physical tail"
         )
         XCTAssertFalse(
             TranscriptScrollMetrics(
@@ -124,14 +168,14 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         let send = coordinator.command
         let initialCandidate = send.flatMap { coordinator.executionCandidate(for: $0) }
         XCTAssertEqual(send?.target, .liveEdge)
-        XCTAssertEqual(send?.motion, .stable)
+        XCTAssertEqual(send?.motion, .immediate)
         XCTAssertEqual(send?.liveEdgeOwner, .send(41))
         XCTAssertTrue(coordinator.ownsLiveEdge)
 
         coordinator.reinforceLiveEdge()
         let reinforcedCandidate = send.flatMap { coordinator.executionCandidate(for: $0) }
         XCTAssertEqual(coordinator.command?.target, .liveEdge)
-        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.motion, .immediate)
         XCTAssertEqual(coordinator.command?.liveEdgeOwner, .send(41))
         XCTAssertEqual(coordinator.command?.sequence, send?.sequence)
         XCTAssertGreaterThan(
@@ -183,7 +227,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertNotNil(coordinator.command.flatMap { coordinator.executionCandidate(for: $0) })
     }
 
-    func testSendOwnerSurvivesLayoutSettlingAndLateFollowUp() {
+    func testImmediateSendOwnerSurvivesLayoutChangesAndStableFollowUp() {
         var coordinator = TranscriptScrollCoordinator()
 
         coordinator.requestSend(41)
@@ -216,7 +260,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertEqual(coordinator.command?.liveEdgeOwner, .jump(1))
 
         coordinator.requestSend(73)
-        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.motion, .immediate)
         XCTAssertEqual(coordinator.command?.liveEdgeOwner, .send(73))
         XCTAssertGreaterThan(coordinator.command?.sequence ?? 0, jump?.sequence ?? 0)
     }
@@ -271,7 +315,27 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertTrue(coordinator.ownsLiveEdge)
     }
 
-    func testPendingSendCannotCompleteBeforeSettledExecution() {
+    func testCompletedSendKeepsOwningLiveEdgeThroughLaterComposerCollapseUntilInteraction() {
+        var coordinator = TranscriptScrollCoordinator()
+        coordinator.requestSend(9)
+        let command = coordinator.command!
+        XCTAssertEqual(command.motion, .immediate)
+        XCTAssertTrue(coordinator.markExecuted(coordinator.executionCandidate(for: command)!))
+        XCTAssertTrue(coordinator.finishSend(atLiveEdge: true))
+
+        // The first bottom sample can arrive before enqueue clears the draft.
+        // Automatic ownership must preserve size-change anchoring afterwards.
+        coordinator.reinforceLiveEdge()
+        XCTAssertTrue(coordinator.ownsLiveEdge)
+        XCTAssertEqual(coordinator.command?.liveEdgeOwner, .automatic)
+        XCTAssertEqual(coordinator.command?.motion, .stable)
+
+        coordinator.cancelForInteraction()
+        XCTAssertFalse(coordinator.ownsLiveEdge)
+        XCTAssertNil(coordinator.command)
+    }
+
+    func testPendingSendCannotCompleteBeforeImmediateExecution() {
         var coordinator = TranscriptScrollCoordinator()
         coordinator.requestSend(9)
         coordinator.reinforceLiveEdge()
@@ -289,7 +353,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertFalse(coordinator.requestHistoryAnchor(anchor))
 
         XCTAssertEqual(coordinator.command?.target, .liveEdge)
-        XCTAssertEqual(coordinator.command?.motion, .stable)
+        XCTAssertEqual(coordinator.command?.motion, .immediate)
         XCTAssertEqual(coordinator.command?.liveEdgeOwner, .send(9))
         XCTAssertTrue(coordinator.ownsLiveEdge)
     }

@@ -13,6 +13,7 @@ enum ToasttyMobileFixtureScenario: String, Equatable, Sendable {
     case transcriptTruncated = "transcript-truncated"
     case transcriptPaging = "transcript-paging"
     case transcriptLongMessage = "transcript-long-message"
+    case transcriptTables = "transcript-tables"
     case toolActivity = "tool-activity"
     case gatedSend = "gated-send"
     case gatedSendReceipt = "gated-send-receipt"
@@ -76,7 +77,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
         switch fixtureScenario {
         case .home, .transcriptPerformance, .transcriptResyncing,
              .transcriptStale, .transcriptTruncated, .transcriptPaging,
-             .transcriptLongMessage, .toolActivity, .gatedSend, .gatedSendReceipt:
+             .transcriptLongMessage, .transcriptTables, .toolActivity, .gatedSend, .gatedSendReceipt:
             .live
         case .connecting, .reconnecting:
             .reconnecting
@@ -100,7 +101,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 scanner = FixturePairingScanner(failure: .couldNotStart)
             case .home, .connecting, .reconnecting, .transcriptPerformance,
                  .transcriptResyncing, .transcriptStale, .transcriptTruncated,
-                 .transcriptPaging, .transcriptLongMessage, .toolActivity,
+                 .transcriptPaging, .transcriptLongMessage, .transcriptTables, .toolActivity,
                  .gatedSend, .gatedSendReceipt,
                  .unpaired, .credentialCorrupt, .pairingFailure, .pairingPrivacy:
                 scanner = FixturePairingScanner()
@@ -109,7 +110,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             switch fixtureScenario {
             case .home, .connecting, .reconnecting, .transcriptPerformance,
                  .transcriptResyncing, .transcriptStale, .transcriptTruncated,
-                 .transcriptPaging, .transcriptLongMessage, .toolActivity,
+                 .transcriptPaging, .transcriptLongMessage, .transcriptTables, .toolActivity,
                  .gatedSend, .gatedSendReceipt:
                 usesPairedFixture = true
             case .unpaired, .cameraDenied, .scannerUnsupported, .scannerFailure, .credentialCorrupt,
@@ -121,7 +122,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             case .reconnecting: .reconnecting
             case .home, .transcriptPerformance, .transcriptResyncing,
                  .transcriptStale, .transcriptTruncated, .transcriptPaging,
-                 .transcriptLongMessage, .toolActivity, .gatedSend, .gatedSendReceipt,
+                 .transcriptLongMessage, .transcriptTables, .toolActivity, .gatedSend, .gatedSendReceipt,
                  .unpaired, .cameraDenied, .scannerUnsupported, .scannerFailure, .credentialCorrupt,
                  .pairingFailure, .pairingPrivacy:
                 .live

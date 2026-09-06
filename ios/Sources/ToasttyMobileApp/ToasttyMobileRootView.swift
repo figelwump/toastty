@@ -298,6 +298,8 @@ struct ToasttyMobileRootView: View {
             )
         case .transcriptLongMessage:
             return ToasttyConversationFixture.longMessagePresentation(for: conversationID)
+        case .transcriptTables:
+            return ToasttyConversationFixture.tablePresentation(for: conversationID)
         case .toolActivity:
             return ToasttyConversationFixture.toolActivityPresentation(for: conversationID)
         case .gatedSend, .gatedSendReceipt:

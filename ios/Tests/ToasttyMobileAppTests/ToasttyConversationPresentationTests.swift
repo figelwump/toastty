@@ -292,6 +292,22 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         XCTAssertTrue(disclosure.isExpanded(liveID))
     }
 
+    func testShortSparseTableUsesSeparateTranscriptCells() {
+        let text = "| A | B |\n| --- | --- |\n" + (1...100).map { "| \($0) | |" }.joined(separator: "\n")
+        XCTAssertLessThan(text.count, ToasttyMarkdownChunking.chunkThreshold)
+        let state = ToasttyConversationPresentationAdapter.makeState(
+            events: [knownEvent(sequence: 1, payload: .assistantMessage(.init(text: text, phase: .final)))],
+            projectionRunID: runID(1),
+            projectionGeneration: 7,
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+        XCTAssertEqual(state.rows.count, 1)
+        XCTAssertEqual(state.blocks.count, 5)
+        XCTAssertEqual(state.blocks.map(\.id.chunkIndex), Array(0..<5))
+    }
+
     func testLongAssistantMessageSplitsIntoStableChunkBlocks() throws {
         let giant = (1 ... 14).map { index in
             "Paragraph \(index): " + Array(repeating: "chunked transcript body", count: 20)

@@ -15,17 +15,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
     private let openPromptConversationID = "B1000000-0000-0000-0000-000000000007"
 
-    private struct TranscriptStabilitySample {
-        enum Phase: String {
-            case awaitingOptimistic
-            case optimisticWithDraft
-            case collapsed
-        }
-
-        let phase: Phase
-        let rowMaxY: CGFloat
-        let composerMinY: CGFloat
-        var tailDistance: CGFloat { composerMinY - rowMaxY }
+    private struct TranscriptScrollTraceSample: Decodable {
+        let elapsed: Double
+        let contentHeight: CGFloat
+        let visibleMaxY: CGFloat
+        let visibleHeight: CGFloat
+        let topInset: CGFloat
+        let bottomInset: CGFloat
+        let containerHeight: CGFloat
+        let hasSendItems: Bool
+        var distanceFromBottom: CGFloat { contentHeight - visibleMaxY }
     }
 
     override func setUpWithError() throws {
@@ -665,7 +664,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
     func testGatedSendWithChangingComposerHeightJumpsToLiveEdgeAndFollowsAppendedTail() {
         let app = launchFixtureApp(
-            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+            environment: [
+                "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
+                "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
+            ]
         )
         openGatedSendConversation(in: app)
 
@@ -696,7 +698,13 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             optimistic.isHittable,
             "The newly appended optimistic message should remain visible at the live edge"
         )
+        assertSendStayedAtBottom(in: app, startedAtBottom: false)
         attachScreenshot(named: "fixture-gated-send-from-slow-reader", of: app)
+
+        transcript.swipeDown()
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(jumpToLatest.exists, "A deliberate drag must release post-send following")
     }
 
     func testGatedSendDelayedOptimisticRowKeepsTranscriptStableWhileComposerCollapses() {
@@ -704,6 +712,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             environment: [
                 "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
                 "TOASTTY_MOBILE_FIXTURE_DELAYED_SUBMIT": "1",
+                "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
             ]
         )
         openGatedSendConversation(in: app)
@@ -731,71 +740,28 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         send.tap()
 
-        var samples: [TranscriptStabilitySample] = []
+        var awaitingOptimisticCount = 0
+        var optimisticWithDraftCount = 0
+        var collapsedCount = 0
         let deadline = Date().addingTimeInterval(7)
         while Date() < deadline {
             let hasOptimistic = optimistic.exists
             let hasCollapsedDraft = (input.value as? String) != draft
-            let phase: TranscriptStabilitySample.Phase
             if hasCollapsedDraft {
-                phase = .collapsed
+                collapsedCount += 1
             } else if hasOptimistic {
-                phase = .optimisticWithDraft
+                optimisticWithDraftCount += 1
             } else {
-                phase = .awaitingOptimistic
+                awaitingOptimisticCount += 1
             }
-
-            XCTAssertTrue(
-                newestStableRow.isHittable,
-                "The stable transcript tail row must remain visible throughout delayed submission"
-            )
-            samples.append(TranscriptStabilitySample(
-                phase: phase,
-                rowMaxY: newestStableRow.frame.maxY,
-                composerMinY: input.frame.minY
-            ))
-
-            if phase == .collapsed,
-               samples.suffix(3).allSatisfy({ $0.phase == .collapsed }) {
-                break
-            }
+            if collapsedCount >= 3 { break }
             RunLoop.current.run(until: Date().addingTimeInterval(0.06))
         }
 
-        let phaseDescription = samples.map {
-            "\($0.phase.rawValue):row=\(String(format: "%.1f", $0.rowMaxY)),composer=\(String(format: "%.1f", $0.composerMinY)),distance=\(String(format: "%.1f", $0.tailDistance))"
-        }.joined(separator: " | ")
-        XCTAssertGreaterThanOrEqual(
-            samples.filter { $0.phase == .awaitingOptimistic }.count,
-            2,
-            "The fixture did not preserve the pre-optimistic phase long enough: \(phaseDescription)"
-        )
-        XCTAssertGreaterThanOrEqual(
-            samples.filter { $0.phase == .optimisticWithDraft }.count,
-            2,
-            "The fixture did not preserve the optimistic-before-collapse phase: \(phaseDescription)"
-        )
-        XCTAssertGreaterThanOrEqual(
-            samples.filter { $0.phase == .collapsed }.count,
-            3,
-            "The fixture did not reach a settled collapsed composer: \(phaseDescription)"
-        )
-
-        for (previous, current) in zip(samples, samples.dropFirst()) {
-            XCTAssertGreaterThanOrEqual(
-                current.tailDistance + 3,
-                previous.tailDistance,
-                "The transcript tail reversed direction during submit: \(phaseDescription)"
-            )
-        }
-
-        let settledSamples = samples.filter { $0.phase == .collapsed }
-        let settledDistances = settledSamples.map(\.tailDistance)
-        XCTAssertLessThanOrEqual(
-            (settledDistances.max() ?? 0) - (settledDistances.min() ?? 0),
-            3,
-            "The transcript tail jittered after composer collapse: \(phaseDescription)"
-        )
+        XCTAssertGreaterThanOrEqual(awaitingOptimisticCount, 2)
+        XCTAssertGreaterThanOrEqual(optimisticWithDraftCount, 2)
+        XCTAssertGreaterThanOrEqual(collapsedCount, 3)
+        assertSendStayedAtBottom(in: app, startedAtBottom: true)
         XCTAssertLessThan(
             input.frame.height,
             expandedComposerHeight - 20,
@@ -806,6 +772,77 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(
             jumpToLatest.exists,
             "Delayed submission must finish at the live edge"
+        )
+    }
+
+    func testGatedSendAtBottomKeepsMultilineSubmitPinned() {
+        let app = launchFixtureApp(environment: [
+            "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
+            "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
+        ])
+        openGatedSendConversation(in: app)
+        let input = composerInput(in: app)
+        input.tap()
+        input.typeText("Line 01\nLine 02\nLine 03\nLine 04\nLine 05")
+        XCTAssertFalse(app.buttons["toastty-mobile-transcript-jump-latest"].exists)
+        app.buttons["toastty-mobile-composer-send"].tap()
+
+        let optimistic = app.descendants(matching: .any)[
+            "toastty-mobile-send-optimistic-fixture-enqueued-1"
+        ]
+        XCTAssertTrue(optimistic.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(optimistic.isHittable)
+        assertSendStayedAtBottom(in: app, startedAtBottom: true)
+    }
+
+    private func assertSendStayedAtBottom(
+        in app: XCUIApplication,
+        startedAtBottom: Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let trace = app.descendants(matching: .any)["toastty-mobile-transcript-scroll-trace"]
+        guard let json = trace.value as? String,
+              let samples = try? JSONDecoder().decode(
+                  [TranscriptScrollTraceSample].self,
+                  from: Data(json.utf8)
+              )
+        else {
+            XCTFail("Missing coherent send geometry trace", file: file, line: line)
+            return
+        }
+        let attachment = XCTAttachment(string: json)
+        attachment.name = "post-send-scroll-geometry"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(samples.count, 1, file: file, line: line)
+        guard let acquisition = samples.firstIndex(where: { $0.distanceFromBottom <= 1 }) else {
+            XCTFail("Submit never acquired the bottom: \(json)", file: file, line: line)
+            return
+        }
+        if startedAtBottom {
+            XCTAssertEqual(acquisition, 0, "Fixture must begin at the bottom", file: file, line: line)
+        }
+        let followed = samples[acquisition...]
+        let baseline = samples[acquisition].distanceFromBottom
+        for sample in followed {
+            XCTAssertEqual(
+                sample.distanceFromBottom,
+                baseline,
+                accuracy: 3,
+                "Submit moved away from its acquired bottom during layout: \(json)",
+                file: file,
+                line: line
+            )
+        }
+        XCTAssertTrue(samples.contains(where: \.hasSendItems), file: file, line: line)
+        XCTAssertGreaterThan(
+            (samples.map(\.visibleHeight).max() ?? 0) - (samples.map(\.visibleHeight).min() ?? 0),
+            20,
+            "The trace must cover keyboard dismissal and composer resize",
+            file: file,
+            line: line
         )
     }
 

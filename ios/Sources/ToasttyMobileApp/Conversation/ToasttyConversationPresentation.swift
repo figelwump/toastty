@@ -83,7 +83,9 @@ struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
         }
 
         func appendChunked(_ row: ToasttyTranscriptRow, text: String) {
-            guard text.count > ToasttyMarkdownChunking.chunkThreshold else {
+            // A short table can still be tall enough to need separate cells.
+            // The parser decides whether a pipe belongs to an actual table.
+            guard text.count > ToasttyMarkdownChunking.chunkThreshold || text.contains("|") else {
                 blocks.append(ToasttyTranscriptBlock(
                     id: ToasttyTranscriptBlockID(rowID: row.id),
                     content: .row(row)

@@ -25,6 +25,9 @@ struct ToasttyTranscriptView: View {
     @State private var followsLiveEdge = true
     @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
     @State private var scrollCoordinator = TranscriptScrollCoordinator()
+    #if DEBUG
+    @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
+    #endif
 
     init(
         state: ToasttyConversationPresentationState,
@@ -80,6 +83,26 @@ struct ToasttyTranscriptView: View {
                 .background(ToasttyDesignTokens.background)
                 .accessibilityIdentifier("toastty-mobile-transcript")
                 .scrollDismissesKeyboard(.interactively)
+                // Keep the content's bottom fixed in the same layout pass as
+                // keyboard dismissal, composer collapse, and appended rows.
+                // A pending submit applies before its command task executes.
+                .defaultScrollAnchor(
+                    followsLiveEdge || scrollCoordinator.ownsLiveEdge || jumpToLiveEdgeRequest > 0
+                        ? .bottom : nil,
+                    for: .sizeChanges
+                )
+                .overlay(alignment: .topLeading) {
+                    #if DEBUG
+                    if TranscriptFixtureScrollTrace.isEnabled {
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .accessibilityElement()
+                            .accessibilityLabel("Transcript scroll trace")
+                            .accessibilityValue(fixtureScrollTrace.encodedSamples)
+                            .accessibilityIdentifier("toastty-mobile-transcript-scroll-trace")
+                    }
+                    #endif
+                }
                 .overlay(alignment: .topLeading) {
                     if state.rows.count == 5_000 {
                         Color.clear
@@ -92,6 +115,9 @@ struct ToasttyTranscriptView: View {
                 .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
                     TranscriptScrollMetrics(geometry: geometry)
                 } action: { old, new in
+                    #if DEBUG
+                    fixtureScrollTrace.record(new, hasSendItems: !state.sendItems.isEmpty)
+                    #endif
                     let hadMeasuredScrollGeometry = hasMeasuredScrollGeometry
                     let atLiveEdge = new.isNearLiveEdge
                     let reachedPhysicalLiveEdge = new.hasReachedPhysicalLiveEdge
@@ -128,6 +154,9 @@ struct ToasttyTranscriptView: View {
                         jumpToLiveEdgeRequest = 0
                         followsLiveEdge = false
                         scrollCoordinator.cancelForInteraction()
+                        #if DEBUG
+                        fixtureScrollTrace.stop()
+                        #endif
                         return
                     }
 
@@ -174,6 +203,9 @@ struct ToasttyTranscriptView: View {
                 }
                 .onChange(of: jumpToLiveEdgeRequest) { _, request in
                     guard request > 0, lastScrollTarget != nil else { return }
+                    #if DEBUG
+                    fixtureScrollTrace.begin()
+                    #endif
                     scrollCoordinator.requestSend(request)
                 }
                 .onChange(of: scrollChangeKey, initial: true) { _, _ in
@@ -212,9 +244,9 @@ struct ToasttyTranscriptView: View {
                             break
                         }
                     } else {
-                        // A user-requested Jump to Latest keeps its immediate
-                        // animated response. Later layout growth is reinforced
-                        // through a new stable command.
+                        // Submit acquires the bottom without animation or a
+                        // settling delay; Jump to Latest keeps its animation.
+                        // Native size-change anchoring covers subsequent layout.
                         await Task.yield()
                         guard Task.isCancelled == false,
                               let candidate = scrollCoordinator.executionCandidate(for: command),
@@ -642,11 +674,23 @@ struct TranscriptScrollMetrics: Equatable {
     let contentHeight: CGFloat
     let visibleMaxY: CGFloat
     let visibleHeight: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let containerHeight: CGFloat
 
     init(geometry: ScrollGeometry) {
         contentHeight = geometry.contentSize.height
-        visibleMaxY = geometry.visibleRect.maxY
-        visibleHeight = geometry.visibleRect.height
+        // visibleRect includes the safe-area regions behind the composer and
+        // keyboard. Only the inset-excluded viewport can establish that the
+        // transcript's bottom is actually visible.
+        visibleMaxY = geometry.visibleRect.maxY - geometry.contentInsets.bottom
+        visibleHeight = max(
+            0,
+            geometry.visibleRect.height - geometry.contentInsets.top - geometry.contentInsets.bottom
+        )
+        topInset = geometry.contentInsets.top
+        bottomInset = geometry.contentInsets.bottom
+        containerHeight = geometry.containerSize.height
     }
 
     init(
@@ -657,6 +701,9 @@ struct TranscriptScrollMetrics: Equatable {
         self.contentHeight = contentHeight
         self.visibleMaxY = visibleMaxY
         self.visibleHeight = visibleHeight
+        topInset = 0
+        bottomInset = 0
+        containerHeight = visibleHeight
     }
 
     func hasViewportHeightChange(comparedTo other: Self) -> Bool {
@@ -677,8 +724,8 @@ struct TranscriptScrollMetrics: Equatable {
     }
 
     /// Completion is intentionally tighter than the user-facing near-tail
-    /// threshold. A negative distance is valid when the inset-adjusted visible
-    /// rect extends beyond the content at the physical bottom.
+    /// threshold. A negative distance is valid during bottom overscroll or
+    /// when the content is shorter than the viewport.
     var hasReachedPhysicalLiveEdge: Bool {
         distanceFromBottom <= Self.physicalLiveEdgeEpsilon
     }
@@ -687,6 +734,64 @@ struct TranscriptScrollMetrics: Equatable {
         isNearLiveEdge
     }
 }
+
+#if DEBUG
+/// UI tests collect one coherent geometry sample per layout change. Reading
+/// separate accessibility frames can straddle the keyboard animation and report
+/// movement that never appeared in a single frame.
+private struct TranscriptFixtureScrollTrace {
+    static let isEnabled = ProcessInfo.processInfo.environment[
+        "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE"
+    ] == "1"
+
+    struct Sample: Encodable {
+        let elapsed: Double
+        let contentHeight: CGFloat
+        let visibleMaxY: CGFloat
+        let visibleHeight: CGFloat
+        let topInset: CGFloat
+        let bottomInset: CGFloat
+        let containerHeight: CGFloat
+        let hasSendItems: Bool
+    }
+
+    private var latest: TranscriptScrollMetrics?
+    private var startedAt: TimeInterval?
+    private var samples: [Sample] = []
+
+    var encodedSamples: String {
+        guard let data = try? JSONEncoder().encode(samples) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    mutating func begin() {
+        guard Self.isEnabled else { return }
+        samples = []
+        startedAt = ProcessInfo.processInfo.systemUptime
+        if let latest { record(latest, hasSendItems: false) }
+    }
+
+    mutating func stop() {
+        startedAt = nil
+    }
+
+    mutating func record(_ metrics: TranscriptScrollMetrics, hasSendItems: Bool) {
+        guard Self.isEnabled else { return }
+        latest = metrics
+        guard let startedAt, samples.count < 512 else { return }
+        samples.append(Sample(
+            elapsed: ProcessInfo.processInfo.systemUptime - startedAt,
+            contentHeight: metrics.contentHeight,
+            visibleMaxY: metrics.visibleMaxY,
+            visibleHeight: metrics.visibleHeight,
+            topInset: metrics.topInset,
+            bottomInset: metrics.bottomInset,
+            containerHeight: metrics.containerHeight,
+            hasSendItems: hasSendItems
+        ))
+    }
+}
+#endif
 
 struct TranscriptScrollCoordinator: Equatable {
     static let stableSettleInterval: Duration = .milliseconds(50)
@@ -699,6 +804,7 @@ struct TranscriptScrollCoordinator: Equatable {
     }
 
     enum Motion: Equatable {
+        case immediate
         case stable
         case animated
     }
@@ -760,7 +866,7 @@ struct TranscriptScrollCoordinator: Equatable {
     }
 
     mutating func requestSend(_ request: UInt64) {
-        issueLiveEdge(owner: .send(request), motion: .stable)
+        issueLiveEdge(owner: .send(request), motion: .immediate)
     }
 
     mutating func requestJump() {
@@ -778,8 +884,8 @@ struct TranscriptScrollCoordinator: Equatable {
            command.liveEdgeOwner == owner,
            executedCommandSequence != command.sequence {
             // Equivalent work that arrives before execution belongs to the
-            // same pending operation. The task observes the newer generation
-            // and waits for layout quiet again.
+            // same pending operation. Immediate sends use the latest generation;
+            // stable commands wait for that generation's layout to settle.
             return
         }
 
@@ -843,8 +949,8 @@ struct TranscriptScrollCoordinator: Equatable {
         )
     }
 
-    /// Marks exactly the generation that was observed after the quiet period.
-    /// A newer generation must be settled instead of being silently consumed.
+    /// Marks exactly the observed generation. A newer generation must be
+    /// observed by the task instead of being silently consumed.
     mutating func markExecuted(_ candidate: ExecutionCandidate) -> Bool {
         guard command == candidate.command,
               liveEdgeLayoutGeneration == candidate.layoutGeneration,
@@ -1145,6 +1251,10 @@ private struct ToasttyTranscriptRowView: View {
 
     @ViewBuilder
     private func message(text: String, isUser: Bool, metadata: String?) -> some View {
+        let containsTable = !isUser && (chunk?.blocks ?? ToasttyMarkdownText.blocks(text)).contains { block in
+            if case .table = block.style { return true }
+            return false
+        }
         let content = VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
             if isUser {
                 Text(text)
@@ -1183,7 +1293,9 @@ private struct ToasttyTranscriptRowView: View {
         } else {
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
+                // Combining the whole message hides descendants of nested
+                // horizontal scroll views from VoiceOver.
+                .accessibilityElement(children: containsTable ? .contain : .combine)
         }
     }
 
