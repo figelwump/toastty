@@ -1,5 +1,6 @@
 @testable import ToasttyApp
 import CoreState
+import RemoteProtocol
 import XCTest
 
 @MainActor
@@ -665,6 +666,225 @@ final class TerminalAppControlTests: XCTestCase {
         let childSessionID = try XCTUnwrap(outcome.result?.string("sessionID"))
         let childRecord = try XCTUnwrap(fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: childSessionID))
         XCTAssertEqual(childRecord.scopedWorkspaceIDs, [explicitWorkspaceID, fixture.workspaceID])
+    }
+
+    // MARK: - Sibling terminal reads
+
+    func testTerminalVisibleTextDescriptorListsTailAndScrollbackParameters() throws {
+        let fixture = try TerminalAppControlFixture()
+        let descriptor = try XCTUnwrap(
+            fixture.executor.listQueryDescriptors().first {
+                $0.id == AppControlQueryID.terminalVisibleText.rawValue
+            }
+        )
+        let names = Set(descriptor.parameters.map(\.name))
+        XCTAssertTrue(names.isSuperset(of: ["contains", "tail", "includeScrollback"]))
+        XCTAssertEqual(descriptor.parameters.first { $0.name == "tail" }?.valueType, .integer)
+        XCTAssertEqual(descriptor.parameters.first { $0.name == "includeScrollback" }?.valueType, .boolean)
+    }
+
+    func testWorkspaceSnapshotSlotMappingsCarryTerminalMetadata() throws {
+        let fixture = try TerminalAppControlFixture()
+        fixture.terminalRuntimeRegistry.terminalLiveTitleStore.setTitle("npm run dev", for: fixture.panelID)
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .busy }
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "owner-session",
+            agent: .claude,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let result = try fixture.executor.runQuery(
+            id: AppControlQueryID.workspaceSnapshot.rawValue,
+            args: ["workspaceID": .string(fixture.workspaceID.uuidString)]
+        )
+
+        guard case .array(let mappings)? = result["slotMappings"],
+              case .object(let entry)? = mappings.first else {
+            XCTFail("expected slotMappings entries")
+            return
+        }
+        XCTAssertEqual(entry.string("panelID"), fixture.panelID.uuidString)
+        XCTAssertEqual(entry.string("panelKind"), "terminal")
+        XCTAssertEqual(entry.string("title"), "npm run dev")
+        XCTAssertEqual(entry.int("shortcutNumber"), 1)
+        XCTAssertEqual(entry.string("promptState"), "busy")
+        XCTAssertEqual(entry.bool("isBusy"), true)
+        XCTAssertEqual(entry.string("sessionID"), "owner-session")
+        XCTAssertEqual(entry.string("agent"), AgentKind.claude.rawValue)
+        XCTAssertEqual(entry.bool("readable"), true)
+        XCTAssertNotNil(entry["cwd"])
+        XCTAssertNotNil(entry["shell"])
+
+        XCTAssertTrue(fixture.store.send(.setTerminalPanelAgentReadPolicy(panelID: fixture.panelID, policy: .denied)))
+        let privateResult = try fixture.executor.runQuery(
+            id: AppControlQueryID.workspaceSnapshot.rawValue,
+            args: ["workspaceID": .string(fixture.workspaceID.uuidString)]
+        )
+        guard case .array(let privateMappings)? = privateResult["slotMappings"],
+              case .object(let privateEntry)? = privateMappings.first else {
+            XCTFail("expected slotMappings entries")
+            return
+        }
+        XCTAssertEqual(privateEntry.bool("readable"), false)
+    }
+
+    func testTerminalVisibleTextTailAndScrollbackParameters() throws {
+        let fixture = try TerminalAppControlFixture()
+        var requestedScrollback: [Bool] = []
+        fixture.terminalRuntimeRegistry.setAutomationReadVisibleTextHandlerForTesting { _, includeScrollback in
+            requestedScrollback.append(includeScrollback)
+            return includeScrollback ? "old-1\nold-2\nline-1\nline-2\nline-3\n" : "line-1\nline-2\nline-3\n"
+        }
+
+        let viewport = try fixture.executor.runQuery(
+            id: AppControlQueryID.terminalVisibleText.rawValue,
+            args: ["panelID": .string(fixture.panelID.uuidString)]
+        )
+        XCTAssertEqual(viewport.string("text"), "line-1\nline-2\nline-3")
+        XCTAssertEqual(viewport.int("lineCount"), 3)
+        XCTAssertEqual(viewport.bool("truncated"), false)
+        XCTAssertEqual(viewport.bool("includesScrollback"), false)
+
+        let tailed = try fixture.executor.runQuery(
+            id: AppControlQueryID.terminalVisibleText.rawValue,
+            args: [
+                "panelID": .string(fixture.panelID.uuidString),
+                "includeScrollback": .string("true"),
+                "tail": .string("2"),
+                "contains": .string("line-3"),
+            ]
+        )
+        XCTAssertEqual(tailed.string("text"), "line-2\nline-3")
+        XCTAssertEqual(tailed.int("lineCount"), 2)
+        XCTAssertEqual(tailed.bool("truncated"), true)
+        XCTAssertEqual(tailed.bool("includesScrollback"), true)
+        XCTAssertEqual(tailed.bool("contains"), true)
+        XCTAssertEqual(requestedScrollback, [false, true])
+
+        XCTAssertThrowsError(
+            try fixture.executor.runQuery(
+                id: AppControlQueryID.terminalVisibleText.rawValue,
+                args: ["panelID": .string(fixture.panelID.uuidString), "tail": .string("0")]
+            )
+        ) { error in
+            guard case AutomationSocketError.invalidPayload = error else {
+                XCTFail("expected invalidPayload, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testBoundedTerminalTextCapsBytesFromTheEnd() {
+        let text = (1...10).map { "line-\($0)" }.joined(separator: "\n")
+        let bounded = AppControlExecutor.boundedTerminalText(text, tail: nil, byteLimit: 14)
+        XCTAssertEqual(bounded.text, "line-9\nline-10")
+        XCTAssertEqual(bounded.lineCount, 2)
+        XCTAssertTrue(bounded.truncated)
+
+        let untouched = AppControlExecutor.boundedTerminalText("a\nb", tail: 5, byteLimit: 1024)
+        XCTAssertEqual(untouched.text, "a\nb")
+        XCTAssertEqual(untouched.lineCount, 2)
+        XCTAssertFalse(untouched.truncated)
+    }
+
+    func testForeignReadOnPrivateTerminalIsDeniedAndOwnSessionIsExempt() throws {
+        let fixture = try TerminalAppControlFixture()
+        fixture.terminalRuntimeRegistry.setAutomationReadVisibleTextHandlerForTesting { _, _ in "secret" }
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "owner-session",
+            agent: .claude,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        XCTAssertTrue(fixture.store.send(.setTerminalPanelAgentReadPolicy(panelID: fixture.panelID, policy: .denied)))
+
+        XCTAssertThrowsError(
+            try fixture.executor.runQuery(
+                id: AppControlQueryID.terminalVisibleText.rawValue,
+                args: ["panelID": .string(fixture.panelID.uuidString)],
+                context: AutomationRequestContext(callerSessionID: "other-session", commandName: "app_control.run_query")
+            )
+        ) { error in
+            guard case AutomationSocketError.panelReadDenied(let panelID) = error else {
+                XCTFail("expected panelReadDenied, got \(error)")
+                return
+            }
+            XCTAssertEqual(panelID, fixture.panelID)
+            XCTAssertEqual(AutomationSocketError.panelReadDenied(panelID: panelID).errorBody.code, "PANEL_READ_DENIED")
+        }
+
+        let own = try fixture.executor.runQuery(
+            id: AppControlQueryID.terminalVisibleText.rawValue,
+            args: ["panelID": .string(fixture.panelID.uuidString)],
+            context: AutomationRequestContext(callerSessionID: "owner-session", commandName: "app_control.run_query")
+        )
+        XCTAssertEqual(own.string("text"), "secret")
+        XCTAssertNil(fixture.terminalRuntimeRegistry.terminalReadActivityStore.existingModel(for: fixture.panelID))
+    }
+
+    func testForeignReadsRecordReadActivityWithReaderLabel() throws {
+        let fixture = try TerminalAppControlFixture()
+        fixture.terminalRuntimeRegistry.setAutomationReadVisibleTextHandlerForTesting { _, _ in "output" }
+        XCTAssertTrue(fixture.store.send(.splitFocusedSlot(workspaceID: fixture.workspaceID, orientation: .horizontal)))
+        let readerPanelID = try XCTUnwrap(
+            fixture.store.state.workspacesByID[fixture.workspaceID]?.layoutTree.allSlotInfos
+                .map(\.panelID)
+                .first { $0 != fixture.panelID }
+        )
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "reader-session",
+            agent: .codex,
+            panelID: readerPanelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let context = AutomationRequestContext(callerSessionID: "reader-session", commandName: "app_control.run_query")
+        _ = try fixture.executor.runQuery(
+            id: AppControlQueryID.terminalVisibleText.rawValue,
+            args: ["panelID": .string(fixture.panelID.uuidString)],
+            context: context
+        )
+        _ = try fixture.executor.runQuery(
+            id: AppControlQueryID.terminalVisibleText.rawValue,
+            args: ["panelID": .string(fixture.panelID.uuidString)],
+            context: context
+        )
+
+        let model = try XCTUnwrap(fixture.terminalRuntimeRegistry.terminalReadActivityStore.existingModel(for: fixture.panelID))
+        XCTAssertEqual(model.totalReadCount, 2)
+        XCTAssertEqual(model.readers.count, 1)
+        XCTAssertEqual(model.readers.first?.sessionID, "reader-session")
+        XCTAssertEqual(model.readers.first?.label, AgentKind.codex.displayName)
+        XCTAssertEqual(model.readers.first?.readCount, 2)
+        XCTAssertNil(fixture.terminalRuntimeRegistry.terminalReadActivityStore.existingModel(for: readerPanelID))
+    }
+
+    func testReadWithoutCallerSessionRecordsUnknownAutomationClient() throws {
+        let fixture = try TerminalAppControlFixture()
+        fixture.terminalRuntimeRegistry.setAutomationReadVisibleTextHandlerForTesting { _, _ in "output" }
+
+        _ = try fixture.executor.runQuery(
+            id: AppControlQueryID.terminalVisibleText.rawValue,
+            args: ["panelID": .string(fixture.panelID.uuidString)]
+        )
+
+        let model = try XCTUnwrap(fixture.terminalRuntimeRegistry.terminalReadActivityStore.existingModel(for: fixture.panelID))
+        XCTAssertEqual(model.readers.first?.sessionID, TerminalReadActivityStore.unknownReaderSessionID)
+        XCTAssertEqual(model.readers.first?.label, TerminalReadActivityStore.unknownReaderLabel)
+        XCTAssertEqual(model.totalReadCount, 1)
     }
 
     private func makeWorkspaceSelectUnreadScenario(

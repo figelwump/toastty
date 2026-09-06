@@ -447,7 +447,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
         case .terminalState:
             return .init(id: rawValue, kind: .query, summary: "Return terminal state metadata.", selectors: [.windowID, .workspaceID, .panelID])
         case .terminalVisibleText:
-            return .init(id: rawValue, kind: .query, summary: "Return the visible text in a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.contains(required: false)])
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return the text in a terminal panel, including another terminal in the same workspace. Reads by other sessions are shown to the user and can be denied per panel.",
+                selectors: [.windowID, .workspaceID, .panelID],
+                parameters: [.contains(required: false), .tail(required: false), .includeScrollback(required: false)]
+            )
         case .panelLocalDocumentState:
             return .init(id: rawValue, kind: .query, summary: "Return local-document panel state.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         case .panelBrowserState:
@@ -524,6 +530,14 @@ private extension AppControlParameterDescriptor {
 
     static func contains(required: Bool) -> Self {
         .init(name: "contains", summary: "Substring to test against visible terminal text.", valueType: .string, required: required)
+    }
+
+    static func tail(required: Bool) -> Self {
+        .init(name: "tail", summary: "Return only the last N lines.", valueType: .integer, required: required)
+    }
+
+    static func includeScrollback(required: Bool) -> Self {
+        .init(name: "includeScrollback", summary: "Include scrollback above the viewport, not just the visible screen.", valueType: .boolean, required: required)
     }
 
     static func cwd(required: Bool) -> Self {
