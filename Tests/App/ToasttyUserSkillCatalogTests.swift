@@ -326,7 +326,7 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
 
     // MARK: - Snapshot preparation
 
-    func testWorktreeExamplesLoadAsUserSkillsWithExecutableHelpers() throws {
+    func testWorkflowExamplesLoadAsUserSkillsWithExecutableHelpers() throws {
         let fixture = try makeFixture(named: "worktree-examples")
         defer { fixture.cleanup() }
         let examplesURL = URL(fileURLWithPath: #filePath)
@@ -334,7 +334,7 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("examples/skills", isDirectory: true)
-        let names = ["worktree-create", "worktree-done"]
+        let names = ["project-orchestrator", "worktree-create", "worktree-done"]
         for name in names {
             try FileManager.default.copyItem(
                 at: examplesURL.appendingPathComponent(name),
@@ -350,6 +350,11 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
                 try Data(contentsOf: examplesURL.appendingPathComponent("\(name)/SKILL.md"))
             )
         }
+        let releaseReference = "project-orchestrator/references/integration-and-release.md"
+        XCTAssertEqual(
+            try Data(contentsOf: snapshot.skillsRootURL.appendingPathComponent(releaseReference)),
+            try Data(contentsOf: examplesURL.appendingPathComponent(releaseReference))
+        )
         let helperURL = snapshot.skillsRootURL
             .appendingPathComponent("worktree-create/scripts/create-worktree.sh")
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: helperURL.path))

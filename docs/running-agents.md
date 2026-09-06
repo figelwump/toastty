@@ -378,49 +378,62 @@ Capability evidence: `docs/plans/evidence/pi-session-scoped-skills-2026-08-05.md
 
 ## Worktree tasks
 
-The optional [personal worktree skills](../examples/skills/README.md) show how to
+The optional [personal workflow skills](../examples/skills/README.md) show how to
 build your own development workflow with Toastty. Copy them into `~/.toastty/skills`
-and customize them before use. `worktree-create` continues an agreed task in its
-own Git worktree and background Toastty workspace. The parent preserves the plan
-and task identity;
-the child uses its runtime's native persistent goal when available and permitted
-to implement, review, and verify the change. It maintains a session-linked
-Scratchpad with progress, a visual explanation when useful, decisions, evidence,
-the validated commit, and steps for human testing. For implementation tasks in
-repositories that use PRs, the child prepares one draft PR per worktree and records
-its URL, base, and exact head alongside the validation evidence. Local-only tasks
-remain supported. The workspace stays available for review, testing, and changes.
+and customize them. `worktree-create` continues an agreed task in its own Git
+worktree and background Toastty workspace. It preserves the plan and local task
+identity; the child uses its runtime's native persistent goal when available and
+permitted to implement, review, and verify the change.
 
-Ask the parent to review the task with `worktree-done` for design and codebase
-consistency, scope, contracts, safety, tests/docs, and interactions with relevant
-in-flight PRs or worktrees. The assessment records the examined commits, blockers,
-optional suggestions, and any recommended merge order. The child owns fixes and
-updates its readiness evidence. A review-only request does not authorize a merge.
+For PR-based implementation tasks, the child prepares one draft PR per worktree.
+The PR carries intent, decisions, review/check evidence, human testing steps,
+dependencies, deployment implications, and an explicit coordinator handoff with
+the validated commit. PR existence does not imply readiness, and a new head
+invalidates prior evidence. Local-only tasks use a durable task note. Child
+Scratchpads are optional visual aids; the handoff must stand on its own.
 
-After review and human testing, ask the parent to “merge the task and clean up
-its workspace” using `worktree-done`. You can name the task without copying a commit SHA. The parent
-matches the task to the verified branch tip, preserves its handoff and Scratchpad,
-follows that repository's integration rules, and validates the landed result.
-With cleanup authorized, it stops task-owned processes, closes the task workspace,
-and safely removes the worktree and merged local branch. A merge-only request
-leaves cleanup pending; new edits, failed verification, or unrelated work prevent
-cleanup. Neither skill bypasses repository review, PR, or approval requirements.
+Use the personal `project-orchestrator` skill in one project session to watch PRs
+and assigned local work while you work. It maintains a Scratchpad dashboard of
+working, validating, ready, merged but awaiting deployment, and completed tasks.
+Cards show blockers, human checks, partial deployments, and source synchronization
+separately, with last-checked time and stale evidence visible. It reviews design,
+codebase consistency, scope, contracts, and interactions across relevant tasks.
+Task agents keep ownership of fixes.
 
-These examples work with the repository being developed; `worktree-done` does not
-assume a `main` branch or Toastty's own build commands. It runs from the parent,
-outside the task workspace and checkout. It is an agent workflow, with no separate
-supervisor or background monitoring service.
+The coordinator also accounts for local commits missing from the remote and
+remote changes missing locally, including squash/rebase correspondence, and
+tracks merged work until its required deployments are verified. Within authorized
+scope it follows repository integration rules, pushes eligible work, and uses the
+repository's release workflow to reconcile shared deployment needs into a concrete
+plan. No new deployment engine is provided. A watch/review request alone does not
+authorize messages, publication, integration, cleanup, or deployment.
+
+After review and human testing, an authorized coordinator or another session can
+use `worktree-done` to integrate the named task, validate the landed result, and
+clean up its assigned local resources. It matches the PR and local task identity,
+preserves the handoff and any optional Scratchpad, and follows the repository's
+rules. With cleanup authorized it stops task-owned processes, closes the task
+workspace, and safely removes the worktree and merged local branch. A merge-only
+request leaves cleanup pending; new edits, failed verification, or unrelated work
+prevent cleanup. Remote-only PRs do not require a local task workspace.
+
+The original parent need not remain active. A private local coordination record
+preserves task/workspace identities and pending decisions outside worktrees that
+will be removed. The coordinator refreshes PR, Git, and release evidence when
+resumed. These are agent workflows, not a separately installed supervisor;
+monitoring ends when the session stops. They use the target project's instructions,
+without assuming a `main` branch or Toastty's own build/release commands.
 
 ## User-created skills
 
 Alongside the four shipped skills, Toastty delivers your own skills to managed
 Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions.
 
-See [examples/skills/](../examples/skills/README.md) for complete worktree creation
-and completion packages, installation instructions, and guidance on customizing
+See [examples/skills/](../examples/skills/README.md) for complete worktree and project coordination
+packages, installation instructions, and guidance on customizing
 their workflow. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
 it is no longer included in the shipped plugin. Existing custom copies are yours
-to keep and edit. `worktree-done` is also provided as a personal example.
+to keep and edit. `worktree-done` and `project-orchestrator` are also personal examples.
 
 - **Authoring**: create `~/.toastty/skills/<name>/SKILL.md` with YAML
   frontmatter containing `name` and a non-empty `description`. The directory

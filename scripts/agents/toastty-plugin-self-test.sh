@@ -84,7 +84,8 @@ user_plugin = user_marketplace / "plugins/toastty-user"
 (user_plugin / ".codex-plugin").mkdir(parents=True)
 manifest["name"] = "toastty-user"
 (user_plugin / ".codex-plugin/plugin.json").write_text(json.dumps(manifest))
-for name in ("worktree-create", "worktree-done"):
+example_names = ("project-orchestrator", "worktree-create", "worktree-done")
+for name in example_names:
     shutil.copytree(examples / name, user_plugin / "skills" / name)
 marketplace = json.loads((repo_root / ".agents/plugins/marketplace.json").read_text())
 marketplace["name"] = "toastty-user"
@@ -100,7 +101,7 @@ with probe["AppServer"](codex, dict(os.environ), working_directory) as server:
         "skills/list", {"cwds": [str(working_directory)], "forceReload": True}
     )["data"]
     loaded = {skill["name"] for entry in skills for skill in entry["skills"] if skill["enabled"]}
-    expected = {"toastty:worktree-create", "toastty-user:worktree-create", "toastty-user:worktree-done"}
+    expected = {"toastty:worktree-create"} | {f"toastty-user:{name}" for name in example_names}
     if not expected.issubset(loaded) or any(entry["errors"] for entry in skills):
         raise SystemExit(f"error: personal worktree examples did not coexist with an older shipped skill: {skills}")
 print("Codex loaded personal worktree examples alongside the older shipped name")
