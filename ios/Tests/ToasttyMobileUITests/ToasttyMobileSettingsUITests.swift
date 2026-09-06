@@ -51,6 +51,22 @@ final class ToasttyMobileSettingsUITests: XCTestCase {
         attachScreenshot(named: "fixture-settings-accessibility-xxxl", of: app)
     }
 
+    func testSettingsShowsInstalledAppVersionAndBuild() {
+        let app = launchFixtureApp()
+        XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].waitForExistence(timeout: 10))
+        app.buttons["toastty-mobile-settings-button"].tap()
+
+        let version = app.descendants(matching: .any)["toastty-mobile-settings-app-version"]
+        let build = app.descendants(matching: .any)["toastty-mobile-settings-app-build"]
+        for _ in 0..<8 where !build.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(version.isHittable)
+        XCTAssertTrue(build.isHittable)
+        XCTAssertNotNil(version.label.range(of: #"Version, \d"#, options: .regularExpression))
+        XCTAssertNotNil(build.label.range(of: #"Build, \d"#, options: .regularExpression))
+    }
+
     private func launchFixtureApp(launchArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"

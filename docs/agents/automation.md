@@ -62,6 +62,22 @@ sv exec -- scripts/remote/test.sh \
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
+The `Mobile iOS` PR workflow runs secret-free dispatcher and release-script tests, then separate Debug and Release simulator jobs. Debug runs the fixture UI suite as well as app/domain tests. Setting `TOASTTY_IOS_CONFIGURATION=Release` on the dispatcher selects only app/domain tests and enables internal test imports without defining `DEBUG`; fixture UI launches require Debug. The remote wrapper invokes xcodebuild directly, so select the same focused Release tier explicitly:
+
+```bash
+sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
+  --run-label ios-release-tests -- \
+  -configuration Release ENABLE_TESTABILITY=YES \
+  -only-testing:ToasttyMobileAppTests \
+  -only-testing:ToasttyMobileDomainTests
+```
+
+This generates, builds, and tests a disposable remote checkout and simulator; it does not sign or upload a release or pair with a production host. To inspect the dispatcher plan locally without invoking Tuist or a simulator, use `TOASTTY_IOS_CONFIGURATION=Release node ios/scripts/toastty-ios.mjs test --dry-run`.
+
+Automatic dispatcher selection uses the newest installed compatible iOS runtime. It does not establish coverage of the iOS 18 minimum or compact phones. Before a release, record the installed runtime/device inventory and, where available, run the focused suite on an explicitly provisioned iOS 18 compact iPhone destination. Use an exact simulator ID through `TOASTTY_IOS_DESTINATION` in CI or `-destination` after the remote wrapper's `--`; caller-supplied remote devices remain caller-owned. Record unavailable runtime/device coverage as a gap rather than substituting a newer large phone silently.
+
+For pre-release host/client coverage, see the disposable-host procedure in [iOS Release CI](../ios-release-ci.md#disposable-host-validation). Ordinary CI does not configure live pairing inputs, so its live-gateway skips are expected and do not prove host interoperability.
+
 The remote timeout watchdog owns a separate timer child and reaps it on success, timeout, or interruption. Cleanup first stops the run's xcodebuild tree, then terminates only Toastty host executables under that run's DerivedData path, and finally removes only a matching manifest-owned simulator clone. `result.json` records test and cleanup failures separately. A run is marked `COMPLETED` only after cleanup succeeds; interrupted or ambiguous runs stay on the remote host for fail-closed review. Never use broad `pkill` cleanup for remote tests.
 
 Evaluate abandoned manifest-owned remote runs before simulator cleanup:

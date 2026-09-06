@@ -75,6 +75,16 @@ enum PairingFailurePresentation: Equatable {
 enum PairingScannerAvailability: Equatable {
     case available
     case unsupported
+    case unavailable
+
+    init(isSupported: Bool, isAvailable: Bool) {
+        self = !isSupported ? .unsupported : (isAvailable ? .available : .unavailable)
+    }
+}
+
+enum PairingScannerFailure: Equatable {
+    case couldNotStart
+    case becameUnavailable
 }
 
 enum PairingScannerAuthorization: Equatable {

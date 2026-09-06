@@ -164,7 +164,7 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
                 return .disabled(.prompt(.sending))
             case .conversationNotOpen, .conversationMissing:
                 return .disabled(.prompt(.offline))
-            case .emptyText, .cancelled:
+            case .emptyText, .messageTooLarge, .requestEncodingFailed, .cancelled:
                 return gate(for: authority.inputAvailability)
             }
         }
@@ -178,6 +178,10 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         switch failure {
         case .emptyText:
             "Enter a message before sending. Your draft was not changed."
+        case .messageTooLarge:
+            "This message is too large to send. Shorten it and try again. Your draft is still here."
+        case .requestEncodingFailed:
+            "Toastty could not prepare this message. Your draft is still here."
         case .cancelled:
             "Send was cancelled before dispatch. Your draft is still here."
         case .coordinatorNotLive, .deviceSendScopeDenied, .conversationNotOpen,

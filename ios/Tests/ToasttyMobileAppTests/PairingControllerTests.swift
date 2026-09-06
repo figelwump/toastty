@@ -8,7 +8,7 @@ import XCTest
 final class PairingControllerTests: XCTestCase {
     func testManualEntryParsesOfflineAndDoesNotContactGatewayUntilConfirmation() async throws {
         let client = RecordingPairingClient(result: .success(Self.exchangeResponse))
-        let vault = FixtureAppCredentialVault()
+        let vault = TestAppCredentialVault()
         var pairedCredential: StoredMobileCredential?
         let controller = makeController(client: client, vault: vault) {
             pairedCredential = $0
@@ -41,7 +41,7 @@ final class PairingControllerTests: XCTestCase {
 
     func testUnsupportedAndDeniedCameraRemainManualCapableWithoutNetwork() async {
         let client = RecordingPairingClient(result: .success(Self.exchangeResponse))
-        let vault = FixtureAppCredentialVault()
+        let vault = TestAppCredentialVault()
         let unsupported = makeController(
             client: client,
             vault: vault,
@@ -55,7 +55,7 @@ final class PairingControllerTests: XCTestCase {
         let denied = makeController(
             client: client,
             vault: vault,
-            scanner: TestPairingScanner(authorization: .denied)
+            scanner: TestPairingScanner(availability: .unavailable, authorization: .denied)
         )
         await denied.startScanning()
         XCTAssertEqual(denied.state, .scanning)
@@ -64,10 +64,44 @@ final class PairingControllerTests: XCTestCase {
         XCTAssertEqual(exchangeCount, 0)
     }
 
+    func testScannerAvailabilityKeepsSupportedButUnauthorizedHardwareDistinct() {
+        XCTAssertEqual(PairingScannerAvailability(isSupported: false, isAvailable: false), .unsupported)
+        XCTAssertEqual(PairingScannerAvailability(isSupported: true, isAvailable: false), .unavailable)
+        XCTAssertEqual(PairingScannerAvailability(isSupported: true, isAvailable: true), .available)
+    }
+
+    func testScannerFailuresCanRetryAndStaleCallbacksCannotReplaceNewAttempt() async throws {
+        let scanner = TestPairingScanner()
+        let client = RecordingPairingClient(result: .success(Self.exchangeResponse))
+        let controller = makeController(client: client, vault: TestAppCredentialVault(), scanner: scanner)
+
+        for failure in [PairingScannerFailure.couldNotStart, .becameUnavailable] {
+            await controller.startScanning()
+            _ = controller.scannerView()
+            let oldFailure = try XCTUnwrap(scanner.onFailure)
+            oldFailure(failure)
+            XCTAssertEqual(controller.scannerFailure, failure)
+            XCTAssertEqual(controller.state, .scanning)
+
+            await controller.startScanning()
+            XCTAssertNil(controller.scannerFailure)
+            oldFailure(failure)
+            XCTAssertNil(controller.scannerFailure, "A replaced scanner cannot fail the new attempt")
+            _ = controller.scannerView()
+            let currentFailure = try XCTUnwrap(scanner.onFailure)
+            controller.showManualEntry()
+            currentFailure(failure)
+            XCTAssertEqual(controller.state, .manual)
+            XCTAssertNil(controller.scannerFailure)
+        }
+        let count = await client.exchangeCount()
+        XCTAssertEqual(count, 0)
+    }
+
     func testInactiveSceneClearsVisibleManualProofAndShowsPrivacyShield() async {
         let controller = makeController(
             client: RecordingPairingClient(result: .success(Self.exchangeResponse)),
-            vault: FixtureAppCredentialVault()
+            vault: TestAppCredentialVault()
         )
         controller.showManualEntry()
         controller.manualGateway = "example-mac.tailnet.ts.net"
@@ -96,7 +130,7 @@ final class PairingControllerTests: XCTestCase {
 
         for (failure, expected) in cases {
             let client = RecordingPairingClient(result: .failure(failure))
-            let controller = makeController(client: client, vault: FixtureAppCredentialVault())
+            let controller = makeController(client: client, vault: TestAppCredentialVault())
             stageAndConfirmManual(controller)
             await client.waitForExchange()
             await waitUntil {
@@ -110,7 +144,7 @@ final class PairingControllerTests: XCTestCase {
     func testScannedExpiredAndUnsupportedQRUseDistinctOfflineFailures() throws {
         let controller = makeController(
             client: RecordingPairingClient(result: .success(Self.exchangeResponse)),
-            vault: FixtureAppCredentialVault()
+            vault: TestAppCredentialVault()
         )
         let expired = RemoteNativePairingQRPayload(
             gatewayURL: URL(string: "https://example-mac.tailnet.ts.net")!,
@@ -150,7 +184,7 @@ final class PairingControllerTests: XCTestCase {
     func testCancelDoesNotAbandonAnExchangeThatMayMintCredential() async throws {
         let responseGate = PairingResponseGate()
         let client = GatedPairingClient(gate: responseGate)
-        let vault = FixtureAppCredentialVault()
+        let vault = TestAppCredentialVault()
         var pairedCredential: StoredMobileCredential?
         let controller = makeController(client: client, vault: vault) {
             pairedCredential = $0
@@ -169,7 +203,7 @@ final class PairingControllerTests: XCTestCase {
 
     private func makeController(
         client: any NativePairingClientProtocol,
-        vault: FixtureAppCredentialVault,
+        vault: TestAppCredentialVault,
         scanner: any PairingCodeScanning = TestPairingScanner(),
         onPaired: @escaping @MainActor (StoredMobileCredential) -> Void = { _ in }
     ) -> PairingController {
@@ -299,6 +333,7 @@ private struct GatedPairingClient: NativePairingClientProtocol {
 private final class TestPairingScanner: PairingCodeScanning {
     let availability: PairingScannerAvailability
     private let authorization: PairingScannerAuthorization
+    private(set) var onFailure: (@MainActor (PairingScannerFailure) -> Void)?
 
     init(
         availability: PairingScannerAvailability = .available,
@@ -310,8 +345,12 @@ private final class TestPairingScanner: PairingCodeScanning {
 
     func requestAuthorization() async -> PairingScannerAuthorization { authorization }
 
-    func makeScannerView(onCode: @escaping @MainActor (String) -> Void) -> AnyView {
-        AnyView(EmptyView())
+    func makeScannerView(
+        onCode: @escaping @MainActor (String) -> Void,
+        onFailure: @escaping @MainActor (PairingScannerFailure) -> Void
+    ) -> AnyView {
+        self.onFailure = onFailure
+        return AnyView(EmptyView())
     }
 }
 

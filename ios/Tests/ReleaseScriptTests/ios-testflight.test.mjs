@@ -94,7 +94,7 @@ test("stubbed release runs prove both skip inputs and the explicit upload path",
 
   writeExecutable(binDirectory, "base64", "#!/bin/sh\n/bin/cat\n");
   writeExecutable(binDirectory, "uuidgen", "#!/bin/sh\nprintf '00000000-0000-0000-0000-000000000000\\n'\n");
-  writeExecutable(binDirectory, "tuist", "#!/bin/sh\nprintf 'tuist %s\\n' \"$*\" >>\"$TOOL_LOG\"\n");
+  writeExecutable(binDirectory, "tuist", "#!/bin/sh\nprintf 'tuist %s\\n' \"$*\" >>\"$TOOL_LOG\"\nif [ \"$1\" = version ]; then printf '4.202.6\\n'; fi\n");
   writeExecutable(binDirectory, "security", `#!/bin/sh
 case "$1" in
   default-keychain)
@@ -140,6 +140,7 @@ esac
   writeExecutable(binDirectory, "xcodebuild", `#!/bin/sh
 printf 'xcodebuild %s\\n' "$*" >>"$TOOL_LOG"
 case " $* " in
+  *" -version "*) printf 'Xcode 26.0\\nBuild version 17A123\\n' ;;
   *" -showBuildSettings "*)
     case " $* " in
       *" -target ToasttyMobileApp "*)
@@ -158,6 +159,9 @@ case " $* " in
     : >"$app/Info.plist"
     printf 'assets' >"$app/Assets.car"
     : >"$app/PrivacyInfo.xcprivacy"
+    symbols="$TOASTTY_IOS_RELEASE_OUTPUT_DIR/Toastty.xcarchive/dSYMs/Toastty.app.dSYM/Contents/Resources/DWARF"
+    mkdir -p "$symbols"
+    if [ "$STUB_OMIT_SYMBOLS" != 1 ]; then printf 'symbols' >"$symbols/Toastty"; fi
     ;;
   *" -exportArchive "*)
     mkdir -p "$TOASTTY_IOS_RELEASE_OUTPUT_DIR/export"
@@ -165,7 +169,13 @@ case " $* " in
     ;;
 esac
 `);
-  writeExecutable(binDirectory, "xcrun", "#!/bin/sh\nprintf 'xcrun %s\\n' \"$*\" >>\"$TOOL_LOG\"\n");
+  writeExecutable(binDirectory, "xcrun", `#!/bin/sh
+printf 'xcrun %s\\n' "$*" >>"$TOOL_LOG"
+case "$*" in
+  "swift --version") printf 'Apple Swift version 6.2\\n' ;;
+  "--sdk iphoneos --show-sdk-version") printf '26.0\\n' ;;
+esac
+`);
 
   try {
     function runStubbedRelease(label, overrides) {
@@ -198,6 +208,7 @@ esac
     const documentedSkip = runStubbedRelease("documented-skip", {
       TOASTTY_IOS_UPLOAD: "1",
       SKIP_UPLOAD: "1",
+      GITHUB_SHA: "ci-event-fixture",
     });
     assert.match(documentedSkip.invocations, /xcrun altool --validate-app/);
     assert.doesNotMatch(documentedSkip.invocations, /--upload-app/);
@@ -207,6 +218,16 @@ esac
     assert.ok(fs.existsSync(path.join(documentedSkip.outputDirectory, "export/Toastty.ipa")));
     assert.match(documentedSkip.output, /Upload request suppressed by validate-only skip input/);
     assert.match(documentedSkip.metadata, /STATUS=validated/);
+    assert.match(documentedSkip.metadata, /GIT_SHA=[a-f0-9]{40}\n/);
+    assert.match(documentedSkip.metadata, /CI_EVENT_SHA=ci-event-fixture\n/);
+    assert.match(documentedSkip.metadata, /XCODE_VERSION=Xcode 26.0 Build version 17A123/);
+    assert.match(documentedSkip.metadata, /SWIFT_VERSION=Apple Swift version 6.2/);
+    assert.match(documentedSkip.metadata, /IOS_SDK_VERSION=26.0/);
+    assert.match(documentedSkip.metadata, /TUIST_VERSION=4.202.6/);
+    const retainedArchive = path.join(documentedSkip.outputDirectory, "Toastty.xcarchive.tar.gz");
+    const archiveContents = execFileSync("tar", ["-tzf", retainedArchive], { encoding: "utf8" });
+    assert.match(archiveContents, /Toastty\.xcarchive\/Products\/Applications\/Toastty\.app\/Info\.plist/);
+    assert.match(archiveContents, /Toastty\.app\.dSYM\/Contents\/Resources\/DWARF\/Toastty/);
     assert.match(documentedSkip.metadata, /UPLOAD_REQUESTED_ORIGINAL=1/);
     assert.match(documentedSkip.metadata, /UPLOAD_REQUESTED=0/);
     assert.match(documentedSkip.metadata, /UPLOAD_SUPPRESSED_BY=SKIP_UPLOAD/);
@@ -230,6 +251,15 @@ esac
     assert.match(upload.metadata, /UPLOAD_REQUESTED_ORIGINAL=1/);
     assert.match(upload.metadata, /UPLOAD_REQUESTED=1/);
     assert.match(upload.metadata, /UPLOAD_SUPPRESSED_BY=none/);
+
+    assert.throws(() => runStubbedRelease("missing-symbols", {
+      TOASTTY_IOS_UPLOAD: "0",
+      STUB_OMIT_SYMBOLS: "1",
+    }), (error) => {
+      assert.match(error.stderr.toString(), /archived app is missing its dSYM debug symbols/);
+      assert.doesNotMatch(fs.readFileSync(toolLog, "utf8"), /--validate-app|--upload-app/);
+      return true;
+    });
   } finally {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
@@ -394,6 +424,13 @@ test("workflow and names-only manifest expose all release inputs without enablin
   assert.match(workflow, /\.tool-versions/);
   assert.match(mobileWorkflow, /'\.node-version'/);
   assert.match(mobileWorkflow, /'\.tool-versions'/);
+  assert.match(mobileWorkflow, /'\.github\/workflows\/ios-testflight\.yml'/);
+  assert.match(mobileWorkflow, /'scripts\/ci\/ios-testflight\.sh'/);
+  assert.match(mobileWorkflow, /node --test ios\/Tests\/ScriptTests\/\*\.test\.mjs ios\/Tests\/ReleaseScriptTests\/\*\.test\.mjs/);
+  assert.match(mobileWorkflow, /configuration: \[Debug, Release\]/);
+  assert.match(workflow, /TOASTTY_IOS_CONFIGURATION: Release/);
+  assert.match(workflow, /artifacts\/ios-release\/\*\*\/Toastty\.xcarchive\.tar\.gz/);
+  assert.match(workflow, /retention-days: 90/);
 });
 
 test("privacy manifest declares required-reason APIs without tracking or collected data", () => {

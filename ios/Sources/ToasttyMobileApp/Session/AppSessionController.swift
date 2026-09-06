@@ -20,6 +20,7 @@ protocol AppLiveSessionsControlling: AnyObject {
     var projectionGeneration: UInt64? { get }
     var activeConversationCursor: UInt64? { get }
     var activeConversationController: LiveConversationController? { get }
+    func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void)
     func start() async
     func foreground() async
     func refresh() async
@@ -28,9 +29,14 @@ protocol AppLiveSessionsControlling: AnyObject {
     func stopObserving()
 }
 
-extension LiveSessionsController: AppLiveSessionsControlling {}
+extension LiveSessionsController: AppLiveSessionsControlling {
+    func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void) {
+        onDiagnosticEvent = handler
+    }
+}
 
 extension AppLiveSessionsControlling {
+    func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void) {}
     var activeConversationController: LiveConversationController? { nil }
 }
 
@@ -135,6 +141,28 @@ final class AppSessionController {
         state = .restoring
         hasRestored = false
         await restoreIfNeeded()
+    }
+
+    /// A corrupt local record cannot authenticate a revocation request. Remove
+    /// only the generation the user confirmed, then begin a fresh pairing.
+    func forgetCorruptPairing() async {
+        guard state == .repairNeeded(.corrupt) else { return }
+        state = .restoring
+        let generation = await credentialVault.currentGeneration()
+        guard await credentialVault.currentCredential() == nil else {
+            await retryRestoration()
+            return
+        }
+        do {
+            if try await credentialVault.delete(ifCurrent: generation) {
+                transitionToUnpaired()
+                beginPairing()
+            } else {
+                await retryRestoration()
+            }
+        } catch {
+            state = .repairNeeded(.unavailable)
+        }
     }
 
     func beginPairing() {
@@ -254,6 +282,7 @@ final class AppSessionController {
         _ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void
     ) {
         onDiagnosticEvent = handler
+        liveController?.installDiagnosticEventHandler(handler)
     }
 
     func refreshCurrentDevice() async {
@@ -393,6 +422,7 @@ final class AppSessionController {
         )
         liveController?.stopObserving()
         liveController = controller
+        controller.installDiagnosticEventHandler(onDiagnosticEvent)
         await controller.updateDeviceScopes(credential.device.scopes)
         beginInitialConnectTimeout(sessionID: sessionID)
         await controller.start()

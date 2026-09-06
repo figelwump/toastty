@@ -10,6 +10,9 @@ public enum RemoteGatewayProtocol {
     public static let credentialCookieName = "toastty_remote_session"
     /// Maximum native-client device name accepted by the shared contract.
     public static let maximumDeviceNameLength = 80
+    /// Maximum encoded HTTP request body accepted by the gateway, including
+    /// JSON field names, identifiers, and escaped text.
+    public static let maximumRequestBodyBytes = 64 * 1024
 }
 
 /// Implemented unauthenticated capability hints. Keep this list narrow: the

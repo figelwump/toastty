@@ -405,3 +405,25 @@ test("destination overrides remain one spawn argument", () => {
   assert.equal(plan.steps.some((step) => step.operation === "resolve-simulator"), false);
   assert.equal(plan.steps.at(-1).args[plan.steps.at(-1).args.indexOf("-destination") + 1], destination);
 });
+
+test("Release tests exercise app and domain branches without Debug fixture UI launches", () => {
+  for (const configuration of ["Debug", "Release"]) {
+    const toolchain = createStubToolchain();
+    const result = runDispatcher(["test"], {
+      ...toolchain.environment,
+      TOASTTY_IOS_CONFIGURATION: configuration,
+      TOASTTY_IOS_DESTINATION: "platform=iOS Simulator,id=STUB-DEVICE",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const args = readLog(toolchain.logPath).find(({ tool }) => tool === "xcodebuild").args;
+    assert.equal(args[args.indexOf("-configuration") + 1], configuration);
+    assert.equal(args.at(-1), "test");
+    assert.equal(args.includes("ENABLE_TESTABILITY=YES"), configuration === "Release");
+    assert.deepEqual(args.filter((arg) => arg.startsWith("-only-testing:")),
+      configuration === "Release" ? [
+        "-only-testing:ToasttyMobileAppTests",
+        "-only-testing:ToasttyMobileDomainTests",
+      ] : []);
+    assert.ok(!args.some((arg) => arg.includes("SWIFT_ACTIVE_COMPILATION_CONDITIONS")));
+  }
+});

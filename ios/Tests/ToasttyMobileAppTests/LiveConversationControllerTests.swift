@@ -38,6 +38,59 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertEqual(subject.projectionRunID, runID(2))
     }
 
+    func testMetadataUpdatesReusePreparedTranscriptAndContentAppendRebuildsIt() {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        let events = (1...5000).map { event(UInt64($0)) }
+        subject.consume(state(runID: runID(1), events: events, phase: .live))
+        let prepared = subject.transcriptPresentation.preparedTranscript
+        var diagnosticEvents: [ToasttyConnectionDiagnosticEvent] = []
+        subject.onDiagnosticEvent = { diagnosticEvents.append($0) }
+        subject.consumeConnectionPhase(.reconnecting(failureCount: 1, showsBanner: false))
+        XCTAssertTrue(subject.transcriptPresentation.preparedTranscript === prepared)
+        subject.consumeSendReconciliation(.init(records: [.init(
+            clientRequestID: "test", text: "draft", projectionRunID: runID(1),
+            deliveryState: .pending(.accepted)
+        )]))
+        XCTAssertTrue(subject.transcriptPresentation.preparedTranscript === prepared)
+        XCTAssertEqual(subject.transcriptPresentation.sendItems.count, 1)
+        XCTAssertEqual(diagnosticEvents, [.sendAccepted])
+        subject.consume(state(runID: runID(1), events: events, phase: .live))
+        XCTAssertTrue(subject.transcriptPresentation.preparedTranscript === prepared)
+        subject.consume(state(runID: runID(1), events: events + [event(5001)], phase: .live))
+        XCTAssertFalse(subject.transcriptPresentation.preparedTranscript === prepared)
+        XCTAssertEqual(subject.transcriptPresentation.rows.count, 5001)
+    }
+
+    func testSustainedSmallAppendsPreserveAllRowsAndReportPreparationTime() {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        var events = (1...5000).map { event(UInt64($0)) }
+        subject.consume(state(runID: runID(1), events: events, phase: .live))
+        let clock = ContinuousClock()
+        let startedAt = clock.now
+        for batch in 0..<200 {
+            let firstSequence = UInt64(5001 + batch * 5)
+            events.append(contentsOf: (firstSequence..<(firstSequence + 5)).map { event($0) })
+            subject.consume(state(runID: runID(1), events: events, phase: .live))
+        }
+        let elapsed = startedAt.duration(to: clock.now)
+        XCTAssertEqual(subject.transcriptPresentation.rows.count, 6000)
+        XCTAssertEqual(subject.transcriptPresentation.rows.last?.id.sequence, 6000)
+        XCTAssertEqual(subject.change, .append)
+        let evidence = "Initial rows: 5000; updates: 200; rows per update: 5; elapsed: \(elapsed). "
+            + "Includes fixture state construction and main-actor presentation preparation; excludes SwiftUI rendering and network transport."
+        print("TOASTTY_TRANSCRIPT_APPEND_PREPARATION \(evidence)")
+        let attachment = XCTAttachment(string: evidence)
+        attachment.name = "sustained-transcript-preparation"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testConnectionPhaseMakesReadableTranscriptStaleOrFailed() {
         let subject = LiveConversationController(
             conversationID: conversationID.rawValue,

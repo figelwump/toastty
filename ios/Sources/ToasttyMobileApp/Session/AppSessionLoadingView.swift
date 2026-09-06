@@ -33,7 +33,7 @@ struct AppSessionLoadingView: View {
         .overlay(alignment: .bottom) {
             hostLine
         }
-        .animation(.easeInOut(duration: 0.3), value: phase)
+        .animation(reducesMotion ? nil : .easeInOut(duration: 0.3), value: phase)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(captionText)
         .accessibilityValue("In progress")

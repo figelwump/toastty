@@ -167,6 +167,8 @@ struct ToasttySettingsView: View {
     private var aboutSection: some View {
         Section("About") {
             settingsRow("Client", value: "Toastty for iPhone", identifier: "client")
+            settingsRow("Version", value: presentation.appVersion, identifier: "app-version")
+            settingsRow("Build", value: presentation.appBuild, identifier: "app-build")
             Text("Native remote access over your Tailscale tailnet.")
                 .font(.footnote)
                 .foregroundStyle(ToasttyDesignTokens.mutedText)

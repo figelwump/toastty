@@ -65,6 +65,13 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload }}
         run: node ios/scripts/toastty-ios.mjs test
 
+      - name: Test Release app and domain
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload }}
+        env:
+          TOASTTY_IOS_CONFIGURATION: Release
+          TOASTTY_IOS_RUN_ID: release-tests
+        run: node ios/scripts/toastty-ios.mjs test
+
       - name: Require main for upload
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && github.ref != 'refs/heads/main' }}
         run: |
@@ -91,6 +98,7 @@ jobs:
           name: ios-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             artifacts/ios-release/**/export/*.ipa
+            artifacts/ios-release/**/Toastty.xcarchive.tar.gz
             artifacts/ios-release/**/ExportOptions.plist
             artifacts/ios-release/**/release-metadata.txt
             artifacts/ios-release/**/generate.log
@@ -99,4 +107,4 @@ jobs:
             artifacts/ios-release/**/validation.log
             artifacts/ios-release/**/upload.log
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 90

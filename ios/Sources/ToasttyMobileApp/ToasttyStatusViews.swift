@@ -36,13 +36,14 @@ struct ToasttySpinner: View {
     var size: CGFloat = 8
     var lineWidth: CGFloat = 1.5
     var color: Color = ToasttyDesignTokens.amber
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { context in
             Circle()
                 .trim(from: 0.16, to: 0.9)
                 .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .rotationEffect(angle(at: context.date))
+                .rotationEffect(reduceMotion ? .zero : angle(at: context.date))
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)

@@ -6,6 +6,7 @@ struct ToasttyWorkspaceView: View {
     let controller: HomeScreenController
 
     @AppStorage private var storedWorkspaceSessionFilter: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         workspaceID: UUID,
@@ -95,7 +96,7 @@ struct ToasttyWorkspaceView: View {
             .frame(maxWidth: .infinity)
             // Reorders happen only on status-bucket transitions; animate so
             // the moving card stays trackable.
-            .animation(.default, value: visibleConversations.map(\.id))
+            .animation(reduceMotion ? nil : .default, value: visibleConversations.map(\.id))
         }
         .scrollIndicators(.hidden)
         .background(ToasttyDesignTokens.background)

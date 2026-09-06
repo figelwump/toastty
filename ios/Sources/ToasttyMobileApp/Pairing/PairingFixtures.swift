@@ -94,18 +94,24 @@ struct FixturePairingClient: NativePairingClientProtocol {
 final class FixturePairingScanner: PairingCodeScanning {
     let availability: PairingScannerAvailability
     private let authorization: PairingScannerAuthorization
+    private let failure: PairingScannerFailure?
 
     init(
         availability: PairingScannerAvailability = .available,
-        authorization: PairingScannerAuthorization = .authorized
+        authorization: PairingScannerAuthorization = .authorized,
+        failure: PairingScannerFailure? = nil
     ) {
         self.availability = availability
         self.authorization = authorization
+        self.failure = failure
     }
 
     func requestAuthorization() async -> PairingScannerAuthorization { authorization }
 
-    func makeScannerView(onCode: @escaping @MainActor (String) -> Void) -> AnyView {
+    func makeScannerView(
+        onCode: @escaping @MainActor (String) -> Void,
+        onFailure: @escaping @MainActor (PairingScannerFailure) -> Void
+    ) -> AnyView {
         AnyView(
             VStack(spacing: 12) {
                 Image(systemName: "qrcode.viewfinder")
@@ -121,6 +127,9 @@ final class FixturePairingScanner: PairingCodeScanning {
             .foregroundStyle(ToasttyDesignTokens.secondaryText)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(ToasttyDesignTokens.raisedSurface)
+            .task {
+                if let failure = self.failure { onFailure(failure) }
+            }
         )
     }
 

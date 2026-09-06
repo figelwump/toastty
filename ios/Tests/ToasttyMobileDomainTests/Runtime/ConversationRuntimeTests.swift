@@ -4,6 +4,74 @@ import XCTest
 @testable import ToasttyMobileDomain
 
 final class ConversationRuntimeTests: XCTestCase {
+    func testOlderCatchUpIdentityCannotAdmitQueuedPagesOrFinishReplacement() async {
+        let runtime = ConversationRuntime(conversationID: conversationID)
+        _ = await runtime.beginCatchUp(connectionGeneration: 1, catchUpID: 1)
+        _ = await runtime.beginCatchUp(connectionGeneration: 1, resnapshot: true, catchUpID: 2)
+
+        let staleBegin = await runtime.beginCatchUp(connectionGeneration: 1, catchUpID: 1)
+        let oldPage = page(runID: runID(1), events: [event(1)], latestSequence: 1)
+        let staleREST = await runtime.applyREST(oldPage, connectionGeneration: 1, catchUpID: 1)
+        let staleTail = await runtime.applyRESTTail(oldPage, connectionGeneration: 1, catchUpID: 1)
+        let staleFinish = await runtime.finishCatchUp(connectionGeneration: 1, catchUpID: 1)
+        let staleResnapshot = await runtime.requireResnapshot(connectionGeneration: 1, catchUpID: 1)
+        XCTAssertFalse(staleBegin)
+        XCTAssertEqual(staleREST, .none)
+        XCTAssertEqual(staleTail, .none)
+        XCTAssertFalse(staleFinish)
+        XCTAssertEqual(staleResnapshot, .none)
+        let untouched = await runtime.currentState()
+        XCTAssertNil(untouched.projectionRunID)
+        XCTAssertTrue(untouched.events.isEmpty)
+        XCTAssertEqual(untouched.phase, .catchingUp)
+
+        let newPage = page(runID: runID(2), events: [event(7), event(8)], latestSequence: 8)
+        let applied = await runtime.applyRESTTail(newPage, connectionGeneration: 1, catchUpID: 2)
+        let finished = await runtime.finishCatchUp(connectionGeneration: 1, catchUpID: 2)
+        XCTAssertEqual(applied, .none)
+        XCTAssertTrue(finished)
+        let repaired = await runtime.currentState()
+        XCTAssertEqual(repaired.events.map(\.sequence), [7, 8])
+        XCTAssertEqual(repaired.projectionRunID, runID(2))
+    }
+
+    func testReplacingCatchUpDuringBufferedDrainDoesNotRemoveReplacementBuffer() async {
+        let runtime = ConversationRuntime(conversationID: conversationID)
+        let gate = RuntimeCatchUpBoundaryGate()
+        let run = runID(1)
+        _ = await runtime.beginCatchUp(connectionGeneration: 1, catchUpID: 1)
+        _ = await runtime.applyLive(page(runID: run, events: [event(2)], latestSequence: 2), connectionGeneration: 1)
+        await runtime.setCatchUpBoundaryWaiter { await gate.wait() }
+        let initialPage = page(runID: run, events: [event(1)], latestSequence: 1)
+        let retired = Task {
+            await runtime.applyREST(initialPage, connectionGeneration: 1, catchUpID: 1)
+        }
+        await gate.waitForEntry()
+
+        _ = await runtime.beginCatchUp(connectionGeneration: 1, resnapshot: true, catchUpID: 2)
+        await runtime.setCatchUpBoundaryWaiter(nil)
+        await gate.open()
+        let retiredDirective = await retired.value
+        XCTAssertEqual(retiredDirective, .none)
+        let replacement = await runtime.currentState()
+        XCTAssertEqual(replacement.phase, .catchingUp)
+        XCTAssertNil(replacement.projectionRunID)
+        XCTAssertTrue(replacement.events.isEmpty)
+
+        let newRun = runID(2)
+        _ = await runtime.applyLive(page(runID: newRun, events: [event(9)], latestSequence: 9), connectionGeneration: 1)
+        let applied = await runtime.applyRESTTail(
+            page(runID: newRun, events: [event(7), event(8)], latestSequence: 8),
+            connectionGeneration: 1,
+            catchUpID: 2
+        )
+        let finished = await runtime.finishCatchUp(connectionGeneration: 1, catchUpID: 2)
+        XCTAssertEqual(applied, .none)
+        XCTAssertTrue(finished)
+        let repaired = await runtime.currentState()
+        XCTAssertEqual(repaired.events.map(\.sequence), [7, 8, 9])
+    }
+
     func testSubscribeBeforeRESTBuffersAndDrainsMatchingLivePage() async {
         let runtime = ConversationRuntime(conversationID: conversationID)
         let run = runID(1)
@@ -751,5 +819,33 @@ final class ConversationRuntimeTests: XCTestCase {
 
     private var bindingID: UUID {
         UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
+    }
+}
+
+private actor RuntimeCatchUpBoundaryGate {
+    private var entered = false
+    private var isOpen = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        entered = true
+        let pending = entryWaiters
+        entryWaiters.removeAll()
+        pending.forEach { $0.resume() }
+        guard !isOpen else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitForEntry() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = releaseWaiters
+        releaseWaiters.removeAll()
+        pending.forEach { $0.resume() }
     }
 }

@@ -8,6 +8,7 @@ import ToasttyMobileDomain
 final class PairingController {
     private(set) var state: PairingState = .intro
     private(set) var scannerAuthorization: PairingScannerAuthorization?
+    private(set) var scannerFailure: PairingScannerFailure?
     private(set) var isPrivacyShielded = false
     var manualGateway = ""
     var manualCode = ""
@@ -19,6 +20,7 @@ final class PairingController {
     private let onPaired: @MainActor (StoredMobileCredential) -> Void
     private var pendingCandidate: PairingCandidate?
     private var exchangeTask: Task<Void, Never>?
+    private var scannerAttemptID: UUID?
 
     init(
         client: any NativePairingClientProtocol,
@@ -41,31 +43,49 @@ final class PairingController {
     var isExchanging: Bool { exchangeTask != nil }
 
     func showIntro() {
+        scannerAttemptID = nil
         clearProof()
         state = .intro
     }
 
     func startScanning() async {
+        let attemptID = UUID()
+        scannerAttemptID = attemptID
+        scannerFailure = nil
+        scannerAuthorization = nil
         clearProof()
-        guard scanner.availability == .available else {
-            scannerAuthorization = nil
+        // Current availability includes camera permission. Only unsupported
+        // hardware skips authorization; denial needs its own recovery copy.
+        guard scanner.availability != .unsupported else {
             state = .scanning
             return
         }
         let authorization = await scanner.requestAuthorization()
+        guard scannerAttemptID == attemptID else { return }
         scannerAuthorization = authorization
         state = .scanning
     }
 
     func showManualEntry() {
+        scannerAttemptID = nil
         clearProof()
         state = .manual
     }
 
     func scannerView() -> AnyView {
-        scanner.makeScannerView { [weak self] value in
-            self?.acceptScannedCode(value)
-        }
+        let attemptID = scannerAttemptID
+        return scanner.makeScannerView(
+            onCode: { [weak self] value in
+                guard let self, self.scannerAttemptID == attemptID,
+                      self.state == .scanning else { return }
+                self.acceptScannedCode(value)
+            },
+            onFailure: { [weak self] failure in
+                guard let self, self.scannerAttemptID == attemptID,
+                      self.state == .scanning else { return }
+                self.scannerFailure = failure
+            }
+        )
     }
 
     func acceptScannedCode(_ value: String, now: Date = Date()) {
@@ -137,6 +157,7 @@ final class PairingController {
         // credential. Cancelling here could orphan an irrevocable credential
         // on the Mac while leaving the phone unpaired.
         guard exchangeTask == nil else { return false }
+        scannerAttemptID = nil
         clearProof()
         state = .intro
         return true
@@ -172,6 +193,7 @@ final class PairingController {
         case .intro, .failure:
             clearProof()
         case .scanning, .manual, .confirming:
+            scannerAttemptID = nil
             clearProof()
             state = .intro
         }

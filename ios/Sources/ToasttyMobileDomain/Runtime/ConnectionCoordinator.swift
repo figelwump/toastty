@@ -49,6 +49,8 @@ public actor ConnectionCoordinator {
     private let sleeper: any ConnectionSleeping
     private let jitter: any ConnectionJitterProviding
     private let retryPolicy: ConnectionRetryPolicy
+    private let firstSnapshotSleeper: any ConnectionSleeping
+    private let firstSnapshotTimeout: Duration
     private let eventsPageLimit: Int
     private let requestIDFactory: any SendRequestIDFactory
     private let stateStream: RuntimeStateStream<State>
@@ -62,12 +64,16 @@ public actor ConnectionCoordinator {
     private var lifecycleIntent = LifecycleIntent.active
     private var lifecycleTransitionsInFlight = 0
     private var activeSubscription: (any EventStreamSubscriptionProtocol)?
+    private var firstSnapshotTimeoutTask: Task<Void, Never>?
     private var attemptFailure: GatewayFailure?
     private var activeCapabilities: Set<RemoteGatewayCapability> = []
     private var conversationRuntimes: [RemoteConversationID: ConversationRuntime] = [:]
     private var retainedConversationRuntimes: [RemoteConversationID: ConversationRuntime] = [:]
     private var activeConversationIDs: Set<RemoteConversationID> = []
     private var conversationCatchUpTasks: [RemoteConversationID: Task<Void, Never>] = [:]
+    private var conversationCatchUpIDs: [RemoteConversationID: UInt64] = [:]
+    private var nextConversationCatchUpID: UInt64 = 0
+    private var catchUpCompletionWaiter: (@Sendable () async -> Void)?
     private var conversationOlderTasks: [RemoteConversationID: (id: UUID, task: Task<Void, Never>)] = [:]
     private var deviceScopes: [RemoteDeviceScope]
     private var sendScopeDeniedByHost = false
@@ -115,7 +121,9 @@ public actor ConnectionCoordinator {
         retryPolicy: ConnectionRetryPolicy = ConnectionRetryPolicy(),
         eventsPageLimit: Int = 200,
         deviceScopes: [RemoteDeviceScope] = [],
-        requestIDFactory: any SendRequestIDFactory = UUIDSendRequestIDFactory()
+        requestIDFactory: any SendRequestIDFactory = UUIDSendRequestIDFactory(),
+        firstSnapshotSleeper: any ConnectionSleeping = ContinuousConnectionSleeper(),
+        firstSnapshotTimeout: Duration = .seconds(15)
     ) {
         self.gateway = gateway
         self.eventStream = eventStream
@@ -123,6 +131,8 @@ public actor ConnectionCoordinator {
         self.sleeper = sleeper
         self.jitter = jitter
         self.retryPolicy = retryPolicy
+        self.firstSnapshotSleeper = firstSnapshotSleeper
+        self.firstSnapshotTimeout = firstSnapshotTimeout
         self.eventsPageLimit = min(max(eventsPageLimit, 1), 200)
         self.deviceScopes = deviceScopes
         self.requestIDFactory = requestIDFactory
@@ -148,6 +158,19 @@ public actor ConnectionCoordinator {
         deviceScopes = scopes
         sendScopeDeniedByHost = false
         await publishComposerAuthorities()
+    }
+
+    func firstSnapshotDeadlineTaskForTesting() -> Task<Void, Never>? {
+        firstSnapshotTimeoutTask
+    }
+
+    func catchUpTaskForTesting(_ conversationID: RemoteConversationID) -> Task<Void, Never>? {
+        conversationCatchUpTasks[conversationID]
+    }
+
+    /// Allows tests to place a stream frame at the REST completion boundary.
+    func setCatchUpCompletionWaiter(_ waiter: (@Sendable () async -> Void)?) {
+        catchUpCompletionWaiter = waiter
     }
 
     func setSendDispatchWaiter(_ waiter: any SendDispatchWaiting) {
@@ -276,6 +299,7 @@ public actor ConnectionCoordinator {
 
     public func closeConversation(_ conversationID: RemoteConversationID) async {
         activeConversationIDs.remove(conversationID)
+        conversationCatchUpIDs.removeValue(forKey: conversationID)
         pendingLegacyConversationNotFound.remove(conversationID)
         conversationCatchUpTasks.removeValue(forKey: conversationID)?.cancel()
         conversationOlderTasks.removeValue(forKey: conversationID)?.task.cancel()
@@ -346,6 +370,23 @@ public actor ConnectionCoordinator {
                 return .notEnqueued(.staleComposerAuthority)
             }
             return .notEnqueued(failure)
+        }
+
+        // Validate the actual claimed request, not a character-count estimate
+        // or placeholder ID. No optimistic row or network task exists yet.
+        guard let request = sendOperations[clientRequestID]?.request else {
+            rollbackUnadmittedClaim(clientRequestID: clientRequestID)
+            return .notEnqueued(.requestEncodingFailed)
+        }
+        do {
+            let body = try GatewayClient.encodedMessageSendRequest(request)
+            guard body.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+                rollbackUnadmittedClaim(clientRequestID: clientRequestID)
+                return .notEnqueued(.messageTooLarge)
+            }
+        } catch {
+            rollbackUnadmittedClaim(clientRequestID: clientRequestID)
+            return .notEnqueued(.requestEncodingFailed)
         }
 
         guard let admission = await runtime.sendReconciliation.enqueue(
@@ -614,6 +655,7 @@ public actor ConnectionCoordinator {
             throw CancellationError()
         }
         state.phase = .awaitingFreshSessionSnapshot
+        startFirstSnapshotDeadline(generation: generation)
         await publish()
 
         for conversationID in activeConversationIDs {
@@ -628,6 +670,7 @@ public actor ConnectionCoordinator {
             while !Task.isCancelled {
                 let message = try await subscription.nextMessage()
                 try ensureCurrentGeneration(generation)
+                if let attemptFailure { throw attemptFailure }
                 try await handleStreamMessage(message, generation: generation)
             }
             throw CancellationError()
@@ -650,12 +693,37 @@ public actor ConnectionCoordinator {
         }
     }
 
+    private func startFirstSnapshotDeadline(generation: UInt64) {
+        firstSnapshotTimeoutTask?.cancel()
+        firstSnapshotTimeoutTask = Task { [weak self] in
+            guard let self else { return }
+            await self.waitForFirstSnapshotDeadline(generation: generation)
+        }
+    }
+
+    private func waitForFirstSnapshotDeadline(generation: UInt64) async {
+        do {
+            try await firstSnapshotSleeper.sleep(for: firstSnapshotTimeout)
+        } catch {
+            return
+        }
+        guard !Task.isCancelled,
+              generation == state.connectionGeneration,
+              state.phase == .awaitingFreshSessionSnapshot else { return }
+        await failCurrentAttempt(.network(reason: .timedOut), generation: generation)
+    }
+
     private func handleStreamMessage(
         _ message: CompatibleGatewayStreamMessage,
         generation: UInt64
     ) async throws {
         switch message {
         case .sessionList(let snapshot):
+            // Decoding and generation admission already succeeded. Stop the
+            // first-snapshot deadline before the next actor hop. Quiet live
+            // connections do not have an inactivity deadline.
+            firstSnapshotTimeoutTask?.cancel()
+            firstSnapshotTimeoutTask = nil
             guard await sessionsRuntime.applyStreamSnapshot(snapshot, generation: generation) else {
                 return
             }
@@ -744,14 +812,20 @@ public actor ConnectionCoordinator {
         }
 
         conversationCatchUpTasks.removeValue(forKey: conversationID)?.cancel()
+        nextConversationCatchUpID &+= 1
+        let catchUpID = nextConversationCatchUpID
+        conversationCatchUpIDs[conversationID] = catchUpID
         conversationOlderTasks.removeValue(forKey: conversationID)?.task.cancel()
         let resnapshot = strategy == .resnapshot
         guard await runtime.beginCatchUp(
             connectionGeneration: generation,
-            resnapshot: resnapshot
+            resnapshot: resnapshot,
+            catchUpID: catchUpID
         ) else {
             return
         }
+
+        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
 
         let usesTail = strategy != .forward
             && activeCapabilities.contains(.conversationBackwardPaging)
@@ -761,16 +835,19 @@ public actor ConnectionCoordinator {
                     runtime: runtime,
                     conversationID: conversationID,
                     generation: generation,
+                    catchUpID: catchUpID,
                     startedAsResnapshot: resnapshot
                 )
             }
         } else {
             let initialCursor = resnapshot ? nil : await runtime.currentState().cursor
+            guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
             conversationCatchUpTasks[conversationID] = Task { [weak self] in
                 await self?.runConversationCatchUp(
                     runtime: runtime,
                     conversationID: conversationID,
                     generation: generation,
+                    catchUpID: catchUpID,
                     initialCursor: initialCursor,
                     startedAsResnapshot: resnapshot
                 )
@@ -782,42 +859,41 @@ public actor ConnectionCoordinator {
         runtime: ConversationRuntime,
         conversationID: RemoteConversationID,
         generation: UInt64,
+        catchUpID: UInt64,
         initialCursor: ConversationEventCursor?,
         startedAsResnapshot: Bool
     ) async {
         var cursor = initialCursor
         var isResnapshot = startedAsResnapshot
 
+        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
         do {
-            while !Task.isCancelled,
-                  generation == state.connectionGeneration,
-                  activeConversationIDs.contains(conversationID) {
+            while isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) {
                 let response = try await gateway.events(
                     conversationID: conversationID,
                     cursor: cursor,
                     limit: eventsPageLimit
                 )
-                guard generation == state.connectionGeneration,
-                      activeConversationIDs.contains(conversationID),
-                      conversationRuntimes[conversationID] === runtime else {
-                    return
-                }
+                guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
 
                 switch response {
                 case .page(let page):
                     let directive = await runtime.applyREST(
                         page,
-                        connectionGeneration: generation
+                        connectionGeneration: generation,
+                        catchUpID: catchUpID
                     )
+                    guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
                     switch directive {
                     case .none:
-                        if await runtime.finishCatchUp(connectionGeneration: generation) {
+                        if await runtime.finishCatchUp(connectionGeneration: generation, catchUpID: catchUpID) {
                             await pruneFinishedSendState(
                                 conversationID: conversationID,
                                 runtime: runtime
                             )
                             return
                         }
+                        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
                         // A live page can arrive after applyREST drains its
                         // buffer but before this task resumes to finish. Page
                         // once more from the actor's authoritative cursor so
@@ -831,7 +907,8 @@ public actor ConnectionCoordinator {
                         cursor = nil
                         _ = await runtime.beginCatchUp(
                             connectionGeneration: generation,
-                            resnapshot: true
+                            resnapshot: true,
+                            catchUpID: catchUpID
                         )
                     }
 
@@ -841,19 +918,23 @@ public actor ConnectionCoordinator {
                     cursor = nil
                     _ = await runtime.beginCatchUp(
                         connectionGeneration: generation,
-                        resnapshot: true
+                        resnapshot: true,
+                        catchUpID: catchUpID
                     )
 
                 case .conversationNotFound:
                     if await completeLegacyEmptyConversationIfKnown(
                         runtime: runtime,
                         conversationID: conversationID,
-                        generation: generation
+                        generation: generation,
+                        catchUpID: catchUpID
                     ) == false {
+                        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
                         pendingLegacyConversationNotFound.insert(conversationID)
                         _ = await runtime.requireResnapshot(
                             .explicit,
-                            connectionGeneration: generation
+                            connectionGeneration: generation,
+                            catchUpID: catchUpID
                         )
                     }
                     return
@@ -862,6 +943,7 @@ public actor ConnectionCoordinator {
         } catch is CancellationError {
             return
         } catch {
+            guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
             let failure = (error as? GatewayFailure) ?? .network(reason: .other)
             await failCurrentAttempt(failure, generation: generation)
         }
@@ -871,38 +953,51 @@ public actor ConnectionCoordinator {
         runtime: ConversationRuntime,
         conversationID: RemoteConversationID,
         generation: UInt64,
+        catchUpID: UInt64,
         startedAsResnapshot: Bool
     ) async {
+        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
         do {
             let response = try await gateway.events(RemoteGatewayEventsRequest(
                 conversationID: conversationID,
                 limit: eventsPageLimit,
                 backward: .latest
             ))
-            guard isCurrent(
-                runtime: runtime,
-                conversationID: conversationID,
-                generation: generation
-            ) else { return }
+            guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
 
             switch response {
             case .page(let page):
                 let directive = await runtime.applyRESTTail(
                     page,
-                    connectionGeneration: generation
+                    connectionGeneration: generation,
+                    catchUpID: catchUpID
                 )
+                guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
                 switch directive {
                 case .none:
-                    _ = await runtime.finishCatchUp(connectionGeneration: generation)
-                    await pruneFinishedSendState(
-                        conversationID: conversationID,
-                        runtime: runtime
-                    )
+                    await catchUpCompletionWaiter?()
+                    guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
+                    if await runtime.finishCatchUp(connectionGeneration: generation, catchUpID: catchUpID) {
+                        await pruneFinishedSendState(conversationID: conversationID, runtime: runtime)
+                    } else {
+                        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
+                        let current = await runtime.currentState()
+                        guard current.phase == .catchingUp else { return }
+                        await runConversationCatchUp(
+                            runtime: runtime,
+                            conversationID: conversationID,
+                            generation: generation,
+                            catchUpID: catchUpID,
+                            initialCursor: current.cursor,
+                            startedAsResnapshot: startedAsResnapshot
+                        )
+                    }
                 case .fetchREST(let cursor):
                     await runConversationCatchUp(
                         runtime: runtime,
                         conversationID: conversationID,
                         generation: generation,
+                        catchUpID: catchUpID,
                         initialCursor: cursor,
                         startedAsResnapshot: startedAsResnapshot
                     )
@@ -910,12 +1005,14 @@ public actor ConnectionCoordinator {
                     guard startedAsResnapshot == false else { return }
                     _ = await runtime.beginCatchUp(
                         connectionGeneration: generation,
-                        resnapshot: true
+                        resnapshot: true,
+                        catchUpID: catchUpID
                     )
                     await runConversationTailCatchUp(
                         runtime: runtime,
                         conversationID: conversationID,
                         generation: generation,
+                        catchUpID: catchUpID,
                         startedAsResnapshot: true
                     )
                 }
@@ -923,30 +1020,36 @@ public actor ConnectionCoordinator {
                 guard startedAsResnapshot == false else { return }
                 _ = await runtime.beginCatchUp(
                     connectionGeneration: generation,
-                    resnapshot: true
+                    resnapshot: true,
+                    catchUpID: catchUpID
                 )
                 await runConversationTailCatchUp(
                     runtime: runtime,
                     conversationID: conversationID,
                     generation: generation,
+                    catchUpID: catchUpID,
                     startedAsResnapshot: true
                 )
             case .conversationNotFound:
                 if await completeLegacyEmptyConversationIfKnown(
                     runtime: runtime,
                     conversationID: conversationID,
-                    generation: generation
+                    generation: generation,
+                    catchUpID: catchUpID
                 ) == false {
+                    guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
                     pendingLegacyConversationNotFound.insert(conversationID)
                     _ = await runtime.requireResnapshot(
                         .explicit,
-                        connectionGeneration: generation
+                        connectionGeneration: generation,
+                        catchUpID: catchUpID
                     )
                 }
             }
         } catch is CancellationError {
             return
         } catch {
+            guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return }
             let failure = (error as? GatewayFailure) ?? .network(reason: .other)
             await failCurrentAttempt(failure, generation: generation)
         }
@@ -958,11 +1061,13 @@ public actor ConnectionCoordinator {
         let conversationIDs = pendingLegacyConversationNotFound
         pendingLegacyConversationNotFound.removeAll()
         for conversationID in conversationIDs {
-            guard let runtime = conversationRuntimes[conversationID] else { continue }
+            guard let runtime = conversationRuntimes[conversationID],
+                  let catchUpID = conversationCatchUpIDs[conversationID] else { continue }
             _ = await completeLegacyEmptyConversationIfKnown(
                 runtime: runtime,
                 conversationID: conversationID,
-                generation: generation
+                generation: generation,
+                catchUpID: catchUpID
             )
         }
     }
@@ -973,11 +1078,10 @@ public actor ConnectionCoordinator {
     private func completeLegacyEmptyConversationIfKnown(
         runtime: ConversationRuntime,
         conversationID: RemoteConversationID,
-        generation: UInt64
+        generation: UInt64,
+        catchUpID: UInt64
     ) async -> Bool {
-        guard generation == state.connectionGeneration,
-              activeConversationIDs.contains(conversationID),
-              conversationRuntimes[conversationID] === runtime,
+        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID),
               let snapshot = authoritativeSessionSnapshot,
               let summary = snapshot.conversations.first(where: {
                   $0.conversationID == conversationID
@@ -987,6 +1091,7 @@ public actor ConnectionCoordinator {
         }
 
         let current = await runtime.currentState()
+        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return false }
         if current.phase != .catchingUp
             || current.projectionRunID != snapshot.projectionRunID
             || current.projectionGeneration != summary.projectionGeneration
@@ -994,7 +1099,8 @@ public actor ConnectionCoordinator {
             || current.latestSequence > 0 {
             guard await runtime.beginCatchUp(
                 connectionGeneration: generation,
-                resnapshot: true
+                resnapshot: true,
+                catchUpID: catchUpID
             ) else { return false }
         }
 
@@ -1009,13 +1115,15 @@ public actor ConnectionCoordinator {
         )
         guard await runtime.applyREST(
             page,
-            connectionGeneration: generation
+            connectionGeneration: generation,
+            catchUpID: catchUpID
         ) == .none else {
             return false
         }
-        guard await runtime.finishCatchUp(connectionGeneration: generation) else {
+        guard await runtime.finishCatchUp(connectionGeneration: generation, catchUpID: catchUpID) else {
             return false
         }
+        guard isCurrentCatchUp(runtime: runtime, conversationID: conversationID, generation: generation, catchUpID: catchUpID) else { return false }
         pendingLegacyConversationNotFound.remove(conversationID)
         await pruneFinishedSendState(conversationID: conversationID, runtime: runtime)
         return true
@@ -1092,6 +1200,17 @@ public actor ConnectionCoordinator {
             let failure = (error as? GatewayFailure) ?? .network(reason: .other)
             await failCurrentAttempt(failure, generation: request.connectionGeneration)
         }
+    }
+
+    private func isCurrentCatchUp(
+        runtime: ConversationRuntime,
+        conversationID: RemoteConversationID,
+        generation: UInt64,
+        catchUpID: UInt64
+    ) -> Bool {
+        !Task.isCancelled
+            && conversationCatchUpIDs[conversationID] == catchUpID
+            && isCurrent(runtime: runtime, conversationID: conversationID, generation: generation)
     }
 
     private func isCurrent(
@@ -1740,10 +1859,13 @@ public actor ConnectionCoordinator {
     }
 
     private func closeAttemptResources() async {
+        firstSnapshotTimeoutTask?.cancel()
+        firstSnapshotTimeoutTask = nil
         for task in conversationCatchUpTasks.values {
             task.cancel()
         }
         conversationCatchUpTasks.removeAll()
+        conversationCatchUpIDs.removeAll()
         for entry in conversationOlderTasks.values {
             entry.task.cancel()
         }

@@ -1,9 +1,11 @@
 import RemoteProtocol
 import SwiftUI
+import UIKit
 import ToasttyMobileDomain
 
 struct ToasttyTranscriptView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
 
     let state: ToasttyConversationPresentationState
     let loadOlder: () -> Void
@@ -286,7 +288,7 @@ struct ToasttyTranscriptView: View {
                 // prepended reconciles must land instantly so opening or
                 // re-anchoring never races an in-flight fold animation.
                 if old != new, new.revision == .appended || new.revision == .metadataOnly {
-                    withAnimation(.easeInOut(duration: 0.25), apply)
+                    withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.25), apply)
                 } else {
                     apply()
                 }
@@ -376,7 +378,7 @@ struct ToasttyTranscriptView: View {
                 isExpanded: turnFold.isExpanded(turn.id),
                 isLive: turn.id == liveTurnID,
                 toggle: {
-                    withAnimation(.easeInOut(duration: 0.22)) {
+                    withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.22)) {
                         turnFold.toggle(turn.id)
                     }
                 }
@@ -573,7 +575,7 @@ struct ToasttyTranscriptView: View {
             anchor = .top
         }
 
-        if command.motion == .animated {
+        if command.motion == .animated, !reducesMotion {
             withAnimation(.easeOut(duration: 0.2)) {
                 proxy.scrollTo(target, anchor: anchor)
             }
@@ -622,7 +624,7 @@ struct ToasttyTranscriptView: View {
         _ id: ToasttyTranscriptRowID,
         in values: inout Set<ToasttyTranscriptRowID>
     ) {
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.2)) {
             if values.contains(id) {
                 values.remove(id)
             } else {
@@ -1029,10 +1031,22 @@ private struct ToasttySendTailItemView: View {
                 )
             }
 
+            Button {
+                UIPasteboard.general.string = item.text
+            } label: {
+                Label("Copy attempted message", systemImage: "doc.on.doc")
+                    .font(.caption.weight(.semibold))
+                    .frame(minHeight: 44)
+            }
+            .foregroundStyle(ToasttyDesignTokens.amberText)
+            .padding(.leading, 28)
+            .accessibilityIdentifier("toastty-mobile-send-receipt-copy-\(item.clientRequestID)")
+
             Text(item.text)
                 .font(.caption.monospaced())
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .lineLimit(3)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 28)
         }
         .padding(12)
@@ -1095,7 +1109,7 @@ private struct ToasttyTranscriptRowView: View {
             // A chunked message renders this row's slice; the metadata caption
             // belongs to the final slice only.
             message(
-                text: chunk?.text ?? text,
+                text: text,
                 isUser: false,
                 metadata: phase == .commentary && (chunk?.isLast ?? true) ? "commentary" : nil
             )
@@ -1140,6 +1154,7 @@ private struct ToasttyTranscriptRowView: View {
             } else {
                 ToasttyMarkdownText(
                     text: text,
+                    preparedBlocks: chunk?.blocks,
                     textColor: isDemoted
                         ? ToasttyDesignTokens.secondaryText
                         : ToasttyDesignTokens.primaryText
@@ -1239,262 +1254,6 @@ private struct ToasttyTranscriptRowView: View {
         case .superseded: "arrow.trianglehead.2.clockwise.rotate.90"
         }
     }
-}
-
-struct ToasttyMarkdownText: View {
-    let text: String
-    var textColor: Color = ToasttyDesignTokens.primaryText
-
-    var body: some View {
-        // Matches the transcript stack spacing so the seams between chunks of
-        // a split message are indistinguishable from in-message block gaps.
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Self.blocks(text)) { block in
-                blockView(block)
-            }
-        }
-        .foregroundStyle(textColor)
-        .lineSpacing(6)
-        .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    @ViewBuilder
-    private func blockView(_ block: ToasttyMarkdownBlock) -> some View {
-        switch block.style {
-        case .paragraph:
-            Text(block.content)
-                .font(.body)
-        case .heading(let level):
-            Text(block.content)
-                .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
-                .padding(.top, block.id == 0 ? 0 : 2)
-        case .list(let marker, let depth):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(marker.label)
-                    .font(.body.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                    .frame(minWidth: 16, alignment: .trailing)
-                Text(block.content)
-                    .font(.body)
-            }
-            .padding(.leading, CGFloat(max(0, depth - 1)) * 16)
-        case .blockQuote:
-            HStack(alignment: .top, spacing: 10) {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(ToasttyDesignTokens.border)
-                    .frame(width: 3)
-                Text(block.content)
-                    .font(.body)
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
-            }
-        case .code(let language):
-            VStack(alignment: .leading, spacing: 0) {
-                if let language, language.isEmpty == false {
-                    Text(language)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(ToasttyDesignTokens.codeHeaderSurface)
-                    Divider()
-                        .overlay(ToasttyDesignTokens.border)
-                }
-                Text(block.content)
-                    .font(.body.monospaced())
-                    .lineSpacing(4)
-                    .padding(12)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ToasttyDesignTokens.raisedSurface)
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
-                    style: .continuous
-                )
-                .stroke(ToasttyDesignTokens.border, lineWidth: 1)
-            }
-            .clipShape(RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.controlCornerRadius,
-                style: .continuous
-            ))
-        }
-    }
-
-    /// Parsed-block cache: with eager transcript layout every message re-parses
-    /// on each body evaluation without it. Keyed by the raw markdown text.
-    private static let parsedBlockCache: NSCache<NSString, ParsedMarkdownBlocks> = {
-        let cache = NSCache<NSString, ParsedMarkdownBlocks>()
-        cache.countLimit = 600
-        return cache
-    }()
-
-    private final class ParsedMarkdownBlocks {
-        let blocks: [ToasttyMarkdownBlock]
-        init(_ blocks: [ToasttyMarkdownBlock]) { self.blocks = blocks }
-    }
-
-    static func blocks(_ text: String) -> [ToasttyMarkdownBlock] {
-        let key = text as NSString
-        if let cached = parsedBlockCache.object(forKey: key) {
-            return cached.blocks
-        }
-        let parsed = parseBlocks(text)
-        parsedBlockCache.setObject(ParsedMarkdownBlocks(parsed), forKey: key)
-        return parsed
-    }
-
-    private static func parseBlocks(_ text: String) -> [ToasttyMarkdownBlock] {
-        guard let attributed = try? AttributedString(markdown: text) else {
-            return [ToasttyMarkdownBlock(
-                id: 0,
-                content: AttributedString(text),
-                style: .paragraph
-            )]
-        }
-
-        var blocks: [ToasttyMarkdownBlock] = []
-        var currentPresentationIdentity: Int?
-        var currentContent = AttributedString()
-        var currentStyle = ToasttyMarkdownBlock.Style.paragraph
-
-        func flushCurrentBlock() {
-            guard currentContent.characters.isEmpty == false else { return }
-            let isCodeBlock = if case .code = currentStyle { true } else { false }
-            blocks.append(ToasttyMarkdownBlock(
-                id: blocks.count,
-                content: isCodeBlock ? currentContent : stylingInlineContent(currentContent),
-                style: currentStyle
-            ))
-            currentContent = AttributedString()
-        }
-
-        for run in attributed.runs {
-            let intent = run.presentationIntent
-            let identity = intent?.components.first?.identity
-            if identity != currentPresentationIdentity {
-                flushCurrentBlock()
-                currentPresentationIdentity = identity
-                currentStyle = Self.style(for: intent)
-            }
-            currentContent.append(AttributedString(attributed[run.range]))
-        }
-        flushCurrentBlock()
-
-        if blocks.isEmpty, text.isEmpty == false {
-            return [ToasttyMarkdownBlock(
-                id: 0,
-                content: AttributedString(text),
-                style: .paragraph
-            )]
-        }
-        return blocks
-    }
-
-    /// Tints inline code and semantic external web links. Inline code wins
-    /// when Markdown assigns both attributes, while the link itself remains
-    /// intact for SwiftUI interaction.
-    private static func stylingInlineContent(_ content: AttributedString) -> AttributedString {
-        guard content.runs.contains(where: {
-            $0.inlinePresentationIntent?.contains(.code) == true
-                || isExternalWebLink($0.link)
-        }) else { return content }
-
-        var styled = AttributedString()
-        for run in content.runs {
-            var piece = AttributedString(content[run.range])
-            if run.inlinePresentationIntent?.contains(.code) == true {
-                piece.foregroundColor = ToasttyDesignTokens.amberText
-                piece.backgroundColor = ToasttyDesignTokens.chipSurface
-            } else if isExternalWebLink(run.link) {
-                piece.foregroundColor = ToasttyDesignTokens.externalLink
-            }
-            styled.append(piece)
-        }
-        return styled
-    }
-
-    private static func isExternalWebLink(_ url: URL?) -> Bool {
-        guard let url,
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https"
-        else { return false }
-        return url.host?.isEmpty == false
-    }
-
-    private static func style(
-        for intent: PresentationIntent?
-    ) -> ToasttyMarkdownBlock.Style {
-        guard let intent else { return .paragraph }
-
-        var headingLevel: Int?
-        var codeLanguage: String?
-        var isCode = false
-        var isBlockQuote = false
-        var listOrdinal: Int?
-        var listMarker: ToasttyMarkdownBlock.ListMarker?
-        var listDepth = 0
-
-        for component in intent.components {
-            switch component.kind {
-            case .header(let level):
-                headingLevel = level
-            case .codeBlock(let language):
-                isCode = true
-                codeLanguage = language
-            case .blockQuote:
-                isBlockQuote = true
-            case .listItem(let ordinal):
-                if listOrdinal == nil { listOrdinal = ordinal }
-            case .orderedList:
-                listDepth += 1
-                if listMarker == nil {
-                    listMarker = .ordered(listOrdinal ?? 1)
-                }
-            case .unorderedList:
-                listDepth += 1
-                if listMarker == nil { listMarker = .bullet }
-            case .paragraph, .thematicBreak, .table, .tableHeaderRow,
-                 .tableRow(_), .tableCell(_):
-                break
-            @unknown default:
-                break
-            }
-        }
-
-        if isCode { return .code(language: codeLanguage) }
-        if let headingLevel { return .heading(level: headingLevel) }
-        if let listMarker { return .list(marker: listMarker, depth: listDepth) }
-        if isBlockQuote { return .blockQuote }
-        return .paragraph
-    }
-}
-
-struct ToasttyMarkdownBlock: Identifiable {
-    enum ListMarker: Equatable {
-        case bullet
-        case ordered(Int)
-
-        var label: String {
-            switch self {
-            case .bullet: "•"
-            case .ordered(let ordinal): "\(ordinal)."
-            }
-        }
-    }
-
-    enum Style: Equatable {
-        case paragraph
-        case heading(level: Int)
-        case list(marker: ListMarker, depth: Int)
-        case blockQuote
-        case code(language: String?)
-    }
-
-    let id: Int
-    let content: AttributedString
-    let style: Style
 }
 
 private struct ToasttyInteractionCard: View {

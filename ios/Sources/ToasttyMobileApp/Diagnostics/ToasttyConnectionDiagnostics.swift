@@ -30,6 +30,7 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
     case streamReconnecting = "reconnecting"
     case streamDisconnected = "disconnected"
     case sendStarted = "send_started"
+    case sendEnqueued = "send_enqueued"
     case sendAccepted = "send_accepted"
     case sendRejected = "send_rejected"
     case sendUncertain = "send_uncertain"
@@ -44,7 +45,7 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
             .gateway
         case .streamConnecting, .streamConnected, .streamReconnecting, .streamDisconnected:
             .stream
-        case .sendStarted, .sendAccepted, .sendRejected, .sendUncertain:
+        case .sendStarted, .sendEnqueued, .sendAccepted, .sendRejected, .sendUncertain:
             .send
         case .authStarted, .authSucceeded, .authRequired, .authRevoked:
             .auth
@@ -61,6 +62,7 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
         case .streamReconnecting: "Reconnecting"
         case .streamDisconnected: "Disconnected"
         case .sendStarted: "Send started"
+        case .sendEnqueued: "Send queued locally"
         case .sendAccepted: "Send accepted"
         case .sendRejected: "Send rejected"
         case .sendUncertain: "Delivery uncertain"

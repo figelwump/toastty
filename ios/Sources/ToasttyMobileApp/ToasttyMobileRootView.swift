@@ -4,6 +4,7 @@ import ToasttyMobileDomain
 
 struct ToasttyMobileRootView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sessionController: AppSessionController
     @State private var navigationPath: [ToasttyMobileRoute] = []
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
@@ -58,7 +59,7 @@ struct ToasttyMobileRootView: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: loadingPhase == nil)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: loadingPhase == nil)
         .task {
             sessionController.installDiagnosticEventHandler(recordDiagnostic)
             recordDiagnostic(.authStarted)
@@ -107,7 +108,8 @@ struct ToasttyMobileRootView: View {
             beginPairing: sessionController.beginPairing,
             retryRestoration: {
                 Task { await sessionController.retryRestoration() }
-            }
+            },
+            forgetCorruptPairing: { await sessionController.forgetCorruptPairing() }
         )
     }
 
@@ -306,7 +308,7 @@ struct ToasttyMobileRootView: View {
                     : []
             )
         case .connecting, .unpaired, .cameraDenied, .scannerUnsupported,
-             .pairingFailure, .pairingPrivacy, nil:
+             .pairingFailure, .pairingPrivacy, .scannerFailure, .credentialCorrupt, nil:
             break
         }
 #endif

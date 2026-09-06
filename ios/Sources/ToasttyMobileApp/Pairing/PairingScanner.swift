@@ -6,15 +6,19 @@ import VisionKit
 protocol PairingCodeScanning: AnyObject {
     var availability: PairingScannerAvailability { get }
     func requestAuthorization() async -> PairingScannerAuthorization
-    func makeScannerView(onCode: @escaping @MainActor (String) -> Void) -> AnyView
+    func makeScannerView(
+        onCode: @escaping @MainActor (String) -> Void,
+        onFailure: @escaping @MainActor (PairingScannerFailure) -> Void
+    ) -> AnyView
 }
 
 @MainActor
 final class LivePairingCodeScanner: PairingCodeScanning {
     var availability: PairingScannerAvailability {
-        DataScannerViewController.isSupported && DataScannerViewController.isAvailable
-            ? .available
-            : .unsupported
+        PairingScannerAvailability(
+            isSupported: DataScannerViewController.isSupported,
+            isAvailable: DataScannerViewController.isAvailable
+        )
     }
 
     func requestAuthorization() async -> PairingScannerAuthorization {
@@ -30,9 +34,12 @@ final class LivePairingCodeScanner: PairingCodeScanning {
         }
     }
 
-    func makeScannerView(onCode: @escaping @MainActor (String) -> Void) -> AnyView {
+    func makeScannerView(
+        onCode: @escaping @MainActor (String) -> Void,
+        onFailure: @escaping @MainActor (PairingScannerFailure) -> Void
+    ) -> AnyView {
         AnyView(
-            LivePairingScannerView(onCode: onCode)
+            LivePairingScannerView(onCode: onCode, onFailure: onFailure)
                 .accessibilityLabel("Camera view for scanning the Toastty pairing code")
                 .accessibilityIdentifier("toastty-mobile-pairing-camera")
         )
@@ -41,9 +48,10 @@ final class LivePairingCodeScanner: PairingCodeScanning {
 
 private struct LivePairingScannerView: UIViewControllerRepresentable {
     let onCode: @MainActor (String) -> Void
+    let onFailure: @MainActor (PairingScannerFailure) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onCode: onCode)
+        Coordinator(onCode: onCode, onFailure: onFailure)
     }
 
     func makeUIViewController(context: Context) -> DataScannerViewController {
@@ -57,26 +65,62 @@ private struct LivePairingScannerView: UIViewControllerRepresentable {
             isHighlightingEnabled: true
         )
         controller.delegate = context.coordinator
-        try? controller.startScanning()
+        context.coordinator.startScanning(controller)
         return controller
     }
 
     func updateUIViewController(_ controller: DataScannerViewController, context: Context) {
-        guard !controller.isScanning else { return }
-        try? controller.startScanning()
+        context.coordinator.startScanning(controller)
     }
 
     static func dismantleUIViewController(_ controller: DataScannerViewController, coordinator: Coordinator) {
-        controller.stopScanning()
+        coordinator.stopScanning(controller)
     }
 
     @MainActor
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         private let onCode: @MainActor (String) -> Void
-        private var hasDeliveredCode = false
+        private let onFailure: @MainActor (PairingScannerFailure) -> Void
+        private var hasFinished = false
 
-        init(onCode: @escaping @MainActor (String) -> Void) {
+        init(
+            onCode: @escaping @MainActor (String) -> Void,
+            onFailure: @escaping @MainActor (PairingScannerFailure) -> Void
+        ) {
             self.onCode = onCode
+            self.onFailure = onFailure
+        }
+
+        func startScanning(_ controller: DataScannerViewController) {
+            guard !hasFinished, !controller.isScanning else { return }
+            do {
+                try controller.startScanning()
+            } catch {
+                reportFailure(.couldNotStart, controller: controller)
+            }
+        }
+
+        func stopScanning(_ controller: DataScannerViewController) {
+            hasFinished = true
+            controller.stopScanning()
+        }
+
+        func dataScanner(
+            _ dataScanner: DataScannerViewController,
+            becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable
+        ) {
+            reportFailure(.becameUnavailable, controller: dataScanner)
+        }
+
+        private func reportFailure(
+            _ failure: PairingScannerFailure,
+            controller: DataScannerViewController
+        ) {
+            guard !hasFinished else { return }
+            stopScanning(controller)
+            // Startup can fail during a representable update. Publish after
+            // that update so SwiftUI does not mutate observed state mid-render.
+            Task { @MainActor [onFailure] in onFailure(failure) }
         }
 
         func dataScanner(
@@ -84,11 +128,10 @@ private struct LivePairingScannerView: UIViewControllerRepresentable {
             didAdd addedItems: [RecognizedItem],
             allItems: [RecognizedItem]
         ) {
-            guard !hasDeliveredCode else { return }
+            guard !hasFinished else { return }
             guard case .barcode(let barcode) = addedItems.first,
                   let value = barcode.payloadStringValue else { return }
-            hasDeliveredCode = true
-            dataScanner.stopScanning()
+            stopScanning(dataScanner)
             onCode(value)
         }
     }

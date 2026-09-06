@@ -39,6 +39,19 @@ struct RemoteGatewayHTTPTests {
         #expect(RemoteGatewayHTTPRequest.parse(Data("GET / HT".utf8)) == .needMoreData)
     }
 
+    @Test func acceptsSharedBodyLimitAndRejectsOneAdditionalByte() {
+        let limit = RemoteGatewayProtocol.maximumRequestBodyBytes
+        let body = String(repeating: "a", count: limit)
+        let request = "POST /api/conversation.message.send HTTP/1.1\r\nContent-Length: \(limit)\r\n\r\n\(body)"
+        guard case .request(let parsed, _) = RemoteGatewayHTTPRequest.parse(Data(request.utf8)) else {
+            Issue.record("Expected body at the shared gateway limit to parse")
+            return
+        }
+        #expect(parsed.body.count == limit)
+        let oversized = "POST /api/conversation.message.send HTTP/1.1\r\nContent-Length: \(limit + 1)\r\n\r\n\(body)a"
+        #expect(RemoteGatewayHTTPRequest.parse(Data(oversized.utf8)) == .invalid)
+    }
+
     @Test func parserPreservesRepeatedSecurityHeadersAndRejectsDuplicateContentLength() {
         let raw = "GET /api/sessions HTTP/1.1\r\nAuthorization: Bearer first\r\nAuthorization: Bearer second\r\nTailscale-User-Login: first@example.com\r\nTailscale-User-Login: second@example.com\r\n\r\n"
         guard case .request(let request, _) = RemoteGatewayHTTPRequest.parse(Data(raw.utf8)) else {

@@ -7,7 +7,7 @@ import XCTest
 final class AppSessionControllerTests: XCTestCase {
     func testAuthorizationDeniedRetainsCredentialAndPairedState() async throws {
         let credential = try Self.credential(deviceName: "Original iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         _ = await vault.restore()
         let controller = makeController(vault: vault, credential: credential)
 
@@ -20,7 +20,7 @@ final class AppSessionControllerTests: XCTestCase {
 
     func testUnpairAttemptsRevokeThenDeletesCredentialEvenWhenRevokeCannotComplete() async throws {
         let credential = try Self.credential(deviceName: "Original iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         _ = await vault.restore()
         let controller = makeController(vault: vault, credential: credential)
         let recorder = AttemptRecorder()
@@ -43,7 +43,7 @@ final class AppSessionControllerTests: XCTestCase {
             deviceName: "Replacement iPhone",
             id: UUID(uuidString: "D1000000-0000-0000-0000-000000000002")!
         )
-        let vault = FixtureAppCredentialVault(initialCredential: first)
+        let vault = TestAppCredentialVault(initialCredential: first)
         _ = await vault.restore()
         let staleGeneration = await vault.currentGeneration()
         _ = try await vault.install(replacement)
@@ -58,7 +58,7 @@ final class AppSessionControllerTests: XCTestCase {
 
     func testCurrentUnauthorizedCallbackDeletesCredentialAndReturnsToPairingGate() async throws {
         let credential = try Self.credential(deviceName: "Current iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         _ = await vault.restore()
         let currentGeneration = await vault.currentGeneration()
         let controller = makeController(vault: vault, credential: credential)
@@ -85,15 +85,74 @@ final class AppSessionControllerTests: XCTestCase {
         )
     }
 
+    func testForgettingCorruptCredentialDeletesLocallyThenStartsPairing() async {
+        let vault = ScriptedRestorationVault(result: .corrupt)
+        let controller = makeController(vault: vault)
+        await controller.restoreIfNeeded()
+        XCTAssertEqual(controller.state, .repairNeeded(.corrupt))
+
+        await controller.forgetCorruptPairing()
+
+        let deletionCount = await vault.deletionCount
+        XCTAssertEqual(deletionCount, 1)
+        XCTAssertEqual(controller.state, .pairing)
+        XCTAssertNotNil(controller.pairingController)
+        XCTAssertNil(controller.pairedDevice)
+    }
+
+    func testCorruptRepairDoesNotDeleteCredentialInstalledAfterRepairScreenAppeared() async throws {
+        let vault = ScriptedRestorationVault(result: .corrupt)
+        let controller = makeController(vault: vault)
+        await controller.restoreIfNeeded()
+        let replacement = try Self.credential(deviceName: "Replacement")
+        _ = try await vault.install(replacement)
+
+        await controller.forgetCorruptPairing()
+
+        let retainedCredential = await vault.currentCredential()
+        let deletionCount = await vault.deletionCount
+        XCTAssertEqual(retainedCredential, replacement)
+        XCTAssertEqual(deletionCount, 0)
+    }
+
+    func testForgettingCorruptCredentialDoesNotStartPairingWhenDeletionFails() async {
+        let vault = ScriptedRestorationVault(result: .corrupt, failsDeletion: true)
+        let controller = makeController(vault: vault)
+        await controller.restoreIfNeeded()
+
+        await controller.forgetCorruptPairing()
+
+        XCTAssertEqual(controller.state, .repairNeeded(.unavailable))
+        XCTAssertNil(controller.pairingController)
+    }
+
+    func testForgetCorruptPairingCannotDeleteLockedMissingOrIncompatibleCredentials() async {
+        let results: [MobileCredentialLoadResult] = [
+            .locked, .missing, .incompatible(storedVersion: 7), .failed(.keychainStatus(-1)),
+        ]
+        for result in results {
+            let vault = ScriptedRestorationVault(result: result)
+            let controller = makeController(vault: vault)
+            await controller.restoreIfNeeded()
+            let originalState = controller.state
+
+            await controller.forgetCorruptPairing()
+
+            let deletionCount = await vault.deletionCount
+            XCTAssertEqual(deletionCount, 0)
+            XCTAssertEqual(controller.state, originalState)
+        }
+    }
+
     func testRestorationInstallsStoredDeviceScopesBeforeStartingLiveRuntime() async throws {
         let credential = try Self.credential(deviceName: "Scoped iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         var liveSpy: AppLiveSessionsSpy?
         let controller = AppSessionController(
             runtimeMode: .fixture,
             credentialVault: vault,
-            pairingClient: FixturePairingClient(behavior: .success),
-            scanner: FixturePairingScanner(),
+            pairingClient: TestAppPairingClient(),
+            scanner: TestAppPairingScanner(),
             deviceName: { "Test iPhone" },
             initialSnapshot: ToasttyMobileFixture.home,
             initialConnectionState: .offline,
@@ -114,13 +173,13 @@ final class AppSessionControllerTests: XCTestCase {
 
     func testInitialConnectStaysOnLoadingUntilFirstLiveFreshness() async throws {
         let credential = try Self.credential(deviceName: "Loading iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         var onFreshness: (@MainActor (LiveProjectionFreshness) -> Void)?
         let controller = AppSessionController(
             runtimeMode: .fixture,
             credentialVault: vault,
-            pairingClient: FixturePairingClient(behavior: .success),
-            scanner: FixturePairingScanner(),
+            pairingClient: TestAppPairingClient(),
+            scanner: TestAppPairingScanner(),
             deviceName: { "Test iPhone" },
             initialSnapshot: ToasttyMobileFixture.home,
             initialConnectionState: .offline,
@@ -152,13 +211,13 @@ final class AppSessionControllerTests: XCTestCase {
 
     func testInitialConnectFallsThroughToHomeWhenFirstAttemptFails() async throws {
         let credential = try Self.credential(deviceName: "Failing iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         var onFreshness: (@MainActor (LiveProjectionFreshness) -> Void)?
         let controller = AppSessionController(
             runtimeMode: .fixture,
             credentialVault: vault,
-            pairingClient: FixturePairingClient(behavior: .success),
-            scanner: FixturePairingScanner(),
+            pairingClient: TestAppPairingClient(),
+            scanner: TestAppPairingScanner(),
             deviceName: { "Test iPhone" },
             initialSnapshot: ToasttyMobileFixture.home,
             initialConnectionState: .offline,
@@ -177,12 +236,12 @@ final class AppSessionControllerTests: XCTestCase {
 
     func testInitialConnectTimeoutFallsThroughToUnreachable() async throws {
         let credential = try Self.credential(deviceName: "Hung iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         let controller = AppSessionController(
             runtimeMode: .fixture,
             credentialVault: vault,
-            pairingClient: FixturePairingClient(behavior: .success),
-            scanner: FixturePairingScanner(),
+            pairingClient: TestAppPairingClient(),
+            scanner: TestAppPairingScanner(),
             deviceName: { "Test iPhone" },
             initialSnapshot: ToasttyMobileFixture.home,
             initialConnectionState: .offline,
@@ -201,13 +260,13 @@ final class AppSessionControllerTests: XCTestCase {
 
     func testRefreshLiveSessionsForwardsToLiveControllerOutsideFixtureHarness() async throws {
         let credential = try Self.credential(deviceName: "Refresh iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         var liveSpy: AppLiveSessionsSpy?
         let controller = AppSessionController(
             runtimeMode: .fixture,
             credentialVault: vault,
-            pairingClient: FixturePairingClient(behavior: .success),
-            scanner: FixturePairingScanner(),
+            pairingClient: TestAppPairingClient(),
+            scanner: TestAppPairingScanner(),
             deviceName: { "Test iPhone" },
             initialSnapshot: ToasttyMobileFixture.home,
             initialConnectionState: .offline,
@@ -226,14 +285,14 @@ final class AppSessionControllerTests: XCTestCase {
 
     func testRefreshLiveSessionsIsHarmlessInFixtureHarness() async throws {
         let credential = try Self.credential(deviceName: "Fixture iPhone")
-        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let vault = TestAppCredentialVault(initialCredential: credential)
         let liveSpy = AppLiveSessionsSpy()
         let controller = AppSessionController(
             runtimeMode: .fixture,
             usesFixtureHarness: true,
             credentialVault: vault,
-            pairingClient: FixturePairingClient(behavior: .success),
-            scanner: FixturePairingScanner(),
+            pairingClient: TestAppPairingClient(),
+            scanner: TestAppPairingScanner(),
             deviceName: { "Test iPhone" },
             initialState: .paired(.live),
             initialPairedDevice: PairedDevicePresentation(credential: credential),
@@ -249,13 +308,13 @@ final class AppSessionControllerTests: XCTestCase {
 
     func testOuterCancelKeepsInFlightPairingControllerAliveUntilCredentialPersists() async throws {
         let gate = SessionPairingResponseGate()
-        let vault = FixtureAppCredentialVault()
+        let vault = TestAppCredentialVault()
         let controller = AppSessionController(
             runtimeMode: .fixture,
             usesFixtureHarness: true,
             credentialVault: vault,
             pairingClient: SessionGatedPairingClient(gate: gate),
-            scanner: FixturePairingScanner(),
+            scanner: TestAppPairingScanner(),
             deviceName: { "Test iPhone" },
             initialState: .unpaired,
             initialSnapshot: ToasttyMobileFixture.home,
@@ -288,8 +347,8 @@ final class AppSessionControllerTests: XCTestCase {
             runtimeMode: .fixture,
             usesFixtureHarness: true,
             credentialVault: vault,
-            pairingClient: FixturePairingClient(behavior: .success),
-            scanner: FixturePairingScanner(),
+            pairingClient: TestAppPairingClient(),
+            scanner: TestAppPairingScanner(),
             deviceName: { "Test iPhone" },
             initialState: credential == nil ? .restoring : .paired(.live),
             initialPairedDevice: credential.map(PairedDevicePresentation.init),
@@ -369,9 +428,12 @@ private final class AppLiveSessionsSpy: AppLiveSessionsControlling {
 private actor ScriptedRestorationVault: AppSessionCredentialVault {
     private let result: MobileCredentialLoadResult
     private let backingVault = MobileCredentialVault(store: EmptyCredentialStore())
+    private let failsDeletion: Bool
+    private(set) var deletionCount = 0
 
-    init(result: MobileCredentialLoadResult) {
+    init(result: MobileCredentialLoadResult, failsDeletion: Bool = false) {
         self.result = result
+        self.failsDeletion = failsDeletion
     }
 
     func restore() async -> MobileCredentialLoadResult { result }
@@ -389,11 +451,15 @@ private actor ScriptedRestorationVault: AppSessionCredentialVault {
     }
 
     func delete() async throws {
+        deletionCount += 1
+        if failsDeletion { throw MobileCredentialStoreFailure.keychainStatus(-1) }
         try await backingVault.delete()
     }
 
     func delete(ifCurrent generation: MobileCredentialGeneration) async throws -> Bool {
-        try await backingVault.delete(ifCurrent: generation)
+        deletionCount += 1
+        if failsDeletion { throw MobileCredentialStoreFailure.keychainStatus(-1) }
+        return try await backingVault.delete(ifCurrent: generation)
     }
 
     func credential() async throws -> GatewayCredential? {

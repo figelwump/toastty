@@ -133,6 +133,25 @@ final class GatewayClientTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
     }
 
+    func testSendTransportUsesSameEncodedBytesAsAdmissionForUnicodeAndEscaping() async throws {
+        let text = String(repeating: "🐈\n\"\\", count: 500)
+        var request = Self.sendRequest
+        request.text = text
+        let expectedBody = try GatewayClient.encodedMessageSendRequest(request)
+        XCTAssertGreaterThan(expectedBody.count, text.utf8.count)
+        let transport = RecordingHTTPTransport(responses: [.json(Self.duplicateSendJSON)])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport
+        )
+
+        _ = try await client.send(request)
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.first?.httpBody, expectedBody)
+        XCTAssertEqual(try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendRequest.self, from: expectedBody), request)
+    }
+
     func testBackwardEventsEncodeExplicitAnchorAndValidateTailInvariant() async throws {
         let tailJSON = Self.eventsPageJSON(sequences: [8, 9, 10], latestSequence: 10)
         let transport = RecordingHTTPTransport(responses: [.json(tailJSON)])

@@ -51,11 +51,25 @@ final class ToasttyAppDiagnosticProjectionTests: XCTestCase {
     func testSendOutcomesProjectWithoutAssociatedValues() {
         XCTAssertEqual(
             ToasttyAppDiagnosticProjection.event(for: .enqueued(clientRequestID: "sensitive-id")),
-            .sendAccepted
+            .sendEnqueued
         )
         XCTAssertEqual(
             ToasttyAppDiagnosticProjection.event(for: .notEnqueued(.deviceSendScopeDenied)),
             .sendRejected
         )
     }
+    func testSendDeliveryEventsDistinguishAcceptanceAndDeduplicateConfirmation() {
+        func state(_ delivery: SendDeliveryState) -> SendReconciliationState {
+            SendReconciliationState(records: [.init(
+                clientRequestID: "private-request", text: "private-message",
+                projectionRunID: nil, deliveryState: delivery
+            )])
+        }
+        XCTAssertEqual(ToasttyAppDiagnosticProjection.events(from: .init(), to: state(.pending(.awaitingResponse))), [])
+        XCTAssertEqual(ToasttyAppDiagnosticProjection.events(from: state(.pending(.awaitingResponse)), to: state(.pending(.accepted))), [.sendAccepted])
+        XCTAssertEqual(ToasttyAppDiagnosticProjection.events(from: state(.pending(.accepted)), to: state(.confirmed(sequence: 3))), [])
+        XCTAssertEqual(ToasttyAppDiagnosticProjection.events(from: state(.pending(.accepted)), to: state(.uncertain)), [.sendUncertain])
+        XCTAssertEqual(ToasttyAppDiagnosticProjection.events(from: state(.pending(.awaitingResponse)), to: state(.operationFailed)), [.sendRejected])
+    }
+
 }

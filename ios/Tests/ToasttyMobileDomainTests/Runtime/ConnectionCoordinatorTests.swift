@@ -42,6 +42,83 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
+    func testFirstSnapshotDeadlineRejectsLateSnapshotAndReconnects() async throws {
+        let operations = OperationLog()
+        let deadlineSleeper = ControlledSleeper()
+        let retrySleeper = ControlledSleeper()
+        let closeGate = CancellationAwareGate()
+        let seed = snapshot(runID: runID(1), title: "Seed")
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse())],
+            sessions: [.success(seed)]
+        )
+        let subscription = ScriptedSubscription(closeGate: closeGate)
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(operations: operations, connections: [.success(subscription)]),
+            sleeper: retrySleeper,
+            firstSnapshotSleeper: deadlineSleeper,
+            firstSnapshotTimeout: .seconds(15)
+        )
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        try await withTimeout { try await deadlineSleeper.waitForRequestCount(1) }
+        let durations = await deadlineSleeper.requestedDurations()
+        XCTAssertEqual(durations, [.seconds(15)])
+        await deadlineSleeper.advance()
+        try await withTimeout { try await subscription.waitForCloseCount(1) }
+
+        // The timeout has fired, but transport teardown has not yet completed.
+        await subscription.send(.sessionList(snapshot(runID: runID(1), title: "Too late")))
+        try await withTimeout { try await subscription.waitForCloseCount(2) }
+        let sessions = await coordinator.sessionProjection()
+        let projected = await sessions.currentState()
+        XCTAssertEqual(projected.snapshot, seed)
+        XCTAssertNotEqual(projected.phase, .live)
+
+        await closeGate.open()
+        try await withTimeout { try await retrySleeper.waitForRequestCount(1) }
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state.phase, .reconnecting(failureCount: 1, showsBanner: false))
+        XCTAssertEqual(state.latestTransportFailure, .timedOut)
+        await coordinator.suspend()
+    }
+
+    func testFreshSnapshotCancelsDeadlineWithoutTimingOutQuietLiveStream() async throws {
+        let operations = OperationLog()
+        let deadlineSleeper = ControlledSleeper()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse())],
+            sessions: [.success(snapshot(runID: runID(1), title: "Seed"))]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(operations: operations, connections: [.success(subscription)]),
+            firstSnapshotSleeper: deadlineSleeper
+        )
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        try await withTimeout { try await deadlineSleeper.waitForRequestCount(1) }
+        let deadlineTask = await coordinator.firstSnapshotDeadlineTaskForTesting()
+        XCTAssertNotNil(deadlineTask)
+
+        await subscription.send(.sessionList(snapshot(runID: runID(1), title: "Fresh")))
+        _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+        await deadlineTask?.value
+        await deadlineSleeper.advance()
+        let state = await coordinator.currentState()
+        let isClosed = await subscription.isClosed()
+        let durations = await deadlineSleeper.requestedDurations()
+        XCTAssertEqual(state.phase, .live)
+        XCTAssertFalse(isClosed)
+        XCTAssertEqual(durations.count, 1)
+        await coordinator.suspend()
+    }
+
     func testRetryBackoffAccumulatesUntilLiveAndShowsBannerAfterTwoFailures() async throws {
         let operations = OperationLog()
         let sleeper = ControlledSleeper()
@@ -639,6 +716,103 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
+    func testTailCompletionRepairsStreamPageArrivingAtCompletionBoundary() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let completionGate = CancellationAwareGate()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse())],
+            sessions: [.success(snapshot(runID: run, title: "Seed"))],
+            events: [
+                ScriptedCall(result: .success(.page(page(runID: run, events: [event(7), event(8)], latestSequence: 8)))),
+                ScriptedCall(result: .success(.page(page(runID: run, events: [event(9)], latestSequence: 9)))),
+            ]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(operations: operations, connections: [.success(subscription)])
+        )
+        await coordinator.setCatchUpCompletionWaiter { try? await completionGate.wait() }
+        let runtime = await coordinator.openConversation(conversationID)
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh", latestSequence: 8)))
+        try await withTimeout { try await completionGate.waitForEntry() }
+        try await withTimeout { try await subscription.waitForReceiveCount(2) }
+
+        await subscription.send(.conversationEvents(page(runID: run, events: [event(9)], latestSequence: 9)))
+        try await withTimeout { try await subscription.waitForReceiveCount(3) }
+        await completionGate.open()
+
+        let state = try await conversationState(matching: { $0.phase == .live && $0.cursor?.afterSequence == 9 }, runtime)
+        let requests = await gateway.recordedEventRequests()
+        XCTAssertEqual(state.events.map(\.sequence), [7, 8, 9])
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].backward, .latest)
+        XCTAssertNil(requests[1].backward)
+        XCTAssertEqual(requests[1].cursor?.afterSequence, 8)
+        await coordinator.suspend()
+    }
+
+    func testCanceledCatchUpResponseAndFailureCannotAffectReplacement() async throws {
+        let oldRun = runID(1)
+        let newRun = runID(2)
+        let outcomes: [Result<CompatibleGatewayEventsResponse, GatewayFailure>] = [
+            .success(.page(page(runID: oldRun, events: [event(1)], latestSequence: 1))),
+            .failure(.unauthenticated(code: .credentialInvalid, message: nil)),
+        ]
+        for outcome in outcomes {
+            let operations = OperationLog()
+            let oldGate = CancellationAwareGate(ignoresCancellation: true)
+            let replacementGate = CancellationAwareGate()
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse())],
+                sessions: [.success(snapshot(runID: oldRun, title: "Seed"))],
+                events: [
+                    ScriptedCall(result: outcome, gate: oldGate),
+                    ScriptedCall(result: .success(.page(page(runID: newRun, events: [event(7), event(8)], latestSequence: 8))), gate: replacementGate),
+                ]
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(operations: operations, connections: [.success(subscription)])
+            )
+            let runtime = await coordinator.openConversation(conversationID)
+            await coordinator.connectIfNeeded()
+            try await withTimeout { try await subscription.waitForReceiveCount(1) }
+            await subscription.send(.sessionList(snapshot(runID: oldRun, title: "Fresh")))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            try await withTimeout { try await oldGate.waitForEntry() }
+            let retiredTask = await coordinator.catchUpTaskForTesting(conversationID)
+            XCTAssertNotNil(retiredTask)
+
+            await subscription.send(.resnapshotRequired(conversationID: conversationID))
+            try await withTimeout { try await replacementGate.waitForEntry() }
+            await oldGate.open()
+            await retiredTask?.value
+
+            let awaitingReplacement = await runtime.currentState()
+            let connection = await coordinator.currentState()
+            let isClosed = await subscription.isClosed()
+            XCTAssertEqual(awaitingReplacement.phase, .catchingUp)
+            XCTAssertNil(awaitingReplacement.projectionRunID)
+            XCTAssertTrue(awaitingReplacement.events.isEmpty)
+            XCTAssertEqual(connection.phase, .live)
+            XCTAssertFalse(isClosed)
+
+            await replacementGate.open()
+            let repaired = try await conversationState(matching: { $0.phase == .live && $0.projectionRunID == newRun }, runtime)
+            XCTAssertEqual(repaired.events.map(\.sequence), [7, 8])
+            let requests = await gateway.recordedEventRequests()
+            XCTAssertEqual(requests.count, 2)
+            await coordinator.suspend()
+        }
+    }
+
     func testHostWithoutBackwardCapabilityFallsBackToForwardInitialCatchUp() async throws {
         let operations = OperationLog()
         let run = runID(1)
@@ -791,6 +965,81 @@ final class ConnectionCoordinatorTests: XCTestCase {
         let requests = await gateway.recordedEventRequests()
         XCTAssertEqual(requests.count, 9)
 
+        await coordinator.suspend()
+    }
+
+    func testSendSizeLimitUsesExactEncodedRequestAndRefusalReleasesClaim() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
+            counter: UInt64.max
+        )
+        // An intentionally nonstandard length catches preflight code that
+        // estimates the body using a placeholder UUID instead of the real ID.
+        let requestID = "size-check-" + String(repeating: "id", count: 300)
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: []))],
+            sessions: [.success(snapshot(runID: run, title: "Seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [ScriptedCall(result: .success(.accepted(epoch: epoch)))]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(operations: operations, connections: [.success(subscription)]),
+            deviceScopes: [.read, .send],
+            requestIDFactory: FixedRequestIDFactory(value: requestID)
+        )
+        let runtime = await coordinator.openConversation(conversationID)
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Ready",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        let ready = try await conversationState(matching: { $0.composerAuthority.canSend }, runtime)
+        let stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+        var boundaryRequest = RemoteMessageSendRequest(
+            conversationID: conversationID,
+            clientRequestID: requestID,
+            expectedInputEpoch: epoch,
+            text: ""
+        )
+        for prefix in ["ASCII", String(repeating: "🐈", count: 10_000), String(repeating: "\n\"\\", count: 9_000)] {
+            boundaryRequest.text = prefix
+            let overhead = try GatewayClient.encodedMessageSendRequest(boundaryRequest).count
+            boundaryRequest.text += String(repeating: "a", count: RemoteGatewayProtocol.maximumRequestBodyBytes - overhead)
+            XCTAssertEqual(
+                try GatewayClient.encodedMessageSendRequest(boundaryRequest).count,
+                RemoteGatewayProtocol.maximumRequestBodyBytes
+            )
+            let outcome = await coordinator.sendMessage(
+                conversationID: conversationID,
+                text: boundaryRequest.text + "a",
+                composerStamp: stamp
+            )
+            XCTAssertEqual(outcome, .notEnqueued(.messageTooLarge))
+            let records = await runtime.sendReconciliation.currentState()
+            XCTAssertTrue(records.records.isEmpty, "An oversized send must not create an optimistic row")
+            let requests = await gateway.recordedSendRequests()
+            XCTAssertTrue(requests.isEmpty)
+        }
+
+        let accepted = await coordinator.sendMessage(
+            conversationID: conversationID,
+            text: boundaryRequest.text,
+            composerStamp: stamp
+        )
+        XCTAssertEqual(accepted, .enqueued(clientRequestID: requestID))
+        try await withTimeout { try await gateway.waitForSendCallCount(1) }
+        let sent = await gateway.recordedSendRequests()
+        XCTAssertEqual(sent, [boundaryRequest])
         await coordinator.suspend()
     }
 
@@ -1716,6 +1965,7 @@ private actor ScriptedSubscription: EventStreamSubscriptionProtocol {
 
 private actor ControlledSleeper: ConnectionSleeping {
     private var durations: [Duration] = []
+    private var pendingAdvances = 0
     private var waiterOrder: [UUID] = []
     private var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
     private let requests = CallCounter()
@@ -1729,6 +1979,9 @@ private actor ControlledSleeper: ConnectionSleeping {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                 if Task.isCancelled {
                     continuation.resume(throwing: CancellationError())
+                } else if pendingAdvances > 0 {
+                    pendingAdvances -= 1
+                    continuation.resume()
                 } else {
                     waiterOrder.append(id)
                     waiters[id] = continuation
@@ -1747,6 +2000,9 @@ private actor ControlledSleeper: ConnectionSleeping {
                 return
             }
         }
+        // A test can advance after observing the request counter but before
+        // sleep resumes from that actor hop and installs its continuation.
+        pendingAdvances += 1
     }
 
     func waitForRequestCount(_ count: Int) async throws { try await requests.wait(for: count) }
@@ -1853,11 +2109,30 @@ private actor CallCounter {
 }
 
 private actor CancellationAwareGate {
+    private let ignoresCancellation: Bool
+    private let entries = CallCounter()
     private var isOpen = false
     private var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
 
+    init(ignoresCancellation: Bool = false) {
+        self.ignoresCancellation = ignoresCancellation
+    }
+
+    func waitForEntry() async throws { try await entries.wait(for: 1) }
+
     func wait() async throws {
+        await entries.increment()
         let id = UUID()
+        if ignoresCancellation {
+            try await withCheckedThrowingContinuation { continuation in
+                if isOpen {
+                    continuation.resume()
+                } else {
+                    waiters[id] = continuation
+                }
+            }
+            return
+        }
         try await withTaskCancellationHandler {
             try Task.checkCancellation()
             try await withCheckedThrowingContinuation { continuation in

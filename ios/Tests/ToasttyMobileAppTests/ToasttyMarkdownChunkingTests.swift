@@ -1,108 +1,96 @@
+import Foundation
 import XCTest
 @testable import ToasttyMobileApp
 
 final class ToasttyMarkdownChunkingTests: XCTestCase {
-    func testShortTextStaysWhole() {
-        let text = Array(repeating: "A modest paragraph of body text.", count: 20)
-            .joined(separator: "\n\n")
-        XCTAssertLessThanOrEqual(text.count, ToasttyMarkdownChunking.chunkThreshold)
-        XCTAssertEqual(ToasttyMarkdownChunking.split(text), [text])
+    func testShortTextKeepsOneSemanticChunk() {
+        let text = "A **short** message with `code`."
+        let chunks = ToasttyMarkdownChunking.split(text)
+        XCTAssertEqual(chunks.count, 1)
+        XCTAssertEqual(chunks[0].blocks, ToasttyMarkdownParser.parse(text))
     }
 
-    func testLongParagraphsSplitAtBlankLinesAndPreserveContent() {
-        let paragraphs = (1 ... 14).map { index in
-            "Paragraph \(index): " + Array(repeating: "chunked transcript body", count: 20)
-                .joined(separator: " ")
-        }
-        let text = paragraphs.joined(separator: "\n\n")
-        XCTAssertGreaterThan(text.count, ToasttyMarkdownChunking.chunkThreshold)
-
+    func testLongParagraphsPreserveAllParsedContentWithinBoundedChunks() {
+        let text = (1...14).map { index in
+            "Paragraph \(index): " + String(repeating: "chunked body ", count: 80)
+        }.joined(separator: "\n\n")
         let chunks = ToasttyMarkdownChunking.split(text)
         XCTAssertGreaterThan(chunks.count, 1)
-        XCTAssertEqual(chunks.joined(separator: "\n\n"), text)
+        XCTAssertEqual(renderedText(chunks), parsedText(text))
+        XCTAssertTrue(chunks.allSatisfy { $0.blocks.reduce(0) { $0 + $1.content.characters.count } <= 2_000 })
+    }
+
+    func testFenceAfterProseWithoutBlankLinePreservesCodeInEveryChunk() {
+        let text = "Introduction\n```swift\n"
+            + (1...160).map { "let value\($0) = functionWithLongName(\($0))" }.joined(separator: "\n")
+            + "\n```"
+        let chunks = ToasttyMarkdownChunking.split(text)
+        XCTAssertGreaterThan(chunks.count, 1)
+        XCTAssertEqual(renderedText(chunks), parsedText(text))
+        let blocks = chunks.flatMap(\.blocks)
+        XCTAssertEqual(blocks.first?.style, .paragraph)
+        XCTAssertTrue(blocks.dropFirst().allSatisfy { $0.style == .code(language: "swift") })
+    }
+
+    func testReferenceLinksResolveBeforeLayoutSplitting() {
+        let text = "See [the docs][reference].\n\n"
+            + String(repeating: "A paragraph of padding.\n\n", count: 200)
+            + "[reference]: https://example.com/docs"
+        let chunks = ToasttyMarkdownChunking.split(text)
+        XCTAssertGreaterThan(chunks.count, 1)
+        let links = chunks.flatMap(\.blocks).flatMap { block in
+            block.content.runs.compactMap(\.link)
+        }
+        XCTAssertEqual(links, [URL(string: "https://example.com/docs")!])
+        XCTAssertEqual(renderedText(chunks), parsedText(text))
+    }
+
+    func testHugeCodeLineIsBoundedWithoutLosingCharactersOrCodeStyle() {
+        let text = "```json\n" + String(repeating: "a", count: 20_000) + "\n```"
+        let chunks = ToasttyMarkdownChunking.split(text)
+        XCTAssertGreaterThan(chunks.count, 1)
+        XCTAssertEqual(renderedText(chunks), parsedText(text))
+        for block in chunks.flatMap(\.blocks) {
+            XCTAssertEqual(block.style, .code(language: "json"))
+            XCTAssertLessThanOrEqual(block.content.characters.count, 2_000)
+        }
+    }
+
+    func testSplitListItemKeepsStyleAndMarksContinuationWithoutRepeatedBullet() {
+        let text = "1. " + String(repeating: "word ", count: 900)
+        let blocks = ToasttyMarkdownChunking.split(text).flatMap(\.blocks)
+        XCTAssertGreaterThan(blocks.count, 1)
+        XCTAssertEqual(blocks.first?.isContinuation, false)
+        XCTAssertTrue(blocks.dropFirst().allSatisfy(\.isContinuation))
+        XCTAssertTrue(blocks.allSatisfy { $0.style == .list(marker: .ordered(1), depth: 1) })
+        XCTAssertEqual(blocks.map { String($0.content.characters) }.joined(), parsedText(text))
+    }
+
+    func testEarlyNewlineAndLaterSpacesKeepUniquePieceIdentitiesWhenSharingACell() {
+        let text = "```text\n" + String(repeating: "a", count: 99) + "\n"
+            + String(repeating: "b ", count: 940) + String(repeating: "c", count: 2_500) + "\n```"
+        let chunks = ToasttyMarkdownChunking.split(text)
+        XCTAssertTrue(chunks.contains { $0.blocks.count > 1 }, "Exercise continuations sharing a cell")
         for chunk in chunks {
-            XCTAssertLessThanOrEqual(
-                chunk.count,
-                ToasttyMarkdownChunking.chunkBudget + 600,
-                "Each chunk should stay near the budget"
-            )
+            XCTAssertEqual(Set(chunk.blocks.map(\.id)).count, chunk.blocks.count)
         }
+        XCTAssertEqual(renderedText(chunks), parsedText(text))
     }
 
-    func testFencedCodeBlockWithBlankLinesStaysAtomicWhenUnderBudget() {
-        let fence = (["```swift", "let a = 1", "", "let b = 2", "```"]).joined(separator: "\n")
-        let padding = (1 ... 10).map { index in
-            "Padding paragraph \(index): " + Array(repeating: "text", count: 80).joined(separator: " ")
-        }
-        let text = (padding.prefix(5) + [fence] + padding.suffix(5)).joined(separator: "\n\n")
-        XCTAssertGreaterThan(text.count, ToasttyMarkdownChunking.chunkThreshold)
-
+    func testHeadingMovesWithFollowingContent() {
+        let text = String(repeating: "lead ", count: 355) + "\n\n## Section\n\n"
+            + String(repeating: "body ", count: 315) + "\n\n" + String(repeating: "tail ", count: 75)
         let chunks = ToasttyMarkdownChunking.split(text)
         XCTAssertGreaterThan(chunks.count, 1)
-        XCTAssertEqual(
-            chunks.filter { $0.contains(fence) }.count,
-            1,
-            "A fence under budget must land intact inside exactly one chunk"
-        )
-        XCTAssertEqual(chunks.joined(separator: "\n\n"), text)
+        XCTAssertFalse(chunks.contains { $0.blocks.last?.style == .heading(level: 2) })
+        XCTAssertEqual(renderedText(chunks), parsedText(text))
     }
 
-    func testOversizedFenceSplitsIntoRefencedChunksThatStillParseAsCode() {
-        let interior = (1 ... 120).map { "let fixtureValue\($0) = transcriptFixtureValue(\($0))" }
-        let text = (["```swift"] + interior + ["```"]).joined(separator: "\n")
-        XCTAssertGreaterThan(text.count, ToasttyMarkdownChunking.chunkThreshold)
-
-        let chunks = ToasttyMarkdownChunking.split(text)
-        XCTAssertGreaterThan(chunks.count, 1)
-
-        var recombinedInterior: [String] = []
-        for chunk in chunks {
-            let lines = chunk.split(separator: "\n").map(String.init)
-            XCTAssertEqual(lines.first, "```swift")
-            XCTAssertEqual(lines.last, "```")
-            recombinedInterior.append(contentsOf: lines.dropFirst().dropLast())
-
-            let blocks = ToasttyMarkdownText.blocks(chunk)
-            XCTAssertEqual(blocks.count, 1)
-            guard case .code(let language) = blocks[0].style else {
-                return XCTFail("A re-fenced chunk must still parse as a code block")
-            }
-            XCTAssertEqual(language, "swift")
-        }
-        XCTAssertEqual(recombinedInterior, interior)
+    private func renderedText(_ chunks: [ToasttyMarkdownChunk]) -> String {
+        chunks.flatMap(\.blocks).map { String($0.content.characters) }.joined()
     }
 
-    func testSingleGiantLineSplitsAtWhitespace() {
-        let words = (1 ... 900).map { "word\($0)" }
-        let text = words.joined(separator: " ")
-        XCTAssertGreaterThan(text.count, ToasttyMarkdownChunking.chunkThreshold)
-
-        let chunks = ToasttyMarkdownChunking.split(text)
-        XCTAssertGreaterThan(chunks.count, 1)
-        XCTAssertEqual(
-            chunks.joined(separator: " ").split(separator: " ").map(String.init),
-            words,
-            "Whitespace splitting must not drop or mangle any word"
-        )
-    }
-
-    func testHeadingIsNotStrandedAtChunkEnd() {
-        let first = "Lead paragraph: " + Array(repeating: "body", count: 355).joined(separator: " ")
-        let heading = "## Section"
-        let second = "Section paragraph: " + Array(repeating: "body", count: 315).joined(separator: " ")
-        let third = "Tail paragraph: " + Array(repeating: "body", count: 75).joined(separator: " ")
-        let text = [first, heading, second, third].joined(separator: "\n\n")
-        XCTAssertGreaterThan(text.count, ToasttyMarkdownChunking.chunkThreshold)
-
-        let chunks = ToasttyMarkdownChunking.split(text)
-        XCTAssertGreaterThan(chunks.count, 1)
-        for chunk in chunks {
-            XCTAssertFalse(
-                chunk.hasSuffix(heading),
-                "A heading must move to the chunk holding the content it titles"
-            )
-        }
-        XCTAssertTrue(chunks.contains { $0.hasPrefix(heading) })
-        XCTAssertEqual(chunks.joined(separator: "\n\n"), text)
+    private func parsedText(_ text: String) -> String {
+        ToasttyMarkdownParser.parse(text).map { String($0.content.characters) }.joined()
     }
 }

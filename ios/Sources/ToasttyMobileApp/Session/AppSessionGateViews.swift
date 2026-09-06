@@ -4,6 +4,10 @@ struct AppSessionGateView: View {
     let state: AppSessionState
     let beginPairing: () -> Void
     let retryRestoration: () -> Void
+    let forgetCorruptPairing: @MainActor () async -> Void
+
+    @State private var confirmsForgetPairing = false
+    @State private var isForgettingPairing = false
 
     var body: some View {
         ZStack {
@@ -44,6 +48,14 @@ struct AppSessionGateView: View {
                     Button("Try again", action: retryRestoration)
                         .buttonStyle(.borderedProminent)
                         .accessibilityIdentifier("toastty-mobile-session-retry-repair")
+                        .disabled(isForgettingPairing)
+                    if reason == .corrupt {
+                        Button("Forget pairing and start again", role: .destructive) {
+                            confirmsForgetPairing = true
+                        }
+                        .disabled(isForgettingPairing)
+                        .accessibilityIdentifier("toastty-mobile-session-forget-corrupt-pairing")
+                    }
                 }
             case .incompatible(let incompatibility):
                 sessionMessage(
@@ -61,6 +73,19 @@ struct AppSessionGateView: View {
                 // this gate.
                 EmptyView()
             }
+        }
+        .alert("Forget this pairing?", isPresented: $confirmsForgetPairing) {
+            Button("Cancel", role: .cancel) {}
+            Button("Forget pairing", role: .destructive) {
+                Task { @MainActor in
+                    isForgettingPairing = true
+                    await forgetCorruptPairing()
+                    isForgettingPairing = false
+                }
+            }
+            .accessibilityIdentifier("toastty-mobile-session-confirm-forget-pairing")
+        } message: {
+            Text("This removes the unreadable pairing record from this iPhone. Your Mac will keep its device entry; you can remove that entry in Remote Access on your Mac. Pair again to reconnect.")
         }
     }
 

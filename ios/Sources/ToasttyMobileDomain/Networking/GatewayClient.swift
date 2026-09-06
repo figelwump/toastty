@@ -177,7 +177,7 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         let urlRequest = try await makeRequest(
             method: "POST",
             path: "/api/conversation.message.send",
-            body: try encode(request),
+            body: try Self.encodedMessageSendRequest(request),
             authenticated: true,
             sendsOrigin: true
         )
@@ -193,6 +193,16 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
             throw try classifyHTTPError(response)
         }
         return try mapCompatibility { try compatibilityDecoder.decodeSendResult(response.body) }
+    }
+
+    /// Shared by enqueue admission and HTTP delivery so request-size checks
+    /// use the same JSON representation as the bytes sent to the Mac.
+    static func encodedMessageSendRequest(_ request: RemoteMessageSendRequest) throws -> Data {
+        do {
+            return try ConversationEventCoding.makeEncoder().encode(request)
+        } catch {
+            throw GatewayFailure.invalidResponse
+        }
     }
 
     public func acknowledgeConversationRead(

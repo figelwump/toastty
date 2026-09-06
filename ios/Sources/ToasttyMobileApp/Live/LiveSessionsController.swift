@@ -125,6 +125,8 @@ final class LiveSessionsController {
         activeConversationController?.cursor?.afterSequence
     }
 
+    var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in }
+
     private let runtime: any LiveConnectionRuntime
     private let hostName: String
     private let onFreshness: @MainActor (LiveProjectionFreshness) -> Void
@@ -296,6 +298,7 @@ final class LiveSessionsController {
                 try await runtime.acknowledgeConversationRead(request)
             }
         )
+        controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }
         controller.consumeConnectionPhase(coordinatorState.phase)
         activeConversationController = controller
         await controller.start()

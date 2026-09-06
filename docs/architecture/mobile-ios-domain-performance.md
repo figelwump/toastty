@@ -26,7 +26,7 @@ Elapsed time uses `ContinuousClock`, so wall-clock adjustments cannot affect the
 
 This memory value is net incremental resident memory, not peak memory. It includes allocations still resident in the XCTest process at the end of the measured operation and can be influenced by allocator reuse or unrelated test-runner activity. Together with simulator load affecting elapsed time, that makes these thresholds regression tripwires rather than portable product guarantees.
 
-Network transport, file I/O, fixture creation, JSON serialization, SwiftUI rendering, transcript layout, scrolling, and physical-device behavior are outside this test's scope. Device rendering and scroll-position performance remain separate Phase 3 validation.
+Network transport, file I/O, fixture creation, JSON serialization, SwiftUI rendering, transcript layout, scrolling, and physical-device behavior are outside this test's scope. Device rendering and scroll-position performance require separate simulator UI and physical-device validation.
 
 ## Reference evidence
 
@@ -46,3 +46,13 @@ Run this test through the repository's remote iOS path, not a local simulator. T
 The hardware and toolchain records were captured separately through the required remote-only validation path at `artifacts/remote-gui/phase1-domain-performance-hardware/` and `artifacts/remote-gui/phase1-domain-toolchain/`; both report remote execution with no local fallback. No local simulator or GUI validation was used.
 
 Use repeated clean remote runs when calibrating this provisional gate. Keep the input and measurement boundaries stable so later results remain comparable.
+
+## Transcript preparation
+
+`LiveConversationController` shares immutable rows, Markdown blocks, and turns across connection and send-delivery metadata updates. A regression test applies these updates to 5,000 events and verifies that the prepared transcript is reused; an appended event requires new preparation. Long messages are parsed as one Markdown document before attributed blocks are split for layout, preserving code fences and reference links across cells.
+
+The fixture UI readiness measurement starts before opening the conversation and ends when the 5,000-row readiness marker appears. It includes fixture navigation and presentation preparation, but does not measure frame timing, sustained streaming, or peak memory. Conversation history remains in memory for the open runtime; these changes do not impose a retention limit or establish a physical-device performance budget.
+
+`LiveConversationControllerTests.testSustainedSmallAppendsPreserveAllRowsAndReportPreparationTime` starts with 5,000 events, then applies 200 updates of five events each. It verifies that all 6,000 rows remain ordered and records elapsed time, including fixture-state construction and main-actor preparation. This measurement excludes SwiftUI rendering and network transport and has no calibrated timing threshold yet.
+
+A remote Debug run on 2026-09-05 recorded 1.9807 seconds for those 200 updates in `artifacts/remote-tests/ios-audit-final-debug/`, with the timing attachment exported under `artifacts/reviews/ios-audit-append-measurement/`. This is one simulator observation, not a physical-device frame-time guarantee.

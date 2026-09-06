@@ -364,6 +364,8 @@ verify_archive_configuration() {
   [[ -f "$app_plist" ]] || fail "expected archived app Info.plist at $app_plist"
   [[ -s "$app_path/Assets.car" ]] || fail "archived app is missing compiled app-icon assets"
   [[ -f "$privacy_manifest" ]] || fail "archived app is missing PrivacyInfo.xcprivacy"
+  [[ -s "$ARCHIVE_PATH/dSYMs/$APP_PRODUCT_NAME.app.dSYM/Contents/Resources/DWARF/$APP_PRODUCT_NAME" ]] \
+    || fail "archived app is missing its dSYM debug symbols"
 
   assert_plist_value "$app_plist" "CFBundleIdentifier" "$RELEASE_BUNDLE_ID"
   assert_plist_value "$app_plist" "CFBundleShortVersionString" "$TUIST_TOASTTY_MOBILE_VERSION"
@@ -390,15 +392,19 @@ find_exported_ipa() {
 write_release_metadata() {
   local status="$1"
   local upload_requested="$2"
-  local commit_sha="${GITHUB_SHA:-unknown}"
   local ci_run_url=""
   if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
     ci_run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
   fi
   {
-    printf 'SCHEMA_VERSION=1\n'
+    printf 'SCHEMA_VERSION=2\n'
     printf 'STATUS=%s\n' "$status"
-    printf 'GIT_SHA=%s\n' "$commit_sha"
+    printf 'GIT_SHA=%s\n' "$SOURCE_COMMIT_SHA"
+    printf 'CI_EVENT_SHA=%s\n' "${GITHUB_SHA:-unknown}"
+    printf 'XCODE_VERSION=%s\n' "$XCODE_VERSION"
+    printf 'SWIFT_VERSION=%s\n' "$SWIFT_VERSION"
+    printf 'IOS_SDK_VERSION=%s\n' "$IOS_SDK_VERSION"
+    printf 'TUIST_VERSION=%s\n' "$TUIST_VERSION"
     printf 'CI_RUN_URL=%s\n' "$ci_run_url"
     printf 'SCHEME=%s\n' "$SCHEME_NAME"
     printf 'CONFIGURATION=%s\n' "$CONFIGURATION"
@@ -438,7 +444,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 validate_static_configuration
-for command_name in base64 find security sed sips tee tuist uuidgen xcodebuild xcrun; do
+for command_name in base64 find git security sed sips tar tee tr tuist uuidgen xcodebuild xcrun; do
   require_command "$command_name"
 done
 [[ -x "$PLIST_BUDDY" ]] || fail "$PLIST_BUDDY is required"
@@ -497,9 +503,14 @@ EXPORT_PATH="$OUTPUT_DIR/export"
 DERIVED_DATA_PATH="$OUTPUT_DIR/DerivedData"
 EXPORT_OPTIONS_PLIST="$OUTPUT_DIR/ExportOptions.plist"
 RELEASE_METADATA_PATH="$OUTPUT_DIR/release-metadata.txt"
-for path in "$ARCHIVE_PATH" "$EXPORT_PATH" "$DERIVED_DATA_PATH" "$EXPORT_OPTIONS_PLIST"; do
+for path in "$ARCHIVE_PATH" "$ARCHIVE_PATH.tar.gz" "$EXPORT_PATH" "$DERIVED_DATA_PATH" "$EXPORT_OPTIONS_PLIST"; do
   [[ ! -e "$path" ]] || fail "release output already exists; choose a fresh build number or output directory: $path"
 done
+SOURCE_COMMIT_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+XCODE_VERSION="$(xcodebuild -version | tr '\n' ' ')"
+SWIFT_VERSION="$(xcrun swift --version | tr '\n' ' ')"
+IOS_SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+TUIST_VERSION="$(tuist version)"
 write_release_metadata "preparing" "$UPLOAD_REQUESTED"
 
 ASC_KEY_DIR="$(mktemp -d "/tmp/toastty-asc-key.XXXXXX")"
@@ -538,6 +549,9 @@ xcodebuild \
   "DEVELOPMENT_TEAM=$TOASTTY_IOS_DEVELOPMENT_TEAM" \
   archive 2>&1 | tee "$OUTPUT_DIR/archive.log"
 verify_archive_configuration
+# Preserve archive permissions and symlinks, including the exact dSYMs for
+# this build, in the downloadable CI artifact.
+tar -czf "$ARCHIVE_PATH.tar.gz" -C "$OUTPUT_DIR" "Toastty.xcarchive"
 write_export_options_plist
 
 log "Exporting the signed IPA."

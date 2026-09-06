@@ -328,9 +328,9 @@ final class ToasttyConversationPresentationTests: XCTestCase {
             XCTAssertEqual(chunk.index, index)
             XCTAssertEqual(chunk.isLast, index == chunkBlocks.count - 1)
             XCTAssertEqual(chunk.row.id.sequence, 2)
-            recombined.append(chunk.text)
+            recombined.append(contentsOf: chunk.blocks.map { String($0.content.characters) })
         }
-        XCTAssertEqual(recombined.joined(separator: "\n\n"), giant)
+        XCTAssertEqual(recombined.joined(), ToasttyMarkdownParser.parse(giant).map { String($0.content.characters) }.joined())
 
         let short = try XCTUnwrap(state.blocks.last)
         guard case .row = short.content else {

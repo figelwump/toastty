@@ -122,6 +122,10 @@ public actor ConversationRuntime {
     private let stateStream: RuntimeStateStream<State>
     private var bufferedLivePages: [CompatibleConversationEventPage] = []
     private var catchUpIsResnapshot = false
+    private var catchUpID: UInt64?
+    private var latestCatchUpID: UInt64 = 0
+    private var catchUpRevision: UInt64 = 0
+    private var catchUpBoundaryWaiter: (@Sendable () async -> Void)?
     private var projectionRunBeforeResnapshot: RemoteProjectionRunID?
     private var coordinatorComposerSnapshot: CoordinatorComposerSnapshot?
 
@@ -136,6 +140,11 @@ public actor ConversationRuntime {
         )
         state = initialState
         stateStream = RuntimeStateStream(initialState)
+    }
+
+    /// A deterministic suspension seam for testing replacement during reduction.
+    func setCatchUpBoundaryWaiter(_ waiter: (@Sendable () async -> Void)?) {
+        catchUpBoundaryWaiter = waiter
     }
 
     public func currentState() -> State {
@@ -170,9 +179,17 @@ public actor ConversationRuntime {
     @discardableResult
     public func beginCatchUp(
         connectionGeneration: UInt64,
-        resnapshot: Bool = false
+        resnapshot: Bool = false,
+        catchUpID: UInt64? = nil
     ) async -> Bool {
-        guard connectionGeneration >= state.connectionGeneration else { return false }
+        guard !Task.isCancelled, connectionGeneration >= state.connectionGeneration else { return false }
+        if let catchUpID {
+            guard catchUpID >= latestCatchUpID else { return false }
+            latestCatchUpID = catchUpID
+        }
+        self.catchUpID = catchUpID
+        catchUpRevision &+= 1
+        let revision = catchUpRevision
         if connectionGeneration > state.connectionGeneration {
             // Buffered frames belong to the connection that received them.
             // Never carry them across a generation boundary.
@@ -188,7 +205,7 @@ public actor ConversationRuntime {
         }
         state.phase = .catchingUp
         await publish()
-        return true
+        return isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID)
     }
 
     /// Applies one REST page and returns the coordinator's next action.
@@ -196,9 +213,11 @@ public actor ConversationRuntime {
     @discardableResult
     public func applyREST(
         _ page: CompatibleConversationEventPage,
-        connectionGeneration: UInt64
+        connectionGeneration: UInt64,
+        catchUpID: UInt64? = nil
     ) async -> ConversationRuntimeDirective {
-        guard connectionGeneration == state.connectionGeneration else { return .none }
+        let revision = catchUpRevision
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
         guard state.phase == .catchingUp else { return .none }
         guard page.conversationID == state.conversationID else {
             return await requireResnapshot(.invalidPage, connectionGeneration: connectionGeneration)
@@ -215,6 +234,7 @@ public actor ConversationRuntime {
         case .valid(let adoptedRun):
             if let adoptedRun, projectionRunBeforeResnapshot != adoptedRun {
                 await sendReconciliation.projectionDidChange(to: adoptedRun)
+                guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
             }
             projectionRunBeforeResnapshot = nil
         }
@@ -229,13 +249,20 @@ public actor ConversationRuntime {
         let applied = applyContiguousEvents(page.events)
         if applied.hasGap {
             await observeAndPublish(applied.acceptedEvents)
+            guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
             return .fetchREST(cursor: state.cursor)
         }
         updatePageMetadata(page)
         await sendReconciliation.observe(applied.acceptedEvents)
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
 
-        let bufferedDirective = await drainBufferedLivePages()
+        let bufferedDirective = await drainBufferedLivePages(
+            revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID
+        )
+        if case .resnapshot = bufferedDirective { return bufferedDirective }
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
         await publish()
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
         if bufferedDirective != .none {
             return bufferedDirective
         }
@@ -252,9 +279,11 @@ public actor ConversationRuntime {
     @discardableResult
     public func applyRESTTail(
         _ page: CompatibleConversationEventPage,
-        connectionGeneration: UInt64
+        connectionGeneration: UInt64,
+        catchUpID: UInt64? = nil
     ) async -> ConversationRuntimeDirective {
-        guard connectionGeneration == state.connectionGeneration else { return .none }
+        let revision = catchUpRevision
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
         guard state.phase == .catchingUp else { return .none }
         guard page.conversationID == state.conversationID else {
             return await requireResnapshot(.invalidPage, connectionGeneration: connectionGeneration)
@@ -274,6 +303,7 @@ public actor ConversationRuntime {
             }
             if projectionRunBeforeResnapshot != page.projectionRunID {
                 await sendReconciliation.projectionDidChange(to: page.projectionRunID)
+                guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
             }
             projectionRunBeforeResnapshot = nil
         }
@@ -299,15 +329,24 @@ public actor ConversationRuntime {
         let applied = applyContiguousEvents(page.events)
         if applied.hasGap {
             let directive = await bufferLivePage(page, connectionGeneration: connectionGeneration)
+            if case .resnapshot = directive { return directive }
+            guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
             await observeAndPublish(applied.acceptedEvents)
+            guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
             if directive != .none { return directive }
             return .fetchREST(cursor: state.cursor)
         }
         updatePageMetadata(page)
         await sendReconciliation.observe(applied.acceptedEvents)
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
 
-        let bufferedDirective = await drainBufferedLivePages()
+        let bufferedDirective = await drainBufferedLivePages(
+            revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID
+        )
+        if case .resnapshot = bufferedDirective { return bufferedDirective }
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
         await publish()
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
         if bufferedDirective != .none { return bufferedDirective }
         if observedSequence < state.latestSequence {
             return .fetchREST(cursor: state.cursor)
@@ -322,7 +361,9 @@ public actor ConversationRuntime {
         _ page: CompatibleConversationEventPage,
         connectionGeneration: UInt64
     ) async -> ConversationRuntimeDirective {
-        guard connectionGeneration == state.connectionGeneration else { return .none }
+        let revision = catchUpRevision
+        let catchUpID = self.catchUpID
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
         guard page.conversationID == state.conversationID else { return .none }
 
         if let runID = state.projectionRunID,
@@ -348,6 +389,7 @@ public actor ConversationRuntime {
         if applied.hasGap {
             let directive = await bufferLivePage(page, connectionGeneration: connectionGeneration)
             if case .none = directive {
+                guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
                 state.phase = .catchingUp
                 await publish()
                 return .fetchREST(cursor: state.cursor)
@@ -357,6 +399,7 @@ public actor ConversationRuntime {
 
         updatePageMetadata(page)
         await sendReconciliation.observe(applied.acceptedEvents)
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
         if observedSequence < page.latestSequence {
             state.phase = .catchingUp
             await publish()
@@ -369,8 +412,12 @@ public actor ConversationRuntime {
     /// Completes a catch-up only when every retained sequence through the
     /// latest advertised sequence has been observed.
     @discardableResult
-    public func finishCatchUp(connectionGeneration: UInt64) async -> Bool {
-        guard connectionGeneration == state.connectionGeneration else { return false }
+    public func finishCatchUp(
+        connectionGeneration: UInt64,
+        catchUpID: UInt64? = nil
+    ) async -> Bool {
+        let revision = catchUpRevision
+        guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return false }
         guard state.phase == .catchingUp, bufferedLivePages.isEmpty else { return false }
         guard observedSequence >= state.latestSequence else { return false }
 
@@ -382,10 +429,11 @@ public actor ConversationRuntime {
                 latestSequence: state.latestSequence,
                 observedThroughSequence: observedSequence
             )
+            guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return false }
         }
         catchUpIsResnapshot = false
         await publish()
-        return true
+        return isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID)
     }
 
     /// Begins one user-driven retained-history page. The returned request is
@@ -505,9 +553,12 @@ public actor ConversationRuntime {
     @discardableResult
     public func requireResnapshot(
         _ reason: ConversationResnapshotReason = .explicit,
-        connectionGeneration: UInt64
+        connectionGeneration: UInt64,
+        catchUpID: UInt64? = nil
     ) async -> ConversationRuntimeDirective {
-        guard connectionGeneration == state.connectionGeneration else { return .none }
+        guard !Task.isCancelled, connectionGeneration == state.connectionGeneration,
+              catchUpID == nil || catchUpID == self.catchUpID else { return .none }
+        catchUpRevision &+= 1
         bufferedLivePages.removeAll(keepingCapacity: true)
         state.isLoadingOlder = false
         state.phase = .resnapshotRequired(reason)
@@ -518,6 +569,7 @@ public actor ConversationRuntime {
     @discardableResult
     public func suspend(connectionGeneration: UInt64) async -> Bool {
         guard connectionGeneration >= state.connectionGeneration else { return false }
+        catchUpRevision &+= 1
         state.connectionGeneration = connectionGeneration
         state.phase = .suspended
         state.isLoadingOlder = false
@@ -706,8 +758,13 @@ public actor ConversationRuntime {
         return .none
     }
 
-    private func drainBufferedLivePages() async -> ConversationRuntimeDirective {
+    private func drainBufferedLivePages(
+        revision: UInt64,
+        connectionGeneration: UInt64,
+        catchUpID: UInt64?
+    ) async -> ConversationRuntimeDirective {
         while let page = bufferedLivePages.first {
+            guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
             guard page.conversationID == state.conversationID else {
                 return await requireResnapshot(
                     .invalidPage,
@@ -738,6 +795,8 @@ public actor ConversationRuntime {
 
             let applied = applyContiguousEvents(page.events)
             await sendReconciliation.observe(applied.acceptedEvents)
+            await catchUpBoundaryWaiter?()
+            guard isCurrentCatchUp(revision: revision, connectionGeneration: connectionGeneration, catchUpID: catchUpID) else { return .none }
             if applied.hasGap {
                 return .fetchREST(cursor: state.cursor)
             }
@@ -748,6 +807,19 @@ public actor ConversationRuntime {
             }
         }
         return .none
+    }
+
+    /// Operation identity rejects queued old calls; revision rejects continuations
+    /// that resume after a new REST boundary or suspension reset the projection.
+    private func isCurrentCatchUp(
+        revision: UInt64,
+        connectionGeneration: UInt64,
+        catchUpID: UInt64?
+    ) -> Bool {
+        !Task.isCancelled
+            && revision == catchUpRevision
+            && connectionGeneration == state.connectionGeneration
+            && catchUpID == self.catchUpID
     }
 
     private func resetProjection() {
@@ -765,6 +837,7 @@ public actor ConversationRuntime {
     private func olderResnapshot(
         _ reason: ConversationResnapshotReason
     ) async -> ConversationOlderPageDirective {
+        catchUpRevision &+= 1
         bufferedLivePages.removeAll(keepingCapacity: true)
         state.phase = .resnapshotRequired(reason)
         state.isLoadingOlder = false

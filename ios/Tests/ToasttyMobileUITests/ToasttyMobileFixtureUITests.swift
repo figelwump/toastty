@@ -517,7 +517,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         // Scrolling up through the giant message must keep moving backwards —
         // the message renders as independent chunks instead of one cell whose
         // deferred measurement snaps the reader back down.
-        let earlyChunk = app.descendants(matching: .any)["toastty-mobile-transcript-row-3-c1"]
+        // The first chunk retains the bare row ID. Later chunks can already
+        // intersect the viewport at the live tail as semantic chunk sizes vary.
+        let earlyChunk = app.descendants(matching: .any)["toastty-mobile-transcript-row-3"]
         XCTAssertTrue(
             scrollToOlder(earlyChunk, in: app),
             "An early chunk of the giant message should be visible after scrolling up"
@@ -569,9 +571,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "transcript-performance"]
         )
-        openFixtureConversation(in: app)
         let clock = ContinuousClock()
         let startedAt = clock.now
+        openFixtureConversation(in: app)
 
         let readiness = app.descendants(matching: .any)["toastty-mobile-transcript-ready-5000"]
         XCTAssertTrue(readiness.waitForExistence(timeout: 10))
@@ -876,6 +878,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             jumpToLatest.tap()
         }
         XCTAssertTrue(dismiss.isHittable)
+        let copy = app.buttons["toastty-mobile-send-receipt-copy-fixture-delivery-unconfirmed"]
+        XCTAssertTrue(copy.isHittable)
+        copy.tap()
+        XCTAssertTrue(receipt.exists, "Copying must keep the delivery receipt available")
         attachScreenshot(named: "fixture-gated-send-unconfirmed-receipt", of: app)
 
         dismiss.tap()
@@ -958,11 +964,13 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         input.tap()
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
 
+        // A rightward drag can invoke iOS navigation back. Drag left so
+        // this checks composer focus without requesting a page transition.
         let start = input.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+            withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)
         )
         let end = input.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)
+            withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5)
         )
         start.press(
             forDuration: 0.1,

@@ -19,6 +19,8 @@ enum ToasttyMobileFixtureScenario: String, Equatable, Sendable {
     case unpaired
     case cameraDenied = "camera-denied"
     case scannerUnsupported = "scanner-unsupported"
+    case scannerFailure = "scanner-failure"
+    case credentialCorrupt = "credential-corrupt"
     case pairingFailure = "pairing-failure"
     case pairingPrivacy = "pairing-privacy"
 }
@@ -78,7 +80,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             .live
         case .connecting, .reconnecting:
             .reconnecting
-        case .unpaired, .cameraDenied, .scannerUnsupported,
+        case .unpaired, .cameraDenied, .scannerUnsupported, .scannerFailure, .credentialCorrupt,
              .pairingFailure, .pairingPrivacy, nil:
             .offline
         }
@@ -91,14 +93,16 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             let scanner: FixturePairingScanner
             switch fixtureScenario {
             case .cameraDenied:
-                scanner = FixturePairingScanner(authorization: .denied)
+                scanner = FixturePairingScanner(availability: .unavailable, authorization: .denied)
             case .scannerUnsupported:
                 scanner = FixturePairingScanner(availability: .unsupported)
+            case .scannerFailure:
+                scanner = FixturePairingScanner(failure: .couldNotStart)
             case .home, .connecting, .reconnecting, .transcriptPerformance,
                  .transcriptResyncing, .transcriptStale, .transcriptTruncated,
                  .transcriptPaging, .transcriptLongMessage, .toolActivity,
                  .gatedSend, .gatedSendReceipt,
-                 .unpaired, .pairingFailure, .pairingPrivacy:
+                 .unpaired, .credentialCorrupt, .pairingFailure, .pairingPrivacy:
                 scanner = FixturePairingScanner()
             }
             let usesPairedFixture: Bool
@@ -108,7 +112,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                  .transcriptPaging, .transcriptLongMessage, .toolActivity,
                  .gatedSend, .gatedSendReceipt:
                 usesPairedFixture = true
-            case .unpaired, .cameraDenied, .scannerUnsupported,
+            case .unpaired, .cameraDenied, .scannerUnsupported, .scannerFailure, .credentialCorrupt,
                  .pairingFailure, .pairingPrivacy:
                 usesPairedFixture = false
             }
@@ -118,7 +122,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             case .home, .transcriptPerformance, .transcriptResyncing,
                  .transcriptStale, .transcriptTruncated, .transcriptPaging,
                  .transcriptLongMessage, .toolActivity, .gatedSend, .gatedSendReceipt,
-                 .unpaired, .cameraDenied, .scannerUnsupported,
+                 .unpaired, .cameraDenied, .scannerUnsupported, .scannerFailure, .credentialCorrupt,
                  .pairingFailure, .pairingPrivacy:
                 .live
             }
@@ -133,7 +137,9 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                 ),
                 scanner: scanner,
                 deviceName: { "Fixture iPhone" },
-                initialState: usesPairedFixture ? .paired(pairedPresentation) : .unpaired,
+                initialState: fixtureScenario == .credentialCorrupt
+                    ? .repairNeeded(.corrupt)
+                    : (usesPairedFixture ? .paired(pairedPresentation) : .unpaired),
                 initialPairedDevice: initialCredential.map(PairedDevicePresentation.init),
                 initialSnapshot: initialSnapshot,
                 initialConnectionState: initialConnectionState

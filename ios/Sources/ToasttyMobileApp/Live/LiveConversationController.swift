@@ -76,6 +76,8 @@ final class LiveConversationController {
     private var connectionGeneration: UInt64 = 0
     private var runtimeRevision: UInt64 = 0
     private var hasConsumedState = false
+    private var canonicalRequestIDs: Set<String> = []
+    var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in }
 
     init(
         conversationID: UUID,
@@ -190,7 +192,8 @@ final class LiveConversationController {
     }
 
     func draftDidChange() {
-        if lastSendGateFailure == .emptyText || lastSendGateFailure == .cancelled {
+        if lastSendGateFailure == .emptyText || lastSendGateFailure == .cancelled
+            || lastSendGateFailure == .messageTooLarge || lastSendGateFailure == .requestEncodingFailed {
             lastSendGateFailure = nil
         }
     }
@@ -211,14 +214,15 @@ final class LiveConversationController {
             return
         }
 
+        let contentChanged = !hasConsumedState || state.events != events
+            || state.projectionRunID != projectionRunID
+            || state.projectionGeneration != projectionGeneration
         let previousEvents = events
         let previousRunID = projectionRunID
         let previousProjectionGeneration = projectionGeneration
         let didChangeRuntime = hasConsumedState && (
             state.connectionGeneration > connectionGeneration
-                || state.projectionRunID != projectionRunID
-                || state.projectionGeneration != projectionGeneration
-                || state.events != events
+                || contentChanged
                 || state.cursor != cursor
                 || state.latestSequence != latestSequence
                 || state.firstAvailableSequence != firstAvailableSequence
@@ -245,12 +249,12 @@ final class LiveConversationController {
         composerAuthority = state.composerAuthority
         hasOlder = state.hasOlder
         isLoadingOlder = state.isLoadingOlder
-        change = classifyChange(
+        change = contentChanged ? classifyChange(
             previousEvents: previousEvents,
             previousRunID: previousRunID,
             previousProjectionGeneration: previousProjectionGeneration,
             hasConsumedState: hasConsumedState
-        )
+        ) : .metadataOnly
         if change == .prepend,
            let projectionRunID,
            let projectionGeneration,
@@ -266,10 +270,21 @@ final class LiveConversationController {
         }
         hasConsumedState = true
         resolvePhase()
-        refreshTranscriptPresentation()
+        if contentChanged {
+            canonicalRequestIDs = events.reduce(into: Set<String>()) { ids, event in
+                guard case .known(let known) = event,
+                      case .userMessage(let payload) = known.payload,
+                      let requestID = payload.clientRequestID else { return }
+                ids.insert(requestID)
+            }
+        }
+        refreshTranscriptPresentation(contentChanged: contentChanged)
     }
 
     func consumeSendReconciliation(_ state: SendReconciliationState) {
+        for event in ToasttyAppDiagnosticProjection.events(from: sendReconciliation, to: state) {
+            onDiagnosticEvent(event)
+        }
         let stateChanged = sendReconciliation != state
         sendReconciliation = state
         if stateChanged && lastSendGateFailure == .tooManyUnresolvedSends {
@@ -366,7 +381,19 @@ final class LiveConversationController {
         }
     }
 
-    private func refreshTranscriptPresentation() {
+    private func refreshTranscriptPresentation(contentChanged: Bool = false) {
+        guard contentChanged else {
+            transcriptPresentation = transcriptPresentation.updatingMetadata(
+                sendItems: ToasttySendPresentationAdapter.makeItems(from: sendReconciliationForPresentation),
+                phase: transcriptPhase,
+                revision: transcriptRevision,
+                historyTruncated: historyTruncated,
+                hasOlder: hasOlder,
+                isLoadingOlder: isLoadingOlder,
+                prependAnchorID: prependAnchorID
+            )
+            return
+        }
         transcriptPresentation = ToasttyConversationPresentationAdapter.makeState(
             events: events,
             projectionRunID: projectionRunID,
@@ -393,16 +420,6 @@ final class LiveConversationController {
         guard sendReconciliation.records.isEmpty == false else {
             return sendReconciliation
         }
-        let canonicalRequestIDs = events.reduce(into: Set<String>()) { requestIDs, event in
-            guard case .known(let known) = event,
-                  case .userMessage(let payload) = known.payload else {
-                return
-            }
-            if let clientRequestID = payload.clientRequestID {
-                requestIDs.insert(clientRequestID)
-            }
-        }
-
         return SendReconciliationState(records: sendReconciliation.records.compactMap { record in
             guard canonicalRequestIDs.contains(record.clientRequestID) == false else {
                 return nil

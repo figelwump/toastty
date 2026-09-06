@@ -63,6 +63,10 @@ final class ToasttyMobilePairingUITests: XCTestCase {
                 ? "toastty-mobile-pairing-camera-denied"
                 : "toastty-mobile-pairing-scanner-unsupported"
             XCTAssertTrue(app.descendants(matching: .any)[explanationID].waitForExistence(timeout: 5))
+            if scenario == "camera-denied" {
+                XCTAssertTrue(app.buttons["toastty-mobile-pairing-camera-settings"].exists)
+                XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-pairing-scanner-unsupported"].exists)
+            }
             let manual = app.buttons["toastty-mobile-pairing-scan-manual"]
             XCTAssertTrue(manual.exists)
             manual.tap()
@@ -84,6 +88,37 @@ final class ToasttyMobilePairingUITests: XCTestCase {
         app.buttons["toastty-mobile-pairing-confirm"].tap()
 
         XCTAssertTrue(app.staticTexts["Pairing offer unavailable"].waitForExistence(timeout: 10))
+    }
+
+    func testScannerFailureOffersRetryAndManualRecovery() {
+        let app = launchPairingFixture("scanner-failure")
+        app.buttons["toastty-mobile-session-begin-pairing"].tap()
+        app.buttons["toastty-mobile-pairing-scan"].tap()
+
+        let failure = app.descendants(matching: .any)["toastty-mobile-pairing-scanner-failed"]
+        XCTAssertTrue(failure.waitForExistence(timeout: 5))
+        app.buttons["toastty-mobile-pairing-scanner-retry"].tap()
+        XCTAssertTrue(failure.waitForExistence(timeout: 5))
+        app.buttons["toastty-mobile-pairing-scan-manual"].tap()
+        XCTAssertTrue(app.textFields["toastty-mobile-pairing-hostname"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.secureTextFields["toastty-mobile-pairing-code"].exists)
+    }
+
+    func testCorruptPairingRequiresConfirmationBeforeStartingAgain() {
+        let app = launchPairingFixture("credential-corrupt")
+        let forget = app.buttons["toastty-mobile-session-forget-corrupt-pairing"]
+        XCTAssertTrue(forget.waitForExistence(timeout: 10))
+        forget.tap()
+        let confirmation = app.alerts["Forget this pairing?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.buttons["Cancel"].tap()
+        XCTAssertTrue(forget.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-pairing-intro"].exists)
+
+        forget.tap()
+        app.buttons["toastty-mobile-session-confirm-forget-pairing"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-pairing-intro"].waitForExistence(timeout: 5))
+        XCTAssertFalse(forget.exists)
     }
 
     func testInactivePairingFixtureRendersPrivacyShield() {

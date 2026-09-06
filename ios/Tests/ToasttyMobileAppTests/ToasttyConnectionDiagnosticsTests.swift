@@ -25,7 +25,7 @@ final class ToasttyConnectionDiagnosticsTests: XCTestCase {
             [
                 "request_started", "request_succeeded", "request_failed",
                 "connecting", "connected", "reconnecting", "disconnected",
-                "send_started", "send_accepted", "send_rejected", "send_uncertain",
+                "send_started", "send_enqueued", "send_accepted", "send_rejected", "send_uncertain",
                 "auth_started", "auth_succeeded", "auth_required", "auth_revoked",
             ]
         )
@@ -41,6 +41,7 @@ final class ToasttyConnectionDiagnosticsTests: XCTestCase {
             .streamReconnecting: .stream,
             .streamDisconnected: .stream,
             .sendStarted: .send,
+            .sendEnqueued: .send,
             .sendAccepted: .send,
             .sendRejected: .send,
             .sendUncertain: .send,

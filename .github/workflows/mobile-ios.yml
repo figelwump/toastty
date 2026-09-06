@@ -30,10 +30,12 @@ jobs:
           filters: |
             ios:
               - '.github/workflows/mobile-ios.yml'
+              - '.github/workflows/ios-testflight.yml'
               - 'ios/**'
               - 'Sources/RemoteProtocol/**'
               - 'Tests/RemoteProtocol/**'
               - 'scripts/remote/test.sh'
+              - 'scripts/ci/ios-testflight.sh'
               - '.node-version'
               - '.tool-versions'
             macos:
@@ -51,12 +53,17 @@ jobs:
               - '.tool-versions'
 
   ios:
-    name: iOS tests
+    name: iOS tests (${{ matrix.configuration }})
     needs: changes
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.ios == 'true'
     runs-on: macos-26
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
     env:
+      TOASTTY_IOS_CONFIGURATION: ${{ matrix.configuration }}
       TOASTTY_IOS_WORKTREE_ID: mobile-ci
       TOASTTY_IOS_RUN_ROOT: ${{ github.workspace }}/artifacts/ios/run
       TOASTTY_IOS_DERIVED_DATA_PATH: ${{ github.workspace }}/artifacts/ios/DerivedData
@@ -78,8 +85,8 @@ jobs:
           echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
           test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
 
-      - name: Test dispatcher
-        run: node --test ios/Tests/ScriptTests/*.test.mjs
+      - name: Test dispatcher and release scripts
+        run: node --test ios/Tests/ScriptTests/*.test.mjs ios/Tests/ReleaseScriptTests/*.test.mjs
 
       - name: Test native client
         run: node ios/scripts/toastty-ios.mjs test
@@ -88,7 +95,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ios-tests-${{ matrix.configuration }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/ios/
           if-no-files-found: warn
           retention-days: 14

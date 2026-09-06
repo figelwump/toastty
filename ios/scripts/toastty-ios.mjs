@@ -338,6 +338,15 @@ function xcodebuildArguments(command, context, destination) {
   // bundle still exercise their intended concurrency.
   if (command === "test") {
     args.push("-parallel-testing-enabled", "NO");
+    if (configuration === "Release") {
+      // Keep Release compilation branches while allowing unit tests to import
+      // internal declarations. Fixture-driven UI launches require Debug.
+      args.push(
+        "ENABLE_TESTABILITY=YES",
+        "-only-testing:ToasttyMobileAppTests",
+        "-only-testing:ToasttyMobileDomainTests",
+      );
+    }
   }
   args.push(command);
   return args;

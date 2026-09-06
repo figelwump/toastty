@@ -33,9 +33,33 @@ enum ToasttyAppDiagnosticProjection {
     static func event(for outcome: ConversationSendOutcome) -> ToasttyConnectionDiagnosticEvent {
         switch outcome {
         case .enqueued:
-            .sendAccepted
+            .sendEnqueued
         case .notEnqueued:
             .sendRejected
+        }
+    }
+
+    static func events(
+        from previous: SendReconciliationState,
+        to state: SendReconciliationState
+    ) -> [ToasttyConnectionDiagnosticEvent] {
+        state.records.compactMap { record in
+            let oldEvent = previous[record.clientRequestID].flatMap {
+                deliveryEvent(for: $0.deliveryState)
+            }
+            guard let event = deliveryEvent(for: record.deliveryState), event != oldEvent else {
+                return nil
+            }
+            return event
+        }
+    }
+
+    private static func deliveryEvent(for state: SendDeliveryState) -> ToasttyConnectionDiagnosticEvent? {
+        switch state {
+        case .pending(.awaitingResponse): nil
+        case .pending(.accepted), .pending(.duplicate), .confirmed: .sendAccepted
+        case .rejected, .operationFailed: .sendRejected
+        case .uncertain, .deliveryUnconfirmed: .sendUncertain
         }
     }
 

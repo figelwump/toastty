@@ -72,7 +72,7 @@ run on every release-relevant push.
 ## First internal build
 
 1. Make sure the exact release commit is on `main` and the normal `Mobile iOS`
-   workflow is green.
+   workflow is green, and complete the disposable-host validation below.
 2. In GitHub Actions, open `iOS TestFlight` and run it from `main` with
    `upload=false` and `run_tests=true`.
 3. Inspect the retained release metadata and validation log. Confirm the bundle
@@ -113,8 +113,65 @@ The release script fails before upload unless it can prove:
   `ITSAppUsesNonExemptEncryption=false`, and privacy manifest;
 - App Store Connect accepts the exported IPA during validation.
 
-The workflow retains the signed IPA, export options, release metadata, and
-sanitized generation/archive/export/validation/upload logs for 14 days.
+Before archiving, the workflow runs Debug tests and focused Release app/domain
+tests. Release tests enable internal test imports while preserving Release
+compilation branches; Debug-only fixture UI launches are excluded. Upload
+requests always run both tiers even if `run_tests` is false. The ordinary PR
+workflow also runs both configurations and the secret-free release-script suite,
+including when the release workflow or script changes.
+
+The workflow retains the signed IPA, compressed Xcode archive (including app
+dSYMs), export options, release metadata, and sanitized
+generation/archive/export/validation/upload logs for 90 days. Archiving fails if
+the app dSYM is missing. Preserve these artifacts elsewhere before expiry if a
+build remains supported longer; GitHub retention policy may impose a lower limit.
+
+Release metadata records the actual checked-out source SHA separately from the
+CI event SHA, plus the selected Xcode/build version, Swift version, iOS SDK, and
+Tuist version. Hosted runners currently supply the selected Xcode toolchain; this
+records its identity but does not pin a specific Xcode version. Check these values
+when comparing builds or investigating a runner-image change.
+
+## Disposable host validation
+
+Before upload, pair a dedicated test client with a disposable, runtime-isolated
+Toastty Mac instance containing the compatible host revision. Follow
+[Remote Access](remote-access.md) for pairing and the
+[dev-run guide](../.agents/skills/toastty-dev-run/SKILL.md) for host isolation.
+Use test conversations only. Provision that instance's canonical HTTPS gateway
+URL and dedicated client credential through the existing manifest-scoped
+`TOASTTY_MOBILE_LIVE_GATEWAY_URL` and `TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL`
+inputs; never paste credentials into commands or logs. The wrapper forwards them
+over SSH stdin to a temporary broker rather than xcodebuild command arguments.
+
+```bash
+sv exec -- scripts/remote/test.sh --platform ios --scope head \
+  --run-label ios-release-live --live-gateway -- \
+  -only-testing:ToasttyMobileDomainTests/LiveGatewayIntegrationTests/testLiveGatewayContractPagingCloseAndReconnect
+```
+
+This builds and tests a disposable remote client, reading sessions and transcript
+pages and opening/closing sockets on the configured host. It uses an existing
+pairing and does not establish pairing UI or interrupted-send coverage. Record a
+separate real client check for initial pairing and an interrupted send against
+the same disposable host, including preservation of attempted text and uncertain
+delivery without automatic retry.
+
+Finally, revoke only the dedicated test client's credential:
+
+```bash
+sv exec -- scripts/remote/test.sh --platform ios --scope head \
+  --run-label ios-release-revoke --live-gateway \
+  --allow-destructive-live-revocation -- \
+  -only-testing:ToasttyMobileDomainTests/LiveGatewayIntegrationTests/testDestructiveRevocationClosesSocketAndRejectsCurrentDevice
+```
+
+This last command mutates the configured host by durably revoking the supplied
+test credential and checks that its socket closes and subsequent authentication
+fails. It requires a fresh dedicated pairing for another run. Neither command
+creates the host, and neither should target a user's production Mac. Retain the
+host/client revisions and remote test artifacts with the release record; report
+missing live inputs as unperformed validation.
 
 ## Recovery
 

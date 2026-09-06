@@ -45,6 +45,8 @@ final class ToasttyComposerPresentationTests: XCTestCase {
     func testEveryDomainGateFailureMapsToAStableLocalPresentation() {
         let cases: [(ConversationSendGateFailure, ToasttyComposerGate)] = [
             (.emptyText, .enabled),
+            (.messageTooLarge, .enabled),
+            (.requestEncodingFailed, .enabled),
             (.cancelled, .enabled),
             (.coordinatorNotLive, .disabled(.connection(.reconnecting))),
             (.deviceSendScopeDenied, .disabled(.deviceScope)),
@@ -152,6 +154,9 @@ final class ToasttyComposerPresentationTests: XCTestCase {
         XCTAssertTrue(cancelled.inlineFeedback?.contains("draft is still here") == true)
         XCTAssertEqual(empty.gate, .enabled)
         XCTAssertTrue(empty.inlineFeedback?.contains("draft was not changed") == true)
+        let oversized = presentation(authority(failure: .messageTooLarge))
+        XCTAssertEqual(oversized.gate, .enabled)
+        XCTAssertTrue(oversized.inlineFeedback?.contains("Shorten it") == true)
     }
 
     func testDraftStateAllowsOnlyOneSubmissionPerConversation() throws {
@@ -216,6 +221,21 @@ final class ToasttyComposerPresentationTests: XCTestCase {
         XCTAssertTrue(subject.isSubmitting(conversationID))
         subject.finishSubmission(current, outcome: .enqueued(clientRequestID: "current"))
         XCTAssertEqual(subject.draft(for: conversationID), "")
+    }
+
+    func testOversizedMessageKeepsFullDraftAndReleasesSubmissionForEditing() throws {
+        let conversationID = UUID()
+        let text = String(repeating: "🐈\n\"\\", count: 12_000)
+        var subject = ToasttyComposerDraftState()
+        subject.updateDraft(text, for: conversationID)
+        let submission = try XCTUnwrap(subject.beginSubmission(for: conversationID))
+
+        subject.finishSubmission(submission, outcome: .notEnqueued(.messageTooLarge))
+
+        XCTAssertEqual(subject.draft(for: conversationID), text)
+        XCTAssertFalse(subject.isSubmitting(conversationID))
+        subject.updateDraft("Shortened message", for: conversationID)
+        XCTAssertNotNil(subject.beginSubmission(for: conversationID))
     }
 
     func testDraftStatePrunesRemovedConversations() {

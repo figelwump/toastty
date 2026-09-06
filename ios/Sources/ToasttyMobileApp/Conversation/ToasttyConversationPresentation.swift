@@ -52,7 +52,7 @@ struct ToasttyTranscriptBlockID: Hashable, Sendable {
 /// One slice of a chunked assistant message.
 struct ToasttyTranscriptMessageChunk: Equatable, Sendable {
     let row: ToasttyTranscriptRow
-    let text: String
+    let blocks: [ToasttyMarkdownBlock]
     let index: Int
     let isLast: Bool
 
@@ -83,6 +83,13 @@ struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
         }
 
         func appendChunked(_ row: ToasttyTranscriptRow, text: String) {
+            guard text.count > ToasttyMarkdownChunking.chunkThreshold else {
+                blocks.append(ToasttyTranscriptBlock(
+                    id: ToasttyTranscriptBlockID(rowID: row.id),
+                    content: .row(row)
+                ))
+                return
+            }
             let chunks = ToasttyMarkdownChunking.split(text)
             guard chunks.count > 1 else {
                 blocks.append(ToasttyTranscriptBlock(
@@ -91,12 +98,12 @@ struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
                 ))
                 return
             }
-            for (index, chunkText) in chunks.enumerated() {
+            for (index, chunk) in chunks.enumerated() {
                 blocks.append(ToasttyTranscriptBlock(
                     id: ToasttyTranscriptBlockID(rowID: row.id, chunkIndex: index),
                     content: .messageChunk(ToasttyTranscriptMessageChunk(
                         row: row,
-                        text: chunkText,
+                        blocks: chunk.blocks,
                         index: index,
                         isLast: index == chunks.count - 1
                     ))
@@ -234,17 +241,35 @@ enum ToasttyTranscriptRevision: Equatable, Sendable {
     case metadataOnly
 }
 
-struct ToasttyConversationPresentationState: Equatable, Sendable {
+/// Prepared transcript content is immutable and shared by metadata-only updates.
+final class ToasttyPreparedTranscript: Equatable, Sendable {
     let rows: [ToasttyTranscriptRow]
     let blocks: [ToasttyTranscriptBlock]
     let turns: [ToasttyTranscriptTurn]
-    let sendItems: [ToasttySendPresentationItem]
-    let phase: ToasttyConversationPresentationPhase
-    let revision: ToasttyTranscriptRevision
-    let historyTruncated: Bool
-    let hasOlder: Bool
-    let isLoadingOlder: Bool
-    let prependAnchorID: ToasttyTranscriptRowID?
+
+    init(rows: [ToasttyTranscriptRow]) {
+        self.rows = rows
+        blocks = ToasttyTranscriptBlock.group(rows)
+        turns = ToasttyTranscriptTurn.turns(for: blocks)
+    }
+
+    static func == (lhs: ToasttyPreparedTranscript, rhs: ToasttyPreparedTranscript) -> Bool {
+        lhs === rhs || (lhs.rows == rhs.rows && lhs.blocks == rhs.blocks && lhs.turns == rhs.turns)
+    }
+}
+
+struct ToasttyConversationPresentationState: Equatable, Sendable {
+    let preparedTranscript: ToasttyPreparedTranscript
+    var rows: [ToasttyTranscriptRow] { preparedTranscript.rows }
+    var blocks: [ToasttyTranscriptBlock] { preparedTranscript.blocks }
+    var turns: [ToasttyTranscriptTurn] { preparedTranscript.turns }
+    private(set) var sendItems: [ToasttySendPresentationItem]
+    private(set) var phase: ToasttyConversationPresentationPhase
+    private(set) var revision: ToasttyTranscriptRevision
+    private(set) var historyTruncated: Bool
+    private(set) var hasOlder: Bool
+    private(set) var isLoadingOlder: Bool
+    private(set) var prependAnchorID: ToasttyTranscriptRowID?
 
     init(
         rows: [ToasttyTranscriptRow],
@@ -256,9 +281,7 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
         isLoadingOlder: Bool = false,
         prependAnchorID: ToasttyTranscriptRowID? = nil
     ) {
-        self.rows = rows
-        blocks = ToasttyTranscriptBlock.group(rows)
-        turns = ToasttyTranscriptTurn.turns(for: blocks)
+        preparedTranscript = ToasttyPreparedTranscript(rows: rows)
         self.sendItems = sendItems
         self.phase = phase
         self.revision = revision
@@ -266,6 +289,26 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
         self.hasOlder = hasOlder
         self.isLoadingOlder = isLoadingOlder
         self.prependAnchorID = prependAnchorID
+    }
+
+    func updatingMetadata(
+        sendItems: [ToasttySendPresentationItem],
+        phase: ToasttyConversationPresentationPhase,
+        revision: ToasttyTranscriptRevision,
+        historyTruncated: Bool,
+        hasOlder: Bool,
+        isLoadingOlder: Bool,
+        prependAnchorID: ToasttyTranscriptRowID?
+    ) -> Self {
+        var updated = self
+        updated.sendItems = sendItems
+        updated.phase = phase
+        updated.revision = revision
+        updated.historyTruncated = historyTruncated
+        updated.hasOlder = hasOlder
+        updated.isLoadingOlder = isLoadingOlder
+        updated.prependAnchorID = prependAnchorID
+        return updated
     }
 
     static let loading = ToasttyConversationPresentationState(

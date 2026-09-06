@@ -9,7 +9,7 @@ import CryptoKit
 /// per buffer read, bounded sizes, no chunked bodies, no pipelining.
 public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
     public static let maximumHeaderBytes = 16 * 1024
-    public static let maximumBodyBytes = 64 * 1024
+    public static let maximumBodyBytes = RemoteGatewayProtocol.maximumRequestBodyBytes
 
     public var method: String
     /// Path only, query string stripped.

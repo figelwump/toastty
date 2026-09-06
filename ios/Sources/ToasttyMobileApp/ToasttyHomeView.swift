@@ -41,6 +41,7 @@ struct ToasttyHomeView: View {
 
     @AppStorage private var storedWorkspaceSessionFilter: String
     @State private var isRetryingConnection = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         controller: HomeScreenController,
@@ -66,7 +67,7 @@ struct ToasttyHomeView: View {
             // Reorders now happen only on status-bucket transitions, so
             // animating them keeps a moving card trackable instead of
             // teleporting.
-            .animation(.default, value: orderedRowIDs)
+            .animation(reduceMotion ? nil : .default, value: orderedRowIDs)
             .padding(.horizontal, 14)
             .padding(.top, 8)
             .padding(.bottom, 40)
@@ -338,12 +339,18 @@ struct ToasttySessionCard: View {
     let showsWorkspace: Bool
     let accessibilityIdentifier: String
     let onOpen: (MobileConversation) -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         Button {
             onOpen(conversation)
         } label: {
             VStack(alignment: .leading, spacing: isIdle ? 6 : 8) {
+                Text(conversation.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(ToasttyDesignTokens.primaryText)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
                 if isIdle {
                     idleContent
                 } else {
@@ -381,7 +388,10 @@ struct ToasttySessionCard: View {
 
     @ViewBuilder
     private var idleContent: some View {
-        if let workspaceLabel {
+        if dynamicTypeSize.isAccessibilitySize {
+            if let workspaceLabel { workspaceChip(workspaceLabel) }
+            idleActivityText
+        } else if let workspaceLabel {
             HStack(spacing: 8) {
                 workspaceChip(workspaceLabel)
                 Spacer(minLength: 8)
@@ -401,25 +411,32 @@ struct ToasttySessionCard: View {
         Text(conversation.lastActivity)
             .font(.subheadline)
             .foregroundStyle(ToasttyDesignTokens.secondaryText)
-            .lineLimit(1)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
             .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
+    @ViewBuilder
     private var statusHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if let workspaceLabel {
-                workspaceChip(workspaceLabel)
-                Spacer(minLength: 8)
-                // The status label never compresses; a long workspace name
-                // truncates inside the chip instead.
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 6) {
+                if let workspaceLabel { workspaceChip(workspaceLabel) }
                 statusLabel
-                    .fixedSize()
-                    .layoutPriority(1)
-            } else {
-                statusLabel
-                Spacer(minLength: 8)
             }
-            activityDestination
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let workspaceLabel {
+                    workspaceChip(workspaceLabel)
+                    Spacer(minLength: 8)
+                    statusLabel
+                        .fixedSize()
+                        .layoutPriority(1)
+                } else {
+                    statusLabel
+                    Spacer(minLength: 8)
+                }
+                activityDestination
+            }
         }
     }
 
@@ -427,7 +444,8 @@ struct ToasttySessionCard: View {
         Text(title)
             .font(.caption2.monospaced())
             .foregroundStyle(ToasttyDesignTokens.primaryText)
-            .lineLimit(1)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(ToasttyDesignTokens.chipSurface, in: RoundedRectangle(
@@ -468,7 +486,7 @@ struct ToasttySessionCard: View {
         Text(conversation.lastActivity)
             .font(bodyFont)
             .foregroundStyle(bodyForegroundStyle)
-            .lineLimit(1)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
             .truncationMode(.tail)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -489,9 +507,10 @@ struct ToasttySessionCard: View {
             if !label.isEmpty {
                 Text(label)
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                     .truncationMode(.middle)
                     .font(.caption2.monospaced())
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

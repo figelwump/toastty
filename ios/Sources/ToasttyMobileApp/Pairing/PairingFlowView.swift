@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct PairingFlowView: View {
     let controller: PairingController
@@ -89,6 +90,7 @@ private struct PairingIntroView: View {
 
 private struct PairingScanView: View {
     let controller: PairingController
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         PairingScrollContainer {
@@ -126,6 +128,24 @@ private struct PairingScanView: View {
                 message: "You can allow camera access in Settings, or pair without the camera by entering the code manually."
             )
             .accessibilityIdentifier("toastty-mobile-pairing-camera-denied")
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    openURL(url)
+                }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("toastty-mobile-pairing-camera-settings")
+        } else if controller.scannerFailure != nil || controller.scannerAvailability == .unavailable {
+            PairingScannerUnavailableView(
+                title: "Camera scanner stopped",
+                message: "Toastty could not use the camera. Try scanning again, or enter the code manually."
+            )
+            .accessibilityIdentifier("toastty-mobile-pairing-scanner-failed")
+            Button("Try scanning again") {
+                Task { await controller.startScanning() }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("toastty-mobile-pairing-scanner-retry")
         } else if controller.scannerAuthorization == .authorized {
             controller.scannerView()
                 .frame(minHeight: 340)
