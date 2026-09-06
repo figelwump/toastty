@@ -1,9 +1,11 @@
+import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 
 struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
+    @State private var selectedPreview: ToasttyPreviewSelection?
     @State private var isComposerFocused = false
     @State private var composerFocusLifecycle = ToasttyComposerFocusLifecyclePolicy()
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
@@ -68,6 +70,14 @@ struct ToasttyConversationScreen: View {
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
             }
         }
+        .environment(\.openURL, OpenURLAction { url in
+            guard let reference = ToasttyPreviewURLPolicy.localFileReference(url) else { return .systemAction }
+            selectedPreview = ToasttyPreviewSelection(
+                target: .conversationFile(conversationID: RemoteConversationID(rawValue: conversationID), fileReference: reference),
+                title: (reference as NSString).lastPathComponent)
+            return .handled
+        })
+        .sheet(item: $selectedPreview) { ToasttyPreviewSheet(selection: $0) }
         .background(ToasttyDesignTokens.elevatedSurface)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)

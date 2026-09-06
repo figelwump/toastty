@@ -40,6 +40,8 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
         let connection: NWConnection
         var buffer = Data()
         var isWebSocket = false
+        var hasReceivedRequest = false
+        var previewTask: Task<Void, Never>?
         var deviceID: UUID?
         var authKind: RemoteDeviceAuthKind?
         var requestTimeoutTask: Task<Void, Never>?
@@ -64,6 +66,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
     private let maximumConnections: Int
     private let requestHeaderTimeoutNanoseconds: UInt64
     private let queue = DispatchQueue(label: "toastty.remote-access.gateway")
+    private var activePreviewCount = 0
     private var listener: NWListener?
     private var connections: [UUID: GatewayConnection] = [:]
     private(set) var listeningPort: UInt16?
@@ -188,11 +191,15 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
     /// active WebSockets must be closed separately.
     func disconnectWebSockets(for deviceID: UUID) {
         let matchingConnectionIDs = connections.values.compactMap { connection in
-            connection.isWebSocket && connection.deviceID == deviceID ? connection.id : nil
+            (connection.isWebSocket || connection.previewTask != nil) && connection.deviceID == deviceID ? connection.id : nil
         }
         for connectionID in matchingConnectionIDs {
             guard let connection = connections[connectionID] else { continue }
-            beginClosing(connection, code: 1008)
+            if connection.isWebSocket {
+                beginClosing(connection, code: 1008)
+            } else {
+                drop(connectionID)
+            }
         }
     }
 
@@ -304,6 +311,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
 
     private func handleReceivedData(_ data: Data, connectionID: UUID) {
         guard let connection = connections[connectionID] else { return }
+        guard !connection.hasReceivedRequest || connection.isWebSocket else { drop(connectionID); return }
         connection.buffer.append(data)
         if connection.isWebSocket {
             drainWebSocketFrames(connection)
@@ -331,6 +339,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
         case .request(let request, _):
             let connectionID = connection.id
             connection.buffer.removeAll()
+            connection.hasReceivedRequest = true
             switch handler.handle(request, at: Date()) {
             case .respond(let response):
                 connection.connection.send(content: response.serialized(), completion: .contentProcessed { [weak self] _ in
@@ -339,6 +348,21 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     }
                 })
 
+            case .deferredPreview(let operation):
+                guard activePreviewCount < 8 else {
+                    sendPreviewResponse(operation.errorResponse(.busy), connectionID: connectionID)
+                    return
+                }
+                connection.deviceID = operation.deviceID
+                connection.authKind = .native
+                activePreviewCount += 1
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer { self.activePreviewCount -= 1 }
+                    let response = await self.handler.resolvePreview(operation)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
             case .upgradeToWebSocket(let deviceID, let authKind, let upgradeResponseData):
                 connection.requestTimeoutTask?.cancel()
                 connection.requestTimeoutTask = nil
@@ -349,6 +373,13 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                 onWebSocketCountsChanged?(webSocketCounts)
             }
         }
+    }
+
+    private func sendPreviewResponse(_ response: RemoteGatewayHTTPResponse, connectionID: UUID) {
+        guard let connection = connections[connectionID] else { return }
+        connection.connection.send(content: response.serialized(), completion: .contentProcessed { [weak self] _ in
+            Task { @MainActor [weak self] in self?.drop(connectionID) }
+        })
     }
 
     private func drainWebSocketFrames(_ connection: GatewayConnection) {
@@ -440,6 +471,8 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
 
     private func drop(_ connectionID: UUID) {
         guard let connection = connections.removeValue(forKey: connectionID) else { return }
+        connection.previewTask?.cancel()
+        connection.previewTask = nil
         connection.requestTimeoutTask?.cancel()
         connection.requestTimeoutTask = nil
         connection.closeFallbackTask?.cancel()

@@ -34,6 +34,7 @@ export type LocalDocumentFormat =
 
 export interface LocalDocumentPanelBootstrap {
   contractVersion: 7;
+  presentation?: "desktop" | "mobileReadOnly";
   filePath: string | null;
   displayName: string;
   format: LocalDocumentFormat;
@@ -287,7 +288,9 @@ installDiagnosticsBridge();
 
 window.ToasttyLocalDocumentPanel = {
   receiveBootstrap(bootstrap) {
-    currentBootstrap = bootstrap;
+    currentBootstrap = bootstrap.presentation === "mobileReadOnly"
+      ? { ...bootstrap, isEditing: false, isDirty: false, isSaving: false }
+      : bootstrap;
     warnOnContractMismatch(bootstrap);
     applyTheme(bootstrap);
     applyTextScale(bootstrap);

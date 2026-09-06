@@ -24,11 +24,12 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
     func workspaces(from workspaces: [MobileWorkspace]) -> [MobileWorkspace] {
         workspaces.compactMap { workspace in
             let conversations = conversations(in: workspace)
-            guard conversations.isEmpty == false else { return nil }
+            guard !conversations.isEmpty || !workspace.panels.isEmpty else { return nil }
             return MobileWorkspace(
                 id: workspace.id,
                 title: workspace.title,
-                conversations: conversations
+                conversations: conversations,
+                panels: workspace.panels
             )
         }
     }

@@ -262,6 +262,18 @@ access remain subject to the user's Tailscale account, ACLs, DNS, and Serve
 configuration. See [Remote Access](remote-access.md) for setup and revocation
 guidance.
 
+Workspace snapshots also describe open right-side panels across the workspace's
+desktop tabs. A native client with read scope can request saved document
+contents, Scratchpad HTML, and permitted local HTML assets for previews. File
+access is bounded by the conversation's repository or recorded working
+directory and files already open in the same workspace. Local HTML additionally
+permits supported web assets from its containing directory; hidden files,
+arbitrary neighboring documents, and paths escaping that directory are not
+served as assets. These preview endpoints require native credentials and do
+not accept legacy browser cookies. See [workspace panels and file
+previews](remote-access.md#workspace-panels-and-file-previews) for the access
+rules and mobile behavior.
+
 Native pairing offers are memory-only. Their QR secret and fallback code are
 discarded on success, cancellation, reissue, expiry, or when Remote Access is
 disabled. Native credentials are bound to the exact Tailscale login stored in

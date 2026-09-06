@@ -428,11 +428,13 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let title: String
     public let conversations: [MobileConversation]
+    public let panels: [RemoteWorkspacePanel]
 
-    public init(id: UUID, title: String, conversations: [MobileConversation]) {
+    public init(id: UUID, title: String, conversations: [MobileConversation], panels: [RemoteWorkspacePanel] = []) {
         self.id = id
         self.title = title
         self.conversations = conversations
+        self.panels = panels
     }
 
     public var sortedConversations: [MobileConversation] {
@@ -458,7 +460,8 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
                 MobileWorkspace(
                     id: workspace.id,
                     title: workspace.title,
-                    conversations: workspace.sortedConversations
+                    conversations: workspace.sortedConversations,
+                    panels: workspace.panels
                 )
             }
             .sorted(by: Self.isWorkspaceOrderedBefore)

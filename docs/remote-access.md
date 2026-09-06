@@ -82,6 +82,60 @@ reloads from Toastty's current snapshots when it detects an event gap. Keep
 Toastty running and Remote Access enabled; Tailscale Serve alone cannot reach a
 stopped local gateway.
 
+## Workspace panels and file previews
+
+Open a workspace in Toastty Mobile to see **Open Panels** above its sessions.
+The list includes the right-side panels from every desktop tab in that
+workspace, including tabs that are not selected and panels in a hidden
+sidebar. Each row identifies its owning desktop tab. Workspaces containing
+open panels remain available even when they have no sessions or the session
+filter hides all their sessions. Closed panels are not a document history.
+
+Tap a document to open a preview sheet, or tap a local file link in a
+conversation to preview that file. Explicit line references reveal the
+requested line. Previews use the saved file on the Mac; unsaved edits in a
+desktop document editor are not transferred. The source viewer supports the
+same text, Markdown source, code, and configuration formats as the desktop
+viewer. Local HTML opens as a rendered browser preview with its permitted
+supporting assets.
+
+Scratchpads open in a full-screen viewer. Pinch to zoom, pan to explore a
+wide layout, and use **Fit** to return to the overview. Existing buttons and
+other interactions inside a Scratchpad remain usable. Viewing a panel on the
+phone does not focus or close its desktop panel, and the phone's zoom and
+scroll position are independent. Close and reopen a preview to load current
+content from the Mac.
+
+File previews require a native paired device with read access. A conversation
+link is resolved using the conversation's recorded working directory on the
+Mac. Access is limited to its containing Git repository, or that recorded
+directory when it is not in a repository, plus files already open in panels
+of the same workspace. A missing working directory does not fall back to the
+Mac's current directory or home directory, and the filesystem root and home
+directory cannot become broad preview roots.
+Recorded working directories and open-panel paths must refer directly to
+their files or directories. Custom symlink paths do not grant remote preview
+access; open the resolved path on the Mac instead. Standard macOS path aliases
+such as `/tmp` remain supported.
+
+An open HTML file also permits supported web assets within its containing
+directory. This includes local stylesheets, scripts, images, fonts, and media;
+it does not grant access to arbitrary neighboring documents or hidden files.
+Paths that escape the allowed directory, including through symlinks, are
+rejected. Local HTML runs separately from the gateway credentials, with
+network connections, forms, and embedded frames blocked. This can prevent a
+local page that depends on external services from working completely.
+
+A regular website panel opens its URL in an independent mobile browser
+session; desktop cookies and page state are not copied. A development server
+address such as `localhost` belongs to the Mac and cannot be opened as the
+phone's `localhost`.
+
+The Mac must remain connected while loading previews. Missing content,
+unsupported previews, and files exceeding the preview size limits show an
+unavailable message. Hosts without the preview capabilities continue to
+support conversations; update Toastty on the Mac to enable previews.
+
 ## Privacy and security
 
 - Remote Access is tailnet-private only when your Tailscale Serve and tailnet
@@ -98,6 +152,10 @@ stopped local gateway.
   message text, concise tool activity, state, workspace/panel placement, and
   working directories when present. It does not receive raw provider JSONL or
   raw terminal frames.
+- Workspace snapshots also include open-panel titles, tab placement, and
+  file or URL metadata. A native client fetches document contents, Scratchpad
+  HTML, and permitted local HTML assets only when needed for a preview. These
+  content endpoints do not accept legacy browser-cookie credentials.
 - Toastty keeps a bounded local audit log of remote-security actions. Entries
   may include timestamps, device IDs or names, and rejection reasons, but not
   message text, prompts, or credential values.

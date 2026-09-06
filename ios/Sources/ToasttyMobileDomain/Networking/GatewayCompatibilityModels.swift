@@ -110,15 +110,18 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
 public struct CompatibleSessionListSnapshot: Equatable, Sendable {
     public var projectionRunID: RemoteProjectionRunID
     public var conversations: [CompatibleConversationSummary]
+    public var workspaces: [RemoteWorkspaceSummary]
     public var generatedAt: Date
 
     public init(
         projectionRunID: RemoteProjectionRunID,
         conversations: [CompatibleConversationSummary],
+        workspaces: [RemoteWorkspaceSummary] = [],
         generatedAt: Date
     ) {
         self.projectionRunID = projectionRunID
         self.conversations = conversations
+        self.workspaces = workspaces
         self.generatedAt = generatedAt
     }
 
@@ -186,16 +189,19 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
         }
         stateTransitions.retain(mobileConversations.map(\.id))
         let grouped = Dictionary(grouping: mobileConversations, by: \.workspaceID)
-        let workspaces: [MobileWorkspace] = grouped.values.map { conversations in
-            let first = conversations[0]
-            return MobileWorkspace(
-                id: first.workspaceID,
-                title: first.workspaceTitle,
-                conversations: conversations.sorted {
+        var metadata: [UUID: RemoteWorkspaceSummary] = [:]
+        for workspace in workspaces { metadata[workspace.id] = workspace }
+        let ids = Set(grouped.keys).union(metadata.keys)
+        let workspaces = ids.map { id in
+            MobileWorkspace(
+                id: id,
+                title: metadata[id]?.title ?? grouped[id]?.first?.workspaceTitle ?? "Workspace",
+                conversations: (grouped[id] ?? []).sorted {
                     let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
                     if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
                     return $0.id.uuidString < $1.id.uuidString
-                }
+                },
+                panels: metadata[id]?.panels ?? []
             )
         }.sorted {
             let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)

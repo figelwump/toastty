@@ -113,7 +113,7 @@ enum ToasttyConversationFixture {
                     11,
                     timestamp,
                     .assistantMessage(
-                        text: "## Transcript ready\n\nKnown events render in sequence with **stable identity** and read-only interaction choices.",
+                        text: "## Transcript ready\n\nKnown events render in sequence with **stable identity** and read-only interaction choices.\n\nOpen [docs/mobile-preview.md:12](docs/mobile-preview.md:12) or the [HTML sample](site/preview.html).",
                         phase: .final
                     )
                 ),

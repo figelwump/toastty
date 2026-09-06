@@ -2,6 +2,7 @@ export type ScratchpadDiagnosticSource = "panel" | "generated-content";
 
 export type ScratchpadPanelEvent =
   | { type: "bridgeReady" }
+  | { type: "contentSize"; width: number; height: number; revision: number | null }
   | {
       type: "consoleMessage";
       level: "info" | "warn" | "error";
@@ -55,6 +56,9 @@ function postEvent(event: ScratchpadPanelEvent) {
 }
 
 export const scratchpadNativeBridge = {
+  contentSize(width: number, height: number, revision: number | null) {
+    postEvent({ type: "contentSize", width, height, revision });
+  },
   bridgeReady() {
     postEvent({ type: "bridgeReady" });
   },

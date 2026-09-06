@@ -24,7 +24,7 @@ function cspMetaTag() {
   )}">`;
 }
 
-function generatedDiagnosticsScript(diagnosticsSessionToken: string) {
+function generatedDiagnosticsScript(diagnosticsSessionToken: string, reportsSize: boolean) {
   return `<script>
 (() => {
   if (window.__toasttyScratchpadGeneratedDiagnosticsInstalled) {
@@ -79,6 +79,29 @@ function generatedDiagnosticsScript(diagnosticsSessionToken: string) {
     } catch {
     }
   };
+  if (${JSON.stringify(reportsSize)}) {
+    let scheduled = false;
+    let previous = "";
+    const measure = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        const width = Math.max(1024, document.documentElement.scrollWidth, document.body?.scrollWidth || 0);
+        const height = Math.max(900, document.documentElement.scrollHeight, document.body?.scrollHeight || 0);
+        const key = width + ":" + height;
+        if (key === previous || width > 16384 || height > 16384) return;
+        previous = key;
+        postDiagnostic({ type: "contentSize", width, height });
+      });
+    };
+    window.addEventListener("load", () => {
+      const observer = new ResizeObserver(measure);
+      observer.observe(document.documentElement);
+      if (document.body) observer.observe(document.body);
+      measure();
+    }, { once: true });
+  }
   for (const level of ["info", "warn", "error"]) {
     const original = console[level]?.bind(console);
     if (!original) {
@@ -135,12 +158,13 @@ function stripLeadingDoctype(html: string): string {
 export function sandboxedSrcdoc(
   rawHTML: string,
   theme: "light" | "dark",
-  diagnosticsSessionToken: string
+  diagnosticsSessionToken: string,
+  reportsSize = false
 ): string {
   const html = stripLeadingDoctype(rawHTML);
   const themeScript = `<script>document.documentElement.dataset.toasttyTheme=${JSON.stringify(theme)};<\/script>`;
   const guardStyle = `<style>html,body{min-height:100%;}body{margin:0;}</style>`;
-  const headPrefix = `${cspMetaTag()}${guardStyle}${generatedDiagnosticsScript(diagnosticsSessionToken)}${themeScript}`;
+  const headPrefix = `${cspMetaTag()}${guardStyle}${generatedDiagnosticsScript(diagnosticsSessionToken, reportsSize)}${themeScript}`;
 
   if (/<head(?:\s[^>]*)?>/i.test(html)) {
     return html.replace(/<head(?:\s[^>]*)?>/i, (match) => `${match}${headPrefix}`);

@@ -2,8 +2,27 @@ import Foundation
 import RemoteProtocol
 
 public enum ToasttyMobileFixture {
+    public static let previewWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
+    public static let panelOnlyWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000004")!
+    public static let scratchpadPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000001")!
+    public static let documentPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000002")!
+    public static let htmlPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000003")!
+    public static let websitePanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000004")!
+    public static let navigationScratchpadPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000005")!
+
+    /// Fixed identities let UI fixtures exercise the same selection across reloads.
+    public static let previewPanels: [RemoteWorkspacePanel] = [
+        previewPanel(1, panelID: scratchpadPanelID, kind: "scratchpad", title: "Workspace map", revision: 1),
+        previewPanel(2, panelID: documentPanelID, kind: "localDocument", title: "mobile-preview.md",
+                     filePath: "/fixtures/toastty/docs/mobile-preview.md"),
+        previewPanel(3, panelID: htmlPanelID, kind: "browser", title: "preview.html",
+                     url: URL(fileURLWithPath: "/fixtures/toastty/site/preview.html")),
+        previewPanel(4, panelID: websitePanelID, kind: "browser", title: "Example website",
+                     tabNumber: 2, tabTitle: "Research", url: URL(string: "https://example.com")),
+    ]
+
     public static let home: MobileHomeSnapshot = {
-        let toasttyID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
+        let toasttyID = previewWorkspaceID
         let researchID = UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!
         let releaseID = UUID(uuidString: "A1000000-0000-0000-0000-000000000003")!
 
@@ -39,7 +58,8 @@ public enum ToasttyMobileFixture {
                     availability: .unavailable(reason: "prompt not open"),
                     age: "1h", last: "Release note generation failed: missing metadata"
                 ),
-            ]
+            ],
+            panels: previewPanels
         )
 
         let research = MobileWorkspace(
@@ -84,8 +104,42 @@ public enum ToasttyMobileFixture {
             ]
         )
 
-        return MobileHomeSnapshot(hostName: "mac-studio", workspaces: [toastty, research, release])
+        let panelOnly = MobileWorkspace(
+            id: panelOnlyWorkspaceID,
+            title: "Preview playground",
+            conversations: [],
+            panels: [
+                previewPanel(5, panelID: navigationScratchpadPanelID, kind: "scratchpad",
+                             title: "Navigation sketch", tabNumber: 3, tabTitle: "Navigation", revision: 1),
+            ]
+        )
+
+        return MobileHomeSnapshot(hostName: "mac-studio", workspaces: [toastty, research, release, panelOnly])
     }()
+
+    private static func previewPanel(
+        _ number: Int,
+        panelID: UUID,
+        kind: String,
+        title: String,
+        tabNumber: Int = 1,
+        tabTitle: String = "iOS preview",
+        revision: Int? = nil,
+        filePath: String? = nil,
+        url: URL? = nil
+    ) -> RemoteWorkspacePanel {
+        RemoteWorkspacePanel(
+            panelID: panelID,
+            auxiliaryTabID: UUID(uuidString: String(format: "D1000000-0000-0000-0000-%012d", number))!,
+            workspaceTabID: UUID(uuidString: String(format: "E1000000-0000-0000-0000-%012d", tabNumber))!,
+            workspaceTabTitle: tabTitle,
+            kind: kind,
+            title: title,
+            revision: revision,
+            filePath: filePath,
+            url: url
+        )
+    }
 
     private static func conversation(
         _ number: Int,

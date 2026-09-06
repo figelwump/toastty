@@ -243,15 +243,29 @@ public struct RemoteSessionListSnapshot: Codable, Equatable, Sendable {
     public var projectionRunID: RemoteProjectionRunID
     public var conversations: [RemoteConversationSummary]
     public var generatedAt: Date
+    public var workspaces: [RemoteWorkspaceSummary]
 
-    public init(
-        projectionRunID: RemoteProjectionRunID,
-        conversations: [RemoteConversationSummary],
-        generatedAt: Date
-    ) {
+    public init(projectionRunID: RemoteProjectionRunID, conversations: [RemoteConversationSummary],
+                generatedAt: Date, workspaces: [RemoteWorkspaceSummary] = []) {
         self.projectionRunID = projectionRunID
         self.conversations = conversations
         self.generatedAt = generatedAt
+        self.workspaces = workspaces
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(projectionRunID, forKey: .projectionRunID)
+        try container.encode(conversations, forKey: .conversations)
+        try container.encode(generatedAt, forKey: .generatedAt)
+        if !workspaces.isEmpty { try container.encode(workspaces, forKey: .workspaces) }
+    }
+    private enum CodingKeys: String, CodingKey { case projectionRunID, conversations, generatedAt, workspaces }
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectionRunID = try container.decode(RemoteProjectionRunID.self, forKey: .projectionRunID)
+        conversations = try container.decode([RemoteConversationSummary].self, forKey: .conversations)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+        workspaces = try container.decodeIfPresent([RemoteWorkspaceSummary].self, forKey: .workspaces) ?? []
     }
 }
 

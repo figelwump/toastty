@@ -1,7 +1,10 @@
+import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 
 struct ToasttyWorkspaceView: View {
+    @State private var selectedPreview: ToasttyPreviewSelection?
+    @State private var selectedScratchpad: ToasttyPreviewSelection?
     let workspaceID: UUID
     let controller: HomeScreenController
 
@@ -36,6 +39,8 @@ struct ToasttyWorkspaceView: View {
                 .accessibilityIdentifier("toastty-mobile-workspace-removed")
             }
         }
+        .sheet(item: $selectedPreview) { ToasttyPreviewSheet(selection: $0) }
+        .fullScreenCover(item: $selectedScratchpad) { ToasttyPreviewSheet(selection: $0) }
         .background(ToasttyDesignTokens.background)
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
@@ -53,6 +58,22 @@ struct ToasttyWorkspaceView: View {
         let visibleConversations = selectedWorkspaceSessionFilter.conversations(in: workspace)
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
+                if !workspace.panels.isEmpty {
+                    Text("Open panels").font(.headline).padding(.horizontal, 6)
+                    ForEach(workspace.panels) { panel in
+                        Button {
+                            let selection = ToasttyPreviewSelection(
+                                target: .panel(workspaceID: workspace.id, panelID: panel.panelID), title: panel.title)
+                            if panel.kind == "scratchpad" { selectedScratchpad = selection }
+                            else { selectedPreview = selection }
+                        } label: {
+                            ToasttyWorkspacePanelRow(panel: panel)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("toastty-workspace-panel-\(panel.panelID.uuidString)")
+                    }
+                    Text("Sessions").font(.headline).padding(.horizontal, 6).padding(.top, 14)
+                }
                 workspaceSessionFilterPicker
 
                 Text(sessionCountLabel(visibleConversations.count))
@@ -63,14 +84,14 @@ struct ToasttyWorkspaceView: View {
 
                 if visibleConversations.isEmpty {
                     ContentUnavailableView(
-                        selectedWorkspaceSessionFilter == .active
-                            ? "No active sessions"
-                            : "No sessions yet",
+                        workspace.conversations.isEmpty
+                            ? "No sessions yet"
+                            : "No active sessions",
                         systemImage: "rectangle.stack",
                         description: Text(
-                            selectedWorkspaceSessionFilter == .active
-                                ? "Choose All to show idle sessions in this workspace."
-                                : "Open a session in Toastty on your Mac and it will appear here."
+                            workspace.conversations.isEmpty
+                                ? "Open a session in Toastty on your Mac and it will appear here."
+                                : "Choose All to show idle sessions in this workspace."
                         )
                     )
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
@@ -129,5 +150,23 @@ struct ToasttyWorkspaceView: View {
 
     private func sessionCountLabel(_ count: Int) -> String {
         "\(count) \(count == 1 ? "session" : "sessions")"
+    }
+}
+
+private struct ToasttyWorkspacePanelRow: View {
+    let panel: RemoteWorkspacePanel
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: panel.kind == "scratchpad" ? "square.on.square" : panel.kind == "browser" ? "globe" : "doc.text")
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(panel.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("\(panel.kind == "localDocument" ? "Document" : panel.kind.capitalized) · \(panel.workspaceTabTitle)")
+                    .font(.caption).foregroundStyle(ToasttyDesignTokens.secondaryText).lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(ToasttyDesignTokens.mutedText)
+        }
+        .padding(14).background(ToasttyDesignTokens.elevatedSurface, in: RoundedRectangle(cornerRadius: 12))
     }
 }

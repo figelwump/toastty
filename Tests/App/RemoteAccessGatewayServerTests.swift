@@ -68,7 +68,8 @@ struct RemoteAccessGatewayServerTests {
 
     private static func startHarness(
         maximumConnections: Int = RemoteAccessGatewayServer.defaultMaximumConnections,
-        requestHeaderTimeoutNanoseconds: UInt64 = RemoteAccessGatewayServer.defaultRequestHeaderTimeoutNanoseconds
+        requestHeaderTimeoutNanoseconds: UInt64 = RemoteAccessGatewayServer.defaultRequestHeaderTimeoutNanoseconds,
+        previewHandler: (@MainActor (RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse)? = nil
     ) throws -> Harness {
         let deviceStore = RemoteDeviceStore(fileURL: nil)
         var port: UInt16 = 0
@@ -91,6 +92,7 @@ struct RemoteAccessGatewayServerTests {
                     ]
                 )
             )
+            handler.previewHandler = previewHandler
             let server = RemoteAccessGatewayServer(
                 handler: handler,
                 maximumConnections: maximumConnections,
@@ -147,6 +149,66 @@ struct RemoteAccessGatewayServerTests {
                 .map(String.init)
         )
         return "\(RemoteGatewayProtocol.credentialCookieName)=\(token)"
+    }
+
+    @Test func nativePreviewAndResourceUseDeferredLoopbackTransport() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("remote-preview-http-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entry = directory.appendingPathComponent("index.html")
+        try Data("<h1>Preview</h1>".utf8).write(to: entry)
+        try Data("body { color: red; }".utf8).write(to: directory.appendingPathComponent("style.css"))
+        let context = RemotePreviewContext(title: "HTML", source: .file(reference: entry.path, recordedCWD: nil, openPaths: [entry.path], format: nil))
+        let harness = try Self.startHarness(previewHandler: { operation in
+            let work = Task.detached { try RemotePreviewProvider.response(operation: operation, context: context) }
+            do { return try await work.value } catch { return operation.errorResponse(.missing) }
+        })
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+        let native = try await Self.pairNativeDevice(harness)
+        let session = Self.cookieFreeEphemeralSession()
+        defer { session.invalidateAndCancel() }
+        let target = RemotePreviewTarget.panel(workspaceID: UUID(), panelID: UUID())
+        var request = URLRequest(url: harness.baseURL.appending(path: "/api/preview.get"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(native.credential)", forHTTPHeaderField: "Authorization")
+        request.setValue(native.tailscaleLogin, forHTTPHeaderField: "Tailscale-User-Login")
+        request.httpBody = try JSONEncoder().encode(RemotePreviewRequest(target: target))
+        let (body, response) = try await session.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        guard case .html(let html) = try JSONDecoder().decode(RemotePreviewResponse.self, from: body).content else {
+            Issue.record("Expected HTML through the deferred server pipeline")
+            return
+        }
+        #expect(html.html == "<h1>Preview</h1>")
+        request.url = harness.baseURL.appending(path: "/api/preview.resource.get")
+        request.httpBody = try JSONEncoder().encode(RemoteHTMLResourceRequest(target: target, expectedSourcePath: html.sourcePath, relativePath: "style.css"))
+        let (resourceBody, resourceResponse) = try await session.data(for: request)
+        #expect((resourceResponse as? HTTPURLResponse)?.statusCode == 200)
+        let resource = try JSONDecoder().decode(RemoteHTMLResourceResponse.self, from: resourceBody)
+        #expect(resource.mimeType == "text/css")
+        #expect(resource.data == Data("body { color: red; }".utf8))
+    }
+
+    @Test func previewTimeoutCancelsConnectionOwnedTask() async throws {
+        var wasCancelled = false
+        let harness = try Self.startHarness(requestHeaderTimeoutNanoseconds: 300_000_000, previewHandler: { operation in
+            do { try await Task.sleep(for: .seconds(10)) } catch { wasCancelled = Task.isCancelled }
+            return operation.errorResponse(.missing)
+        })
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+        let native = try await Self.pairNativeDevice(harness)
+        let session = Self.cookieFreeEphemeralSession()
+        defer { session.invalidateAndCancel() }
+        var request = URLRequest(url: harness.baseURL.appending(path: "/api/preview.get"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(native.credential)", forHTTPHeaderField: "Authorization")
+        request.setValue(native.tailscaleLogin, forHTTPHeaderField: "Tailscale-User-Login")
+        request.httpBody = try JSONEncoder().encode(RemotePreviewRequest(target: .panel(workspaceID: UUID(), panelID: UUID())))
+        _ = try? await session.data(for: request)
+        for _ in 0..<20 where !wasCancelled { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(wasCancelled)
     }
 
     private static func pairNativeDevice(

@@ -3,6 +3,7 @@ import Foundation
 import RemoteProtocol
 
 public enum GatewayCompatibilityError: Error, Equatable, Sendable {
+    case missingCapability(RemoteGatewayCapability)
     case invalidJSON
     case invalidEnvelope(String)
     case unsupportedProtocolVersion(String)
@@ -100,8 +101,21 @@ public struct GatewayCompatibilityDecoder: Sendable {
         CompatibleSessionListSnapshot(
             projectionRunID: try decodeProjectionRunID(object.requiredString("projectionRunID")),
             conversations: try object.requiredArray("conversations").map(decodeSummary),
+            workspaces: ((try? object.requiredArray("workspaces")) ?? []).compactMap {
+                try? decodeWorkspaceSummary($0)
+            },
             generatedAt: try object.requiredDate("generatedAt")
         )
+    }
+
+    private func decodeWorkspaceSummary(_ object: JSONObject) throws -> RemoteWorkspaceSummary {
+        guard let id = try object.optionalUUID("id") else {
+            throw GatewayCompatibilityError.invalidEnvelope("Missing workspace id")
+        }
+        return RemoteWorkspaceSummary(id: id, title: (try? object.optionalString("title")) ?? "Workspace",
+            panels: ((try? object.requiredArray("panels")) ?? []).compactMap {
+                try? decode(RemoteWorkspacePanel.self, from: $0)
+            })
     }
 
     private func decodeSummary(_ object: JSONObject) throws -> CompatibleConversationSummary {

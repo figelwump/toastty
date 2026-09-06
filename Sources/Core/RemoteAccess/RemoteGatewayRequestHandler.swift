@@ -34,6 +34,7 @@ public struct RemoteGatewayConfiguration: Sendable {
 public final class RemoteGatewayRequestHandler {
     public enum Outcome: Equatable {
         case respond(RemoteGatewayHTTPResponse)
+        case deferredPreview(RemoteGatewayPreviewOperation)
         case upgradeToWebSocket(
             deviceID: UUID,
             authKind: RemoteDeviceAuthKind,
@@ -69,6 +70,21 @@ public final class RemoteGatewayRequestHandler {
     private var pairingRateLimiter: RemoteAccessRateLimiter
     private var authRateLimiter: RemoteAccessRateLimiter
     private let encoder = ConversationEventCoding.makeEncoder()
+
+    /// Invoked only by the main-actor transport, after native read authorization.
+    public var previewHandler: (@MainActor (RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse)?
+
+    @MainActor
+    public func resolvePreview(_ operation: RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse {
+        guard previewIsAuthorized(operation), let previewHandler else { return operation.errorResponse(.denied) }
+        let response = await previewHandler(operation)
+        guard !Task.isCancelled, previewIsAuthorized(operation) else { return operation.errorResponse(.denied) }
+        return response
+    }
+
+    private func previewIsAuthorized(_ operation: RemoteGatewayPreviewOperation) -> Bool {
+        deviceStore.devices.contains { $0.id == operation.deviceID && !$0.isRevoked && $0.authKind == .native && $0.scopes.contains(.read) }
+    }
 
     /// Called only after a pairing mutation has durably completed.
     public var onDevicePaired: ((RemoteDeviceRecord) -> Void)?
@@ -243,6 +259,25 @@ public final class RemoteGatewayRequestHandler {
 
         // 6. Handler/side effect.
         switch policy.route {
+        case .preview, .previewResource:
+            guard request.body.count <= 16 * 1024 else {
+                return .respond(errorResponse(status: 413, reason: "Payload Too Large", code: "invalid_request", message: "Preview request is too large"))
+            }
+            do {
+                let operationRequest: RemoteGatewayPreviewOperation.Request
+                if policy.route == .preview {
+                    let decoded = try JSONDecoder().decode(RemotePreviewRequest.self, from: request.body)
+                    guard decoded.protocolVersion == RemoteGatewayProtocol.version else { throw RemotePreviewError.unsupported }
+                    operationRequest = .preview(decoded)
+                } else {
+                    let decoded = try JSONDecoder().decode(RemoteHTMLResourceRequest.self, from: request.body)
+                    guard decoded.protocolVersion == RemoteGatewayProtocol.version else { throw RemotePreviewError.unsupported }
+                    operationRequest = .resource(decoded)
+                }
+                return .deferredPreview(.init(deviceID: authenticated.id, request: operationRequest))
+            } catch {
+                return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_request", message: "Invalid preview request"))
+            }
         case .sessions:
             return handleSessionList(at: date)
         case .conversationEvents:

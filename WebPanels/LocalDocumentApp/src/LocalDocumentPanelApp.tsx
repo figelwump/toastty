@@ -148,7 +148,7 @@ function useLocalDocumentPanelState(): {
   }, [bootstrap?.filePath, bootstrap?.isEditing]);
 
   const enterEdit = React.useCallback(() => {
-    if (!bootstrap?.filePath) {
+    if (!bootstrap?.filePath || bootstrap.presentation === "mobileReadOnly") {
       return;
     }
 
@@ -1237,7 +1237,7 @@ function LoadedLocalDocumentPanelApp(props: {
 
   return (
     <main className="local-document-shell">
-      <Header
+      {props.bootstrap.presentation !== "mobileReadOnly" && <Header
         bootstrap={props.bootstrap}
         content={renderedContent}
         isDirty={props.isDirty}
@@ -1249,7 +1249,7 @@ function LoadedLocalDocumentPanelApp(props: {
         saveEdit={props.saveEdit}
         overwriteAfterConflict={props.overwriteAfterConflict}
         cancelEdit={props.cancelEdit}
-      />
+      />}
       {props.bootstrap.isEditing ? (
         <LocalDocumentEditor
           bootstrap={props.bootstrap}

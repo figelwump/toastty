@@ -59,6 +59,7 @@ struct ToasttyMobileRootView: View {
                 }
             }
         }
+        .environment(\.toasttyPreviewService, sessionController.previewService)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: loadingPhase == nil)
         .task {
             sessionController.installDiagnosticEventHandler(recordDiagnostic)

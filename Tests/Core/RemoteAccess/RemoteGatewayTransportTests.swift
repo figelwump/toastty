@@ -381,6 +381,9 @@ struct RemoteGatewayRequestHandlerTests {
         )
         #expect(hello == RemoteGatewayHelloResponse())
         #expect(hello.capabilities == [
+            .workspacePanels,
+            .localFilePreview,
+            .workspacePanelPreview,
             .browserCookiePairing,
             .nativeBearerPairing,
             .conversationBackwardPaging,

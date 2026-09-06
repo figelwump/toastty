@@ -73,6 +73,26 @@ final class AppSessionController {
 
     var credentialProvider: any GatewayCredentialProvider { credentialVault }
 
+    var previewService: ToasttyPreviewService {
+        if usesFixtureHarness { return .fixture }
+        guard let pairedDevice else { return ToasttyPreviewService() }
+        let vault = credentialVault
+        let provider = ToasttyPreviewCredentialProvider(vault: vault,
+            gatewayURL: pairedDevice.gatewayURL, deviceID: pairedDevice.device.id)
+        let client = GatewayClient(baseURL: pairedDevice.gatewayURL, credentialProvider: provider)
+        return ToasttyPreviewService(content: { target in
+            let generation = await vault.currentGeneration()
+            let content = try await client.preview(target)
+            guard await vault.currentGeneration() == generation else { throw RemotePreviewError.stale }
+            return content
+        }, resource: { request in
+            let generation = await vault.currentGeneration()
+            let resource = try await client.previewResource(request)
+            guard await vault.currentGeneration() == generation else { throw RemotePreviewError.stale }
+            return resource
+        })
+    }
+
     var currentDeviceSummary: RemoteGatewayDeviceSummary? {
         pairedDevice?.device
     }
@@ -489,5 +509,20 @@ final class AppSessionController {
             onTerminal: onTerminal,
             onFreshness: onFreshness
         )
+    }
+}
+
+/// A sheet created for one pairing must never send a replacement host's token
+/// to the previous host, even if pairing changes while a resource is loading.
+private struct ToasttyPreviewCredentialProvider: GatewayCredentialProvider {
+    let vault: any AppSessionCredentialVault
+    let gatewayURL: URL
+    let deviceID: UUID
+    func credential() async throws -> GatewayCredential? {
+        guard let credential = await vault.currentCredential(),
+              credential.gatewayURL == gatewayURL, credential.device.id == deviceID else {
+            throw RemotePreviewError.stale
+        }
+        return .bearer(token: credential.bearerToken)
     }
 }

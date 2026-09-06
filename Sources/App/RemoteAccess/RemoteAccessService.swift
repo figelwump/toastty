@@ -290,6 +290,7 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
+    private let previewScratchpadDirectory: URL
     private let store: AppStore
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -395,6 +396,7 @@ final class RemoteAccessService: ObservableObject {
             RemoteAccessGatewayServer(handler: $0)
         }
     ) {
+        self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
@@ -417,6 +419,10 @@ final class RemoteAccessService: ObservableObject {
             }
         )
         self.server = gatewayServerFactory(handler)
+        handler.previewHandler = { [weak self] operation in
+            guard let self else { return operation.errorResponse(.stale) }
+            return await self.resolvePreview(operation)
+        }
         self.devices = deviceStore.devices
         facadeBridge.service = self
         sendBridge.service = self
@@ -566,6 +572,9 @@ final class RemoteAccessService: ObservableObject {
             guard let self,
                   self.isEnabled,
                   self.conversationTrackingGeneration == generation else { return }
+            if Self.workspaceInventory(state: previousState) != Self.workspaceInventory(state: nextState) {
+                self.scheduleSessionListBroadcast()
+            }
             switch action {
             case .updateTerminalPanelResumeRecord, .updateTerminalPanelRemoteConversationID:
                 self.syncConversations()
@@ -753,8 +762,111 @@ final class RemoteAccessService: ObservableObject {
         RemoteSessionListSnapshot(
             projectionRunID: projectionStore.runID,
             conversations: buildConversationSummaries(),
-            generatedAt: date
+            generatedAt: date,
+            workspaces: Self.workspaceInventory(state: store.state)
         )
+    }
+
+    static func workspaceInventory(state: AppState) -> [RemoteWorkspaceSummary] {
+        var ids: [UUID] = []
+        var seen: Set<UUID> = []
+        for window in state.windows {
+            for id in window.workspaceIDs where state.workspacesByID[id] != nil {
+                if seen.insert(id).inserted { ids.append(id) }
+            }
+        }
+        for id in state.workspacesByID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            if seen.insert(id).inserted { ids.append(id) }
+        }
+        return ids.compactMap { id in
+            guard let workspace = state.workspacesByID[id] else { return nil }
+            let panels = workspace.orderedTabs.flatMap { tab in
+                tab.rightAuxPanel.orderedTabs.compactMap { auxiliary -> RemoteWorkspacePanel? in
+                    guard case .web(let web) = auxiliary.panelState else { return nil }
+                    return RemoteWorkspacePanel(
+                        panelID: auxiliary.panelID,
+                        auxiliaryTabID: auxiliary.id,
+                        workspaceTabID: tab.id,
+                        workspaceTabTitle: tab.displayTitle,
+                        kind: web.definition.rawValue,
+                        title: web.title,
+                        revision: web.scratchpad?.revision,
+                        filePath: Self.localPreviewPath(web),
+                        url: (web.currentURL ?? web.initialURL).flatMap(URL.init(string:))
+                    )
+                }
+            }
+            return RemoteWorkspaceSummary(id: id, title: workspace.title, panels: panels)
+        }
+    }
+
+    private static func localPreviewPath(_ web: WebPanelState) -> String? {
+        if web.definition == .localDocument { return web.filePath }
+        if web.definition == .browser,
+           let rawURL = web.currentURL ?? web.initialURL,
+           let url = URL(string: rawURL), url.isFileURL {
+            return url.path
+        }
+        return nil
+    }
+
+    private func previewContext(target: RemotePreviewTarget) throws -> RemotePreviewContext {
+        switch target {
+        case .panel(let workspaceID, let panelID):
+            guard let workspace = store.state.workspacesByID[workspaceID],
+                  let panel = workspace.orderedTabs.lazy.flatMap({ $0.rightAuxPanel.orderedTabs })
+                    .first(where: { $0.panelID == panelID }),
+                  case .web(let web) = panel.panelState else { throw RemotePreviewError.stale }
+            if let path = Self.localPreviewPath(web) {
+                return .init(title: web.title, source: .file(reference: path, recordedCWD: nil,
+                                                           openPaths: [path], format: web.localDocument?.format))
+            }
+            if web.definition == .scratchpad, let scratchpad = web.scratchpad {
+                return .init(title: web.title, source: .scratchpad(documentID: scratchpad.documentID,
+                                                                  revision: scratchpad.revision,
+                                                                  storeDirectory: previewScratchpadDirectory))
+            }
+            if web.definition == .browser,
+               let rawURL = web.currentURL ?? web.initialURL, let url = URL(string: rawURL) {
+                return .init(title: web.title, source: .web(url))
+            }
+            throw RemotePreviewError.unsupported
+        case .conversationFile(let conversationID, let reference):
+            guard let summary = buildConversationSummaries().first(where: { $0.conversationID == conversationID }),
+                  let workspaceID = summary.placement.workspaceID,
+                  let workspace = store.state.workspacesByID[workspaceID] else { throw RemotePreviewError.stale }
+            let paths = workspace.orderedTabs.flatMap { tab in
+                tab.rightAuxPanel.orderedTabs.compactMap { panel -> String? in
+                    guard case .web(let web) = panel.panelState else { return nil }
+                    return Self.localPreviewPath(web)
+                }
+            }
+            return .init(title: reference, source: .file(reference: reference, recordedCWD: summary.cwd,
+                                                        openPaths: paths, format: nil))
+        }
+    }
+
+    private func resolvePreview(_ operation: RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse {
+        do {
+            let context = try previewContext(target: operation.request.target)
+            let work = Task.detached(priority: .utility) {
+                try RemotePreviewProvider.response(operation: operation, context: context)
+            }
+            let response = try await withTaskCancellationHandler {
+                try await work.value
+            } onCancel: {
+                work.cancel()
+            }
+            try Task.checkCancellation()
+            guard try previewContext(target: operation.request.target) == context else {
+                return operation.errorResponse(.stale)
+            }
+            return response
+        } catch let error as RemotePreviewError {
+            return operation.errorResponse(error)
+        } catch {
+            return operation.errorResponse(.missing)
+        }
     }
 
     func facadeConversationSnapshot(for conversationID: RemoteConversationID, at date: Date) -> RemoteConversationSnapshot? {

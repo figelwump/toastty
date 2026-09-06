@@ -19,6 +19,9 @@ public enum RemoteGatewayProtocol {
 /// native client must not infer that a future authentication mechanism exists
 /// until the host actually implements and advertises it.
 public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Sendable {
+    case workspacePanels = "workspace_panels"
+    case localFilePreview = "local_file_preview"
+    case workspacePanelPreview = "workspace_panel_preview"
     /// The existing web flow exchanges a short pairing code for an HttpOnly
     /// browser session cookie. This does not imply native Bearer support.
     case browserCookiePairing = "browser_cookie_pairing"
@@ -43,6 +46,9 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
         protocolVersion: String = RemoteGatewayProtocol.version,
         minimumSupportedProtocolVersion: String = RemoteGatewayProtocol.minimumSupportedVersion,
         capabilities: [RemoteGatewayCapability] = [
+            .workspacePanels,
+            .localFilePreview,
+            .workspacePanelPreview,
             .browserCookiePairing,
             .nativeBearerPairing,
             .conversationBackwardPaging,

@@ -228,6 +228,33 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         }
     }
 
+    public func preview(_ target: RemotePreviewTarget) async throws -> RemotePreviewContent {
+        let hello = try await hello()
+        let capability: RemoteGatewayCapability = switch target {
+        case .panel: .workspacePanelPreview
+        case .conversationFile: .localFilePreview
+        }
+        guard hello.capabilities.contains(capability) else {
+            throw GatewayFailure.operationCompatibility(.missingCapability(capability))
+        }
+        let response = try await perform(method: "POST", path: "/api/preview.get",
+                                         body: try encode(RemotePreviewRequest(target: target)))
+        let decoded = try ConversationEventCoding.makeDecoder().decode(RemotePreviewResponse.self, from: response.body)
+        guard decoded.protocolVersion == RemoteGatewayProtocol.version else { throw GatewayFailure.invalidResponse }
+        if let error = decoded.error { throw error }
+        guard let content = decoded.content else { throw GatewayFailure.invalidResponse }
+        return content
+    }
+
+    public func previewResource(_ request: RemoteHTMLResourceRequest) async throws -> RemoteHTMLResourceResponse {
+        let response = try await perform(method: "POST", path: "/api/preview.resource.get", body: try encode(request))
+        let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteHTMLResourceResponse.self, from: response.body)
+        guard decoded.protocolVersion == RemoteGatewayProtocol.version else { throw GatewayFailure.invalidResponse }
+        if let error = decoded.error { throw error }
+        guard decoded.data != nil, decoded.mimeType != nil else { throw GatewayFailure.invalidResponse }
+        return decoded
+    }
+
     private static func validateBackwardResponse(
         _ response: CompatibleGatewayEventsResponse,
         request: RemoteGatewayEventsRequest

@@ -4,6 +4,8 @@ import RemoteProtocol
 /// Closed route catalog for the gateway. Unknown paths never inherit policy
 /// from a neighboring endpoint, and known paths accept exactly one method.
 enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
+    case preview
+    case previewResource
     case hello
     case browserPair
     case nativePairingExchange
@@ -17,6 +19,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
 
     var path: String {
         switch self {
+        case .preview: "/api/preview.get"
+        case .previewResource: "/api/preview.resource.get"
         case .hello: "/api/hello"
         case .browserPair: "/api/pair"
         case .nativePairingExchange: "/v1/native-pairing/exchange"
@@ -64,6 +68,8 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
     var scope: Scope
 
     static let fixed: [RemoteGatewayRoute: RemoteGatewayRoutePolicy] = [
+        .preview: .init(route: .preview, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        .previewResource: .init(route: .previewResource, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
         .hello: .init(route: .hello, method: "GET", origin: .optionalAllowed, authentication: .none, scope: .none),
         .browserPair: .init(route: .browserPair, method: "POST", origin: .requiredAllowed, authentication: .browserPairing, scope: .none),
         .nativePairingExchange: .init(route: .nativePairingExchange, method: "POST", origin: .browserContextForbidden, authentication: .none, scope: .none),

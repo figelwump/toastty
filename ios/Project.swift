@@ -211,7 +211,11 @@ let project = Project(
             deploymentTargets: deploymentTarget,
             infoPlist: .extendingDefault(with: appInfoPlist),
             sources: ["Sources/ToasttyMobileApp/**"],
-            resources: ["Resources/ToasttyMobileApp/**"],
+            resources: [
+                "Resources/ToasttyMobileApp/**",
+                .folderReference(path: "../Sources/App/Resources/WebPanels/local-document-panel"),
+                .folderReference(path: "../Sources/App/Resources/WebPanels/scratchpad-panel"),
+            ],
             dependencies: [
                 .target(name: "ToasttyMobileDomain"),
                 .target(name: "RemoteProtocol"),

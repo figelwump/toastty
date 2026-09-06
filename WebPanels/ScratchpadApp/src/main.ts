@@ -5,6 +5,7 @@ type ScratchpadPanelTheme = "light" | "dark";
 
 interface ScratchpadPanelBootstrap {
   contractVersion: 1;
+  mobileViewport?: boolean;
   documentID: string | null;
   displayName: string;
   revision: number | null;
@@ -256,6 +257,15 @@ function installGeneratedContentDiagnosticsBridge() {
       return;
     }
 
+    if (diagnosticEvent.type === "contentSize") {
+      if (!currentBootstrap?.mobileViewport) return;
+      const { width, height } = diagnosticEvent;
+      if (typeof width !== "number" || typeof height !== "number" ||
+          !Number.isFinite(width) || !Number.isFinite(height) ||
+          width < 320 || height < 320 || width > 16384 || height > 16384) return;
+      scratchpadNativeBridge.contentSize(width, height, currentBootstrap.revision);
+      return;
+    }
     forwardGeneratedContentDiagnostic(diagnosticEvent);
   });
 }
@@ -467,7 +477,8 @@ function renderDocument(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) 
   iframe.srcdoc = sandboxedSrcdoc(
     bootstrap.contentHTML ?? "",
     bootstrap.theme,
-    currentGeneratedContentDiagnosticsToken
+    currentGeneratedContentDiagnosticsToken,
+    bootstrap.mobileViewport === true
   );
   iframe.addEventListener("load", () => {
     currentGeneratedContentReady = true;
