@@ -5,7 +5,7 @@ description: Use this skill when the user asks for /worktree-create or wants to 
 
 # Worktree Create
 
-Use this workflow when the current thread should continue in a fresh git worktree and Toastty workspace.
+This example personal skill continues the current thread in a fresh Git worktree and Toastty workspace. Customize its branch naming, goal, review, and human-testing workflow for your own projects. It uses Toastty’s built-in app-control and Scratchpad skills.
 
 ## Core flow
 
@@ -19,21 +19,18 @@ Use this workflow when the current thread should continue in a fresh git worktre
    - Use `refactor` for internal restructuring without intended behavior changes.
    - Use `test`, `docs`, or `chore` when the branch is primarily test-only, documentation-only, or maintenance work.
    - If the user explicitly provides a prefix or branch name, honor it when it fits the repo's branch naming style.
-3. Confirm the Toastty-managed environment is present before using the launch helper.
-   - `TOASTTY_SKILLS_ROOT` must point to the copied Toastty plugin's `skills`
-     directory. If it is absent or does not contain `worktree-create`, stop
-     with `error: worktree-create must run inside a Toastty-managed agent session`.
-     Do not guess `.agents/skills`, `~/.agents/skills`,
-     `~/.codex/skills`, a repository checkout, or a versioned plugin cache.
+3. Resolve this personal skill's helper directory and confirm the managed environment.
+   - Resolve `scripts/` relative to the path of this loaded `SKILL.md`, not the current repository or shell directory. Set `WORKTREE_CREATE_SKILL_DIR` to that absolute skill directory for the examples below. This is a shell variable you set, not an environment value injected by Toastty.
+   - Use the scripts from this package, including when the skill is loaded from a copied user-plugin snapshot. Do not look for them under `TOASTTY_SKILLS_ROOT`, which belongs to the shipped Toastty skills, or guess a versioned plugin cache path.
+   - `TOASTTY_CLI_PATH` must be set and executable. If the managed environment is missing, stop with `error: worktree-create must run inside a Toastty-managed agent session`.
 
 ```bash
-if [[ -z "${TOASTTY_SKILLS_ROOT:-}" || ! -d "$TOASTTY_SKILLS_ROOT/worktree-create" ]]; then
+if [[ -z "${TOASTTY_CLI_PATH:-}" || ! -x "$TOASTTY_CLI_PATH" ]]; then
   echo "error: worktree-create must run inside a Toastty-managed agent session" >&2
   exit 1
 fi
 ```
 
-   - `TOASTTY_CLI_PATH` must be set.
    - `TOASTTY_PANEL_ID` must be set for the default structured launch because parent `set-current` needs the current panel. It may be omitted only when using `--startup-command`, or when combining `--window-id` with `--no-scope-parent`.
    - `TOASTTY_SESSION_ID` must be set for the default structured launch because the helper scopes the current parent session before it creates the child workspace.
    - The skill is designed for a Toastty-managed agent session, not an arbitrary shell.
@@ -48,7 +45,7 @@ fi
 5. Create the new worktree with the bundled helper, passing the selected branch prefix explicitly:
 
 ```bash
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/create-worktree.sh" \
+"$WORKTREE_CREATE_SKILL_DIR/scripts/create-worktree.sh" \
   --slug browser-link-routing \
   --branch-prefix feat \
   --json
@@ -99,7 +96,7 @@ fi
    - If you intentionally need to leave the parent session unrestricted, pass `--no-scope-parent` and mention that exception in the handoff.
 
 ```bash
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" \
+"$WORKTREE_CREATE_SKILL_DIR/scripts/open-toastty-worktree-session.sh" \
   --workspace-name browser-link-routing \
   --worktree-path /abs/path/to/repo-browser-link-routing \
   --handoff-file /abs/path/to/repo-browser-link-routing/WORKTREE_HANDOFF.md \
@@ -193,7 +190,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 - For validation or debugging, you can override the startup command:
 
 ```bash
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" \
+"$WORKTREE_CREATE_SKILL_DIR/scripts/open-toastty-worktree-session.sh" \
   --workspace-name smoke-slug \
   --worktree-path /abs/path/to/repo-smoke-slug \
   --handoff-file /abs/path/to/repo-smoke-slug/WORKTREE_HANDOFF.md \

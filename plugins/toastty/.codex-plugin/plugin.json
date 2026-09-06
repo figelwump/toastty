@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Toastty",
     "shortDescription": "Control and support Toastty from managed agent sessions.",
-    "longDescription": "Toastty adds workflows for app control, Scratchpad visuals, local-document review, redacted diagnostics, and worktree creation and approved integration. Toastty exposes these skills only to supported managed agent sessions.",
+    "longDescription": "Toastty adds workflows for app control, Scratchpad visuals, local-document review, and redacted diagnostics. Toastty exposes these skills only to supported managed agent sessions.",
     "developerName": "Giant Things",
     "category": "Developer Tools",
     "capabilities": [
@@ -19,9 +19,7 @@
     "defaultPrompt": [
       "Show this plan in Toastty for review.",
       "Create a visual summary in Scratchpad.",
-      "Send Toastty diagnostics.",
-      "Move this task into a new worktree.",
-      "Merge this finished task and clean up its worktree."
+      "Send Toastty diagnostics."
     ]
   }
 }

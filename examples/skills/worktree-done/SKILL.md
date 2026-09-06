@@ -5,7 +5,7 @@ description: Use this skill when the user wants to merge or finish a task create
 
 # Worktree Done
 
-Land a completed task from the parent session, using the target repository's
+This example personal skill lands a completed task from the parent session, using the target repository's
 own integration and verification rules. The user can name the task; discover
 its validated commit without requiring them to supply a SHA.
 

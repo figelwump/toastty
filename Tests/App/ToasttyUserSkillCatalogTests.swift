@@ -326,6 +326,38 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
 
     // MARK: - Snapshot preparation
 
+    func testWorktreeExamplesLoadAsUserSkillsWithExecutableHelpers() throws {
+        let fixture = try makeFixture(named: "worktree-examples")
+        defer { fixture.cleanup() }
+        let examplesURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("examples/skills", isDirectory: true)
+        let names = ["worktree-create", "worktree-done"]
+        for name in names {
+            try FileManager.default.copyItem(
+                at: examplesURL.appendingPathComponent(name),
+                to: fixture.skillsRootURL.appendingPathComponent(name)
+            )
+        }
+
+        let snapshot = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+        XCTAssertEqual(snapshot.acceptedPackageNames, names)
+        for name in names {
+            XCTAssertEqual(
+                try Data(contentsOf: snapshot.skillsRootURL.appendingPathComponent("\(name)/SKILL.md")),
+                try Data(contentsOf: examplesURL.appendingPathComponent("\(name)/SKILL.md"))
+            )
+        }
+        let helperURL = snapshot.skillsRootURL
+            .appendingPathComponent("worktree-create/scripts/create-worktree.sh")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: helperURL.path))
+        let result = try runProcess(helperURL.path, arguments: ["--help"])
+        XCTAssertEqual(result.status, 0, result.stderr)
+        XCTAssertTrue(result.stderr.contains("--repo-root"))
+    }
+
     func testPrepareSnapshotBuildsExpectedLayoutAndReusesImmutably() throws {
         let fixture = try makeFixture(named: "snapshot")
         defer { fixture.cleanup() }

@@ -43,6 +43,7 @@ if command -v codex >/dev/null 2>&1; then
   HOME="$isolated_home" CODEX_HOME="$isolated_codex_home" \
     python3 - "$ROOT_DIR" "$fixture_root" <<'PY'
 import os
+import json
 import runpy
 import shutil
 import sys
@@ -68,6 +69,41 @@ with probe["AppServer"](shutil.which("codex"), dict(os.environ), working_directo
     if loaded != expected or any(entry["errors"] for entry in skills):
         raise SystemExit(f"error: Codex did not load the expected Toastty skills: {skills}")
 print("Codex loaded all Toastty skills without plugin hooks or hook diagnostics")
+
+# Exercise the transition from an older app that still ships worktree-create.
+# This mutates only this test's installed cache, after checking the real bundle.
+manifest = json.loads((repo_root / "plugins/toastty/.codex-plugin/plugin.json").read_text())
+installed_skills = (
+    Path(os.environ["CODEX_HOME"]) / "plugins/cache/toastty/toastty"
+    / manifest["version"] / "skills"
+)
+examples = repo_root / "examples/skills"
+shutil.copytree(examples / "worktree-create", installed_skills / "worktree-create")
+user_marketplace = working_directory / "user-marketplace"
+user_plugin = user_marketplace / "plugins/toastty-user"
+(user_plugin / ".codex-plugin").mkdir(parents=True)
+manifest["name"] = "toastty-user"
+(user_plugin / ".codex-plugin/plugin.json").write_text(json.dumps(manifest))
+for name in ("worktree-create", "worktree-done"):
+    shutil.copytree(examples / name, user_plugin / "skills" / name)
+marketplace = json.loads((repo_root / ".agents/plugins/marketplace.json").read_text())
+marketplace["name"] = "toastty-user"
+marketplace["plugins"][0]["name"] = "toastty-user"
+marketplace["plugins"][0]["source"]["path"] = "./plugins/toastty-user"
+(user_marketplace / ".agents/plugins").mkdir(parents=True)
+(user_marketplace / ".agents/plugins/marketplace.json").write_text(json.dumps(marketplace))
+codex = shutil.which("codex")
+probe["run"]([codex, "plugin", "marketplace", "add", str(user_marketplace), "--json"], environment=dict(os.environ))
+probe["run"]([codex, "plugin", "add", "toastty-user@toastty-user", "--json"], environment=dict(os.environ))
+with probe["AppServer"](codex, dict(os.environ), working_directory) as server:
+    skills = server.request(
+        "skills/list", {"cwds": [str(working_directory)], "forceReload": True}
+    )["data"]
+    loaded = {skill["name"] for entry in skills for skill in entry["skills"] if skill["enabled"]}
+    expected = {"toastty:worktree-create", "toastty-user:worktree-create", "toastty-user:worktree-done"}
+    if not expected.issubset(loaded) or any(entry["errors"] for entry in skills):
+        raise SystemExit(f"error: personal worktree examples did not coexist with an older shipped skill: {skills}")
+print("Codex loaded personal worktree examples alongside the older shipped name")
 PY
 else
   printf 'warning: codex is unavailable; skipped live marketplace acceptance check\n' >&2
@@ -304,8 +340,5 @@ printf '# Review\n' > "$markdown_file"
 "$TOASTTY_SKILLS_ROOT/toastty-open-markdown/scripts/open-markdown-file.sh" "$markdown_file" >/dev/null
 "$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-outline.sh" "Cache Test" >/dev/null
 
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/create-worktree.sh" --help >/dev/null 2>&1
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/create-toastty-worktree.sh" --help >/dev/null 2>&1
-"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" --help >/dev/null 2>&1
 
 printf 'Toastty three-host plugin copied-cache self-test passed\n'

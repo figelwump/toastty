@@ -15,8 +15,6 @@ EXPECTED_SKILLS = [
     "toastty-open-markdown",
     "toastty-scratchpad",
     "toastty-send-diagnostics",
-    "worktree-create",
-    "worktree-done",
 ]
 
 EXPECTED_CURSOR_HOOKS = [
@@ -219,15 +217,10 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
             '$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-outline.sh',
             '$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-html.sh',
         ],
-        "worktree-create": [
-            '$TOASTTY_SKILLS_ROOT/worktree-create/scripts/create-worktree.sh',
-            '$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh',
-        ],
     }
     skills_requiring_managed_root = {
         "toastty-open-markdown",
         "toastty-scratchpad",
-        "worktree-create",
     }
     for skill_name in EXPECTED_SKILLS:
         skill_path = skills_root / skill_name / "SKILL.md"
