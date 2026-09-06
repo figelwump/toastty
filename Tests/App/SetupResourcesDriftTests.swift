@@ -18,6 +18,10 @@ final class SetupResourcesDriftTests: XCTestCase {
             ToasttyAgentPluginBundle.skills.map(\.name).sorted()
         )
         XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 6)
+        // ToasttyAgentPluginBundle.read rejects symlinks, and one inside a
+        // skill folder silently breaks delivery for every managed agent.
+        let symlinks = try symbolicLinks(under: shippedSkillsURL())
+        XCTAssertTrue(symlinks.isEmpty, "shipped skills contain symlinks: \(symlinks)")
         XCTAssertTrue(
             (try? regularFiles(
                 under: setupResourcesURL().appendingPathComponent("starter-skills", isDirectory: true)
@@ -298,6 +302,21 @@ final class SetupResourcesDriftTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+
+    private func symbolicLinks(under root: URL) throws -> [String] {
+        var links: [String] = []
+        let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isSymbolicLinkKey],
+            options: []
+        )
+        while let url = enumerator?.nextObject() as? URL {
+            if (try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+                links.append(url.path)
+            }
+        }
+        return links
     }
 
     private func regularFiles(under rootURL: URL) throws -> [URL] {

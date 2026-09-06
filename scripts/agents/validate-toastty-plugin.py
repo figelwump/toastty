@@ -203,6 +203,17 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
     if unexpected_metadata:
         errors.append(f"plugin contains Finder metadata: {unexpected_metadata}")
 
+    # The app's plugin reader rejects any symlink inside the bundle, so catch
+    # one here before it ships (a stray link inside a skill folder breaks skill
+    # delivery for every managed agent at runtime).
+    symlinks = sorted(
+        path.relative_to(plugin_root).as_posix()
+        for path in plugin_root.rglob("*")
+        if path.is_symlink()
+    )
+    if symlinks:
+        errors.append(f"plugin contains symbolic links: {symlinks}")
+
     try:
         skill_names = sorted(path.name for path in skills_root.iterdir() if path.is_dir())
     except OSError as error:
