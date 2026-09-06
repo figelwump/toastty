@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Read Terminal"
+  short_description: "Read output from another terminal in the same workspace."
+  default_prompt: "Use $toastty-read-terminal to check what the other terminal in this Toastty workspace is printing."

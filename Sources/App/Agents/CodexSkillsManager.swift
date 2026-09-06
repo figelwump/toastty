@@ -2018,7 +2018,7 @@ private extension CodexSkillsManager {
         } else if updatePending {
             detail = "A Toastty skills update will be installed before the next managed Codex launch."
         } else {
-            detail = "Toastty's five skills are ready for managed Codex sessions."
+            detail = "Toastty's six skills are ready for managed Codex sessions."
         }
         return CodexSkillsStatus(
             availability: .ready,

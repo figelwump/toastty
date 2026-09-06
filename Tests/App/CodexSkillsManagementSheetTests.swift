@@ -4,12 +4,13 @@ import XCTest
 @testable import ToasttyApp
 
 final class CodexSkillsManagementSheetTests: XCTestCase {
-    func testManagementRowsExposeTheExactFiveQualifiedSkillsAndSummaries() {
+    func testManagementRowsExposeTheExactSixQualifiedSkillsAndSummaries() {
         XCTAssertEqual(
             ToasttyAgentPluginBundle.skills.map { "toastty:\($0.name)" },
             [
                 "toastty:toastty-capabilities",
                 "toastty:toastty-open-markdown",
+                "toastty:toastty-read-terminal",
                 "toastty:toastty-scratchpad",
                 "toastty:toastty-send-diagnostics",
                 "toastty:worktree-create",
