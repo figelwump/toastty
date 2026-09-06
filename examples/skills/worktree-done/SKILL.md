@@ -1,12 +1,12 @@
 ---
 name: worktree-done
-description: Use this skill when the user wants to merge or finish a task created in a Toastty worktree, validate the landed result, and perform authorized child-session, workspace, worktree, and branch cleanup from the parent session.
+description: Use this skill from the parent when the user wants to review, merge, or finish a Toastty worktree task or its PR, assess codebase consistency and relevant in-flight work, and perform authorized child-session, workspace, worktree, and branch cleanup.
 ---
 
 # Worktree Done
 
-This example personal skill lands a completed task from the parent session, using the target repository's
-own integration and verification rules. The user can name the task; discover
+This example personal skill reviews and, when authorized, lands a task from the
+parent session using the target repository's integration and verification rules. The user can name the task; discover
 its validated commit without requiring them to supply a SHA.
 
 ## Resolve the task and authority
@@ -32,6 +32,12 @@ its validated commit without requiring them to supply a SHA.
 - A request to merge and clean up authorizes both actions; do not ask again
   at each step. A merge-only request does not authorize termination or deletion.
   A readiness report, finished goal, or passing test does not authorize a merge.
+- A review-only request authorizes assessment and a report, not changes to the
+  task branch, PR state, or child workspace. Do not advance into landing,
+  evidence archiving for cleanup, process termination, or deletion without the
+  corresponding authorization. Keep feedback in the parent report/Scratchpad;
+  posting PR comments or requesting changes from the child needs authorization
+  for that action, which may already be part of the task.
 
 ## Establish readiness
 
@@ -45,16 +51,72 @@ its validated commit without requiring them to supply a SHA.
   task without that field, establish the commit from existing evidence or
   complete the missing verification before proceeding; do not equate “done”
   with verified. A newer tip needs updated review and verification.
-- Confirm the child is idle and will not continue writing during integration.
+- For a PR, verify its repository, base branch, head branch, and live head SHA
+  against the task identity. Integration requires the PR head, task branch tip,
+  and `ValidatedCommit` to agree, with required review and CI covering that head.
+  Do not silently choose the newer of conflicting tips. For review-only work,
+  assess an explicitly identified current commit and label missing or stale
+  readiness evidence; it need not prevent useful read-only feedback.
+- Before integration, confirm the child is idle and will not continue writing.
   Capture the branch tip and worktree status, including untracked files and
   content fingerprints for artifacts that will be removed. Status paths alone
   cannot detect later edits to an already-untracked handoff.
   Preserve uncommitted or unpublished work; never stash, reset, or force it
   away. Treat the handoff as an artifact to preserve, not a product change.
-- Check the landing checkout can accept integration without mixing unrelated
-  local changes. Preserve those changes; do not clear them to make room.
+- Before integration, check the landing checkout can accept it without mixing
+  unrelated local changes. Preserve those changes; do not clear them to make room.
   Refresh the destination only as the repository requires, without discarding
   local commits or bypassing its integration policy.
+
+## Parent assessment
+
+Integration requires a completed parent assessment of the exact task commit.
+Run this pass before merging if no current assessment exists, even when the user
+only said “merge.” It also supports review-only requests and complements
+repository-required independent review, CI, and human testing.
+
+- Review the task diff in the context of existing code: design and ownership
+  boundaries, established abstractions and naming, duplicate capability,
+  maintenance cost, API and data contracts, failure handling, security and data
+  preservation, and missing tests or documentation. Keep mechanical style
+  checks with existing formatters/linters; explain concrete consequences for
+  design findings.
+- Inspect the intended target branch and relevant open PRs and active worktrees
+  in the same repository. Use their identified commit heads, prioritizing shared
+  files, interfaces, data models, configuration, and overlapping product scope.
+  Record which work was examined and any access or discovery limits; do not
+  claim compatibility with work you could not inspect.
+- Distinguish Git conflicts from semantic incompatibility: changes can merge
+  cleanly while disagreeing about a contract or expected behavior. Start with
+  read-only inspection. When a specific interaction cannot be resolved that
+  way, use a disposable integration worktree for the candidate and the relevant
+  changes expected to land first, then run focused checks. Record the tested
+  commits, order, commands, and results. Keep this worktree outside child
+  workspaces and use detached commits; never stash or change task/landing
+  checkouts for the experiment. Remove only this disposable worktree when the
+  checks finish, preserving useful results in the report; report any teardown
+  failure. This review-owned teardown does not authorize task cleanup. Do not
+  rebase the children's branches, test every possible combination, or require
+  a speculative build for every review.
+- Report the assessed task/PR head, target SHA, relevant peer SHAs, coverage
+  limits, blocking findings, optional suggestions, and any recommended merge
+  order. Unresolved material conflicts or correctness risks block integration;
+  cosmetic preferences do not become new gates. Keep the report in the parent
+  Scratchpad or other durable task record.
+- The child owns fixes. Return actionable findings to the user and, when
+  authorized, resume the existing child for accepted corrections. Existing task
+  authorization can cover routine fixes within scope; review-only requests do
+  not add permission to initiate edits. Changed code
+  invalidates readiness; require an updated PR/branch head, affected review and
+  checks, and revised human-testing evidence where needed. Reassess the changed
+  areas before landing. Do not silently take over the child's implementation
+  or expand its task to satisfy an optional suggestion.
+- For review-only requests, stop after the report. Before an authorized merge,
+  recheck the live PR/task head, target branch, and relevant peer heads against
+  this assessment. A changed task head needs fresh readiness evidence; changes
+  to the target or related work need an updated conflict/interaction assessment
+  and affected checks. Observe repository requirements for human testing and
+  approval. No permanent monitoring service is part of this workflow.
 
 ## Preserve evidence, land, and verify
 

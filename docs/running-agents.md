@@ -381,15 +381,24 @@ Capability evidence: `docs/plans/evidence/pi-session-scoped-skills-2026-08-05.md
 The optional [personal worktree skills](../examples/skills/README.md) show how to
 build your own development workflow with Toastty. Copy them into `~/.toastty/skills`
 and customize them before use. `worktree-create` continues an agreed task in its
-own Git worktree and background Toastty workspace. The parent preserves the plan and task identity;
+own Git worktree and background Toastty workspace. The parent preserves the plan
+and task identity;
 the child uses its runtime's native persistent goal when available and permitted
 to implement, review, and verify the change. It maintains a session-linked
 Scratchpad with progress, a visual explanation when useful, decisions, evidence,
-the validated commit, and steps for human testing. The workspace stays available
-for you to try the result and request changes.
+the validated commit, and steps for human testing. For implementation tasks in
+repositories that use PRs, the child prepares one draft PR per worktree and records
+its URL, base, and exact head alongside the validation evidence. Local-only tasks
+remain supported. The workspace stays available for review, testing, and changes.
 
-When ready, ask the parent to “merge the task and clean up its workspace” using
-`worktree-done`. You can name the task without copying a commit SHA. The parent
+Ask the parent to review the task with `worktree-done` for design and codebase
+consistency, scope, contracts, safety, tests/docs, and interactions with relevant
+in-flight PRs or worktrees. The assessment records the examined commits, blockers,
+optional suggestions, and any recommended merge order. The child owns fixes and
+updates its readiness evidence. A review-only request does not authorize a merge.
+
+After review and human testing, ask the parent to “merge the task and clean up
+its workspace” using `worktree-done`. You can name the task without copying a commit SHA. The parent
 matches the task to the verified branch tip, preserves its handoff and Scratchpad,
 follows that repository's integration rules, and validates the landed result.
 With cleanup authorized, it stops task-owned processes, closes the task workspace,
