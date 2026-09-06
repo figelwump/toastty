@@ -26,7 +26,7 @@ Do not use this skill for release builds or pure unit-test work.
 3. Prefer `TOASTTY_RUNTIME_HOME` when a task needs a one-off sandbox. Otherwise set `TOASTTY_DEV_WORKTREE_ROOT` to the worktree root and let Toastty derive a stable runtime home under `artifacts/dev-runs/`.
 4. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Xcode Run schemes already use `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`. Preserve that behavior instead of hand-editing labels or run IDs.
 5. Launch the app, then read `instance.json` from the runtime home before using `peekaboo`.
-6. Use the PID from `instance.json` for `peekaboo ... --pid <pid>`. Do not target Toastty by app name if a PID is available.
+6. Use the PID from `instance.json` for `peekaboo ... --pid <pid>`. Do not target Toastty by app name if a PID is available. On the user's machine, only do this when the user explicitly asked for local validation.
 7. Before any `peekaboo` call, confirm the PID from `instance.json` is still alive. If it is stale, relaunch instead of guessing.
 8. Before any required local `peekaboo` interaction, run `peekaboo permissions --json`. If Accessibility is not granted, stop and ask the user to grant local Accessibility before continuing. Do not keep trying local `peekaboo` or improvise local screenshot/menu workarounds after a failed permissions preflight. If the user does not want to grant it locally, switch to the remote GUI path.
 9. Inspect logs and runtime state inside the same runtime home you launched. Do not inspect shared `~/.toastty` data for an isolated run.
@@ -54,45 +54,11 @@ Use the least disruptive path that still covers the change:
 
 - Local smoke: use `scripts/automation/smoke-ui.sh` first when socket automation covers the change. This is the default local path because it restores the previously frontmost app after Toastty reaches automation readiness.
 - Shortcut-hints smoke: use `scripts/automation/shortcut-hints-smoke.sh` when the change only needs a visual artifact for always-visible shortcut badges or hint text.
-- Local foreground: use a local isolated dev run plus Peekaboo only when you need direct inspection but the focus impact is acceptable.
+- Local foreground: only when the user explicitly asks for local validation. A local dev run plus Peekaboo steals focus from the user's desktop, so default to the remote validation flow below for any check that needs a screenshot, menu click, or window focus.
 - Remote validation: use `scripts/remote/validate.sh` when the validation should run on the dedicated remote Mac. Prefer `--smoke-test` for remote smoke runs; keep `--validation-command` for foreground-capable Peekaboo checks or other custom remote validation.
 - Remote Computer Use: use `.agents/skills/toastty-computer-use/SKILL.md` when the check needs human-like interaction, judgment, or exploratory GUI reproduction beyond the smoke scripts.
 
-## Typical terminal flow
-
-From the target worktree root:
-
-```bash
-ARCH="${ARCH:-$(uname -m)}"
-DERIVED_PATH="${DERIVED_PATH:-$PWD/artifacts/dev-runs/manual/Derived}"
-TOASTTY_DEV_WORKTREE_ROOT="$PWD"
-
-./scripts/dev/bootstrap-worktree.sh
-xcodebuild \
-  -workspace toastty.xcworkspace \
-  -scheme ToasttyApp \
-  -configuration Debug \
-  -destination "platform=macOS,arch=${ARCH}" \
-  -derivedDataPath "$DERIVED_PATH" \
-  build
-
-TOASTTY_DEV_WORKTREE_ROOT="$TOASTTY_DEV_WORKTREE_ROOT" \
-TOASTTY_DERIVED_PATH="$DERIVED_PATH" \
-"$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty" &
-APP_PID=$!
-```
-
-After launch:
-
-```bash
-INSTANCE_JSON="$(find "$PWD/artifacts/dev-runs" -path '*/runtime-home/instance.json' -print | sort | tail -n 1)"
-jq . "$INSTANCE_JSON"
-PID="$(jq -r '.pid' "$INSTANCE_JSON")"
-kill -0 "$PID"
-peekaboo menu list --pid "$PID" --json
-```
-
-## Remote Validation Flow
+## Remote Validation Flow (default for GUI checks)
 
 For remote smoke on a dedicated remote Mac:
 
@@ -126,6 +92,40 @@ Notes:
 - SSH-based remote `shortcut-trace` runs skip the `Workspace > Close Panel` menu-equivalence subcheck because `System Events` menu-item dispatch is not reliable in that context. Local trace runs still keep that assertion.
 - `--validation-command` remains available for foreground-capable remote validation after Toastty launches on the remote host.
 - The remote Mac must be awake, unlocked, logged into the target GUI session, and have Peekaboo permissions granted there for custom remote validation commands.
+
+## Local terminal flow (explicit user request only)
+
+Use this only when the user asked for local validation. From the target worktree root:
+
+```bash
+ARCH="${ARCH:-$(uname -m)}"
+DERIVED_PATH="${DERIVED_PATH:-$PWD/artifacts/dev-runs/manual/Derived}"
+TOASTTY_DEV_WORKTREE_ROOT="$PWD"
+
+./scripts/dev/bootstrap-worktree.sh
+xcodebuild \
+  -workspace toastty.xcworkspace \
+  -scheme ToasttyApp \
+  -configuration Debug \
+  -destination "platform=macOS,arch=${ARCH}" \
+  -derivedDataPath "$DERIVED_PATH" \
+  build
+
+TOASTTY_DEV_WORKTREE_ROOT="$TOASTTY_DEV_WORKTREE_ROOT" \
+TOASTTY_DERIVED_PATH="$DERIVED_PATH" \
+"$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty" &
+APP_PID=$!
+```
+
+After launch:
+
+```bash
+INSTANCE_JSON="$(find "$PWD/artifacts/dev-runs" -path '*/runtime-home/instance.json' -print | sort | tail -n 1)"
+jq . "$INSTANCE_JSON"
+PID="$(jq -r '.pid' "$INSTANCE_JSON")"
+kill -0 "$PID"
+peekaboo menu list --pid "$PID" --json
+```
 
 ## Runtime-home conventions
 
