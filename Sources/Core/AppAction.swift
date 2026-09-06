@@ -110,6 +110,7 @@ public enum AppAction: Equatable, Sendable {
     case updateTerminalPanelMetadata(panelID: UUID, title: String?, cwd: String?)
     case updateTerminalPanelResumeRecord(panelID: UUID, resumeRecord: ManagedAgentResumeRecord?)
     case updateTerminalPanelRemoteConversationID(panelID: UUID, remoteConversationID: RemoteConversationID?)
+    case setTerminalPanelAgentReadPolicy(panelID: UUID, policy: TerminalAgentReadPolicy?)
     case updateWebPanelMetadata(panelID: UUID, title: String?, url: String?)
     case updateScratchpadPanelState(panelID: UUID, scratchpad: ScratchpadState, title: String?)
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
@@ -243,6 +244,8 @@ public extension AppAction {
             return "updateTerminalPanelResumeRecord"
         case .updateTerminalPanelRemoteConversationID:
             return "updateTerminalPanelRemoteConversationID"
+        case .setTerminalPanelAgentReadPolicy:
+            return "setTerminalPanelAgentReadPolicy"
         case .updateWebPanelMetadata:
             return "updateWebPanelMetadata"
         case .updateScratchpadPanelState:

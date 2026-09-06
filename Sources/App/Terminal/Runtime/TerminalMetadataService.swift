@@ -247,6 +247,7 @@ final class TerminalMetadataService {
             livePanelIDs.contains($0)
         }
         liveTitleStore.synchronizeLivePanels(livePanelIDs)
+        registry?.terminalReadActivityStore.synchronizeLivePanels(livePanelIDs)
     }
 
     func invalidate(panelID: UUID) {

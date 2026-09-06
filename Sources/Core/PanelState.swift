@@ -1,6 +1,14 @@
 import RemoteProtocol
 import Foundation
 
+/// Whether other managed sessions may read a terminal panel's text via
+/// automation. Cooperative, like workspace scope: the panel's own session is
+/// always exempt.
+public enum TerminalAgentReadPolicy: String, Codable, Equatable, Sendable {
+    case allowed
+    case denied
+}
+
 public struct TerminalPanelState: Codable, Equatable, Sendable {
     public var title: String
     public var shell: String
@@ -14,6 +22,10 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
     /// user-visible conversation (and any remote client following it) survives
     /// those transitions.
     public var remoteConversationID: RemoteConversationID?
+    /// User choice for whether other managed sessions may read this
+    /// terminal's text through automation. `nil` means the default (allowed).
+    /// Optional so layouts persisted before this field decode unchanged.
+    public var agentReadPolicy: TerminalAgentReadPolicy?
     private static let homeDirectory = (NSHomeDirectory() as NSString).standardizingPath
 
     public init(
@@ -23,7 +35,8 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         launchWorkingDirectory: String? = nil,
         profileBinding: TerminalProfileBinding? = nil,
         resumeRecord: ManagedAgentResumeRecord? = nil,
-        remoteConversationID: RemoteConversationID? = nil
+        remoteConversationID: RemoteConversationID? = nil,
+        agentReadPolicy: TerminalAgentReadPolicy? = nil
     ) {
         self.title = title
         self.shell = shell
@@ -32,6 +45,12 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         self.profileBinding = profileBinding
         self.resumeRecord = resumeRecord
         self.remoteConversationID = remoteConversationID
+        self.agentReadPolicy = agentReadPolicy
+    }
+
+    /// Whether sessions other than this panel's own may read its text.
+    public var allowsAgentReads: Bool {
+        agentReadPolicy != .denied
     }
 
     /// The cwd we should use when launching or re-launching a shell surface.

@@ -82,6 +82,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private let presentLocalDocumentLinkAlert: LocalDocumentLinkAlertPresenter
     private let runtimeStore = TerminalWindowRuntimeStore()
     let terminalLiveTitleStore = TerminalLiveTitleStore()
+    let terminalReadActivityStore = TerminalReadActivityStore()
     private weak var store: AppStore?
     private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
