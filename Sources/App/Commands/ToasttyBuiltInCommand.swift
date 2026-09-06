@@ -35,6 +35,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case toggleFocusedPanelMode
     case watchRunningCommand
     case closePanel
+    case toggleFocusedTerminalAgentReads
     case renameWorkspace
     case closeWorkspace
     case renameTab
@@ -58,6 +59,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     private static let hideRightPanelTitle = "Hide Right Panel"
     private static let focusPanelTitle = "Focus Panel"
     private static let restoreLayoutTitle = "Restore Layout"
+    private static let makeTerminalPrivateTitle = "Make Terminal Private to Agents"
+    private static let allowTerminalReadsTitle = "Allow Agents to Read Terminal"
 
     // Keep these machine ids stable even if the user-facing titles change.
     var id: String {
@@ -124,6 +127,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "panel.process-watch.create"
         case .closePanel:
             return "panel.close"
+        case .toggleFocusedTerminalAgentReads:
+            return "terminal.agent-reads.toggle"
         case .renameWorkspace:
             return "workspace.rename"
         case .closeWorkspace:
@@ -224,6 +229,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Watch Running Command"
         case .closePanel:
             return "Close Panel"
+        case .toggleFocusedTerminalAgentReads:
+            return Self.makeTerminalPrivateTitle
         case .renameWorkspace:
             return "Rename Workspace"
         case .closeWorkspace:
@@ -323,6 +330,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ToasttyKeyboardShortcuts.watchRunningCommand
         case .closePanel:
             return ToasttyKeyboardShortcuts.closePanel
+        case .toggleFocusedTerminalAgentReads:
+            return nil
         case .renameWorkspace:
             return ToasttyKeyboardShortcuts.renameWorkspace
         case .closeWorkspace:
@@ -425,6 +434,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["watch", "running", "command", "process", "monitor", "foreground", "terminal", "panel"]
         case .closePanel:
             return ["close", "panel", "remove"]
+        case .toggleFocusedTerminalAgentReads:
+            return ["terminal", "private", "agents", "read", "allow", "eye"]
         case .renameWorkspace:
             return ["workspace", "rename", "edit", "title"]
         case .closeWorkspace:
@@ -470,5 +481,9 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     static func toggleFocusedPanelModeTitle(focusedPanelModeActive: Bool) -> String {
         focusedPanelModeActive ? restoreLayoutTitle : focusPanelTitle
+    }
+
+    static func toggleFocusedTerminalAgentReadsTitle(allowsAgentReads: Bool) -> String {
+        allowsAgentReads ? makeTerminalPrivateTitle : allowTerminalReadsTitle
     }
 }

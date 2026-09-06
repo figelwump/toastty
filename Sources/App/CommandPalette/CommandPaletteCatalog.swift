@@ -64,6 +64,7 @@ enum CommandPaletteCatalog {
             (.toggleFocusedPanelMode, actions.canToggleFocusedPanelMode(originWindowID: originWindowID)),
             (.watchRunningCommand, actions.canWatchRunningCommand(originWindowID: originWindowID)),
             (.closePanel, actions.canClosePanel(originWindowID: originWindowID)),
+            (.toggleFocusedTerminalAgentReads, actions.canToggleFocusedTerminalAgentReads(originWindowID: originWindowID)),
             (.renameWorkspace, actions.canRenameWorkspace(originWindowID: originWindowID)),
             (.closeWorkspace, actions.canCloseWorkspace(originWindowID: originWindowID)),
             (.renameTab, actions.canRenameTab(originWindowID: originWindowID)),
@@ -217,6 +218,8 @@ enum CommandPaletteCatalog {
             return actions.rightPanelTitle(originWindowID: originWindowID)
         case .toggleFocusedPanelMode:
             return actions.toggleFocusedPanelModeTitle(originWindowID: originWindowID)
+        case .toggleFocusedTerminalAgentReads:
+            return actions.toggleFocusedTerminalAgentReadsTitle(originWindowID: originWindowID)
         default:
             return command.title
         }

@@ -677,6 +677,7 @@ struct ToasttyApp: App {
     private let workspaceLayoutDisplayDiagnosticsObserver: WorkspaceLayoutDisplayDiagnosticsObserver?
     private let appTerminationObserver: AppTerminationObserver?
     private let scratchpadSessionLinkCleanupCoordinator: ScratchpadSessionLinkCleanupCoordinator
+    private let terminalReadActivityCleanupCoordinator: TerminalReadActivityCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
@@ -916,6 +917,10 @@ struct ToasttyApp: App {
             sessionRuntimeStore: sessionRuntimeStore,
             documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
         )
+        let terminalReadActivityCleanupCoordinator = TerminalReadActivityCleanupCoordinator(
+            sessionRuntimeStore: sessionRuntimeStore,
+            readActivityStore: terminalRuntimeRegistry.terminalReadActivityStore
+        )
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry
@@ -935,6 +940,7 @@ struct ToasttyApp: App {
         Self.writeToasttyConfigReference()
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
         self.scratchpadSessionLinkCleanupCoordinator = scratchpadSessionLinkCleanupCoordinator
+        self.terminalReadActivityCleanupCoordinator = terminalReadActivityCleanupCoordinator
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,

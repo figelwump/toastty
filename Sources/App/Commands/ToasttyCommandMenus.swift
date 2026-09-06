@@ -185,6 +185,21 @@ struct ToasttyCommandMenus: Commands {
         commandWorkspace != nil
     }
 
+    private var commandFocusedTerminalAgentReadTarget: (panelID: UUID, allowsAgentReads: Bool)? {
+        guard let workspace = commandWorkspace,
+              let panelID = workspace.focusedPanelID,
+              case .terminal(let terminalState) = workspace.panelState(for: panelID) else {
+            return nil
+        }
+        return (panelID, terminalState.allowsAgentReads)
+    }
+
+    private var commandFocusedTerminalAgentReadsTitle: String {
+        ToasttyBuiltInCommand.toggleFocusedTerminalAgentReadsTitle(
+            allowsAgentReads: commandFocusedTerminalAgentReadTarget?.allowsAgentReads ?? true
+        )
+    }
+
     private var focusedLocalDocumentPanelSelection: FocusedLocalDocumentPanelCommandSelection? {
         store.focusedLocalDocumentPanelSelection(preferredWindowID: preferredCommandWindowID)
     }
@@ -500,6 +515,13 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
+            Button(commandFocusedTerminalAgentReadsTitle) {
+                toggleFocusedTerminalAgentReadsFromCommandSelection()
+            }
+            .disabled(commandFocusedTerminalAgentReadTarget == nil)
+
+            Divider()
+
             Button("Manage Terminal Profiles…") {
                 terminalProfilesMenuController.openProfilesConfiguration()
             }
@@ -787,6 +809,17 @@ struct ToasttyCommandMenus: Commands {
     private func toggleRightPanelFromCommandSelection() {
         guard let workspaceID = commandWorkspace?.id else { return }
         _ = store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+    }
+
+    private func toggleFocusedTerminalAgentReadsFromCommandSelection() {
+        guard let target = commandFocusedTerminalAgentReadTarget else { return }
+        _ = store.send(
+            .setTerminalPanelAgentReadPolicy(
+                panelID: target.panelID,
+                policy: target.allowsAgentReads ? .denied : nil
+            ),
+            source: .command("menu_toggle_terminal_agent_reads")
+        )
     }
 
     private func closeFocusedPanelFromCommandSelection() {

@@ -32,6 +32,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.toggleRightPanel.id, "window.toggle-right-panel")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
+        XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedTerminalAgentReads.id, "terminal.agent-reads.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.manageConfig.id, "app.config.manage")
         XCTAssertEqual(ToasttyBuiltInCommand.manageTerminalProfiles.id, "terminal.profiles.manage")
         XCTAssertEqual(ToasttyBuiltInCommand.manageAgents.id, "agent.profiles.manage")
@@ -90,6 +91,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.toggleFocusedPanelMode.id,
                 ToasttyBuiltInCommand.watchRunningCommand.id,
                 ToasttyBuiltInCommand.closePanel.id,
+                ToasttyBuiltInCommand.toggleFocusedTerminalAgentReads.id,
                 ToasttyBuiltInCommand.renameWorkspace.id,
                 ToasttyBuiltInCommand.closeWorkspace.id,
                 ToasttyBuiltInCommand.renameTab.id,
@@ -115,6 +117,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.sidebarTitleValue = "Hide Sidebar"
         actions.rightPanelTitleValue = "Hide Right Panel"
         actions.focusedPanelModeTitleValue = "Restore Layout"
+        actions.terminalAgentReadsTitleValue = "Allow Agents to Read Terminal"
 
         let commands = makeCommands(actions: actions)
 
@@ -129,6 +132,10 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(
             try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.toggleFocusedPanelMode.id })).title,
             "Restore Layout"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.toggleFocusedTerminalAgentReads.id })).title,
+            "Allow Agents to Read Terminal"
         )
         XCTAssertEqual(
             commands.filter { $0.id.hasPrefix("local-document.") }.map(\.title),
