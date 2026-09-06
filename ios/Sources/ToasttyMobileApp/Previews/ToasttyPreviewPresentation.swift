@@ -23,13 +23,37 @@ extension EnvironmentValues {
 }
 
 struct ToasttyPreviewSelection: Identifiable {
-    let id = UUID()
+    let id: UUID
     let target: RemotePreviewTarget
     let title: String
+
+    init(target: RemotePreviewTarget, title: String, id: UUID = UUID()) {
+        self.id = id
+        self.target = target
+        self.title = title
+    }
 }
 
 struct ToasttyPreviewSheet: View {
     @Environment(\.dismiss) private var dismiss
+    let selection: ToasttyPreviewSelection
+
+    var body: some View {
+        NavigationStack {
+            ToasttyPreviewPage(selection: selection)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close", systemImage: "xmark") { dismiss() }
+                            .accessibilityIdentifier("toastty-preview-close")
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+struct ToasttyPreviewPage: View {
     @Environment(\.toasttyPreviewService) private var service
     let selection: ToasttyPreviewSelection
     @State private var content: RemotePreviewContent?
@@ -38,42 +62,34 @@ struct ToasttyPreviewSheet: View {
     @State private var fitRequest = 0
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let content {
-                    ToasttyPreviewContentView(content: content, target: selection.target,
-                                              service: service, fitRequest: fitRequest)
-                } else if let errorMessage {
-                    ContentUnavailableView {
-                        Label("Preview unavailable", systemImage: "doc.badge.ellipsis")
-                    } description: {
-                        Text(errorMessage)
-                    } actions: {
-                        Button("Retry") { attempt += 1 }
-                    }
-                } else {
-                    ProgressView("Loading preview…")
+        ZStack {
+            if let content {
+                ToasttyPreviewContentView(content: content, target: selection.target,
+                                          service: service, fitRequest: fitRequest)
+            } else if let errorMessage {
+                ContentUnavailableView {
+                    Label("Preview unavailable", systemImage: "doc.badge.ellipsis")
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Retry") { attempt += 1 }
                 }
+            } else {
+                ProgressView("Loading preview…")
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(ToasttyDesignTokens.background)
-            .navigationTitle(selection.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close", systemImage: "xmark") { dismiss() }
-                        .accessibilityIdentifier("toastty-preview-close")
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    if case .scratchpad = content {
-                        Button("Fit") { fitRequest += 1 }
-                            .accessibilityIdentifier("toastty-scratchpad-fit")
-                    }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ToasttyDesignTokens.background)
+        .navigationTitle(selection.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if case .scratchpad = content {
+                    Button("Fit") { fitRequest += 1 }
+                        .accessibilityIdentifier("toastty-scratchpad-fit")
                 }
             }
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
         .task(id: "\(selection.id)-\(attempt)") {
             content = nil
             errorMessage = nil

@@ -43,7 +43,7 @@ enum ToasttyPreviewFixture {
                 return scratchpad(title: "Workspace map", documentNumber: 1)
             case ToasttyMobileFixture.navigationScratchpadPanelID:
                 return scratchpad(title: "Navigation sketch", documentNumber: 2)
-            case ToasttyMobileFixture.documentPanelID:
+            case ToasttyMobileFixture.documentPanelID, ToasttyMobileFixture.olderDocumentPanelID, ToasttyMobileFixture.undatedDocumentPanelID:
                 return document(line: nil)
             case ToasttyMobileFixture.htmlPanelID:
                 return html
@@ -169,7 +169,7 @@ enum ToasttyPreviewFixture {
     Pinch to zoom into a diagram.
     Drag to explore the canvas.
 
-    Use Fit to see the whole page.
+    Use Fit to match the screen width and return to the top.
     """
 
     private static let scratchpadHTML = """
@@ -198,8 +198,12 @@ enum ToasttyPreviewFixture {
     <label>Note<input aria-label="Scratchpad note" type="text" placeholder="Add a note"></label></div>
     <div class="notes" tabindex="0" aria-label="Scrollable notes"><strong>Scrollable notes</strong>
     <p>Open a panel to review its content on your phone.</p><p>Zoom and pan stay local to this viewer.</p>
-    <p>Buttons, sliders, and text inputs should remain interactive.</p><p>Fit returns to the overview.</p></div>
-    </main><script>let count=0;document.getElementById('count-button').addEventListener('click',()=>{
+    <p>Buttons, sliders, and text inputs should remain interactive.</p><p>Fit returns to the top at screen width.</p></div>
+    <section style="padding-top:1800px"><h2>Further down the workspace</h2>
+    <p>This tall document keeps its readable width while you scroll vertically.</p>
+    <button id="bottom-button">Mark reviewed</button><output id="bottom-output">Not reviewed</output></section>
+    </main><script>document.getElementById('bottom-button').addEventListener('click',()=>{
+    document.getElementById('bottom-output').textContent='Reviewed';});let count=0;document.getElementById('count-button').addEventListener('click',()=>{
     document.getElementById('count-output').textContent='Count: '+(++count);});</script></body></html>
     """
 }

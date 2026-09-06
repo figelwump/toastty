@@ -87,24 +87,37 @@ stopped local gateway.
 Open a workspace in Toastty Mobile to see **Open Panels** above its sessions.
 The list includes the right-side panels from every desktop tab in that
 workspace, including tabs that are not selected and panels in a hidden
-sidebar. Each row identifies its owning desktop tab. Workspaces containing
+sidebar. Each row identifies its owning desktop tab. Panels are ordered by
+their latest known opening or update time, with a relative age beside the
+title. The list initially shows four panels; use **Show more** to see the rest
+and **Show less** to collapse it. Workspaces containing
 open panels remain available even when they have no sessions or the session
 filter hides all their sessions. Closed panels are not a document history.
 
-Tap a document to open a preview sheet, or tap a local file link in a
-conversation to preview that file. Explicit line references reveal the
+Tap a panel to open a full page, then use Back to return to the workspace.
+Local file links in conversations open preview sheets. Explicit line references reveal the
 requested line. Previews use the saved file on the Mac; unsaved edits in a
 desktop document editor are not transferred. The source viewer supports the
 same text, Markdown source, code, and configuration formats as the desktop
 viewer. Local HTML opens as a rendered browser preview with its permitted
 supporting assets.
 
-Scratchpads open in a full-screen viewer. Pinch to zoom, pan to explore a
-wide layout, and use **Fit** to return to the overview. Existing buttons and
+Scratchpads initially fit the screen width and start at the top. Scroll down
+through tall content, pinch to zoom, pan to explore, and use **Fit** to return
+to the width-fitted view at the top. Existing buttons and
 other interactions inside a Scratchpad remain usable. Viewing a panel on the
 phone does not focus or close its desktop panel, and the phone's zoom and
-scroll position are independent. Close and reopen a preview to load current
+scroll position are independent. Leave and reopen a preview to load current
 content from the Mac.
+
+Recency combines the desktop's recent panel activity with saved file
+modification times. The desktop retains a limited history, so older panels
+may have no known time; those appear after dated panels without an age label.
+Panels showing the same file or website can share its activity time.
+
+Local-file panels whose files are confirmed missing are omitted from the
+mobile list. This does not close their desktop tabs or retarget them to a
+different file. Permission errors and inconclusive checks do not hide panels.
 
 File previews require a native paired device with read access. A conversation
 link is resolved using the conversation's recorded working directory on the

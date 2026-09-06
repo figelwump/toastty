@@ -1,4 +1,5 @@
 import RemoteProtocol
+import SwiftUI
 import WebKit
 import XCTest
 @testable import ToasttyMobileApp
@@ -6,6 +7,29 @@ import XCTest
 
 @MainActor
 final class ToasttyPreviewTests: XCTestCase {
+    func testPreviewLoadsOnceWhenLoadingViewBecomesContent() async {
+        let firstLoad = expectation(description: "Preview loads")
+        let duplicateLoad = expectation(description: "Preview must not reload after rendering content")
+        duplicateLoad.isInverted = true
+        let calls = PreviewLoadCounter()
+        let service = ToasttyPreviewService(content: { _ in
+            if await calls.increment() == 1 { firstLoad.fulfill() }
+            else { duplicateLoad.fulfill() }
+            return .webURL(URL(string: "http://localhost")!)
+        })
+        let selection = ToasttyPreviewSelection(
+            target: .panel(workspaceID: UUID(), panelID: UUID()), title: "Preview")
+        let host = UIHostingController(rootView: NavigationStack {
+            ToasttyPreviewPage(selection: selection).environment(\.toasttyPreviewService, service)
+        })
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        await fulfillment(of: [firstLoad], timeout: 3)
+        await fulfillment(of: [duplicateLoad], timeout: 0.5)
+    }
+
     func testNavigationDelegatesImplementWebKitPolicySelector() {
         let selector = NSSelectorFromString("webView:decidePolicyForNavigationAction:decisionHandler:")
         let document = RemotePreviewDocument(title: "Source", sourcePath: "/project/a.md", content: "text",
@@ -39,8 +63,8 @@ final class ToasttyPreviewTests: XCTestCase {
     }
 
     func testUnsupportedFileAndOlderHostHaveDifferentRecoveryGuidance() {
-        XCTAssertFalse(ToasttyPreviewSheet.message(for: RemotePreviewError.unsupported).contains("Update"))
-        XCTAssertTrue(ToasttyPreviewSheet.message(for: GatewayFailure.operationCompatibility(
+        XCTAssertFalse(ToasttyPreviewPage.message(for: RemotePreviewError.unsupported).contains("Update"))
+        XCTAssertTrue(ToasttyPreviewPage.message(for: GatewayFailure.operationCompatibility(
             .missingCapability(.localFilePreview))).contains("Update Toastty on your Mac"))
     }
 
@@ -83,6 +107,49 @@ final class ToasttyPreviewTests: XCTestCase {
         XCTAssertEqual(viewport.zoomScale, fittedScale, accuracy: 0.001)
         XCTAssertEqual(webView.scrollView.minimumZoomScale, 1)
         XCTAssertEqual(webView.scrollView.maximumZoomScale, 1)
+    }
+
+    func testTallCanvasFitsWidthAndReturnsToTop() {
+        let viewport = ToasttyPreviewViewport(webView: WKWebView(), usesCanvas: true)
+        viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 700)
+        viewport.setCanvasSize(CGSize(width: 1000, height: 3000))
+        viewport.layoutIfNeeded()
+        XCTAssertEqual(viewport.zoomScale, 0.4, accuracy: 0.001)
+        XCTAssertEqual(viewport.contentSize.height, 1200, accuracy: 1)
+        XCTAssertEqual(viewport.contentOffset, .zero)
+        viewport.contentOffset.y = 400
+        viewport.setZoomScale(0.8, animated: false)
+        viewport.fit()
+        XCTAssertEqual(viewport.zoomScale, 0.4, accuracy: 0.001)
+        XCTAssertEqual(viewport.contentOffset, .zero)
+    }
+
+    func testPanelRecencySortsNewestFirstWithStableTiesAndUnknownLast() {
+        var panels = ToasttyMobileFixture.previewPanels
+        let now = Date(timeIntervalSince1970: 10_000)
+        panels[0].updatedAt = now.addingTimeInterval(-120)
+        panels[1].updatedAt = now
+        panels[2].updatedAt = now
+        panels[3].updatedAt = nil
+        let sorted = ToasttyWorkspacePanels.sorted(Array(panels.prefix(4)).reversed())
+        XCTAssertEqual(sorted.map(\.panelID), [panels[1], panels[2], panels[0], panels[3]].map(\.panelID))
+        XCTAssertEqual(ToasttyWorkspacePanels.age(now, now: now), "Just now")
+        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-120), now: now), "2m ago")
+        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-7200), now: now), "2h ago")
+        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-172800), now: now), "2d ago")
+    }
+
+    func testKnownDistantPastSortsBeforeUnknownDatesWithStableUUIDTies() {
+        var panels = Array(ToasttyMobileFixture.previewPanels.prefix(3))
+        panels[0].updatedAt = nil
+        panels[1].updatedAt = .distantPast
+        panels[2].updatedAt = nil
+        let expected = [panels[1].panelID, panels[0].panelID, panels[2].panelID]
+        for permutation in [panels, panels.reversed(), [panels[2], panels[0], panels[1]]] {
+            XCTAssertEqual(ToasttyWorkspacePanels.sorted(Array(permutation)).map(\.panelID), expected)
+        }
+        panels[1].updatedAt = nil
+        XCTAssertEqual(ToasttyWorkspacePanels.sorted(panels.reversed()).map(\.panelID), panels.map(\.panelID))
     }
 
     func testSameScratchpadRevisionPreservesInteractiveState() {
@@ -232,4 +299,12 @@ private final class PreviewSchemeTask: NSObject, @MainActor WKURLSchemeTask {
     func didReceive(_ data: Data) { callbacks.append("data") }
     func didFinish() { callbacks.append("finish") }
     func didFailWithError(_ error: any Error) { callbacks.append("error") }
+}
+
+private actor PreviewLoadCounter {
+    private var count = 0
+    func increment() -> Int {
+        count += 1
+        return count
+    }
 }

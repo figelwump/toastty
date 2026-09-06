@@ -10,15 +10,21 @@ public enum ToasttyMobileFixture {
     public static let websitePanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000004")!
     public static let navigationScratchpadPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000005")!
 
+    public static let olderDocumentPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000006")!
+    public static let undatedDocumentPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000007")!
+
     /// Fixed identities let UI fixtures exercise the same selection across reloads.
     public static let previewPanels: [RemoteWorkspacePanel] = [
-        previewPanel(1, panelID: scratchpadPanelID, kind: "scratchpad", title: "Workspace map", revision: 1),
+        previewPanel(1, panelID: scratchpadPanelID, kind: "scratchpad", title: "Workspace map", revision: 1, updatedAt: Date().addingTimeInterval(-120)),
         previewPanel(2, panelID: documentPanelID, kind: "localDocument", title: "mobile-preview.md",
-                     filePath: "/fixtures/toastty/docs/mobile-preview.md"),
+                     filePath: "/fixtures/toastty/docs/mobile-preview.md", updatedAt: Date().addingTimeInterval(-300)),
         previewPanel(3, panelID: htmlPanelID, kind: "browser", title: "preview.html",
-                     url: URL(fileURLWithPath: "/fixtures/toastty/site/preview.html")),
+                     url: URL(fileURLWithPath: "/fixtures/toastty/site/preview.html"), updatedAt: Date().addingTimeInterval(-3600)),
         previewPanel(4, panelID: websitePanelID, kind: "browser", title: "Example website",
-                     tabNumber: 2, tabTitle: "Research", url: URL(string: "https://example.com")),
+                     tabNumber: 2, tabTitle: "Research", url: URL(string: "https://example.com"), updatedAt: Date().addingTimeInterval(-7200)),
+        previewPanel(6, panelID: olderDocumentPanelID, kind: "localDocument", title: "Earlier notes",
+                     updatedAt: Date().addingTimeInterval(-172800)),
+        previewPanel(7, panelID: undatedDocumentPanelID, kind: "localDocument", title: "Undated notes"),
     ]
 
     public static let home: MobileHomeSnapshot = {
@@ -126,7 +132,8 @@ public enum ToasttyMobileFixture {
         tabTitle: String = "iOS preview",
         revision: Int? = nil,
         filePath: String? = nil,
-        url: URL? = nil
+        url: URL? = nil,
+        updatedAt: Date? = nil
     ) -> RemoteWorkspacePanel {
         RemoteWorkspacePanel(
             panelID: panelID,
@@ -137,7 +144,8 @@ public enum ToasttyMobileFixture {
             title: title,
             revision: revision,
             filePath: filePath,
-            url: url
+            url: url,
+            updatedAt: updatedAt
         )
     }
 

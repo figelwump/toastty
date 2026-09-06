@@ -290,6 +290,8 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
+    private let panelMetadataCache = RemotePanelMetadataCache()
+    private var panelMetadataPollTask: Task<Void, Never>?
     private let previewScratchpadDirectory: URL
     private let store: AppStore
     private let sessionRuntimeStore: SessionRuntimeStore
@@ -423,6 +425,7 @@ final class RemoteAccessService: ObservableObject {
             guard let self else { return operation.errorResponse(.stale) }
             return await self.resolvePreview(operation)
         }
+        panelMetadataCache.onChange = { [weak self] in self?.scheduleSessionListBroadcast() }
         self.devices = deviceStore.devices
         facadeBridge.service = self
         sendBridge.service = self
@@ -446,6 +449,7 @@ final class RemoteAccessService: ObservableObject {
             let previousCount = self.connectedClientCount
             self.connectedClientCount = counts.total
             self.connectedNativeClientCount = counts.native
+            self.updatePanelMetadataPolling()
             if counts.total > previousCount {
                 // A fresh subscriber gets the current snapshot immediately
                 // instead of waiting for the next registry change.
@@ -538,6 +542,15 @@ final class RemoteAccessService: ObservableObject {
         guard storeActionObserverToken == nil, conversationTrackingCancellables.isEmpty else { return }
         conversationTrackingGeneration &+= 1
         let generation = conversationTrackingGeneration
+        panelMetadataCache.start()
+        store.$state.combineLatest(store.$recentRightPanelItems)
+            .sink { [weak self] state, recentItems in
+                guard let self, self.conversationTrackingGeneration == generation else { return }
+                self.panelMetadataCache.updateInputs(Self.panelMetadataInputs(
+                    state: state, recentItems: recentItems, scratchpadDirectory: self.previewScratchpadDirectory
+                ))
+            }
+            .store(in: &conversationTrackingCancellables)
 
         // Observe local keyboard/paste input to invalidate open remote epochs.
         terminalRuntimeRegistry.localInputObserver = { [weak self] panelID in
@@ -600,6 +613,9 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func endConversationTracking() {
+        panelMetadataPollTask?.cancel()
+        panelMetadataPollTask = nil
+        panelMetadataCache.stop()
         conversationTrackingCancellables.removeAll()
         if let storeActionObserverToken {
             store.removeActionAppliedObserver(storeActionObserverToken)
@@ -759,15 +775,22 @@ final class RemoteAccessService: ObservableObject {
     // MARK: - Facade surface (main-actor entry points for the bridge)
 
     func facadeSessionList(at date: Date) -> RemoteSessionListSnapshot {
+        refreshPanelMetadata()
+        return makeSessionList(at: date)
+    }
+
+    private func makeSessionList(at date: Date) -> RemoteSessionListSnapshot {
         RemoteSessionListSnapshot(
             projectionRunID: projectionStore.runID,
             conversations: buildConversationSummaries(),
             generatedAt: date,
-            workspaces: Self.workspaceInventory(state: store.state)
+            workspaces: Self.workspaceInventory(state: store.state, metadata: panelMetadataCache.metadata)
         )
     }
 
-    static func workspaceInventory(state: AppState) -> [RemoteWorkspaceSummary] {
+    static func workspaceInventory(
+        state: AppState, metadata: [UUID: RemotePanelMetadataCache.Metadata] = [:]
+    ) -> [RemoteWorkspaceSummary] {
         var ids: [UUID] = []
         var seen: Set<UUID> = []
         for window in state.windows {
@@ -782,7 +805,8 @@ final class RemoteAccessService: ObservableObject {
             guard let workspace = state.workspacesByID[id] else { return nil }
             let panels = workspace.orderedTabs.flatMap { tab in
                 tab.rightAuxPanel.orderedTabs.compactMap { auxiliary -> RemoteWorkspacePanel? in
-                    guard case .web(let web) = auxiliary.panelState else { return nil }
+                    guard case .web(let web) = auxiliary.panelState,
+                          metadata[auxiliary.panelID]?.isConfirmedMissing != true else { return nil }
                     return RemoteWorkspacePanel(
                         panelID: auxiliary.panelID,
                         auxiliaryTabID: auxiliary.id,
@@ -792,11 +816,72 @@ final class RemoteAccessService: ObservableObject {
                         title: web.title,
                         revision: web.scratchpad?.revision,
                         filePath: Self.localPreviewPath(web),
-                        url: (web.currentURL ?? web.initialURL).flatMap(URL.init(string:))
+                        url: (web.currentURL ?? web.initialURL).flatMap(URL.init(string:)),
+                        updatedAt: metadata[auxiliary.panelID]?.updatedAt
                     )
                 }
             }
             return RemoteWorkspaceSummary(id: id, title: workspace.title, panels: panels)
+        }
+    }
+
+    static func panelMetadataInputs(
+        state: AppState, recentItems: [RecentRightPanelItem], scratchpadDirectory: URL
+    ) -> [UUID: RemotePanelMetadataCache.Input] {
+        let recentDates = recentItems.reduce(into: [RecentRightPanelItemID: Date]()) { result, item in
+            result[item.id] = max(result[item.id] ?? .distantPast, item.updatedAt)
+        }
+        var inputs: [UUID: RemotePanelMetadataCache.Input] = [:]
+        for workspace in state.workspacesByID.values {
+            for tab in workspace.orderedTabs {
+                for panel in tab.rightAuxPanel.orderedTabs {
+                    guard case .web(let web) = panel.panelState else { continue }
+                    let source: RemotePanelMetadataSource?
+                    let recentID: RecentRightPanelItemID?
+                    if let path = Self.localPreviewPath(web) {
+                        source = .init(path: path, kind: .localFile)
+                        recentID = web.definition == .localDocument
+                            ? .localDocument(path: path)
+                            : AppStore.normalizedBrowserRecentURL(web.restorableURL).map { .browser(url: $0) }
+                    } else if let scratchpad = web.scratchpad, web.definition == .scratchpad {
+                        source = .init(path: scratchpadDirectory.appendingPathComponent(
+                            scratchpad.documentID.uuidString + ".json").path,
+                            kind: .scratchpad(revision: scratchpad.revision))
+                        recentID = .scratchpad(documentID: scratchpad.documentID)
+                    } else {
+                        source = nil
+                        recentID = AppStore.normalizedBrowserRecentURL(web.restorableURL).map { .browser(url: $0) }
+                    }
+                    inputs[panel.panelID] = .init(source: source, recentActivityAt: recentID.flatMap { recentDates[$0] })
+                }
+            }
+        }
+        return inputs
+    }
+
+    private func refreshPanelMetadata() {
+        guard isEnabled else { return }
+        panelMetadataCache.updateInputs(Self.panelMetadataInputs(
+            state: store.state, recentItems: store.recentRightPanelItems,
+            scratchpadDirectory: previewScratchpadDirectory
+        ))
+        panelMetadataCache.requestRefresh()
+    }
+
+    private func updatePanelMetadataPolling() {
+        guard isEnabled, connectedNativeClientCount > 0 else {
+            panelMetadataPollTask?.cancel()
+            panelMetadataPollTask = nil
+            return
+        }
+        refreshPanelMetadata()
+        guard panelMetadataPollTask == nil else { return }
+        panelMetadataPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                guard let self, self.isEnabled, self.connectedNativeClientCount > 0 else { return }
+                self.refreshPanelMetadata()
+            }
         }
     }
 
@@ -1859,7 +1944,7 @@ final class RemoteAccessService: ObservableObject {
         guard isEnabled else { return }
         sessionListBroadcastTask?.cancel()
         sessionListBroadcastTask = nil
-        let snapshot = facadeSessionList(at: Date())
+        let snapshot = makeSessionList(at: Date())
         logRemotePresentationChanges(in: snapshot)
         server.broadcast(.sessionList(snapshot))
     }

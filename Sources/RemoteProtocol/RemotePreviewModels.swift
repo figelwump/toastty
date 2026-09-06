@@ -21,12 +21,15 @@ public struct RemoteWorkspacePanel: Codable, Equatable, Sendable, Identifiable {
     public var kind: String
     public var title: String
     public var revision: Int?
+    /// Most recent known desktop activity or source modification; absent when unknown.
+    public var updatedAt: Date?
     /// Display metadata only. Workspace and panel identity authorize reads.
     public var filePath: String?
     public var url: URL?
     public init(
         panelID: UUID, auxiliaryTabID: UUID, workspaceTabID: UUID, workspaceTabTitle: String,
-        kind: String, title: String, revision: Int? = nil, filePath: String? = nil, url: URL? = nil
+        kind: String, title: String, revision: Int? = nil, filePath: String? = nil, url: URL? = nil,
+        updatedAt: Date? = nil
     ) {
         self.panelID = panelID
         self.auxiliaryTabID = auxiliaryTabID
@@ -35,6 +38,7 @@ public struct RemoteWorkspacePanel: Codable, Equatable, Sendable, Identifiable {
         self.kind = kind
         self.title = title
         self.revision = revision
+        self.updatedAt = updatedAt
         self.filePath = filePath
         self.url = url
     }

@@ -21,6 +21,14 @@ struct RemotePreviewProtocolTests {
                 == withWorkspace)
     }
 
+    @Test func oldPanelMetadataDecodesWithoutTimestamp() throws {
+        let panel = RemoteWorkspacePanel(panelID: UUID(), auxiliaryTabID: UUID(), workspaceTabID: UUID(),
+                                         workspaceTabTitle: "Tab", kind: "localDocument", title: "File")
+        let data = try ConversationEventCoding.makeEncoder().encode(panel)
+        #expect(!String(decoding: data, as: UTF8.self).contains("updatedAt"))
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteWorkspacePanel.self, from: data).updatedAt == nil)
+    }
+
     @Test func previewTargetsAndResourcesRoundTripAndRejectIncompleteEnvelopes() throws {
         for target: RemotePreviewTarget in [
             .panel(workspaceID: UUID(), panelID: UUID()),
