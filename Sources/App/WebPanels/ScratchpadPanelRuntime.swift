@@ -42,8 +42,10 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
     typealias DiagnosticLogger = @MainActor @Sendable (ToasttyLogLevel, String, [String: String]) -> Void
 
     private static let scriptMessageHandlerName = "toasttyScratchpadPanel"
+    private static let externalLinkHandlerName = "toasttyScratchpadExternalLink"
     private static let maxRecentDiagnostics = 20
 
+    private let openExternalLink: @MainActor (UUID, URL) -> Void
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
     private let webView: FocusAwareWKWebView
@@ -72,6 +74,7 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         documentStore: ScratchpadDocumentStore,
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
+        openExternalLink: @escaping @MainActor (UUID, URL) -> Void = { _, _ in },
         bundle: Bundle = .main,
         entryURL: URL? = nil,
         bridgeScriptEvaluator: BridgeScriptEvaluator? = nil,
@@ -91,6 +94,7 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         let resolvedEntryURL = entryURL ?? ScratchpadPanelAssetLocator.entryURL(bundle: bundle)
         let resolvedAssetDirectoryURL = resolvedEntryURL?.deletingLastPathComponent()
         let capabilityProfile = WebPanelDefinition.scratchpad.capabilityProfile
+        self.openExternalLink = openExternalLink
         self.panelID = panelID
         self.documentStore = documentStore
         self.metadataDidChange = metadataDidChange
@@ -132,6 +136,16 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         }
         webView.navigationDelegate = self
         webView.configuration.userContentController.add(self, name: Self.scriptMessageHandlerName)
+        // Generated HTML cannot access this handler or forge trusted clicks in the isolated world.
+        webView.configuration.userContentController.add(
+            self, contentWorld: .defaultClient, name: Self.externalLinkHandlerName
+        )
+        webView.configuration.userContentController.addUserScript(WKUserScript(
+            source: Self.externalLinkJavaScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+            in: .defaultClient
+        ))
         ToasttyLog.info(
             "Finished Scratchpad WKWebView initialization",
             category: .state,
@@ -151,6 +165,9 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
             webView.interactionDidRequestFocus = nil
             webView.navigationDelegate = nil
             webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.scriptMessageHandlerName)
+            webView.configuration.userContentController.removeScriptMessageHandler(
+                forName: Self.externalLinkHandlerName, contentWorld: .defaultClient
+            )
             webView.removeFromSuperview()
         }
     }
@@ -924,8 +941,44 @@ extension ScratchpadPanelRuntime: WKNavigationDelegate {
     }
 }
 
+extension ScratchpadPanelRuntime {
+    nonisolated static let externalLinkJavaScript = """
+    (() => {
+      window.addEventListener("click", (event) => {
+        if (!event.isTrusted || event.defaultPrevented || event.button !== 0) return;
+        const anchor = event.composedPath().find((node) =>
+          node instanceof Element && node.matches("a[href]")
+        );
+        if (!anchor) return;
+        const href = anchor.getAttribute("href")?.trim();
+        if (!href || href.startsWith("#")) return;
+        let url;
+        try { url = new URL(href, document.baseURI); } catch { return; }
+        if (url.protocol !== "https:" && url.protocol !== "http:") return;
+        event.preventDefault();
+        window.webkit.messageHandlers.toasttyScratchpadExternalLink.postMessage(url.href);
+      });
+    })();
+    """
+
+    func handleExternalLinkMessage(_ body: Any) {
+        guard let rawURL = body as? String,
+              let url = URL(string: rawURL),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty else {
+            return
+        }
+        openExternalLink(panelID, url)
+    }
+}
+
 extension ScratchpadPanelRuntime: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == Self.externalLinkHandlerName {
+            handleExternalLinkMessage(message.body)
+            return
+        }
         guard message.name == Self.scriptMessageHandlerName,
               message.frameInfo.isMainFrame,
               let event = BridgeEvent(messageBody: message.body) else {

@@ -130,6 +130,8 @@ to its original workspace tab.
 
 Browser panel header actions can open the current page in the default browser, copy or save the visible page screenshot, insert a temporary PNG path into an active Toastty-managed agent session in the same workspace tab, or annotate the page with numbered comments and send that visual feedback to an active agent.
 
+Clicked HTTP and HTTPS links in a Scratchpad open a new embedded browser tab in the right panel. Links to sections within the Scratchpad stay in the document.
+
 Right-click or `Control`-click browser and Scratchpad content to use the panel's available **Back** and **Forward** history actions.
 
 Terminal command-click integrations use Toastty for common supporting files: supported local documents open as editable local-document tabs, local HTML files open in the browser, directories open terminal splits, and existing unsupported local files open in their macOS default app.

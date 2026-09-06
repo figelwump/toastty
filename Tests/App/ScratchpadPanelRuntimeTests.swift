@@ -6,6 +6,71 @@ import XCTest
 
 @MainActor
 final class ScratchpadPanelRuntimeTests: XCTestCase {
+    func testExternalLinksRouteOnlyWebURLsFromIsolatedHandler() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let panelID = UUID()
+        var opened: [URL] = []
+        let runtime = ScratchpadPanelRuntime(
+            panelID: panelID,
+            documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            openExternalLink: { sourcePanelID, url in
+                XCTAssertEqual(sourcePanelID, panelID)
+                opened.append(url)
+            },
+            diagnosticLogger: { _, _, _ in }
+        )
+        for url in ["https://example.com/path#section", "http://example.com/"] {
+            runtime.handleExternalLinkMessage(url)
+        }
+        for url in ["#section", "file:///tmp/example.html", "javascript:alert(1)", "mailto:a@example.com", "https:", "https:///", "relative"] {
+            runtime.handleExternalLinkMessage(url)
+        }
+        // The page-world bridge must not expose the isolated link-opening capability.
+        runtime.simulateBridgeMessageForTesting(["type": "openExternalLink", "url": "https://ignored.example"])
+        runtime.handleExternalLinkMessage(["url": "https://ignored.example"])
+        XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com/path#section", "http://example.com/"])
+    }
+
+    func testExternalLinkHandlerIsUnavailableToPageScripts() async throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let routed = expectation(description: "isolated handler routes URL")
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(),
+            documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            openExternalLink: { _, url in
+                XCTAssertEqual(url.absoluteString, "https://example.com/")
+                routed.fulfill()
+            },
+            diagnosticLogger: { _, _, _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        runtime.attachHost(to: container, attachment: PanelHostAttachmentToken.next())
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        let ready = expectation(description: "bundled page loaded")
+        let handler = ScratchpadPanelTestMessageHandler()
+        handler.bridgeReadyExpectation = ready
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "toasttyScratchpadPanel")
+        webView.configuration.userContentController.add(handler, name: "toasttyScratchpadPanel")
+        let entryURL = try XCTUnwrap(ScratchpadPanelAssetLocator.entryURL())
+        webView.loadFileURL(entryURL, allowingReadAccessTo: entryURL.deletingLastPathComponent())
+        await fulfillment(of: [ready], timeout: 5)
+
+        let pageAccess = try await webView.evaluateJavaScript(
+            "typeof window.webkit?.messageHandlers?.toasttyScratchpadExternalLink"
+        )
+        XCTAssertEqual(pageAccess as? String, "undefined")
+        _ = try await webView.evaluateJavaScript(
+            "window.webkit.messageHandlers.toasttyScratchpadExternalLink.postMessage('https://example.com/'); true",
+            in: nil,
+            in: .defaultClient
+        )
+        await fulfillment(of: [routed], timeout: 5)
+    }
+
     func testScratchpadRuntimeOptsIntoHistoryContextMenuItems() throws {
         let fixture = try ScratchpadRuntimeFixture()
         let runtime = ScratchpadPanelRuntime(
