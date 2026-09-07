@@ -4,6 +4,53 @@ import XCTest
 final class ToasttyMobilePreviewUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testSessionScratchpadSheetPreservesDraftAndReturnsToChat() {
+        let app = XCUIApplication()
+        app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_SCENARIO"] = "gated-send"
+        app.launch()
+        let home = app.descendants(matching: .any)["toastty-mobile-home"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
+        let session = app.buttons["toastty-mobile-grouped-card-B1000000-0000-0000-0000-000000000007"]
+        for _ in 0..<12 where !session.isHittable { home.swipeUp() }
+        session.tap()
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        app.typeText("Keep this draft while I check the Scratchpad.")
+        app.buttons["toastty-conversation-scratchpad"].tap()
+        XCTAssertTrue(app.buttons["toastty-preview-close"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["toastty-scratchpad-session"].exists)
+        let counter = app.webViews.buttons["Tap to count"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        counter.tap()
+        XCTAssertTrue(app.webViews.staticTexts["Count: 1"].waitForExistence(timeout: 5))
+        attach(app, name: "session-scratchpad-sheet")
+        app.buttons["toastty-preview-close"].tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, "Keep this draft while I check the Scratchpad.")
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+    }
+
+    func testScratchpadSessionBackReturnsToSamePreviewAndThenWorkspace() {
+        let app = launchWorkspace()
+        app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000001"].tap()
+        let counter = app.webViews.buttons["Tap to count"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        counter.tap()
+        XCTAssertTrue(app.webViews.staticTexts["Count: 1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["toastty-scratchpad-session"].exists)
+        app.buttons["toastty-scratchpad-session"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["toastty-mobile-conversation-title"].label, "Changelog + tag")
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["toastty-scratchpad-session"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.webViews.staticTexts["Count: 1"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["toastty-preview-close"].exists)
+        attach(app, name: "scratchpad-after-session-back")
+        returnToWorkspace(app)
+    }
+
     func testWorkspaceDocumentAndHTMLPreviewReturnToWorkspace() {
         let app = launchWorkspace()
         app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000002"].tap()
@@ -93,6 +140,7 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Choose All to show idle sessions in this workspace."].exists)
         attach(app, name: "panel-only-workspace")
         panel.tap()
+        XCTAssertFalse(app.buttons["toastty-scratchpad-session"].exists)
         XCTAssertTrue(app.buttons["toastty-scratchpad-fit"].waitForExistence(timeout: 10))
         returnToWorkspace(app)
         app.navigationBars.firstMatch.buttons.firstMatch.tap()

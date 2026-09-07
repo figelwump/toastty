@@ -4,7 +4,6 @@ import ToasttyMobileDomain
 
 struct ToasttyWorkspaceView: View {
     @State private var showsAllPanels = false
-    @State private var selectedPreview: ToasttyPreviewSelection?
     let workspaceID: UUID
     let controller: HomeScreenController
 
@@ -39,14 +38,6 @@ struct ToasttyWorkspaceView: View {
                 .accessibilityIdentifier("toastty-mobile-workspace-removed")
             }
         }
-        .navigationDestination(isPresented: Binding(
-            get: { selectedPreview != nil },
-            set: { if !$0 { selectedPreview = nil } }
-        )) {
-            if let selectedPreview {
-                ToasttyPreviewPage(selection: selectedPreview)
-            }
-        }
         .background(ToasttyDesignTokens.background)
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
@@ -69,12 +60,9 @@ struct ToasttyWorkspaceView: View {
                 if !workspace.panels.isEmpty {
                     Text("Open panels").font(.headline).padding(.horizontal, 6)
                     ForEach(visiblePanels) { panel in
-                        Button {
-                            selectedPreview = ToasttyPreviewSelection(
-                                target: .panel(workspaceID: workspace.id, panelID: panel.panelID),
-                                title: panel.title, id: panel.panelID
-                            )
-                        } label: {
+                        NavigationLink(value: ToasttyMobileRoute.panelPreview(
+                            workspaceID: workspace.id, panelID: panel.panelID
+                        )) {
                             ToasttyWorkspacePanelRow(panel: panel)
                         }
                         .buttonStyle(.plain)

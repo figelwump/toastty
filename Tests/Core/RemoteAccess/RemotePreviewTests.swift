@@ -26,7 +26,18 @@ struct RemotePreviewProtocolTests {
                                          workspaceTabTitle: "Tab", kind: "localDocument", title: "File")
         let data = try ConversationEventCoding.makeEncoder().encode(panel)
         #expect(!String(decoding: data, as: UTF8.self).contains("updatedAt"))
+        #expect(!String(decoding: data, as: UTF8.self).contains("associatedConversationID"))
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteWorkspacePanel.self, from: data).associatedConversationID == nil)
         #expect(try ConversationEventCoding.makeDecoder().decode(RemoteWorkspacePanel.self, from: data).updatedAt == nil)
+    }
+
+    @Test func scratchpadConversationAssociationRoundTrips() throws {
+        let panel = RemoteWorkspacePanel(
+            panelID: UUID(), auxiliaryTabID: UUID(), workspaceTabID: UUID(),
+            workspaceTabTitle: "Tab", kind: "scratchpad", title: "Notes",
+            associatedConversationID: RemoteConversationID())
+        let data = try ConversationEventCoding.makeEncoder().encode(panel)
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteWorkspacePanel.self, from: data) == panel)
     }
 
     @Test func previewTargetsAndResourcesRoundTripAndRejectIncompleteEnvelopes() throws {

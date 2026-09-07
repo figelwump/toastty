@@ -5,6 +5,7 @@ public enum ToasttyMobileFixture {
     public static let previewWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
     public static let panelOnlyWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000004")!
     public static let scratchpadPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000001")!
+    public static let scratchpadConversationID = UUID(uuidString: "B1000000-0000-0000-0000-000000000007")!
     public static let documentPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000002")!
     public static let htmlPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000003")!
     public static let websitePanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000004")!
@@ -15,7 +16,9 @@ public enum ToasttyMobileFixture {
 
     /// Fixed identities let UI fixtures exercise the same selection across reloads.
     public static let previewPanels: [RemoteWorkspacePanel] = [
-        previewPanel(1, panelID: scratchpadPanelID, kind: "scratchpad", title: "Workspace map", revision: 1, updatedAt: Date().addingTimeInterval(-120)),
+        previewPanel(1, panelID: scratchpadPanelID, kind: "scratchpad", title: "Workspace map", revision: 1,
+                     updatedAt: Date().addingTimeInterval(-120),
+                     associatedConversationID: RemoteConversationID(rawValue: scratchpadConversationID)),
         previewPanel(2, panelID: documentPanelID, kind: "localDocument", title: "mobile-preview.md",
                      filePath: "/fixtures/toastty/docs/mobile-preview.md", updatedAt: Date().addingTimeInterval(-300)),
         previewPanel(3, panelID: htmlPanelID, kind: "browser", title: "preview.html",
@@ -133,7 +136,8 @@ public enum ToasttyMobileFixture {
         revision: Int? = nil,
         filePath: String? = nil,
         url: URL? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        associatedConversationID: RemoteConversationID? = nil
     ) -> RemoteWorkspacePanel {
         RemoteWorkspacePanel(
             panelID: panelID,
@@ -145,7 +149,8 @@ public enum ToasttyMobileFixture {
             revision: revision,
             filePath: filePath,
             url: url,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            associatedConversationID: associatedConversationID
         )
     }
 

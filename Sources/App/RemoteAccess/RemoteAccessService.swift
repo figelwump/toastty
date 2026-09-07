@@ -589,6 +589,9 @@ final class RemoteAccessService: ObservableObject {
                 self.scheduleSessionListBroadcast()
             }
             switch action {
+            case .updateScratchpadPanelState:
+                // A link can change independently of title or document revision.
+                self.scheduleSessionListBroadcast()
             case .updateTerminalPanelResumeRecord, .updateTerminalPanelRemoteConversationID:
                 self.syncConversations()
             case .focusPanel(let workspaceID, let panelID),
@@ -780,16 +783,22 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func makeSessionList(at date: Date) -> RemoteSessionListSnapshot {
-        RemoteSessionListSnapshot(
+        let conversations = buildConversationSummaries()
+        let associations = Self.scratchpadConversationAssociations(
+            state: store.state, registry: sessionRuntimeStore.sessionRegistry,
+            conversations: conversations)
+        return RemoteSessionListSnapshot(
             projectionRunID: projectionStore.runID,
-            conversations: buildConversationSummaries(),
+            conversations: conversations,
             generatedAt: date,
-            workspaces: Self.workspaceInventory(state: store.state, metadata: panelMetadataCache.metadata)
+            workspaces: Self.workspaceInventory(
+                state: store.state, metadata: panelMetadataCache.metadata, associations: associations)
         )
     }
 
     static func workspaceInventory(
-        state: AppState, metadata: [UUID: RemotePanelMetadataCache.Metadata] = [:]
+        state: AppState, metadata: [UUID: RemotePanelMetadataCache.Metadata] = [:],
+        associations: [UUID: RemoteConversationID] = [:]
     ) -> [RemoteWorkspaceSummary] {
         var ids: [UUID] = []
         var seen: Set<UUID> = []
@@ -817,12 +826,46 @@ final class RemoteAccessService: ObservableObject {
                         revision: web.scratchpad?.revision,
                         filePath: Self.localPreviewPath(web),
                         url: (web.currentURL ?? web.initialURL).flatMap(URL.init(string:)),
-                        updatedAt: metadata[auxiliary.panelID]?.updatedAt
+                        updatedAt: metadata[auxiliary.panelID]?.updatedAt,
+                        associatedConversationID: web.definition == .scratchpad
+                            ? associations[auxiliary.panelID] : nil
                     )
                 }
             }
             return RemoteWorkspaceSummary(id: id, title: workspace.title, panels: panels)
         }
+    }
+
+    static func scratchpadConversationAssociations(
+        state: AppState, registry: SessionRegistry,
+        conversations: [RemoteConversationSummary]
+    ) -> [UUID: RemoteConversationID] {
+        var conversationBySessionID: [String: RemoteConversationSummary] = [:]
+        for conversation in conversations {
+            guard let panelID = conversation.placement.panelID,
+                  let workspaceID = conversation.placement.workspaceID,
+                  case .terminal(let terminal)? = state.workspacesByID[workspaceID]?.panelState(for: panelID),
+                  terminal.remoteConversationID == conversation.conversationID,
+                  let session = registry.activeSession(for: panelID),
+                  session.agent == conversation.provider else { continue }
+            conversationBySessionID[session.sessionID] = conversation
+        }
+        var associations: [UUID: RemoteConversationID] = [:]
+        for workspace in state.workspacesByID.values {
+            for tab in workspace.orderedTabs {
+                for panel in tab.rightAuxPanel.orderedTabs {
+                    guard case .web(let web) = panel.panelState,
+                          web.definition == .scratchpad,
+                          let link = web.scratchpad?.sessionLink,
+                          let conversation = conversationBySessionID[link.sessionID],
+                          conversation.provider == link.agent else { continue }
+                    // Session IDs name exact live bindings. A reused source
+                    // panel or a saved title never establishes an association.
+                    associations[panel.panelID] = conversation.conversationID
+                }
+            }
+        }
+        return associations
     }
 
     static func panelMetadataInputs(

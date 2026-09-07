@@ -298,6 +298,93 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func scratchpadAssociationsRequireExactLiveSessionAndMatchingSummary() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude)
+        defer { fixture.removeRuntimeFiles() }
+        var state = fixture.store.state
+        let summary = fixture.summary
+        let workspaceID = try #require(summary.placement.workspaceID)
+        let tabID = try #require(state.workspacesByID[workspaceID]?.selectedTabID)
+        let link = ScratchpadSessionLink(
+            sessionID: fixture.sessionID, agent: .claude,
+            sourcePanelID: UUID(), sourceWorkspaceID: UUID())
+        let firstID = UUID()
+        let secondID = UUID()
+        let standaloneID = UUID()
+        for panelID in [firstID, secondID, standaloneID] {
+            let documentID = UUID()
+            state.workspacesByID[workspaceID]?.tabsByID[tabID]?.rightAuxPanel.appendTab(
+                .init(
+                    id: UUID(), identity: .scratchpad(id: documentID), panelID: panelID,
+                    panelState: .web(.init(
+                        definition: .scratchpad,
+                        scratchpad: .init(documentID: documentID,
+                            sessionLink: panelID == standaloneID ? nil : link, revision: 1)))))
+        }
+        var registry = fixture.sessionRuntimeStore.sessionRegistry
+        let associations = RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [summary])
+        #expect(associations == [firstID: fixture.conversationID, secondID: fixture.conversationID])
+        let inventory = RemoteAccessService.workspaceInventory(state: state, associations: associations)
+        #expect(inventory.flatMap(\.panels).filter { $0.associatedConversationID == fixture.conversationID }.count == 2)
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: []).isEmpty)
+        var staleSummary = summary
+        staleSummary.conversationID = RemoteConversationID()
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [staleSummary]).isEmpty)
+        for summaries in [[summary, staleSummary], [staleSummary, summary]] {
+            #expect(RemoteAccessService.scratchpadConversationAssociations(
+                state: state, registry: registry, conversations: summaries) == associations)
+        }
+        var wrongProvider = summary
+        wrongProvider.provider = .codex
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [wrongProvider]).isEmpty)
+        registry.stopSession(sessionID: fixture.sessionID, at: .now)
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [summary]).isEmpty)
+        registry.startSession(
+            sessionID: "replacement", agent: .claude, panelID: fixture.panelID,
+            windowID: UUID(), workspaceID: workspaceID, cwd: nil, repoRoot: nil, at: .now)
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [summary]).isEmpty)
+    }
+
+    @MainActor
+    @Test func scratchpadLinkOnlyChangeBroadcastsAssociationWithoutRevisionChange() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude)
+        defer { fixture.removeRuntimeFiles() }
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+        let documentID = UUID()
+        let scratchpad = ScratchpadState(documentID: documentID, revision: 1)
+        #expect(fixture.store.send(.createWebPanel(
+            workspaceID: workspaceID,
+            panel: .init(definition: .scratchpad, scratchpad: scratchpad), placement: .rightPanel)))
+        let panelID = try #require(fixture.service.facadeSessionList(at: .now).workspaces
+            .flatMap(\.panels).first { $0.kind == "scratchpad" }?.panelID)
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.server.sessionListSnapshots.last?.workspaces.flatMap(\.panels)
+                .contains { $0.panelID == panelID } == true
+        }
+        fixture.server.removeAllBroadcasts()
+        var linked = scratchpad
+        linked.sessionLink = .init(
+            sessionID: fixture.sessionID, agent: .claude,
+            sourcePanelID: fixture.panelID, sourceWorkspaceID: workspaceID)
+        #expect(fixture.store.send(.updateScratchpadPanelState(
+            panelID: panelID, scratchpad: linked, title: nil)))
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.server.sessionListSnapshots.last?.workspaces.flatMap(\.panels)
+                .first { $0.panelID == panelID }?.associatedConversationID == fixture.conversationID
+        }
+        let panel = try #require(fixture.server.sessionListSnapshots.last?.workspaces.flatMap(\.panels)
+            .first { $0.panelID == panelID })
+        #expect(panel.associatedConversationID == fixture.conversationID)
+        #expect(panel.revision == 1)
+    }
+
+    @MainActor
     @Test func desktopReadTransitionSchedulesFreshIdleSessionList() async throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
         defer { fixture.removeRuntimeFiles() }

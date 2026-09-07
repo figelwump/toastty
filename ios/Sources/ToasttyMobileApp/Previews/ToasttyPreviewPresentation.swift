@@ -37,6 +37,7 @@ struct ToasttyPreviewSelection: Identifiable {
 struct ToasttyPreviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     let selection: ToasttyPreviewSelection
+    var detents: Set<PresentationDetent> = [.medium, .large]
 
     var body: some View {
         NavigationStack {
@@ -48,7 +49,7 @@ struct ToasttyPreviewSheet: View {
                     }
                 }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents(detents)
         .presentationDragIndicator(.visible)
     }
 }
@@ -57,6 +58,7 @@ struct ToasttyPreviewPage: View {
     @Environment(\.toasttyPreviewService) private var service
     let selection: ToasttyPreviewSelection
     @State private var content: RemotePreviewContent?
+    @State private var loadedTarget: RemotePreviewTarget?
     @State private var errorMessage: String?
     @State private var attempt = 0
     @State private var fitRequest = 0
@@ -91,12 +93,16 @@ struct ToasttyPreviewPage: View {
             }
         }
         .task(id: "\(selection.id)-\(attempt)") {
+            // Returning from a session keeps the already-loaded Scratchpad and
+            // its local interactions. Closing and reopening creates a new page.
+            guard content == nil || loadedTarget != selection.target else { return }
             content = nil
             errorMessage = nil
             do {
                 let loaded = try await service.content(selection.target)
                 try Task.checkCancellation()
                 content = loaded
+                loadedTarget = selection.target
             } catch is CancellationError {
             } catch {
                 guard !Task.isCancelled else { return }

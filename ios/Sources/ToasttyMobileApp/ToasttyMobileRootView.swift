@@ -141,6 +141,8 @@ struct ToasttyMobileRootView: View {
                         )
                     case .conversation(let conversationID):
                         conversationScreen(for: conversationID)
+                    case .panelPreview(let workspaceID, let panelID):
+                        workspacePreview(workspaceID: workspaceID, panelID: panelID)
                     }
                 }
         }
@@ -262,6 +264,35 @@ struct ToasttyMobileRootView: View {
             dismissSendReceipt: conversationReceiptDismissAction(for: conversationID),
             onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID)
         )
+    }
+
+    private func workspacePreview(workspaceID: UUID, panelID: UUID) -> some View {
+        let controller = sessionController.homeController
+        let title = controller.workspace(id: workspaceID)?.panels.first { $0.panelID == panelID }?.title
+        return ToasttyPreviewPage(selection: ToasttyPreviewSelection(
+            target: .panel(workspaceID: workspaceID, panelID: panelID),
+            title: title ?? "Preview", id: panelID
+        ))
+        .toolbar {
+            if let conversation = ToasttySessionScratchpads.conversation(
+                in: controller.snapshot, workspaceID: workspaceID, panelID: panelID
+            ) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        // Resolve again at tap time so an ended/rebound session
+                        // cannot use an association captured by an older render.
+                        guard let current = ToasttySessionScratchpads.conversation(
+                            in: controller.snapshot, workspaceID: workspaceID, panelID: panelID
+                        ) else { return }
+                        controller.openConversation(id: current.id)
+                    } label: {
+                        Label("Session", systemImage: "bubble.left")
+                    }
+                    .accessibilityHint("Open \(conversation.title)")
+                    .accessibilityIdentifier("toastty-scratchpad-session")
+                }
+            }
+        }
     }
 
     private var settingsPresentation: ToasttySettingsPresentation? {

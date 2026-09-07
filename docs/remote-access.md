@@ -107,8 +107,17 @@ through tall content, pinch to zoom, pan to explore, and use **Fit** to return
 to the width-fitted view at the top. Existing buttons and
 other interactions inside a Scratchpad remain usable. Viewing a panel on the
 phone does not focus or close its desktop panel, and the phone's zoom and
-scroll position are independent. Leave and reopen a preview to load current
-content from the Mac.
+scroll position are independent. Close the sheet or return to the workspace,
+then open the preview again to load current content from the Mac.
+
+For a Scratchpad linked to a session, use the **Scratchpad** button in the
+chat header to open it in a sheet. Close the sheet to return to your chat;
+an unfinished message draft is preserved. If more than one open Scratchpad
+is linked to that session, the button offers a menu identifying each panel.
+From a Scratchpad opened through the workspace list, use **Session** to open
+the linked chat. Back returns to the Scratchpad, then to the workspace.
+These links follow the exact live session association on the Mac. Standalone
+Scratchpads and ended sessions do not gain inferred links to other sessions.
 
 Recency combines the desktop's recent panel activity with saved file
 modification times. The desktop retains a limited history, so older panels
