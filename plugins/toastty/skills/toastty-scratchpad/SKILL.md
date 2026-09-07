@@ -142,11 +142,13 @@ If the artifact starts to feel busy, the answer is almost always to remove eleme
    - use remote HTTPS font files only through inline `@font-face` declarations, and only when they materially improve the artifact
    - use inline SVG, CSS, HTML, and small inline data assets when useful
    - keep content under roughly 1 MB
-4. Design for a resizable panel:
-   - responsive layout
-   - readable at narrow and wide widths
-   - no text overlap
+4. Make artifacts responsive by default for resizable panels and smaller desktops, and support mobile widths where practical:
+   - adapt to the available panel width, not just a large desktop viewport; include a device-width viewport meta tag
+   - reflow columns and reduce spacing at narrow widths while keeping text readable; avoid fixed page widths, clipped content, and overlapping labels
+   - keep wide tables or diagrams in their own scrollable region when reflow would obscure their meaning, rather than shrinking text or making the whole page scroll horizontally
+   - make interactive controls usable with touch and expose essential information without requiring hover
    - enough labels that the user can understand the artifact without chat context
+   - when previewing, check a smaller desktop panel and a mobile width as well as the wide layout
 5. Replace the initial loading screen by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact. If the first loading screen used `--new`, omit `--new` on later publishes so they update that newly linked Scratchpad.
 
 ## Progressive Updates
