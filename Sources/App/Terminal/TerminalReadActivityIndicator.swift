@@ -106,7 +106,9 @@ struct TerminalReadActivityIndicator: View {
     /// after the first read changes the count, so `onChange` alone misses it.
     @State private var lastFlashedReadCount = 0
 
-    private static let flashDurationNanoseconds: UInt64 = 1_000_000_000
+    /// How long the eye stays accent-colored with the "Read by" label after a
+    /// read. Long enough to read the label; repeated polls keep extending it.
+    private static let flashDurationNanoseconds: UInt64 = 4_000_000_000
 
     private var state: TerminalReadActivityIndicatorState {
         .resolve(allowsAgentReads: allowsAgentReads, hasReaders: model.hasReaders)
@@ -123,7 +125,8 @@ struct TerminalReadActivityIndicator: View {
                     if isFlashing, let reader = model.mostRecentReader {
                         Text("Read by \(reader.label)")
                             .font(ToastyTheme.fontWorkspaceSessionChip)
-                            .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
+                            .foregroundStyle(idleTint)
+                            .tint(idleTint)
                             .lineLimit(1)
                             .fixedSize()
                             .transition(.opacity)
@@ -187,6 +190,7 @@ struct TerminalReadActivityIndicator: View {
         let image = Image(systemName: systemName)
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(tint)
+            .tint(tint)
             .frame(width: 16, height: 16)
             .contentShape(Rectangle())
         if reduceMotion {
@@ -210,7 +214,11 @@ struct TerminalReadActivityIndicator: View {
     private func flash() {
         lastFlashedReadCount = model.totalReadCount
         settleTask?.cancel()
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+        // Snap to the accent immediately so the read is visible the instant
+        // it happens; only the settle back to muted is animated.
+        var immediate = Transaction()
+        immediate.disablesAnimations = true
+        withTransaction(immediate) {
             isFlashing = true
         }
         settleTask = Task { @MainActor in
