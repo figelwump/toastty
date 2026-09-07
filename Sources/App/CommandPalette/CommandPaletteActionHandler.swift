@@ -41,6 +41,9 @@ protocol CommandPaletteActionHandling: AnyObject {
     func watchRunningCommand(originWindowID: UUID) -> Bool
     func canClosePanel(originWindowID: UUID) -> Bool
     func closePanel(originWindowID: UUID) -> Bool
+    func canToggleFocusedTerminalAgentReads(originWindowID: UUID) -> Bool
+    func toggleFocusedTerminalAgentReads(originWindowID: UUID) -> Bool
+    func toggleFocusedTerminalAgentReadsTitle(originWindowID: UUID) -> String
     func canRenameWorkspace(originWindowID: UUID) -> Bool
     func renameWorkspace(originWindowID: UUID) -> Bool
     func canCloseWorkspace(originWindowID: UUID) -> Bool
@@ -396,6 +399,37 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         ).didMutateState
     }
 
+    private func focusedTerminalAgentReadTarget(originWindowID: UUID) -> (panelID: UUID, allowsAgentReads: Bool)? {
+        guard let workspace = store?.commandSelection(preferredWindowID: originWindowID)?.workspace,
+              let panelID = workspace.focusedPanelID,
+              case .terminal(let terminalState) = workspace.panelState(for: panelID) else {
+            return nil
+        }
+        return (panelID, terminalState.allowsAgentReads)
+    }
+
+    func canToggleFocusedTerminalAgentReads(originWindowID: UUID) -> Bool {
+        focusedTerminalAgentReadTarget(originWindowID: originWindowID) != nil
+    }
+
+    func toggleFocusedTerminalAgentReads(originWindowID: UUID) -> Bool {
+        guard let store, let target = focusedTerminalAgentReadTarget(originWindowID: originWindowID) else {
+            return false
+        }
+        return store.send(
+            .setTerminalPanelAgentReadPolicy(
+                panelID: target.panelID,
+                policy: target.allowsAgentReads ? .denied : nil
+            ),
+            source: .command("command_palette_toggle_terminal_agent_reads")
+        )
+    }
+
+    func toggleFocusedTerminalAgentReadsTitle(originWindowID: UUID) -> String {
+        let allowsAgentReads = focusedTerminalAgentReadTarget(originWindowID: originWindowID)?.allowsAgentReads ?? true
+        return ToasttyBuiltInCommand.toggleFocusedTerminalAgentReadsTitle(allowsAgentReads: allowsAgentReads)
+    }
+
     // The menu controllers wrap these same AppStore command helpers, but the
     // palette must pass its explicit origin window instead of following the
     // live key-window providers those controllers use.
@@ -724,6 +758,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return watchRunningCommand(originWindowID: originWindowID)
         case .closePanel:
             return closePanel(originWindowID: originWindowID)
+        case .toggleFocusedTerminalAgentReads:
+            return toggleFocusedTerminalAgentReads(originWindowID: originWindowID)
         case .renameWorkspace:
             return renameWorkspace(originWindowID: originWindowID)
         case .closeWorkspace:

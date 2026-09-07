@@ -291,6 +291,7 @@ public actor SendReconciliation {
 
             case .assistantMessage, .toolStarted, .toolFinished,
                  .statusChanged, .interactionPresented, .interactionResolved,
+                 .interactionResponseClosed,
                  .subagentSummary, .sessionBindingChanged:
                 continue
             }

@@ -77,6 +77,21 @@ terminal rejects the send. An accepted send means Toastty handed it to the
 terminal; the transcript event carrying the same request ID is the later
 confirmation.
 
+Claude Code sessions launched or resumed through Toastty can also answer
+`AskUserQuestion` forms from the phone. Choose an option, select multiple options
+where offered, or enter a custom answer, then submit the complete form. The
+desktop question remains available. The phone waits for Claude's completion
+event before showing the accepted answers, including when you answer on the Mac
+first.
+
+Question answers require a native paired device with send access and remote
+replies enabled for that session. A question can be answered remotely for up to
+five minutes while its launch hook remains connected. If that connection ends,
+the question expires, or the provider's form is unsupported, continue on the
+Mac. Other tool permission requests remain read-only on the phone. Existing
+Claude sessions must be relaunched or resumed through the updated Toastty to
+install the answer hook.
+
 Toastty Mobile reconnects automatically after transient network loss and
 reloads from Toastty's current snapshots when it detects an event gap. Keep
 Toastty running and Remote Access enabled; Tailscale Serve alone cannot reach a
@@ -87,24 +102,46 @@ stopped local gateway.
 Open a workspace in Toastty Mobile to see **Open Panels** above its sessions.
 The list includes the right-side panels from every desktop tab in that
 workspace, including tabs that are not selected and panels in a hidden
-sidebar. Each row identifies its owning desktop tab. Workspaces containing
+sidebar. Each row identifies its owning desktop tab. Panels are ordered by
+their latest known opening or update time, with a relative age beside the
+title. The list initially shows four panels; use **Show more** to see the rest
+and **Show less** to collapse it. Workspaces containing
 open panels remain available even when they have no sessions or the session
 filter hides all their sessions. Closed panels are not a document history.
 
-Tap a document to open a preview sheet, or tap a local file link in a
-conversation to preview that file. Explicit line references reveal the
+Tap a panel to open a full page, then use Back to return to the workspace.
+Local file links in conversations open preview sheets. Explicit line references reveal the
 requested line. Previews use the saved file on the Mac; unsaved edits in a
 desktop document editor are not transferred. The source viewer supports the
 same text, Markdown source, code, and configuration formats as the desktop
 viewer. Local HTML opens as a rendered browser preview with its permitted
 supporting assets.
 
-Scratchpads open in a full-screen viewer. Pinch to zoom, pan to explore a
-wide layout, and use **Fit** to return to the overview. Existing buttons and
+Scratchpads initially fit the screen width and start at the top. Scroll down
+through tall content, pinch to zoom, pan to explore, and use **Fit** to return
+to the width-fitted view at the top. Existing buttons and
 other interactions inside a Scratchpad remain usable. Viewing a panel on the
 phone does not focus or close its desktop panel, and the phone's zoom and
-scroll position are independent. Close and reopen a preview to load current
-content from the Mac.
+scroll position are independent. Close the sheet or return to the workspace,
+then open the preview again to load current content from the Mac.
+
+For a Scratchpad linked to a session, use the **Scratchpad** button in the
+chat header to open it in a sheet. Close the sheet to return to your chat;
+an unfinished message draft is preserved. If more than one open Scratchpad
+is linked to that session, the button offers a menu identifying each panel.
+From a Scratchpad opened through the workspace list, use **Session** to open
+the linked chat. Back returns to the Scratchpad, then to the workspace.
+These links follow the exact live session association on the Mac. Standalone
+Scratchpads and ended sessions do not gain inferred links to other sessions.
+
+Recency combines the desktop's recent panel activity with saved file
+modification times. The desktop retains a limited history, so older panels
+may have no known time; those appear after dated panels without an age label.
+Panels showing the same file or website can share its activity time.
+
+Local-file panels whose files are confirmed missing are omitted from the
+mobile list. This does not close their desktop tabs or retarget them to a
+different file. Permission errors and inconclusive checks do not hide panels.
 
 File previews require a native paired device with read access. A conversation
 link is resolved using the conversation's recorded working directory on the
@@ -152,6 +189,11 @@ support conversations; update Toastty on the Mac to enable previews.
   message text, concise tool activity, state, workspace/panel placement, and
   working directories when present. It does not receive raw provider JSONL or
   raw terminal frames.
+- Answerable Claude questions include their question text, options, optional
+  previews, and accepted answers. The phone sends option identifiers and custom
+  answer text; the Mac applies them only to the exact pending question through
+  Claude's hook response. This does not grant tool permissions or change
+  Claude's permission settings.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These

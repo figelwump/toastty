@@ -75,7 +75,7 @@ List the skills Toastty can make available to new supported managed agent launch
 toastty setup skills list
 ```
 
-The read-only inventory includes Toastty's four shipped skills and accepted
+The read-only inventory includes Toastty's five shipped skills and accepted
 user-authored packages under `~/.toastty/skills`. Invalid user packages appear
 in an excluded section with the same diagnostic used by `Toastty > Manage
 Toastty Skills…`. A missing user-skills directory is an empty catalog and is
@@ -533,6 +533,7 @@ Query selectors and `key=value` argument handling follow the same rules as `acti
 "$TOASTTY_CLI_PATH" query run annotation.keys
 "$TOASTTY_CLI_PATH" query run workspace.snapshot --workspace "$WORKSPACE_ID"
 "$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$PANEL_ID" contains="ready"
+"$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$OTHER_PANEL_ID" tail=80 includeScrollback=true
 ```
 
 Prefer `query list --json` to discover the current canonical IDs. Common queries include:
@@ -540,11 +541,23 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `annotation.keys`
 - `workspace.snapshot`
 - `terminal.state` (returns `windowID`, `workspaceID`, `panelID`, and terminal metadata)
-- `terminal.visible-text`
+- `terminal.visible-text` (accepts `contains`, `tail`, and `includeScrollback`;
+  returns `text`, `lineCount`, `truncated`, and `includesScrollback`)
 - `panel.local-document.state`
 - `panel.browser.state`
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.state`
+
+`terminal.visible-text` may target any terminal panel in a workspace the
+caller can automate, not only the caller's own panel. Reads by another session
+are shown in the read panel's header, and a panel the user marked private
+returns `PANEL_READ_DENIED` to every session except its own.
+
+`workspace.snapshot` describes the selected tab's main-area slots in
+`slotMappings`. Terminal entries carry `title`, `cwd`, `shell`, `profileID`,
+`shortcutNumber`, `promptState`, `isBusy`, `sessionID`, `agent`, and
+`readable`, so an agent can pick a sibling terminal by name or state without
+reading its text.
 
 `workspace.snapshot` includes the selected workspace tab's right-panel tabs at
 `rightPanel.tabs`. Each tab includes `panelID`, `panelKind`, `webDefinition`,

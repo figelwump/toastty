@@ -19,6 +19,9 @@ struct ToasttyConversationScreen: View {
     let loadOlder: () -> Void
     let submitDraft: () -> Bool
     let dismissSendReceipt: (String) -> Void
+    let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
+    let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
+    let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let onVisibleLiveEdge: (MobileSessionStatus) -> Void
 
     init(
@@ -31,6 +34,12 @@ struct ToasttyConversationScreen: View {
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping () -> Bool = { false },
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
+        editInteractionAnswer: @escaping (
+            RemotePendingInteraction.ID,
+            ToasttyInteractionAnswerEdit
+        ) -> Void = { _, _ in },
+        submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in }
     ) {
         self.conversationID = conversationID
@@ -42,6 +51,9 @@ struct ToasttyConversationScreen: View {
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
         self.dismissSendReceipt = dismissSendReceipt
+        self.interactionAnswerStates = interactionAnswerStates
+        self.editInteractionAnswer = editInteractionAnswer
+        self.submitInteractionAnswer = submitInteractionAnswer
         self.onVisibleLiveEdge = onVisibleLiveEdge
     }
 
@@ -52,6 +64,9 @@ struct ToasttyConversationScreen: View {
                     state: resolvedPresentation,
                     loadOlder: loadOlder,
                     dismissSendReceipt: dismissSendReceipt,
+                    interactionAnswerStates: interactionAnswerStates,
+                    editInteractionAnswer: editInteractionAnswer,
+                    submitInteractionAnswer: submitInteractionAnswer,
                     readAcknowledgementEpoch: conversation.state,
                     jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
                     onVisibleLiveEdge: {
@@ -77,7 +92,9 @@ struct ToasttyConversationScreen: View {
                 title: (reference as NSString).lastPathComponent)
             return .handled
         })
-        .sheet(item: $selectedPreview) { ToasttyPreviewSheet(selection: $0) }
+        .sheet(item: $selectedPreview) { selection in
+            ToasttyPreviewSheet(selection: selection, detents: previewDetents(for: selection))
+        }
         .background(ToasttyDesignTokens.elevatedSurface)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -88,6 +105,9 @@ struct ToasttyConversationScreen: View {
                     navigationBarHeader(conversation)
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                scratchpadButton
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
@@ -97,6 +117,41 @@ struct ToasttyConversationScreen: View {
     private var resolvedPresentation: ToasttyConversationPresentationState {
         if let presentation { return presentation }
         return .loading
+    }
+
+    @ViewBuilder
+    private var scratchpadButton: some View {
+        let panels = ToasttySessionScratchpads.panels(in: controller.snapshot, for: conversationID)
+        if panels.count == 1, let panel = panels.first {
+            Button { openScratchpad(panel) } label: {
+                Label("Scratchpad", systemImage: "square.on.square")
+            }
+            .accessibilityIdentifier("toastty-conversation-scratchpad")
+        } else if panels.count > 1 {
+            Menu {
+                ForEach(panels) { panel in
+                    Button(panel.menuTitle) { openScratchpad(panel) }
+                }
+            } label: {
+                Label("Scratchpads", systemImage: "square.on.square")
+            }
+            .accessibilityIdentifier("toastty-conversation-scratchpad")
+        }
+    }
+
+    private func openScratchpad(_ panel: ToasttySessionScratchpad) {
+        guard selectedPreview == nil,
+              let current = ToasttySessionScratchpads.panels(in: controller.snapshot, for: conversationID)
+                .first(where: { $0.workspaceID == panel.workspaceID && $0.id == panel.id }) else { return }
+        isComposerFocused = false
+        selectedPreview = current.selection
+    }
+
+    private func previewDetents(for selection: ToasttyPreviewSelection) -> Set<PresentationDetent> {
+        switch selection.target {
+        case .panel: [.large]
+        case .conversationFile: [.medium, .large]
+        }
     }
 
     private func navigationBarHeader(_ conversation: MobileConversation) -> some View {

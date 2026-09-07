@@ -1244,6 +1244,88 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
+    func testQuestionAnswerRequiresCurrentCapabilityResponseAndEpoch() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "CDCDCDCD-CDCD-CDCD-CDCD-CDCDCDCDCDCD")!,
+            counter: 4
+        )
+        let interactionID = RemotePendingInteraction.ID(rawValue: "question-current")
+        let questions = [RemoteInteractionQuestion(
+            id: "0",
+            header: "Choice",
+            question: "Which one?",
+            options: [
+                .init(id: "0", label: "First"),
+                .init(id: "1", label: "Second"),
+            ]
+        )]
+        let interaction = RemotePendingInteraction(
+            id: interactionID,
+            kind: .question,
+            prompt: "Choose one",
+            inputEpoch: epoch,
+            presentedAt: Date(timeIntervalSince1970: 1),
+            questions: questions,
+            responseID: "response-current"
+        )
+        let presented: CompatibleConversationEvent = .known(ConversationEvent(
+            conversationID: conversationID,
+            sequence: 1,
+            eventID: "question-presented",
+            timestamp: Date(timeIntervalSince1970: 1),
+            provider: .claude,
+            payload: .interactionPresented(interaction)
+        ))
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: [.questionAnswers]))],
+            sessions: [.success(snapshot(runID: run, title: "REST seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [presented], latestSequence: 1)
+            )))],
+            questionAnswers: [.success(.submitted)]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.read, .send]
+        )
+        let runtime = await coordinator.openConversation(conversationID)
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Fresh",
+            inputAvailability: .pendingInteraction(interactionIDs: [interactionID]),
+            latestSequence: 1
+        )))
+        _ = try await conversationState(matching: { $0.phase == .live }, runtime)
+
+        let request = RemoteQuestionAnswerRequest(
+            conversationID: conversationID,
+            interactionID: interactionID,
+            responseID: "response-current",
+            expectedInputEpoch: epoch,
+            clientRequestID: "answer-1",
+            answers: [RemoteInteractionAnswer(questionID: "0", selectedOptionIDs: ["1"])]
+        )
+        let submitted = try await coordinator.answerQuestion(request)
+        XCTAssertEqual(submitted, .submitted)
+        var stale = request
+        stale.expectedInputEpoch = epoch.next()
+        let rejected = try await coordinator.answerQuestion(stale)
+        XCTAssertEqual(rejected, .rejected(reason: .epochMismatch))
+        let recorded = await gateway.recordedQuestionAnswers()
+        XCTAssertEqual(recorded, [request])
+        await coordinator.suspend()
+    }
+
     func testExactStreamEchoWinsAndLateResponseCannotInvalidateNewSnapshot() async throws {
         let operations = OperationLog()
         let run = runID(1)
@@ -1794,12 +1876,14 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var sessionScripts: [ScriptedCall<CompatibleSessionListSnapshot>]
     private var eventScripts: [ScriptedCall<CompatibleGatewayEventsResponse>]
     private var sendScripts: [ScriptedCall<RemoteMessageSendResult>]
+    private var questionAnswerScripts: [ScriptedCall<RemoteQuestionAnswerResult>]
     private var eventCursors: [ConversationEventCursor?] = []
     private var eventRequests: [RemoteGatewayEventsRequest] = []
     private let eventCalls = CallCounter()
     private let sendCalls = CallCounter()
     private var helloCalls = 0
     private var sendRequests: [RemoteMessageSendRequest] = []
+    private var questionAnswerRequests: [RemoteQuestionAnswerRequest] = []
     private var readAcknowledgements: [RemoteConversationReadAcknowledgementRequest] = []
 
     init(
@@ -1807,13 +1891,15 @@ private actor ScriptedGateway: GatewayClientProtocol {
         hello: [Result<RemoteGatewayHelloResponse, GatewayFailure>],
         sessions: [Result<CompatibleSessionListSnapshot, GatewayFailure>] = [],
         events: [ScriptedCall<CompatibleGatewayEventsResponse>] = [],
-        sends: [ScriptedCall<RemoteMessageSendResult>] = []
+        sends: [ScriptedCall<RemoteMessageSendResult>] = [],
+        questionAnswers: [Result<RemoteQuestionAnswerResult, GatewayFailure>] = []
     ) {
         self.operations = operations
         helloScripts = hello.map { ScriptedCall(result: $0) }
         sessionScripts = sessions.map { ScriptedCall(result: $0) }
         eventScripts = events
         sendScripts = sends
+        questionAnswerScripts = questionAnswers.map { ScriptedCall(result: $0) }
     }
 
     func hello() async throws -> RemoteGatewayHelloResponse {
@@ -1861,6 +1947,13 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return try await execute(sendScripts.removeFirst())
     }
 
+    func answerQuestion(
+        _ request: RemoteQuestionAnswerRequest
+    ) async throws -> RemoteQuestionAnswerResult {
+        questionAnswerRequests.append(request)
+        return try await execute(questionAnswerScripts.removeFirst())
+    }
+
     func acknowledgeConversationRead(
         _ request: RemoteConversationReadAcknowledgementRequest
     ) async throws -> RemoteConversationReadAcknowledgementResponse {
@@ -1873,6 +1966,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     func recordedEventRequests() -> [RemoteGatewayEventsRequest] { eventRequests }
     func waitForEventsCallCount(_ count: Int) async throws { try await eventCalls.wait(for: count) }
     func recordedSendRequests() -> [RemoteMessageSendRequest] { sendRequests }
+    func recordedQuestionAnswers() -> [RemoteQuestionAnswerRequest] { questionAnswerRequests }
     func recordedReadAcknowledgements() -> [RemoteConversationReadAcknowledgementRequest] {
         readAcknowledgements
     }

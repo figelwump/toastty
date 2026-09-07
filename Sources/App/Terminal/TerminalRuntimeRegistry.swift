@@ -82,6 +82,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private let presentLocalDocumentLinkAlert: LocalDocumentLinkAlertPresenter
     private let runtimeStore = TerminalWindowRuntimeStore()
     let terminalLiveTitleStore = TerminalLiveTitleStore()
+    let terminalReadActivityStore = TerminalReadActivityStore()
     private weak var store: AppStore?
     private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
@@ -107,6 +108,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var restoredManagedLaunchSubmitterForTesting: ((String, Bool, UUID) -> Bool)?
     private var automationSendTextHandlerForTesting: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?
     private var automationPromptStateHandlerForTesting: ((UUID) -> TerminalPromptState)?
+    private var automationReadVisibleTextHandlerForTesting: ((UUID, Bool) -> String?)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -221,6 +223,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
         _ handler: ((UUID) -> TerminalPromptState)?
     ) {
         automationPromptStateHandlerForTesting = handler
+    }
+
+    /// Test seam for `readVisibleText`. The handler receives the panel ID and
+    /// whether scrollback was requested.
+    func setAutomationReadVisibleTextHandlerForTesting(
+        _ handler: ((UUID, Bool) -> String?)?
+    ) {
+        automationReadVisibleTextHandlerForTesting = handler
     }
 
     func setExternalURLOpenerForTesting(_ opener: @escaping @MainActor (URL) -> Bool) {
@@ -518,7 +528,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func readVisibleText(panelID: UUID) -> String? {
-        automationReadVisibleText(panelID: panelID)
+        readVisibleText(panelID: panelID, includeScrollback: false)
+    }
+
+    func readVisibleText(panelID: UUID, includeScrollback: Bool) -> String? {
+        if let automationReadVisibleTextHandlerForTesting {
+            return automationReadVisibleTextHandlerForTesting(panelID, includeScrollback)
+        }
+        return automationReadVisibleText(panelID: panelID, includeScrollback: includeScrollback)
     }
 
     func promptState(panelID: UUID) -> TerminalPromptState {
@@ -553,11 +570,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
     }
 
-    func automationReadVisibleText(panelID: UUID) -> String? {
+    func automationReadVisibleText(panelID: UUID, includeScrollback: Bool = false) -> String? {
         guard let controller = runtimeStore.existingController(for: panelID) else {
             return nil
         }
-        return controller.automationReadVisibleText()
+        return controller.automationReadVisibleText(includeScrollback: includeScrollback)
     }
 
     private func performSearchAction(_ action: String, panelID: UUID) -> Bool {

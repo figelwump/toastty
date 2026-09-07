@@ -760,19 +760,7 @@ final class AppControlExecutor {
             )
 
         case .terminalVisibleText:
-            let resolved = try resolveTerminalTarget(payload: args)
-            guard let text = terminalRuntimeRegistry.readVisibleText(panelID: resolved.panelID) else {
-                throw AutomationSocketError.invalidPayload("terminal visible text unavailable for panelID \(resolved.panelID.uuidString)")
-            }
-            var result: [String: AutomationJSONValue] = [
-                "workspaceID": .string(resolved.workspaceID.uuidString),
-                "panelID": .string(resolved.panelID.uuidString),
-                "text": .string(text),
-            ]
-            if let needle = normalizedOptionalText(args.stringValue("contains")) {
-                result["contains"] = .bool(text.contains(needle))
-            }
-            return result
+            return try terminalVisibleTextResult(args: args)
 
         case .panelLocalDocumentState:
             let resolved = try resolveLocalDocumentTarget(payload: args)
@@ -2273,6 +2261,85 @@ private extension AppControlExecutor {
         ]
     }
 
+    /// Upper bound on returned terminal text, applied from the end so the most
+    /// recent output survives.
+    static let terminalVisibleTextByteLimit = 256 * 1024
+
+    func terminalVisibleTextResult(args: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
+        let resolved = try resolveTerminalTarget(payload: args)
+        let store = try requiredStore()
+        guard let workspace = store.state.workspacesByID[resolved.workspaceID],
+              case .terminal(let terminalState) = workspace.panelState(for: resolved.panelID) else {
+            throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
+        }
+
+        let callerSessionID = requestContext().callerSessionID
+        let ownSessionID = sessionRuntimeStore.sessionRegistry.activeSession(for: resolved.panelID)?.sessionID
+        let isForeignRead = callerSessionID == nil || callerSessionID != ownSessionID
+        if isForeignRead, terminalState.allowsAgentReads == false {
+            ToasttyLog.info(
+                "Denied terminal read on a private panel",
+                category: .automation,
+                metadata: [
+                    "caller_session_id": callerSessionID ?? "none",
+                    "panel_id": resolved.panelID.uuidString,
+                ]
+            )
+            throw AutomationSocketError.panelReadDenied(panelID: resolved.panelID)
+        }
+
+        let includeScrollback: Bool
+        if args["includeScrollback"] == nil {
+            includeScrollback = false
+        } else if let value = args.boolValue("includeScrollback") {
+            includeScrollback = value
+        } else {
+            throw AutomationSocketError.invalidPayload("includeScrollback must be a boolean")
+        }
+
+        let tail: Int?
+        if args["tail"] == nil {
+            tail = nil
+        } else if let value = args.intValue("tail"), value >= 1 {
+            tail = value
+        } else {
+            throw AutomationSocketError.invalidPayload("tail must be an integer greater than or equal to 1")
+        }
+
+        guard let fullText = terminalRuntimeRegistry.readVisibleText(
+            panelID: resolved.panelID,
+            includeScrollback: includeScrollback
+        ) else {
+            throw AutomationSocketError.invalidPayload("terminal visible text unavailable for panelID \(resolved.panelID.uuidString)")
+        }
+
+        let bounded = Self.boundedTerminalText(fullText, tail: tail, byteLimit: Self.terminalVisibleTextByteLimit)
+
+        if isForeignRead {
+            let callerRecord = callerSessionID.flatMap {
+                sessionRuntimeStore.sessionRegistry.activeSession(sessionID: $0)
+            }
+            terminalRuntimeRegistry.terminalReadActivityStore.recordRead(
+                panelID: resolved.panelID,
+                sessionID: callerRecord?.sessionID,
+                label: callerRecord.map { $0.displayTitleOverride ?? $0.agent.displayName }
+            )
+        }
+
+        var result: [String: AutomationJSONValue] = [
+            "workspaceID": .string(resolved.workspaceID.uuidString),
+            "panelID": .string(resolved.panelID.uuidString),
+            "text": .string(bounded.text),
+            "lineCount": .int(bounded.lineCount),
+            "truncated": .bool(bounded.truncated),
+            "includesScrollback": .bool(includeScrollback),
+        ]
+        if let needle = normalizedOptionalText(args.stringValue("contains")) {
+            result["contains"] = .bool(bounded.text.contains(needle))
+        }
+        return result
+    }
+
     func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {
         let store = try requiredStore()
         guard let workspace = store.state.workspacesByID[workspaceID] else {
@@ -2283,11 +2350,37 @@ private extension AppControlExecutor {
         let tabIDs = workspace.tabIDs.map { AutomationJSONValue.string($0.uuidString) }
         let slotIDs = slotInfos.map { AutomationJSONValue.string($0.slotID.uuidString) }
         let slotPanelIDs = slotInfos.map { AutomationJSONValue.string($0.panelID.uuidString) }
-        let slotMappings = slotInfos.map { slotInfo in
-            AutomationJSONValue.object([
+        let shortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
+            limit: DisplayShortcutConfig.maxPanelFocusShortcutCount
+        )
+        let slotMappings = slotInfos.map { slotInfo -> AutomationJSONValue in
+            var entry: [String: AutomationJSONValue] = [
                 "slotID": .string(slotInfo.slotID.uuidString),
                 "panelID": .string(slotInfo.panelID.uuidString),
-            ])
+            ]
+            switch workspace.panels[slotInfo.panelID] {
+            case .terminal(let terminalState):
+                let promptState = terminalRuntimeRegistry.promptState(panelID: slotInfo.panelID)
+                let session = sessionRuntimeStore.sessionRegistry.activeSession(for: slotInfo.panelID)
+                entry["panelKind"] = .string("terminal")
+                entry["title"] = .string(currentTerminalTitle(panelID: slotInfo.panelID, terminalState: terminalState))
+                entry["cwd"] = .string(terminalState.cwd)
+                entry["shell"] = .string(terminalState.shell)
+                entry["profileID"] = terminalState.profileBinding.map { .string($0.profileID) } ?? .null
+                entry["shortcutNumber"] = shortcutNumbersByPanelID[slotInfo.panelID].map { .int($0) } ?? .null
+                entry["promptState"] = .string(Self.promptStateLabel(promptState))
+                entry["isBusy"] = .bool(promptState == .busy)
+                entry["sessionID"] = session.map { .string($0.sessionID) } ?? .null
+                entry["agent"] = session.map { .string($0.agent.rawValue) } ?? .null
+                entry["readable"] = .bool(terminalState.allowsAgentReads)
+            case .web(let webState):
+                entry["panelKind"] = .string("web")
+                entry["webDefinition"] = .string(webState.definition.rawValue)
+                entry["title"] = .string(webState.title)
+            case nil:
+                break
+            }
+            return .object(entry)
         }
         let selectedTabID = workspace.resolvedSelectedTabID
         let selectedTabIndex: Int? = selectedTabID.flatMap { tabID in
@@ -2429,6 +2522,19 @@ private extension AppControlExecutor {
         SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    static func promptStateLabel(_ state: TerminalPromptState) -> String {
+        switch state {
+        case .unavailable:
+            return "unavailable"
+        case .exited:
+            return "exited"
+        case .idleAtPrompt:
+            return "idleAtPrompt"
+        case .busy:
+            return "busy"
+        }
+    }
+
     func currentTerminalTitle(panelID: UUID, terminalState: TerminalPanelState) -> String {
         terminalRuntimeRegistry.terminalLiveTitleStore.title(for: panelID) ?? terminalState.title
     }
@@ -2518,5 +2624,40 @@ private extension Dictionary where Key == String, Value == AutomationJSONValue {
         default:
             return []
         }
+    }
+}
+
+extension AppControlExecutor {
+    /// Applies `tail` (last N lines) and then a byte cap from the end. Lines
+    /// are split on newlines only; content is not trimmed or sanitized.
+    static func boundedTerminalText(
+        _ text: String,
+        tail: Int?,
+        byteLimit: Int
+    ) -> (text: String, lineCount: Int, truncated: Bool) {
+        var truncated = false
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // A trailing newline yields an empty final element; it is not a line.
+        if lines.last == "" {
+            lines.removeLast()
+        }
+        if let tail, lines.count > tail {
+            lines = Array(lines.suffix(tail))
+            truncated = true
+        }
+        // Untouched text keeps its original bytes (including any trailing
+        // newline) so existing callers see exactly what they did before.
+        var joined = truncated ? lines.joined(separator: "\n") : text
+        if joined.utf8.count > byteLimit {
+            truncated = true
+            var utf8 = Array(joined.utf8.suffix(byteLimit))
+            // Drop a partial leading scalar so the result stays valid UTF-8.
+            while let first = utf8.first, first & 0xC0 == 0x80 {
+                utf8.removeFirst()
+            }
+            joined = String(decoding: utf8, as: UTF8.self)
+            lines = joined.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        }
+        return (joined, lines.count, truncated)
     }
 }

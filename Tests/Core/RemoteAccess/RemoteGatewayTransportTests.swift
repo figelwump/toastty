@@ -254,6 +254,7 @@ struct RemoteGatewayRequestHandlerTests {
         authLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300),
         eventsOutcome: ConversationEventPageOutcome = .conversationNotFound,
         sendHandler: RemoteGatewayRequestHandler.SendHandler? = nil,
+        questionAnswerHandler: RemoteGatewayRequestHandler.QuestionAnswerHandler? = nil,
         readAcknowledgementHandler: RemoteGatewayRequestHandler.ReadAcknowledgementHandler? = nil,
         nativeIdentityForTesting: String? = nil
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
@@ -274,6 +275,7 @@ struct RemoteGatewayRequestHandlerTests {
                 ]
             ),
             sendHandler: sendHandler,
+            questionAnswerHandler: questionAnswerHandler,
             readAcknowledgementHandler: readAcknowledgementHandler,
             nativeIdentityForTesting: nativeIdentityForTesting,
             pairingRateLimiter: pairingLimiter,
@@ -388,6 +390,7 @@ struct RemoteGatewayRequestHandlerTests {
             .nativeBearerPairing,
             .conversationBackwardPaging,
             .conversationReadAcknowledgement,
+            .questionAnswers,
         ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
@@ -1781,5 +1784,47 @@ struct RemoteGatewayRequestHandlerTests {
             return
         }
         #expect(notUpgrade.status == 400)
+    }
+}
+
+
+extension RemoteGatewayRequestHandlerTests {
+    @Test func questionAnswerRequiresNativeIdentitySendScopeAndValidBoundedVersionedBody() throws {
+        var submissions = 0
+        let (handler, store, audit) = Self.makeHandler(questionAnswerHandler: { _, _ in
+            submissions += 1
+            return .submitted
+        })
+        let native = try Self.nativeCredential(handler: handler, store: store)
+        let headers = [("authorization", "Bearer \(native.credential)"), ("tailscale-user-login", "owner@example.com")]
+        let answer = RemoteQuestionAnswerRequest(conversationID: .init(), interactionID: .init(rawValue: "claude:call:1"),
+            responseID: UUID().uuidString, expectedInputEpoch: .init(bindingID: UUID(), counter: 1),
+            clientRequestID: "req", answers: [.init(questionID: "0", selectedOptionIDs: ["0"])])
+        let body = try ConversationEventCoding.makeEncoder().encode(answer)
+        let path = "/api/conversation.question.answer"
+        func response(_ headers: [(String, String)], body: Data) throws -> RemoteGatewayHTTPResponse {
+            guard case .respond(let response) = handler.handle(Self.request("POST", path, headerFields: headers, body: body), at: Self.now) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            return response
+        }
+        #expect(try response(headers, body: body).status == 200)
+        #expect(submissions == 1)
+        #expect(audit.entries.last?.action == .questionAnswerSubmitted)
+        #expect(try response(headers + [("origin", "https://hostile.example")], body: body).status == 403)
+        #expect(try response([headers[0]], body: body).status == 401)
+        #expect(try response([headers[0], ("tailscale-user-login", "other@example.com")], body: body).status == 401)
+        #expect(try response([("cookie", Self.pairedDeviceCookie(store)), ("origin", Self.origin)], body: body).status == 401)
+        #expect(try response(headers, body: Data(repeating: 65, count: 64 * 1024 + 1)).status == 413)
+        #expect(try response(headers, body: Data("{}".utf8)).status == 400)
+        var unsupported = answer
+        unsupported.protocolVersion = "99.0"
+        #expect(try response(headers, body: ConversationEventCoding.makeEncoder().encode(unsupported)).status == 409)
+        #expect(submissions == 1)
+        #expect(try store.setScopes([.read], forDevice: native.device.id))
+        let denied = try response(headers, body: body)
+        #expect(denied.status == 403)
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteQuestionAnswerResult.self, from: denied.body) == .rejected(reason: .sendScopeDenied))
+        #expect(submissions == 1)
     }
 }

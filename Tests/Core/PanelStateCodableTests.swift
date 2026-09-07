@@ -76,6 +76,19 @@ struct PanelStateCodableTests {
         #expect(decoded.title == "T")
         #expect(decoded.profileBinding == TerminalProfileBinding(profileID: "zmx"))
         #expect(decoded.resumeRecord == nil)
+        #expect(decoded.agentReadPolicy == nil)
+        #expect(decoded.allowsAgentReads)
+    }
+
+    @Test
+    func terminalPanelStateRoundTripsAgentReadPolicy() throws {
+        let panel = TerminalPanelState(title: "T", shell: "zsh", cwd: "/tmp", agentReadPolicy: .denied)
+
+        let encoded = try JSONEncoder().encode(panel)
+        let decoded = try JSONDecoder().decode(TerminalPanelState.self, from: encoded)
+
+        #expect(decoded == panel)
+        #expect(decoded.allowsAgentReads == false)
     }
 
     @Test

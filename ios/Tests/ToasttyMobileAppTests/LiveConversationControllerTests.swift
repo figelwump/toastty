@@ -715,6 +715,122 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertLessThanOrEqual(appendElapsed, .seconds(1))
     }
 
+    func testQuestionDraftSurvivesReconnectAndRetryReusesRequestIdentity() async throws {
+        let recorder = QuestionAnswerRecorder(results: [
+            .failure(GatewayFailure.network(reason: .connectionLost)),
+            .success(.submitted),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            answerQuestion: { request in try await recorder.answer(request) }
+        )
+        subject.consumeConnectionState(ConnectionCoordinator.State(
+            connectionGeneration: 4,
+            phase: .live,
+            capabilities: [.questionAnswers]
+        ))
+        subject.consume(state(
+            runID: runID(1),
+            events: [questionPresentedEvent(1)],
+            phase: .live
+        ))
+        subject.editInteractionAnswer(
+            interactionID: questionInteraction.id,
+            edit: .toggleOption(questionID: "0", optionID: "1")
+        )
+
+        subject.consumeConnectionState(ConnectionCoordinator.State(
+            connectionGeneration: 5,
+            phase: .reconnecting(failureCount: 1, showsBanner: false),
+            capabilities: []
+        ))
+        let reconnecting = try XCTUnwrap(subject.interactionAnswerStates[questionInteraction.id])
+        XCTAssertEqual(reconnecting.drafts["0"]?.selectedOptionIDs, ["1"])
+        XCTAssertFalse(reconnecting.canSubmit)
+
+        subject.consume(state(
+            runID: runID(1),
+            events: [],
+            phase: .catchingUp
+        ))
+        XCTAssertEqual(
+            subject.interactionAnswerStates[questionInteraction.id]?.drafts["0"]?.selectedOptionIDs,
+            ["1"],
+            "A transient empty resnapshot must not discard the current response draft"
+        )
+        subject.consume(state(
+            runID: runID(1),
+            events: [questionPresentedEvent(1)],
+            phase: .live
+        ))
+
+        subject.consumeConnectionState(ConnectionCoordinator.State(
+            connectionGeneration: 5,
+            phase: .live,
+            capabilities: [.questionAnswers]
+        ))
+        await subject.submitInteractionAnswer(interactionID: questionInteraction.id)
+        guard case .failed = subject.interactionAnswerStates[questionInteraction.id]?.status else {
+            return XCTFail("Expected retryable failure")
+        }
+        await subject.submitInteractionAnswer(interactionID: questionInteraction.id)
+        XCTAssertEqual(subject.interactionAnswerStates[questionInteraction.id]?.status, .awaitingClaude)
+        let requests = await recorder.requests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0], requests[1])
+    }
+
+    func testQuestionClosureRevokesFormAndCanonicalResolutionWins() async throws {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        subject.consumeConnectionState(ConnectionCoordinator.State(
+            phase: .live,
+            capabilities: [.questionAnswers]
+        ))
+        subject.consume(state(
+            runID: runID(1),
+            events: [questionPresentedEvent(1)],
+            phase: .live
+        ))
+        XCTAssertNotNil(subject.interactionAnswerStates[questionInteraction.id])
+
+        subject.consume(state(
+            runID: runID(1),
+            events: [questionPresentedEvent(1), questionClosedEvent(2)],
+            phase: .live
+        ))
+        guard case .unavailable = subject.interactionAnswerStates[questionInteraction.id]?.status else {
+            return XCTFail("Expected closed response channel")
+        }
+        guard case .interaction(let closedCard) = subject.transcriptPresentation.rows[0].content else {
+            return XCTFail("Expected interaction card")
+        }
+        XCTAssertNil(closedCard.interaction.responseID)
+        XCTAssertEqual(closedCard.interaction.state, .pending)
+
+        let accepted = [RemoteInteractionAnswer(questionID: "0", selectedOptionIDs: ["0"])]
+        subject.consume(state(
+            runID: runID(1),
+            events: [
+                questionPresentedEvent(1),
+                questionClosedEvent(2),
+                questionResolvedEvent(3, resolution: .resolved, answers: nil),
+                questionResolvedEvent(4, resolution: .superseded, answers: nil),
+                questionResolvedEvent(5, resolution: .resolved, answers: accepted),
+            ],
+            phase: .live
+        ))
+        guard case .interaction(let resolvedCard) = subject.transcriptPresentation.rows[0].content else {
+            return XCTFail("Expected resolved card")
+        }
+        XCTAssertEqual(resolvedCard.interaction.state, .resolved)
+        XCTAssertEqual(resolvedCard.interaction.answers, accepted)
+        XCTAssertEqual(subject.interactionAnswerStates[questionInteraction.id]?.status, .resolved(accepted))
+    }
+
     private func state(
         runID: RemoteProjectionRunID,
         projectionGeneration: UInt64 = 7,
@@ -779,6 +895,73 @@ final class LiveConversationControllerTests: XCTestCase {
         ))
     }
 
+    private func questionPresentedEvent(_ sequence: UInt64) -> CompatibleConversationEvent {
+        .known(ConversationEvent(
+            conversationID: conversationID,
+            sequence: sequence,
+            eventID: "question-presented-\(sequence)",
+            timestamp: Date(timeIntervalSince1970: TimeInterval(sequence)),
+            provider: .claude,
+            payload: .interactionPresented(questionInteraction)
+        ))
+    }
+
+    private func questionClosedEvent(_ sequence: UInt64) -> CompatibleConversationEvent {
+        .known(ConversationEvent(
+            conversationID: conversationID,
+            sequence: sequence,
+            eventID: "question-closed-\(sequence)",
+            timestamp: Date(timeIntervalSince1970: TimeInterval(sequence)),
+            provider: .claude,
+            payload: .interactionResponseClosed(.init(
+                interactionID: questionInteraction.id,
+                reason: .expired
+            ))
+        ))
+    }
+
+    private func questionResolvedEvent(
+        _ sequence: UInt64,
+        resolution: RemotePendingInteraction.State,
+        answers: [RemoteInteractionAnswer]?
+    ) -> CompatibleConversationEvent {
+        .known(ConversationEvent(
+            conversationID: conversationID,
+            sequence: sequence,
+            eventID: "question-resolved-\(sequence)",
+            timestamp: Date(timeIntervalSince1970: TimeInterval(sequence)),
+            provider: .claude,
+            payload: .interactionResolved(.init(
+                interactionID: questionInteraction.id,
+                resolution: resolution,
+                answers: answers
+            ))
+        ))
+    }
+
+    private var questionInteraction: RemotePendingInteraction {
+        RemotePendingInteraction(
+            id: RemotePendingInteraction.ID(rawValue: "question-1"),
+            kind: .question,
+            prompt: "Choose one",
+            inputEpoch: RemoteInputEpoch(
+                bindingID: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+                counter: 2
+            ),
+            presentedAt: Date(timeIntervalSince1970: 1),
+            questions: [RemoteInteractionQuestion(
+                id: "0",
+                header: "Choice",
+                question: "Which one?",
+                options: [
+                    .init(id: "0", label: "First"),
+                    .init(id: "1", label: "Second"),
+                ]
+            )],
+            responseID: "response-1"
+        )
+    }
+
     private func runID(_ suffix: UInt8) -> RemoteProjectionRunID {
         RemoteProjectionRunID(rawValue: UUID(uuid: (
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, suffix
@@ -822,6 +1005,22 @@ final class LiveConversationControllerTests: XCTestCase {
             deliveryState: deliveryState
         )
     }
+}
+
+private actor QuestionAnswerRecorder {
+    private var results: [Result<RemoteQuestionAnswerResult, GatewayFailure>]
+    private var recordedRequests: [RemoteQuestionAnswerRequest] = []
+
+    init(results: [Result<RemoteQuestionAnswerResult, GatewayFailure>]) {
+        self.results = results
+    }
+
+    func answer(_ request: RemoteQuestionAnswerRequest) async throws -> RemoteQuestionAnswerResult {
+        recordedRequests.append(request)
+        return try results.removeFirst().get()
+    }
+
+    func requests() -> [RemoteQuestionAnswerRequest] { recordedRequests }
 }
 
 private actor LoadOlderRecorder {

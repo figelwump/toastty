@@ -49,6 +49,7 @@ Use `.agents/skills/toastty-dev-run/SKILL.md` for live Toastty dev/debug app ins
 - Use runtime isolation and per-run filesystem paths for local dev/debug/test runs.
 - Preserve `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` in the Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes.
 - Treat `instance.json` as authoritative for PID, paths, logs, and socket targeting.
+- Do not drive a local Toastty GUI with Peekaboo (focus, clicks, screenshots) unless the user explicitly asks for local validation. Use `scripts/remote/validate.sh` or `.agents/skills/toastty-computer-use/SKILL.md` instead; local socket-only checks that never focus a window are fine.
 
 ## Release Workflow
 

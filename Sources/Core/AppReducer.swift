@@ -907,6 +907,20 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
             return true
 
+        case .setTerminalPanelAgentReadPolicy(let panelID, let policy):
+            guard let location = locatePanel(panelID, in: state) else { return false }
+            guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
+            guard let tabID = workspace.tabID(containingPanelID: panelID),
+                  case .terminal(var terminalState) = workspace.tab(id: tabID)?.panels[panelID] else { return false }
+            guard terminalState.agentReadPolicy != policy else { return false }
+
+            terminalState.agentReadPolicy = policy
+            _ = workspace.updateTab(id: tabID) { tab in
+                tab.panels[panelID] = .terminal(terminalState)
+            }
+            commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
+            return true
+
         case .updateWebPanelMetadata(let panelID, let title, let url):
             if let location = locateRightAuxPanel(panelID, in: state) {
                 guard var workspace = state.workspacesByID[location.workspaceID],

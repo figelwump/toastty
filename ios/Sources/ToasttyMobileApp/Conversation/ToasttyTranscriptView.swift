@@ -10,6 +10,9 @@ struct ToasttyTranscriptView: View {
     let state: ToasttyConversationPresentationState
     let loadOlder: () -> Void
     let dismissSendReceipt: (String) -> Void
+    let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
+    let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
+    let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let readAcknowledgementEpoch: MobileSessionStatus?
     let onVisibleLiveEdge: () -> Void
     @Binding private var jumpToLiveEdgeRequest: UInt64
@@ -33,6 +36,12 @@ struct ToasttyTranscriptView: View {
         state: ToasttyConversationPresentationState,
         loadOlder: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
+        editInteractionAnswer: @escaping (
+            RemotePendingInteraction.ID,
+            ToasttyInteractionAnswerEdit
+        ) -> Void = { _, _ in },
+        submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
         readAcknowledgementEpoch: MobileSessionStatus? = nil,
         jumpToLiveEdgeRequest: Binding<UInt64>,
         onVisibleLiveEdge: @escaping () -> Void = {}
@@ -40,6 +49,9 @@ struct ToasttyTranscriptView: View {
         self.state = state
         self.loadOlder = loadOlder
         self.dismissSendReceipt = dismissSendReceipt
+        self.interactionAnswerStates = interactionAnswerStates
+        self.editInteractionAnswer = editInteractionAnswer
+        self.submitInteractionAnswer = submitInteractionAnswer
         self.readAcknowledgementEpoch = readAcknowledgementEpoch
         self.onVisibleLiveEdge = onVisibleLiveEdge
         _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
@@ -537,7 +549,10 @@ struct ToasttyTranscriptView: View {
                 row: row,
                 isDemoted: demoted,
                 subagentIsExpanded: expandedSubagentIDs.contains(row.id),
-                toggleSubagentExpansion: { toggle(row.id, in: &expandedSubagentIDs) }
+                toggleSubagentExpansion: { toggle(row.id, in: &expandedSubagentIDs) },
+                interactionAnswerStates: interactionAnswerStates,
+                editInteractionAnswer: editInteractionAnswer,
+                submitInteractionAnswer: submitInteractionAnswer
             )
         case .messageChunk(let chunk):
             ToasttyTranscriptRowView(
@@ -545,7 +560,10 @@ struct ToasttyTranscriptView: View {
                 chunk: chunk,
                 isDemoted: demoted,
                 subagentIsExpanded: false,
-                toggleSubagentExpansion: {}
+                toggleSubagentExpansion: {},
+                interactionAnswerStates: interactionAnswerStates,
+                editInteractionAnswer: editInteractionAnswer,
+                submitInteractionAnswer: submitInteractionAnswer
             )
         case .toolBatch(let rows):
             ToasttyToolBatchCard(
@@ -1179,15 +1197,25 @@ private struct ToasttyTranscriptRowView: View {
     var isDemoted = false
     let subagentIsExpanded: Bool
     let toggleSubagentExpansion: () -> Void
+    let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
+    let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
+    let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
 
     @ViewBuilder
     var body: some View {
         switch row.content {
-        case .interaction(let interaction):
-            ToasttyInteractionCard(interaction: interaction)
+        case .interaction(let presentation):
+            let interaction = presentation.interaction
+            ToasttyInteractionCard(
+                presentation: presentation,
+                answerState: interactionAnswerStates[interaction.id],
+                onEdit: { editInteractionAnswer(interaction.id, $0) },
+                onSubmit: { submitInteractionAnswer(interaction.id) }
+            )
                 .accessibilityIdentifier(rowAccessibilityIdentifier)
                 .overlay {
-                    if interaction.state == .pending {
+                    if interaction.state == .pending,
+                       interactionAnswerStates[interaction.id] == nil {
                         Color.clear
                             .accessibilityElement()
                             .accessibilityLabel(
@@ -1364,102 +1392,6 @@ private struct ToasttyTranscriptRowView: View {
         case .pending: "hourglass"
         case .resolved: "checkmark.circle"
         case .superseded: "arrow.trianglehead.2.clockwise.rotate.90"
-        }
-    }
-}
-
-private struct ToasttyInteractionCard: View {
-    let interaction: RemotePendingInteraction
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 7) {
-                Label(kindLabel, systemImage: kindIcon)
-                    .font(.caption.monospaced().weight(.semibold))
-                    .foregroundStyle(accentColor)
-                Spacer(minLength: 6)
-                Text(interaction.state.rawValue)
-                    .font(.caption2.monospaced().weight(.semibold))
-                    .foregroundStyle(stateColor)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(stateColor.opacity(0.12), in: Capsule())
-            }
-
-            Text(interaction.prompt)
-                .font(.body)
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if interaction.options.isEmpty == false {
-                // Plain text, deliberately without selection affordances:
-                // options are read-only here and answered on the Mac.
-                VStack(alignment: .leading, spacing: 7) {
-                    ForEach(interaction.options, id: \.id) { option in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(option.label)
-                                .font(.subheadline.weight(.medium))
-                            if let detail = option.detail {
-                                Text(detail)
-                                    .font(.caption)
-                                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                            }
-                        }
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                        .accessibilityElement(children: .combine)
-                    }
-                }
-            }
-
-            if interaction.state == .pending {
-                Label("Respond on the desktop", systemImage: "desktopcomputer")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.amberText)
-            }
-        }
-        .padding(14)
-        .background(ToasttyDesignTokens.interactionSurface)
-        .overlay {
-            RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.cardCornerRadius,
-                style: .continuous
-            )
-            .stroke(accentColor.opacity(0.35))
-        }
-        .clipShape(RoundedRectangle(
-            cornerRadius: ToasttyDesignTokens.cardCornerRadius,
-            style: .continuous
-        ))
-        .accessibilityElement(children: .combine)
-    }
-
-    private var kindLabel: String {
-        switch interaction.kind {
-        case .permission: "Permission request"
-        case .question: "Question"
-        case .structuredChoice: "Choose on Mac"
-        case .freeForm: "Response requested"
-        }
-    }
-
-    private var kindIcon: String {
-        switch interaction.kind {
-        case .permission: "lock.shield"
-        case .question: "questionmark.bubble"
-        case .structuredChoice: "list.bullet.circle"
-        case .freeForm: "text.bubble"
-        }
-    }
-
-    private var accentColor: Color {
-        interaction.state == .pending ? ToasttyDesignTokens.amber : ToasttyDesignTokens.secondaryText
-    }
-
-    private var stateColor: Color {
-        switch interaction.state {
-        case .pending: ToasttyDesignTokens.amberText
-        case .resolved: ToasttyDesignTokens.green
-        case .superseded: ToasttyDesignTokens.mutedText
         }
     }
 }

@@ -42,6 +42,7 @@ public final class RemoteGatewayRequestHandler {
         )
     }
 
+    public typealias QuestionAnswerHandler = (RemoteQuestionAnswerRequest, RemoteDeviceRecord) -> RemoteQuestionAnswerResult
     public typealias SendHandler = (RemoteMessageSendRequest, RemoteDeviceRecord) -> RemoteMessageSendResult
     public typealias ReadAcknowledgementHandler = (
         RemoteConversationReadAcknowledgementRequest,
@@ -63,6 +64,7 @@ public final class RemoteGatewayRequestHandler {
     private let deviceStore: RemoteDeviceStore
     private let auditLog: RemoteAccessAuditLog
     private let facade: any RemoteSessionFacade
+    private let questionAnswerHandler: QuestionAnswerHandler?
     private let sendHandler: SendHandler?
     private let readAcknowledgementHandler: ReadAcknowledgementHandler?
     private let nativeIdentityForTesting: String?
@@ -98,6 +100,7 @@ public final class RemoteGatewayRequestHandler {
         facade: any RemoteSessionFacade,
         configuration: RemoteGatewayConfiguration,
         sendHandler: SendHandler? = nil,
+        questionAnswerHandler: QuestionAnswerHandler? = nil,
         readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
@@ -108,6 +111,7 @@ public final class RemoteGatewayRequestHandler {
             facade: facade,
             configuration: configuration,
             sendHandler: sendHandler,
+            questionAnswerHandler: questionAnswerHandler,
             readAcknowledgementHandler: readAcknowledgementHandler,
             // The public production entry point can never inject identity.
             nativeIdentityForTesting: nil,
@@ -125,6 +129,7 @@ public final class RemoteGatewayRequestHandler {
         facade: any RemoteSessionFacade,
         configuration: RemoteGatewayConfiguration,
         sendHandler: SendHandler? = nil,
+        questionAnswerHandler: QuestionAnswerHandler? = nil,
         readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
         nativeIdentityForTesting: String?,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
@@ -135,6 +140,7 @@ public final class RemoteGatewayRequestHandler {
         self.facade = facade
         self.configuration = configuration
         self.sendHandler = sendHandler
+        self.questionAnswerHandler = questionAnswerHandler
         self.readAcknowledgementHandler = readAcknowledgementHandler
         self.nativeIdentityForTesting = nativeIdentityForTesting
         self.pairingRateLimiter = pairingRateLimiter
@@ -248,11 +254,16 @@ public final class RemoteGatewayRequestHandler {
             guard authenticated.scopes.contains(.send) else {
                 auditLog.record(RemoteAccessAuditEntry(
                     at: date,
-                    action: .remoteSendRejected,
+                    action: policy.route == .questionAnswer ? .questionAnswerRejected : .remoteSendRejected,
                     deviceID: authenticated.id,
                     detail: "send_scope_denied"
                 ))
-                let body = (try? encoder.encode(RemoteMessageSendResult.rejected(reason: .sendScopeDenied))) ?? Data()
+                let body: Data
+                if policy.route == .questionAnswer {
+                    body = (try? encoder.encode(RemoteQuestionAnswerResult.rejected(reason: .sendScopeDenied))) ?? Data()
+                } else {
+                    body = (try? encoder.encode(RemoteMessageSendResult.rejected(reason: .sendScopeDenied))) ?? Data()
+                }
                 return .respond(.json(status: 403, reason: "Forbidden", body: body))
             }
         }
@@ -284,6 +295,8 @@ public final class RemoteGatewayRequestHandler {
             return handleConversationEvents(request)
         case .conversationReadAcknowledge:
             return handleConversationReadAcknowledgement(request, device: authenticated)
+        case .questionAnswer:
+            return handleQuestionAnswer(request, device: authenticated, at: date)
         case .messageSend:
             return handleMessageSend(request, device: authenticated, at: date)
         case .subscribe:
@@ -488,6 +501,30 @@ public final class RemoteGatewayRequestHandler {
             result: result
         ))) ?? Data()
         return .respond(.json(body: body))
+    }
+
+    private func handleQuestionAnswer(
+        _ request: RemoteGatewayHTTPRequest, device: RemoteDeviceRecord, at date: Date
+    ) -> Outcome {
+        guard request.body.count <= 64 * 1024 else {
+            return .respond(errorResponse(status: 413, reason: "Payload Too Large", code: "invalid_body", message: "Question answer is too large"))
+        }
+        guard let answer = try? ConversationEventCoding.makeDecoder().decode(RemoteQuestionAnswerRequest.self, from: request.body) else {
+            return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected question answer JSON"))
+        }
+        guard answer.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(status: 409, reason: "Conflict", code: "protocol_mismatch", message: "Unsupported protocol version"))
+        }
+        let result = questionAnswerHandler?(answer, device) ?? .rejected(reason: .unsupported)
+        switch result {
+        case .submitted:
+            auditLog.record(.init(at: date, action: .questionAnswerSubmitted, deviceID: device.id))
+        case .rejected(let reason):
+            auditLog.record(.init(at: date, action: .questionAnswerRejected, deviceID: device.id, detail: reason.rawValue))
+        case .duplicate:
+            break
+        }
+        return .respond(.json(body: (try? encoder.encode(result)) ?? Data()))
     }
 
     private func handleMessageSend(

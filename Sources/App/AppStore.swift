@@ -2456,7 +2456,7 @@ final class AppStore: ObservableObject {
         }
     }
 
-    private static func normalizedBrowserRecentURL(_ value: String?) -> String? {
+    static func normalizedBrowserRecentURL(_ value: String?) -> String? {
         guard let normalized = WebPanelState.normalizedCurrentURL(value),
               normalized.caseInsensitiveCompare("about:blank") != .orderedSame,
               let url = URL(string: normalized),

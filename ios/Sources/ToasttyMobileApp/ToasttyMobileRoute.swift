@@ -2,6 +2,7 @@ import Foundation
 
 enum ToasttyMobileRoute: Hashable {
     case workspace(UUID)
+    case panelPreview(workspaceID: UUID, panelID: UUID)
     case conversation(UUID)
 
     var conversationID: UUID? {

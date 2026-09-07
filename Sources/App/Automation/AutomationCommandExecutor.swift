@@ -312,6 +312,18 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 context: context
             )
 
+        case "session.claude_question":
+            guard let requestJSON = payload.string("requestJSON"),
+                  requestJSON.utf8.count <= 128 * 1024,
+                  let data = requestJSON.data(using: .utf8),
+                  let questionRequest = try? JSONDecoder().decode(ClaudeQuestionHookRequest.self, from: data),
+                  context.callerSessionID == questionRequest.sessionID else {
+                throw AutomationSocketError.invalidPayload("Invalid Claude question request or caller")
+            }
+            let reply = sessionRuntimeStore.handleClaudeQuestion(questionRequest)
+            let encoded = try JSONEncoder().encode(reply)
+            return ["replyJSON": .string(String(decoding: encoded, as: UTF8.self))]
+
         case "session.scope.show":
             let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
             return try sessionScopeResponse(sessionID: sessionID)

@@ -594,6 +594,35 @@ extension AppReducerTests {
         )
     }
 
+    @Test
+    func setTerminalPanelAgentReadPolicyUpdatesOnlyWhenChanged() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let panelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.setTerminalPanelAgentReadPolicy(panelID: panelID, policy: .denied), state: &state))
+        guard case .terminal(let denied) = state.workspacesByID[workspaceID]?.panels[panelID] else {
+            Issue.record("expected terminal panel")
+            return
+        }
+        #expect(denied.agentReadPolicy == .denied)
+        #expect(denied.allowsAgentReads == false)
+
+        #expect(reducer.send(.setTerminalPanelAgentReadPolicy(panelID: panelID, policy: .denied), state: &state) == false)
+
+        #expect(reducer.send(.setTerminalPanelAgentReadPolicy(panelID: panelID, policy: nil), state: &state))
+        guard case .terminal(let restored) = state.workspacesByID[workspaceID]?.panels[panelID] else {
+            Issue.record("expected terminal panel")
+            return
+        }
+        #expect(restored.agentReadPolicy == nil)
+        #expect(restored.allowsAgentReads)
+
+        #expect(reducer.send(.setTerminalPanelAgentReadPolicy(panelID: UUID(), policy: .denied), state: &state) == false)
+
+        try StateValidator.validate(state)
+    }
 }
 
 private func makeTestResumeRecord(

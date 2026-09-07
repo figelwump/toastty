@@ -298,6 +298,93 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func scratchpadAssociationsRequireExactLiveSessionAndMatchingSummary() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude)
+        defer { fixture.removeRuntimeFiles() }
+        var state = fixture.store.state
+        let summary = fixture.summary
+        let workspaceID = try #require(summary.placement.workspaceID)
+        let tabID = try #require(state.workspacesByID[workspaceID]?.selectedTabID)
+        let link = ScratchpadSessionLink(
+            sessionID: fixture.sessionID, agent: .claude,
+            sourcePanelID: UUID(), sourceWorkspaceID: UUID())
+        let firstID = UUID()
+        let secondID = UUID()
+        let standaloneID = UUID()
+        for panelID in [firstID, secondID, standaloneID] {
+            let documentID = UUID()
+            state.workspacesByID[workspaceID]?.tabsByID[tabID]?.rightAuxPanel.appendTab(
+                .init(
+                    id: UUID(), identity: .scratchpad(id: documentID), panelID: panelID,
+                    panelState: .web(.init(
+                        definition: .scratchpad,
+                        scratchpad: .init(documentID: documentID,
+                            sessionLink: panelID == standaloneID ? nil : link, revision: 1)))))
+        }
+        var registry = fixture.sessionRuntimeStore.sessionRegistry
+        let associations = RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [summary])
+        #expect(associations == [firstID: fixture.conversationID, secondID: fixture.conversationID])
+        let inventory = RemoteAccessService.workspaceInventory(state: state, associations: associations)
+        #expect(inventory.flatMap(\.panels).filter { $0.associatedConversationID == fixture.conversationID }.count == 2)
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: []).isEmpty)
+        var staleSummary = summary
+        staleSummary.conversationID = RemoteConversationID()
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [staleSummary]).isEmpty)
+        for summaries in [[summary, staleSummary], [staleSummary, summary]] {
+            #expect(RemoteAccessService.scratchpadConversationAssociations(
+                state: state, registry: registry, conversations: summaries) == associations)
+        }
+        var wrongProvider = summary
+        wrongProvider.provider = .codex
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [wrongProvider]).isEmpty)
+        registry.stopSession(sessionID: fixture.sessionID, at: .now)
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [summary]).isEmpty)
+        registry.startSession(
+            sessionID: "replacement", agent: .claude, panelID: fixture.panelID,
+            windowID: UUID(), workspaceID: workspaceID, cwd: nil, repoRoot: nil, at: .now)
+        #expect(RemoteAccessService.scratchpadConversationAssociations(
+            state: state, registry: registry, conversations: [summary]).isEmpty)
+    }
+
+    @MainActor
+    @Test func scratchpadLinkOnlyChangeBroadcastsAssociationWithoutRevisionChange() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude)
+        defer { fixture.removeRuntimeFiles() }
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+        let documentID = UUID()
+        let scratchpad = ScratchpadState(documentID: documentID, revision: 1)
+        #expect(fixture.store.send(.createWebPanel(
+            workspaceID: workspaceID,
+            panel: .init(definition: .scratchpad, scratchpad: scratchpad), placement: .rightPanel)))
+        let panelID = try #require(fixture.service.facadeSessionList(at: .now).workspaces
+            .flatMap(\.panels).first { $0.kind == "scratchpad" }?.panelID)
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.server.sessionListSnapshots.last?.workspaces.flatMap(\.panels)
+                .contains { $0.panelID == panelID } == true
+        }
+        fixture.server.removeAllBroadcasts()
+        var linked = scratchpad
+        linked.sessionLink = .init(
+            sessionID: fixture.sessionID, agent: .claude,
+            sourcePanelID: fixture.panelID, sourceWorkspaceID: workspaceID)
+        #expect(fixture.store.send(.updateScratchpadPanelState(
+            panelID: panelID, scratchpad: linked, title: nil)))
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.server.sessionListSnapshots.last?.workspaces.flatMap(\.panels)
+                .first { $0.panelID == panelID }?.associatedConversationID == fixture.conversationID
+        }
+        let panel = try #require(fixture.server.sessionListSnapshots.last?.workspaces.flatMap(\.panels)
+            .first { $0.panelID == panelID })
+        #expect(panel.associatedConversationID == fixture.conversationID)
+        #expect(panel.revision == 1)
+    }
+
+    @MainActor
     @Test func desktopReadTransitionSchedulesFreshIdleSessionList() async throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
         defer { fixture.removeRuntimeFiles() }
@@ -935,6 +1022,7 @@ private final class RemoteBootstrapFixture {
     let sessionRuntimeStore: SessionRuntimeStore
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
     let server: RemoteAccessGatewayServerSpy
+    let gatewayHandler: RemoteGatewayRequestHandler
     let service: RemoteAccessService
     let panelID: UUID
     let sessionID: String
@@ -984,6 +1072,7 @@ private final class RemoteBootstrapFixture {
         terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let gatewayServer = RemoteAccessGatewayServerSpy()
         server = gatewayServer
+        var capturedHandler: RemoteGatewayRequestHandler?
         service = RemoteAccessService(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -996,8 +1085,12 @@ private final class RemoteBootstrapFixture {
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,
             sendConfirmationTimeout: sendConfirmationTimeout,
-            gatewayServerFactory: { _ in gatewayServer }
+            gatewayServerFactory: { handler in
+                capturedHandler = handler
+                return gatewayServer
+            }
         )
+        gatewayHandler = try #require(capturedHandler)
         service.setEnabled(true, persist: false)
         server.reportReady(port: 42_997)
         conversationID = try #require(Self.remoteConversationID(panelID: panelID, in: store))
@@ -1115,5 +1208,89 @@ private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
 
     func reportWebSocketCounts(total: Int, native: Int) {
         onWebSocketCountsChanged?(RemoteAccessWebSocketCounts(total: total, native: native))
+    }
+}
+
+extension RemoteAccessServiceSafetyTests {
+    @MainActor
+    @Test func claudeQuestionAnswerUsesExactPendingEpochAndWritePolicyWithoutTerminalInput() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working)
+        defer { fixture.removeRuntimeFiles(); fixture.sessionRuntimeStore.reset() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let questions = [RemoteInteractionQuestion(id: "q0", header: "Choice", question: "Choose a color",
+            options: [.init(id: "q0:o0", label: "Blue"), .init(id: "q0:o1", label: "Green")])]
+        let responseID = UUID().uuidString
+        let now = Date()
+        func hook(_ phase: ClaudeQuestionHookRequest.Phase, name: ClaudeQuestionHookEvent.EventName) -> ClaudeQuestionHookRequest {
+            .init(phase: phase, sessionID: fixture.sessionID, panelID: fixture.panelID,
+                event: .init(eventName: name, nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                    promptID: "prompt", transcriptPath: fixture.resumeRecord.sessionFilePath,
+                    providerCallID: name == .preToolUse ? "question-call" : nil, questions: questions, timestamp: now),
+                responseID: phase == .begin ? responseID : nil)
+        }
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.observe, name: .preToolUse), at: now).status == .observed)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.begin, name: .permissionRequest), at: now).status == .pending)
+        let snapshot = try #require(fixture.service.facadeConversationSnapshot(for: fixture.conversationID, at: now))
+        let interaction = try #require(snapshot.pendingInteractions.first)
+        #expect(interaction.responseID == responseID)
+        #expect(snapshot.summary.presentationStatus == .needsApproval)
+        let request = RemoteQuestionAnswerRequest(conversationID: fixture.conversationID, interactionID: interaction.id,
+            responseID: responseID, expectedInputEpoch: interaction.inputEpoch, clientRequestID: "mobile",
+            answers: [.init(questionID: "q0", selectedOptionIDs: ["q0:o0"])])
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: now)
+        var readOnlyDevice = device
+        readOnlyDevice.scopes = [.read]
+        #expect(fixture.service.performQuestionAnswer(request, device: readOnlyDevice) == .rejected(reason: .sendScopeDenied))
+        fixture.service.setSessionWriteEnabled(false, for: fixture.conversationID)
+        #expect(fixture.service.performQuestionAnswer(request, device: device) == .rejected(reason: .sessionWritesDisabled))
+        fixture.service.setSessionWriteEnabled(true, for: fixture.conversationID)
+        var stale = request
+        stale.expectedInputEpoch = .init(bindingID: UUID(), counter: 99)
+        #expect(fixture.service.performQuestionAnswer(stale, device: device) == .rejected(reason: .epochMismatch))
+        // Exercise the actual native authorization -> service -> broker bridge.
+        let originalOrigin = fixture.service.tailnetOrigin
+        defer { fixture.service.tailnetOrigin = originalOrigin }
+        fixture.service.tailnetOrigin = "https://question-test.ts.net"
+        fixture.service.issueNativePairingOffer(at: now)
+        let offer = try #require(fixture.service.currentNativePairingOffer)
+        let exchange = RemoteGatewayNativePairingExchangeRequest(deviceName: "Question Phone",
+            offerID: offer.id, secret: offer.qrPayload.secret)
+        guard case .respond(let pairingResponse) = fixture.gatewayHandler.handle(.init(method: "POST",
+            path: "/v1/native-pairing/exchange", headers: ["tailscale-user-login": "owner@example.com"],
+            body: try ConversationEventCoding.makeEncoder().encode(exchange)), at: now) else {
+            Issue.record("Expected native pairing response")
+            return
+        }
+        #expect(pairingResponse.status == 200)
+        let pairing = try ConversationEventCoding.makeDecoder().decode(RemoteGatewayNativePairingExchangeResponse.self, from: pairingResponse.body)
+        let gatewayRequest = RemoteGatewayHTTPRequest(method: "POST", path: "/api/conversation.question.answer",
+            headers: ["authorization": "Bearer \(pairing.credential)", "tailscale-user-login": "owner@example.com"],
+            body: try ConversationEventCoding.makeEncoder().encode(request))
+        // Typing in the native modal must not use the free-form send draft gate.
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        for expected in [RemoteQuestionAnswerResult.submitted, .duplicate] {
+            guard case .respond(let response) = fixture.gatewayHandler.handle(gatewayRequest, at: now) else {
+                Issue.record("Expected question answer response")
+                return
+            }
+            #expect(response.status == 200)
+            #expect(try ConversationEventCoding.makeDecoder().decode(RemoteQuestionAnswerResult.self, from: response.body) == expected)
+        }
+        let poll = ClaudeQuestionHookRequest(phase: .poll, sessionID: fixture.sessionID,
+            panelID: fixture.panelID, responseID: responseID)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(poll, at: now).answers == request.answers)
+        let completed = ClaudeQuestionHookRequest(phase: .observe, sessionID: fixture.sessionID, panelID: fixture.panelID,
+            event: .init(eventName: .postToolUse, nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                promptID: "prompt", transcriptPath: fixture.resumeRecord.sessionFilePath, providerCallID: "question-call",
+                answers: ["Choose a color": "Blue"], timestamp: now.addingTimeInterval(1)))
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(completed, at: now.addingTimeInterval(1)).status == .observed)
+        let finished = try #require(fixture.service.facadeConversationSnapshot(for: fixture.conversationID, at: now.addingTimeInterval(1)))
+        #expect(finished.pendingInteractions.isEmpty)
+        let feed = try #require(fixture.sessionRuntimeStore.providerConversationFeed(managedSessionID: fixture.sessionID))
+        guard case .transcript(.interactionResolved(let resolution)) = try #require(feed.observations.last).payload else {
+            Issue.record("Expected accepted answers in provider feed")
+            return
+        }
+        #expect(resolution.answers == request.answers)
     }
 }

@@ -151,6 +151,11 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             interactionDidRequestFocus: { [weak self] panelID in
                 guard let self else { return }
                 _ = self.store?.focusPanel(containing: panelID)
+            },
+            openExternalLink: { [weak self] panelID, url in
+                guard let store = self?.store else { return }
+                let windowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
+                _ = store.openURLInBrowser(preferredWindowID: windowID, url: url, placement: .rightPanel)
             }
         )
         scratchpadRuntimeByPanelID[panelID] = runtime

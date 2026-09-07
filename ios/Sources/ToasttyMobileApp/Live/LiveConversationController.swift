@@ -59,11 +59,17 @@ final class LiveConversationController {
     private(set) var composerAuthority = ConversationComposerAuthority()
     private(set) var sendReconciliation = SendReconciliationState()
     private(set) var lastSendGateFailure: ConversationSendGateFailure?
+    private(set) var interactionAnswerStates: [
+        RemotePendingInteraction.ID: ToasttyInteractionAnswerState
+    ] = [:]
 
     private let runtime: any LiveConversationRuntime
     private let loadOlderAction: @Sendable () async -> Void
     private let sendAction: @Sendable (String, ConversationComposerStamp) async -> ConversationSendOutcome
     private let dismissSendReceiptAction: @Sendable (String) async -> Void
+    private let answerQuestionAction: @Sendable (
+        RemoteQuestionAnswerRequest
+    ) async throws -> RemoteQuestionAnswerResult
     private let acknowledgeReadAction: @Sendable (
         RemoteConversationReadAcknowledgementRequest
     ) async throws -> RemoteConversationReadAcknowledgementResponse?
@@ -73,6 +79,7 @@ final class LiveConversationController {
     private var readAcknowledgementBoundary: ReadBoundary?
     private var lastAcknowledgedBoundary: ReadBoundary?
     private var connectionPhase: ConnectionCoordinatorPhase = .idle
+    private var supportsQuestionAnswers = false
     private var connectionGeneration: UInt64 = 0
     private var runtimeRevision: UInt64 = 0
     private var hasConsumedState = false
@@ -86,6 +93,11 @@ final class LiveConversationController {
         send: @escaping @Sendable (String, ConversationComposerStamp) async -> ConversationSendOutcome = { _, _ in
             .notEnqueued(.conversationNotOpen)
         },
+        answerQuestion: @escaping @Sendable (
+            RemoteQuestionAnswerRequest
+        ) async throws -> RemoteQuestionAnswerResult = { _ in
+            .rejected(reason: .unsupported)
+        },
         dismissSendReceipt: @escaping @Sendable (String) async -> Void = { _ in },
         acknowledgeRead: @escaping @Sendable (
             RemoteConversationReadAcknowledgementRequest
@@ -95,6 +107,7 @@ final class LiveConversationController {
         self.runtime = runtime
         loadOlderAction = loadOlder
         sendAction = send
+        answerQuestionAction = answerQuestion
         dismissSendReceiptAction = dismissSendReceipt
         acknowledgeReadAction = acknowledgeRead
     }
@@ -198,6 +211,61 @@ final class LiveConversationController {
         }
     }
 
+    func editInteractionAnswer(
+        interactionID: RemotePendingInteraction.ID,
+        edit: ToasttyInteractionAnswerEdit
+    ) {
+        guard var state = interactionAnswerStates[interactionID] else { return }
+        state.apply(edit)
+        interactionAnswerStates[interactionID] = state
+    }
+
+    func submitInteractionAnswer(
+        interactionID: RemotePendingInteraction.ID
+    ) async {
+        guard var answerState = interactionAnswerStates[interactionID],
+              answerState.canSubmit,
+              let answers = answerState.canonicalAnswers else { return }
+        let request = answerState.retryRequest ?? RemoteQuestionAnswerRequest(
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            interactionID: answerState.key.interactionID,
+            responseID: answerState.key.responseID,
+            expectedInputEpoch: answerState.key.inputEpoch,
+            clientRequestID: UUID().uuidString.lowercased(),
+            answers: answers
+        )
+        answerState.retryRequest = request
+        answerState.status = .submitting
+        interactionAnswerStates[interactionID] = answerState
+
+        let result: Result<RemoteQuestionAnswerResult, Error>
+        do {
+            result = .success(try await answerQuestionAction(request))
+        } catch {
+            result = .failure(error)
+        }
+
+        guard var current = interactionAnswerStates[interactionID],
+              current.key == answerState.key,
+              current.retryRequest == request,
+              current.status == .submitting else { return }
+        switch result {
+        case .success(.submitted), .success(.duplicate):
+            current.status = .awaitingClaude
+        case .success(.rejected(let reason)):
+            current.retryRequest = nil
+            current.status = questionRejectionStatus(reason)
+        case .failure:
+            current.status = .failed("Answer could not be sent. Try again.")
+        }
+        interactionAnswerStates[interactionID] = current
+    }
+
+    func consumeConnectionState(_ state: ConnectionCoordinator.State) {
+        supportsQuestionAnswers = state.capabilities.contains(.questionAnswers)
+        consumeConnectionPhase(state.phase)
+    }
+
     func consumeConnectionPhase(_ phase: ConnectionCoordinatorPhase) {
         if connectionPhase != phase {
             runtimeRevision &+= 1
@@ -206,6 +274,7 @@ final class LiveConversationController {
         connectionPhase = phase
         resolvePhase()
         refreshTranscriptPresentation()
+        reconcileInteractionAnswerStates()
     }
 
     func consume(_ state: ConversationRuntime.State) {
@@ -279,6 +348,7 @@ final class LiveConversationController {
             }
         }
         refreshTranscriptPresentation(contentChanged: contentChanged)
+        reconcileInteractionAnswerStates()
     }
 
     func consumeSendReconciliation(_ state: SendReconciliationState) {
@@ -408,6 +478,86 @@ final class LiveConversationController {
             isLoadingOlder: isLoadingOlder,
             prependAnchorID: prependAnchorID
         )
+    }
+
+    private func reconcileInteractionAnswerStates() {
+        var updated: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
+        var sawInteractionCard = false
+        for row in transcriptPresentation.rows {
+            guard case .interaction(let presentation) = row.content else { continue }
+            sawInteractionCard = true
+            let interaction = presentation.interaction
+            guard let questions = interaction.questions,
+                  RemoteQuestionAnswerValidation.supports(questions) else { continue }
+
+            if interaction.state == .resolved {
+                if var existing = interactionAnswerStates[interaction.id] {
+                    existing.status = .resolved(interaction.answers ?? [])
+                    existing.connectionIsLive = connectionPhase == .live
+                    updated[interaction.id] = existing
+                }
+                continue
+            }
+
+            if let reason = presentation.responseClosedReason {
+                if var existing = interactionAnswerStates[interaction.id] {
+                    existing.status = .unavailable(questionRejectionMessage(reason))
+                    existing.connectionIsLive = false
+                    updated[interaction.id] = existing
+                }
+                continue
+            }
+
+            guard interaction.state == .pending,
+                  let responseID = interaction.responseID,
+                  responseID.isEmpty == false else { continue }
+            let key = ToasttyInteractionAnswerKey(
+                interactionID: interaction.id,
+                responseID: responseID,
+                inputEpoch: interaction.inputEpoch
+            )
+            var state: ToasttyInteractionAnswerState
+            if let existing = interactionAnswerStates[interaction.id], existing.key == key {
+                state = existing
+            } else {
+                guard supportsQuestionAnswers else { continue }
+                state = ToasttyInteractionAnswerState(key: key, questions: questions)
+            }
+            state.connectionIsLive = connectionPhase == .live && supportsQuestionAnswers
+            updated[interaction.id] = state
+        }
+        if sawInteractionCard == false, phase != .live {
+            for (id, var state) in interactionAnswerStates {
+                state.connectionIsLive = false
+                updated[id] = state
+            }
+        }
+        interactionAnswerStates = updated
+    }
+
+    private func questionRejectionStatus(
+        _ reason: RemoteQuestionAnswerRejectionReason
+    ) -> ToasttyInteractionAnswerStatus {
+        switch reason {
+        case .invalidAnswers:
+            .failed("Review every answer and try again.")
+        default:
+            .unavailable(questionRejectionMessage(reason))
+        }
+    }
+
+    private func questionRejectionMessage(
+        _ reason: RemoteQuestionAnswerRejectionReason
+    ) -> String {
+        switch reason {
+        case .expired: "The answer window closed. Respond on the desktop."
+        case .sendScopeDenied: "This device cannot send answers."
+        case .sessionWritesDisabled: "Remote answers are disabled for this session."
+        case .notBound, .epochMismatch, .notPending, .alreadySubmitted:
+            "This answer is no longer available on iPhone."
+        case .invalidAnswers: "Review every answer and try again."
+        case .unsupported: "Update Toastty on your Mac to answer here."
+        }
     }
 
     /// The canonical conversation stream and send-reconciliation stream are

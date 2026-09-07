@@ -3,9 +3,9 @@ import Foundation
 /// A durable host fact describing a modal provider interaction (permission
 /// request, question, or structured choice) that is blocking the root session.
 ///
-/// Early mobile slices render these read-only. A response path is allowed only
-/// when the provider supplies a semantic action channel addressed to the same
-/// interaction identity — never by converting an interaction into keystrokes.
+/// A response path is allowed only when the provider supplies a semantic action
+/// channel addressed to the same interaction identity. Other interactions are
+/// read-only; answers are never converted into terminal keystrokes.
 public struct RemotePendingInteraction: Codable, Equatable, Sendable, Identifiable {
     /// Deterministic identity, derived from provider identifiers (approval ID,
     /// call ID) when available, otherwise from a stable content fingerprint.
@@ -46,11 +46,13 @@ public struct RemotePendingInteraction: Codable, Equatable, Sendable, Identifiab
         public var id: String
         public var label: String
         public var detail: String?
+        public var preview: String?
 
-        public init(id: String, label: String, detail: String? = nil) {
+        public init(id: String, label: String, detail: String? = nil, preview: String? = nil) {
             self.id = id
             self.label = label
             self.detail = detail
+            self.preview = preview
         }
     }
 
@@ -66,6 +68,11 @@ public struct RemotePendingInteraction: Codable, Equatable, Sendable, Identifiab
     public var inputEpoch: RemoteInputEpoch
     public var presentedAt: Date
     public var state: State
+    /// Present only for a provider question with a semantic response channel.
+    public var questions: [RemoteInteractionQuestion]?
+    public var responseID: String?
+    public var responseExpiresAt: Date?
+    public var answers: [RemoteInteractionAnswer]?
 
     public init(
         id: ID,
@@ -76,7 +83,11 @@ public struct RemotePendingInteraction: Codable, Equatable, Sendable, Identifiab
         options: [Option] = [],
         inputEpoch: RemoteInputEpoch,
         presentedAt: Date,
-        state: State = .pending
+        state: State = .pending,
+        questions: [RemoteInteractionQuestion]? = nil,
+        responseID: String? = nil,
+        responseExpiresAt: Date? = nil,
+        answers: [RemoteInteractionAnswer]? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -87,5 +98,9 @@ public struct RemotePendingInteraction: Codable, Equatable, Sendable, Identifiab
         self.inputEpoch = inputEpoch
         self.presentedAt = presentedAt
         self.state = state
+        self.questions = questions
+        self.responseID = responseID
+        self.responseExpiresAt = responseExpiresAt
+        self.answers = answers
     }
 }

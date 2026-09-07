@@ -60,19 +60,28 @@ public struct ProviderInteractionObservation: Codable, Equatable, Sendable {
     public var providerApprovalID: String?
     public var prompt: String
     public var options: [RemotePendingInteraction.Option]
+    public var questions: [RemoteInteractionQuestion]?
+    public var responseID: String?
+    public var responseExpiresAt: Date?
 
     public init(
         kind: RemotePendingInteraction.Kind,
         providerCallID: String? = nil,
         providerApprovalID: String? = nil,
         prompt: String,
-        options: [RemotePendingInteraction.Option] = []
+        options: [RemotePendingInteraction.Option] = [],
+        questions: [RemoteInteractionQuestion]? = nil,
+        responseID: String? = nil,
+        responseExpiresAt: Date? = nil
     ) {
         self.kind = kind
         self.providerCallID = providerCallID
         self.providerApprovalID = providerApprovalID
         self.prompt = prompt
         self.options = options
+        self.questions = questions
+        self.responseID = responseID
+        self.responseExpiresAt = responseExpiresAt
     }
 }
 

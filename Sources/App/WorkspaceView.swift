@@ -3895,6 +3895,15 @@ struct PanelCardView: View {
                 .fill(panelHeaderDividerColor)
                 .frame(height: panelHeaderDividerHeight)
         }
+        .contextMenu {
+            if let terminalAllowsAgentReads {
+                TerminalAgentReadMenuItems(
+                    allowsAgentReads: terminalAllowsAgentReads,
+                    setAllowsAgentReads: setTerminalAllowsAgentReads,
+                    closePanel: closePanelFromHeaderMenu
+                )
+            }
+        }
     }
 
     @ViewBuilder
@@ -4201,6 +4210,17 @@ struct PanelCardView: View {
             )
         }
 
+        if let terminalAllowsAgentReads {
+            TerminalReadActivityIndicator(
+                model: terminalRuntimeRegistry.terminalReadActivityStore.model(for: panelID),
+                allowsAgentReads: terminalAllowsAgentReads,
+                appIsActive: appIsActive,
+                shortcutNumberForSession: shortcutNumberForReaderSession,
+                setAllowsAgentReads: setTerminalAllowsAgentReads,
+                closePanel: closePanelFromHeaderMenu
+            )
+        }
+
         if let browserHeaderAccessory {
             browserHeaderAccessory
         }
@@ -4217,6 +4237,37 @@ struct PanelCardView: View {
         case .empty:
             EmptyView()
         }
+    }
+
+    /// Nil for non-terminal panels.
+    private var terminalAllowsAgentReads: Bool? {
+        guard case .terminal(let terminalState) = panelState else { return nil }
+        return terminalState.allowsAgentReads
+    }
+
+    private func shortcutNumberForReaderSession(_ sessionID: String) -> Int? {
+        guard let readerPanelID = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.panelID,
+              let workspace = store.state.workspacesByID[workspaceID] else {
+            return nil
+        }
+        return workspace.terminalShortcutNumbersByPanelID(
+            limit: DisplayShortcutConfig.maxPanelFocusShortcutCount
+        )[readerPanelID]
+    }
+
+    private func setTerminalAllowsAgentReads(_ allows: Bool) {
+        _ = store.send(
+            .setTerminalPanelAgentReadPolicy(panelID: panelID, policy: allows ? nil : .denied),
+            source: .ui("panel_header_agent_reads")
+        )
+    }
+
+    private func closePanelFromHeaderMenu() {
+        _ = focusedPanelCommandController.closePanel(
+            panelID: panelID,
+            source: .ui("panel_header_menu_close"),
+            confirmationPolicy: .interactive
+        )
     }
 
     private var scratchpadTerminalBindingIndicatorState: ScratchpadTerminalBindingIndicatorState? {

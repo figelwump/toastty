@@ -47,13 +47,20 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertNotNil(hooks["SubagentStop"])
         XCTAssertNotNil(hooks["PreToolUse"])
         XCTAssertNotNil(hooks["PostToolUse"])
-        XCTAssertNil(hooks["PostToolUseFailure"])
+        XCTAssertNotNil(hooks["PostToolUseFailure"])
+        XCTAssertNotNil(hooks["SessionEnd"])
         XCTAssertNotNil(hooks["PermissionRequest"])
         XCTAssertNotNil(hooks["Notification"])
 
         let postToolUseEntries = try XCTUnwrap(hooks["PostToolUse"] as? [[String: Any]])
         XCTAssertNotNil(postToolUseEntries.first { ($0["matcher"] as? String) == "Agent" })
         XCTAssertNotNil(postToolUseEntries.first { ($0["matcher"] as? String) == "Task" })
+        XCTAssertNotNil(postToolUseEntries.first { ($0["matcher"] as? String) == "AskUserQuestion" })
+        let failureEntries = try XCTUnwrap(hooks["PostToolUseFailure"] as? [[String: Any]])
+        XCTAssertEqual(failureEntries.compactMap { $0["matcher"] as? String }, ["AskUserQuestion"])
+        let permissionEntries = try XCTUnwrap(hooks["PermissionRequest"] as? [[String: Any]])
+        let permissionHooks = try XCTUnwrap(permissionEntries.last?["hooks"] as? [[String: Any]])
+        XCTAssertEqual(permissionHooks.first?["timeout"] as? Int, 310)
 
         let notificationEntries = try XCTUnwrap(hooks["Notification"] as? [[String: Any]])
         let matcherEntry = notificationEntries.first { entry in
@@ -2234,8 +2241,37 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: capturedPayloadURL, encoding: .utf8), payload)
         XCTAssertEqual(
             try String(contentsOf: capturedArgsURL, encoding: .utf8),
-            "session\ningest-agent-event\n--source\nclaude-hooks\n"
+            "session\ningest-agent-event\n--source\nclaude-hooks\n--respond-to-questions\n"
         )
+    }
+
+    func testOnlyClaudeHookForwarderPreservesProviderResponseOnStdout() throws {
+        let rootURL = FileManager.default.temporaryDirectory.appendingPathComponent("toastty-hook-response-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let fakeCLIURL = rootURL.appendingPathComponent("toastty-cli")
+        let providerResponse = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{"answers":{"Which?":"First"}}}}}"#
+        try Data("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '\(providerResponse)'\n".utf8).write(to: fakeCLIURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeCLIURL.path)
+        for agent in [AgentKind.claude, .codex] {
+            let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+                agent: agent,
+                argv: [agent == .claude ? "claude" : "codex"],
+                cliExecutablePath: fakeCLIURL.path,
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default
+            )
+            let artifactsURL = try XCTUnwrap(preparedLaunch.artifacts?.directoryURL)
+            defer { try? FileManager.default.removeItem(at: artifactsURL) }
+            let scriptURL = artifactsURL.appendingPathComponent(agent == .claude ? "claude-hook.sh" : "codex-notify.sh")
+            let script = try String(contentsOf: scriptURL, encoding: .utf8)
+            let result = try runScript(at: scriptURL, environment: [:], standardInput: Data("{}".utf8))
+            XCTAssertEqual(result.exitCode, 0)
+            XCTAssertEqual(result.stderr, "")
+            XCTAssertEqual(result.stdout, agent == .claude ? providerResponse + "\n" : "")
+            XCTAssertEqual(script.contains("--respond-to-questions"), agent == .claude)
+        }
     }
 
     func testProcessLifetimeLaunchesUseDurableArtifactsAndRecordOwnerPID() throws {

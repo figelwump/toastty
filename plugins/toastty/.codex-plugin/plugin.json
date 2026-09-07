@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Toastty",
     "shortDescription": "Control and support Toastty from managed agent sessions.",
-    "longDescription": "Toastty adds workflows for app control, Scratchpad visuals, local-document review, and redacted diagnostics. Toastty exposes these skills only to supported managed agent sessions.",
+    "longDescription": "Toastty adds workflows for app control, Scratchpad visuals, local-document review, sibling-terminal reads, and redacted diagnostics. Toastty exposes these skills only to supported managed agent sessions.",
     "developerName": "Giant Things",
     "category": "Developer Tools",
     "capabilities": [
@@ -19,6 +19,7 @@
     "defaultPrompt": [
       "Show this plan in Toastty for review.",
       "Create a visual summary in Scratchpad.",
+      "Check what the dev server in the other terminal is printing.",
       "Send Toastty diagnostics."
     ]
   }

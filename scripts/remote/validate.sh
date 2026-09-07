@@ -58,8 +58,11 @@ Notes:
   - If the remote host is unavailable during preflight, smoke tests fall back to
     a local run by default.
   - Pass --require-remote to disable that fallback and fail fast instead.
-  - --validation-command remains available as an undocumented debug escape hatch
-    for ad-hoc remote validation commands.
+  - --validation-command is the supported path for foreground-capable remote
+    checks (Peekaboo screenshots, menu clicks, focus) after Toastty launches on
+    the remote host. It exports TOASTTY_PID, TOASTTY_SOCKET_PATH, TOASTTY_APP_BUNDLE,
+    TOASTTY_INSTANCE_JSON, TOASTTY_RUNTIME_HOME, TOASTTY_DERIVED_PATH, and
+    TOASTTY_ARTIFACTS_DIR to the command.
 EOF
 }
 

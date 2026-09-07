@@ -800,16 +800,30 @@ private extension AgentLaunchInstrumentation {
             ],
         ]
 
+        let questionCommandHook: [String: Any] = [
+            "matcher": "AskUserQuestion",
+            "hooks": [["type": "command", "command": command]],
+        ]
+        // The response runner waits at most five minutes. Give it time to
+        // release the host lease before Claude cancels the command itself.
+        let permissionCommandHook: [String: Any] = [
+            "matcher": "*",
+            "hooks": [["type": "command", "command": command, "timeout": 310]],
+        ]
+
         var hooks = mergedSettings["hooks"] as? [String: Any] ?? [:]
         appendClaudeHookEntry(commandHook, to: "SessionStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "UserPromptSubmit", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "Stop", in: &hooks)
+        appendClaudeHookEntry(commandHook, to: "SessionEnd", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "SubagentStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "SubagentStop", in: &hooks)
         appendClaudeHookEntry(agentPostToolUseCommandHook, to: "PostToolUse", in: &hooks)
         appendClaudeHookEntry(taskPostToolUseCommandHook, to: "PostToolUse", in: &hooks)
+        appendClaudeHookEntry(questionCommandHook, to: "PostToolUse", in: &hooks)
+        appendClaudeHookEntry(questionCommandHook, to: "PostToolUseFailure", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PreToolUse", in: &hooks)
-        appendClaudeHookEntry(wildcardCommandHook, to: "PermissionRequest", in: &hooks)
+        appendClaudeHookEntry(permissionCommandHook, to: "PermissionRequest", in: &hooks)
         // Keep both PermissionRequest and Notification coverage. Claude surfaces
         // some approval/input pauses as notifications (for example
         // permission_prompt / elicitation_dialog), and the runtime store
@@ -2181,13 +2195,16 @@ private extension AgentLaunchInstrumentation {
     ) -> String {
         let stderrTemplateURL = stderrFallbackURL.deletingLastPathComponent()
             .appendingPathComponent("telemetry-stderr.XXXXXX", isDirectory: false)
-        let cliCommand = "\(shellQuote(cliExecutablePath)) session ingest-agent-event --source \(source)"
+        let respondsToQuestions = source == "claude-hooks"
+        let responseFlag = respondsToQuestions ? " --respond-to-questions" : ""
+        let stdoutRedirect = respondsToQuestions ? "" : " >/dev/null"
+        let cliCommand = "\(shellQuote(cliExecutablePath)) session ingest-agent-event --source \(source)\(responseFlag)"
         let commandInvocationLines: [String]
 
         switch inputMode {
         case .none:
             commandInvocationLines = [
-                "if \(cliCommand) >/dev/null 2>\"$stderr_file\"; then",
+                "if \(cliCommand)\(stdoutRedirect) 2>\"$stderr_file\"; then",
                 "  :",
                 "else",
                 "  status=$?",
@@ -2201,7 +2218,7 @@ private extension AgentLaunchInstrumentation {
                 "  printf '%s' \"$1\"",
                 "else",
                 "  cat",
-                "fi | \(cliCommand) >/dev/null 2>\"$stderr_file\"",
+                "fi | \(cliCommand)\(stdoutRedirect) 2>\"$stderr_file\"",
                 "status=$?",
                 "if [ \"$status\" -ne 0 ]; then",
                 "  append_telemetry_failure \"$status\"",

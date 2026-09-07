@@ -12,7 +12,7 @@ final class ToasttyTurnPresentationTests: XCTestCase {
             row(3, .assistantMessage(text: "checking", phase: .commentary)),
             row(4, .toolStarted(callID: "call-1", name: "Read", detail: nil)),
             row(5, .toolFinished(callID: "call-1", name: "Read", outcome: .succeeded, detail: nil)),
-            row(6, .interaction(pendingInteraction)),
+            row(6, .interaction(ToasttyInteractionPresentation(interaction: pendingInteraction))),
             row(7, .toolStarted(callID: "call-2", name: "Bash", detail: nil)),
             row(8, .assistantMessage(text: "the answer", phase: .final)),
             row(9, .toolStarted(callID: "call-3", name: "Read", detail: nil)),

@@ -745,17 +745,29 @@ Request payload:
 - `workspaceID?: UUID string`
 - `windowID?: UUID string`
 - `contains?: String`
+- `tail?: Int` (return only the last N lines; must be >= 1)
+- `includeScrollback?: Bool` (read the whole screen buffer, scrollback plus
+  viewport, instead of the viewport only)
 
 Result:
 
 - `workspaceID: UUID string`
 - `panelID: UUID string`
 - `text: String`
+- `lineCount: Int`
+- `truncated: Bool` (true when `tail` or the 256 KiB byte cap dropped leading
+  content; the cap keeps the most recent output)
+- `includesScrollback: Bool`
 - `contains?: Bool`
 
 Behavior:
 
 - Compatibility shim over `app_control.run_query` with `id: "terminal.visible-text"`.
+- A read from any caller other than the panel's own managed session is a
+  foreign read. Foreign reads are recorded and surfaced to the user in that
+  panel's header. Toastty's internal status parsing never counts.
+- When the user marked the panel private, foreign reads fail with
+  `PANEL_READ_DENIED`. The panel's own session is always exempt.
 
 ### `automation.launch_agent`
 
@@ -989,7 +1001,15 @@ Result:
 - `rootSplitRatio: Double | null`
 - `slotIDs: [UUID string]`
 - `slotPanelIDs: [UUID string]`
-- `slotMappings: [{ slotID, panelID }]`
+- `slotMappings: [{ slotID, panelID, panelKind, ... }]`
+  - `panelKind` is `"terminal"` or `"web"`.
+  - terminal entries add `title`, `cwd`, `shell`, `profileID`, `shortcutNumber`
+    (1-based focus shortcut, null beyond the shortcut limit), `promptState`
+    (`"busy"`, `"idleAtPrompt"`, `"exited"`, or `"unavailable"`), `isBusy`,
+    `sessionID` and `agent` for a managed session on that panel (null
+    otherwise), and `readable` (false when the user marked the panel private
+    to other sessions).
+  - web entries add `webDefinition` and `title`.
 - `rightPanel: { isVisible, width, hasCustomWidth, tabCount, activeTabID, activePanelID, focusedPanelID, tabIDs, panelIDs, tabs }`
   - describes the selected workspace tab's right panel; switching workspace tabs changes this object with the selected tab
   - `width` is the stored custom width. When `hasCustomWidth` is false, the visible panel width is resolved responsively from the workspace width.
@@ -1561,6 +1581,7 @@ Current response error codes:
 - `INVALID_PAYLOAD`
 - `CONFIRMATION_REQUIRED`
 - `CLOSE_BLOCKED`
+- `PANEL_READ_DENIED`
 - `INTERNAL_ERROR`
 
 ## 9) implementation notes that are not separate protocol guarantees

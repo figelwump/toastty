@@ -122,6 +122,19 @@ public struct ConversationProjector: Sendable {
             if authorizesCurrentRuntime, case .toolFinished(let finished) = payload {
                 resolveInteractions(matchingCallID: finished.callID, at: observation.timestamp, emitting: &emitted)
             }
+            if authorizesCurrentRuntime, case .interactionResolved(let resolution) = payload {
+                // The transcript may finish the tool before the hook supplies
+                // its accepted answers. Preserve that later event as answer
+                // enrichment, while removing live authority only once.
+                pendingInteractions.removeAll { $0.id == resolution.interactionID }
+                updateInteractionAvailability(at: observation.timestamp, emitting: &emitted)
+            }
+            if authorizesCurrentRuntime, case .interactionResponseClosed(let closure) = payload,
+               let index = pendingInteractions.firstIndex(where: { $0.id == closure.interactionID }) {
+                // Losing the hook does not dismiss Claude's desktop question.
+                pendingInteractions[index].responseID = nil
+                pendingInteractions[index].responseExpiresAt = nil
+            }
 
         case .interactionPresented(let interactionObservation):
             let interaction = RemotePendingInteraction(
@@ -132,12 +145,19 @@ public struct ConversationProjector: Sendable {
                 prompt: interactionObservation.prompt,
                 options: interactionObservation.options,
                 inputEpoch: currentEpoch,
-                presentedAt: observation.timestamp
+                presentedAt: observation.timestamp,
+                questions: interactionObservation.questions,
+                responseID: authorizesCurrentRuntime ? interactionObservation.responseID : nil,
+                responseExpiresAt: authorizesCurrentRuntime ? interactionObservation.responseExpiresAt : nil
             )
             emitted.append(appendProviderEvent(.interactionPresented(interaction), from: observation))
             if authorizesCurrentRuntime {
                 pendingPromptStabilizationToken = nil
-                pendingInteractions.append(interaction)
+                if let index = pendingInteractions.firstIndex(where: { $0.id == interaction.id }) {
+                    pendingInteractions[index] = interaction
+                } else {
+                    pendingInteractions.append(interaction)
+                }
                 transition(
                     to: .awaitingInput,
                     availability: .pendingInteraction(interactionIDs: pendingInteractions.map(\.id)),
@@ -525,6 +545,13 @@ public struct ConversationProjector: Sendable {
                 at: date
             ))
         }
+        updateInteractionAvailability(at: date, emitting: &emitted)
+    }
+
+    private mutating func updateInteractionAvailability(
+        at date: Date,
+        emitting emitted: inout [ConversationEvent]
+    ) {
         if pendingInteractions.isEmpty, case .pendingInteraction = inputAvailability {
             transition(to: .working, availability: .unavailable(reason: .working), at: date, emitting: &emitted)
         } else if pendingInteractions.isEmpty == false {

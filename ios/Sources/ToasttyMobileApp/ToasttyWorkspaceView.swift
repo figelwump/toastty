@@ -3,8 +3,7 @@ import SwiftUI
 import ToasttyMobileDomain
 
 struct ToasttyWorkspaceView: View {
-    @State private var selectedPreview: ToasttyPreviewSelection?
-    @State private var selectedScratchpad: ToasttyPreviewSelection?
+    @State private var showsAllPanels = false
     let workspaceID: UUID
     let controller: HomeScreenController
 
@@ -39,8 +38,6 @@ struct ToasttyWorkspaceView: View {
                 .accessibilityIdentifier("toastty-mobile-workspace-removed")
             }
         }
-        .sheet(item: $selectedPreview) { ToasttyPreviewSheet(selection: $0) }
-        .fullScreenCover(item: $selectedScratchpad) { ToasttyPreviewSheet(selection: $0) }
         .background(ToasttyDesignTokens.background)
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
@@ -56,21 +53,28 @@ struct ToasttyWorkspaceView: View {
 
     private func workspaceList(_ workspace: MobileWorkspace) -> some View {
         let visibleConversations = selectedWorkspaceSessionFilter.conversations(in: workspace)
+        let sortedPanels = ToasttyWorkspacePanels.sorted(workspace.panels)
+        let visiblePanels = showsAllPanels ? sortedPanels : Array(sortedPanels.prefix(4))
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 if !workspace.panels.isEmpty {
                     Text("Open panels").font(.headline).padding(.horizontal, 6)
-                    ForEach(workspace.panels) { panel in
-                        Button {
-                            let selection = ToasttyPreviewSelection(
-                                target: .panel(workspaceID: workspace.id, panelID: panel.panelID), title: panel.title)
-                            if panel.kind == "scratchpad" { selectedScratchpad = selection }
-                            else { selectedPreview = selection }
-                        } label: {
+                    ForEach(visiblePanels) { panel in
+                        NavigationLink(value: ToasttyMobileRoute.panelPreview(
+                            workspaceID: workspace.id, panelID: panel.panelID
+                        )) {
                             ToasttyWorkspacePanelRow(panel: panel)
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("toastty-workspace-panel-\(panel.panelID.uuidString)")
+                    }
+                    if sortedPanels.count > 4 {
+                        Button(showsAllPanels ? "Show less" : "Show more") {
+                            showsAllPanels.toggle()
+                        }
+                        .font(.subheadline)
+                        .padding(.horizontal, 6)
+                        .accessibilityIdentifier("toastty-workspace-panels-toggle")
                     }
                     Text("Sessions").font(.headline).padding(.horizontal, 6).padding(.top, 14)
                 }
@@ -165,6 +169,13 @@ private struct ToasttyWorkspacePanelRow: View {
                     .font(.caption).foregroundStyle(ToasttyDesignTokens.secondaryText).lineLimit(1)
             }
             Spacer()
+            if let updatedAt = panel.updatedAt {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(ToasttyWorkspacePanels.age(updatedAt, now: context.date))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                }
+            }
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(ToasttyDesignTokens.mutedText)
         }
         .padding(14).background(ToasttyDesignTokens.elevatedSurface, in: RoundedRectangle(cornerRadius: 12))

@@ -15,6 +15,8 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
         case remoteAccessEnabled = "remote_access_enabled"
         case remoteAccessDisabled = "remote_access_disabled"
         case sessionSubscribed = "session_subscribed"
+        case questionAnswerSubmitted = "question_answer_submitted"
+        case questionAnswerRejected = "question_answer_rejected"
         case remoteSendAccepted = "remote_send_accepted"
         case remoteSendRejected = "remote_send_rejected"
         case remoteSendUncertain = "remote_send_uncertain"

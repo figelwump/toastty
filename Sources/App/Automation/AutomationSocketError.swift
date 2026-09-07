@@ -13,6 +13,7 @@ enum AutomationSocketError: Error {
     case annotationColorLocked(key: String, currentColor: String)
     case annotationUsageUnavailable
     case scopeDenied(workspaceID: UUID)
+    case panelReadDenied(panelID: UUID)
     case internalError(String)
 
     var response: AutomationResponseEnvelope {
@@ -56,6 +57,11 @@ enum AutomationSocketError: Error {
             return AutomationResponseError(
                 code: "scope_denied",
                 message: "This workspace is outside your assigned scope. If the user explicitly assigned it, run toastty session scope add; otherwise stop and report."
+            )
+        case .panelReadDenied:
+            return AutomationResponseError(
+                code: "PANEL_READ_DENIED",
+                message: "The user marked this terminal private, so other sessions may not read its text. Do not retry; report it and continue without that output."
             )
         case .internalError(let message):
             return AutomationResponseError(code: "INTERNAL_ERROR", message: message)

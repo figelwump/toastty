@@ -80,6 +80,7 @@ public protocol GatewayClientProtocol: Sendable {
     ) async throws -> CompatibleGatewayEventsResponse
     func events(_ request: RemoteGatewayEventsRequest) async throws -> CompatibleGatewayEventsResponse
     func send(_ request: RemoteMessageSendRequest) async throws -> RemoteMessageSendResult
+    func answerQuestion(_ request: RemoteQuestionAnswerRequest) async throws -> RemoteQuestionAnswerResult
     func acknowledgeConversationRead(
         _ request: RemoteConversationReadAcknowledgementRequest
     ) async throws -> RemoteConversationReadAcknowledgementResponse
@@ -100,6 +101,12 @@ public extension GatewayClientProtocol {
     func acknowledgeConversationRead(
         _ request: RemoteConversationReadAcknowledgementRequest
     ) async throws -> RemoteConversationReadAcknowledgementResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func answerQuestion(
+        _ request: RemoteQuestionAnswerRequest
+    ) async throws -> RemoteQuestionAnswerResult {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -193,6 +200,38 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
             throw try classifyHTTPError(response)
         }
         return try mapCompatibility { try compatibilityDecoder.decodeSendResult(response.body) }
+    }
+
+    public func answerQuestion(
+        _ request: RemoteQuestionAnswerRequest
+    ) async throws -> RemoteQuestionAnswerResult {
+        let urlRequest = try await makeNativeBearerRequest(
+            method: "POST",
+            path: "/api/conversation.question.answer",
+            body: try encode(request),
+            sendsOrigin: true
+        )
+        let response = try await sendTransportRequest(urlRequest)
+        if response.statusCode == 403,
+           let result = try? ConversationEventCoding.makeDecoder().decode(
+               RemoteQuestionAnswerResult.self,
+               from: response.body
+           ),
+           result == .rejected(reason: .sendScopeDenied) {
+            return result
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            throw try classifyHTTPError(response)
+        }
+        do {
+            let result = try ConversationEventCoding.makeDecoder().decode(
+                RemoteQuestionAnswerResult.self,
+                from: response.body
+            )
+            return result
+        } catch {
+            throw GatewayFailure.invalidResponse
+        }
     }
 
     /// Shared by enqueue admission and HTTP delivery so request-size checks
@@ -346,6 +385,31 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         if authenticated, let credential = try await credentialProvider.credential() {
             Self.apply(credential, to: &request)
         }
+        return request
+    }
+
+    private func makeNativeBearerRequest(
+        method: String,
+        path: String,
+        body: Data?,
+        sendsOrigin: Bool
+    ) async throws -> URLRequest {
+        guard case .bearer(let token)? = try await credentialProvider.credential() else {
+            throw GatewayFailure.unauthenticated(code: nil, message: nil)
+        }
+        guard let url = endpointURL(path: path) else { throw GatewayFailure.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        if sendsOrigin {
+            guard let origin = gatewayOrigin else { throw GatewayFailure.invalidResponse }
+            request.setValue(origin, forHTTPHeaderField: "Origin")
+        }
+        Self.apply(.bearer(token: token), to: &request)
         return request
     }
 

@@ -24,6 +24,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canToggleFocusedPanelModeValue = true
     var canWatchRunningCommandValue = true
     var canClosePanelValue = true
+    var canToggleFocusedTerminalAgentReadsValue = true
+    var toggledTerminalAgentReadsWindowIDs: [UUID] = []
+    var terminalAgentReadsTitleValue = ToasttyBuiltInCommand.toggleFocusedTerminalAgentReads.title
     var canRenameWorkspaceValue = true
     var canCloseWorkspaceValue = true
     var canRenameTabValue = true
@@ -315,6 +318,21 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return closePanelResult
     }
 
+    func canToggleFocusedTerminalAgentReads(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canToggleFocusedTerminalAgentReadsValue
+    }
+
+    func toggleFocusedTerminalAgentReads(originWindowID: UUID) -> Bool {
+        toggledTerminalAgentReadsWindowIDs.append(originWindowID)
+        return true
+    }
+
+    func toggleFocusedTerminalAgentReadsTitle(originWindowID: UUID) -> String {
+        _ = originWindowID
+        return terminalAgentReadsTitleValue
+    }
+
     func canRenameWorkspace(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return canRenameWorkspaceValue
@@ -588,6 +606,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return watchRunningCommand(originWindowID: originWindowID)
             case .closePanel:
                 return closePanel(originWindowID: originWindowID)
+            case .toggleFocusedTerminalAgentReads:
+                return toggleFocusedTerminalAgentReads(originWindowID: originWindowID)
             case .renameWorkspace:
                 return renameWorkspace(originWindowID: originWindowID)
             case .closeWorkspace:

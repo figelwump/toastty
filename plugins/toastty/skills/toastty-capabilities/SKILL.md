@@ -88,7 +88,7 @@ Common workflow families:
 - Annotation discovery: `annotation.keys`.
 - Workspaces and tabs: `workspace.create`, `workspace.select`, `workspace.rename`, `workspace.set-annotation`, `workspace.clear-annotation`, `workspace.tab.create`, `workspace.tab.select`.
 - Panels: `panel.create.browser`, `panel.create.local-document`, `panel.close`, `panel.focus-mode.toggle`.
-- Terminal control: `terminal.send-text`, `terminal.visible-text`, `terminal.state`.
+- Terminal control: `terminal.send-text`, `terminal.visible-text`, `terminal.state`. To read another terminal's output in the same workspace, use the toastty-read-terminal skill.
 - Agents: `agent.launch`.
 - Scratchpad: `panel.scratchpad.set-content`, `panel.scratchpad.patch-content`, `panel.scratchpad.export`, `panel.scratchpad.state`.
 - Notifications: `toastty notify`.

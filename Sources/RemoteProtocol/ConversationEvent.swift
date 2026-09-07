@@ -14,6 +14,7 @@ public enum ConversationEventKind: String, Codable, Equatable, Sendable {
     case statusChanged = "status_changed"
     case interactionPresented = "interaction_presented"
     case interactionResolved = "interaction_resolved"
+    case interactionResponseClosed = "interaction_response_closed"
     case subagentSummary = "subagent_summary"
     case sessionBindingChanged = "session_binding_changed"
     case sendDeliveryUnconfirmed = "send_delivery_unconfirmed"
@@ -32,7 +33,7 @@ public enum ConversationEventKind: String, Codable, Equatable, Sendable {
         case .statusChanged, .sessionBindingChanged, .sendDeliveryUnconfirmed:
             return false
         case .userMessage, .assistantMessage, .toolStarted, .toolFinished,
-             .interactionPresented, .interactionResolved, .subagentSummary:
+             .interactionPresented, .interactionResolved, .interactionResponseClosed, .subagentSummary:
             return true
         }
     }
@@ -145,10 +146,28 @@ public struct ConversationStatusChangedPayload: Codable, Equatable, Sendable {
 public struct ConversationInteractionResolvedPayload: Codable, Equatable, Sendable {
     public var interactionID: RemotePendingInteraction.ID
     public var resolution: RemotePendingInteraction.State
+    public var answers: [RemoteInteractionAnswer]?
 
-    public init(interactionID: RemotePendingInteraction.ID, resolution: RemotePendingInteraction.State) {
+    public init(
+        interactionID: RemotePendingInteraction.ID,
+        resolution: RemotePendingInteraction.State,
+        answers: [RemoteInteractionAnswer]? = nil
+    ) {
         self.interactionID = interactionID
         self.resolution = resolution
+        self.answers = answers
+    }
+}
+
+/// The provider can still be waiting on the desktop after its remote response
+/// channel closes. This event revokes that channel without claiming an answer.
+public struct ConversationInteractionResponseClosedPayload: Codable, Equatable, Sendable {
+    public var interactionID: RemotePendingInteraction.ID
+    public var reason: RemoteQuestionAnswerRejectionReason
+
+    public init(interactionID: RemotePendingInteraction.ID, reason: RemoteQuestionAnswerRejectionReason) {
+        self.interactionID = interactionID
+        self.reason = reason
     }
 }
 
@@ -231,6 +250,7 @@ public enum ConversationEventPayload: Codable, Equatable, Sendable {
     case statusChanged(ConversationStatusChangedPayload)
     case interactionPresented(RemotePendingInteraction)
     case interactionResolved(ConversationInteractionResolvedPayload)
+    case interactionResponseClosed(ConversationInteractionResponseClosedPayload)
     case subagentSummary(ConversationSubagentSummaryPayload)
     case sessionBindingChanged(ConversationSessionBindingChangedPayload)
     case sendDeliveryUnconfirmed(ConversationSendDeliveryUnconfirmedPayload)
@@ -244,6 +264,7 @@ public enum ConversationEventPayload: Codable, Equatable, Sendable {
         case .statusChanged: return .statusChanged
         case .interactionPresented: return .interactionPresented
         case .interactionResolved: return .interactionResolved
+        case .interactionResponseClosed: return .interactionResponseClosed
         case .subagentSummary: return .subagentSummary
         case .sessionBindingChanged: return .sessionBindingChanged
         case .sendDeliveryUnconfirmed: return .sendDeliveryUnconfirmed
@@ -272,6 +293,8 @@ public enum ConversationEventPayload: Codable, Equatable, Sendable {
             self = .interactionPresented(try container.decode(RemotePendingInteraction.self, forKey: .payload))
         case .interactionResolved:
             self = .interactionResolved(try container.decode(ConversationInteractionResolvedPayload.self, forKey: .payload))
+        case .interactionResponseClosed:
+            self = .interactionResponseClosed(try container.decode(ConversationInteractionResponseClosedPayload.self, forKey: .payload))
         case .subagentSummary:
             self = .subagentSummary(try container.decode(ConversationSubagentSummaryPayload.self, forKey: .payload))
         case .sessionBindingChanged:
@@ -292,6 +315,7 @@ public enum ConversationEventPayload: Codable, Equatable, Sendable {
         case .statusChanged(let value): try container.encode(value, forKey: .payload)
         case .interactionPresented(let value): try container.encode(value, forKey: .payload)
         case .interactionResolved(let value): try container.encode(value, forKey: .payload)
+        case .interactionResponseClosed(let value): try container.encode(value, forKey: .payload)
         case .subagentSummary(let value): try container.encode(value, forKey: .payload)
         case .sessionBindingChanged(let value): try container.encode(value, forKey: .payload)
         case .sendDeliveryUnconfirmed(let value): try container.encode(value, forKey: .payload)
@@ -399,6 +423,8 @@ public struct ConversationEvent: Codable, Equatable, Sendable {
             self.payload = .interactionPresented(try container.decode(RemotePendingInteraction.self, forKey: .payload))
         case .interactionResolved:
             self.payload = .interactionResolved(try container.decode(ConversationInteractionResolvedPayload.self, forKey: .payload))
+        case .interactionResponseClosed:
+            self.payload = .interactionResponseClosed(try container.decode(ConversationInteractionResponseClosedPayload.self, forKey: .payload))
         case .subagentSummary:
             self.payload = .subagentSummary(try container.decode(ConversationSubagentSummaryPayload.self, forKey: .payload))
         case .sessionBindingChanged:
@@ -434,6 +460,8 @@ public struct ConversationEvent: Codable, Equatable, Sendable {
         case .interactionPresented(let value):
             try container.encode(value, forKey: .payload)
         case .interactionResolved(let value):
+            try container.encode(value, forKey: .payload)
+        case .interactionResponseClosed(let value):
             try container.encode(value, forKey: .payload)
         case .subagentSummary(let value):
             try container.encode(value, forKey: .payload)

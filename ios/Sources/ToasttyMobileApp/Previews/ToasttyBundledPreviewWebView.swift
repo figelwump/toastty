@@ -230,7 +230,7 @@ final class ToasttyPreviewViewport: UIScrollView, UIScrollViewDelegate {
         setZoomScale(1, animated: false)
         webView.frame = CGRect(origin: .zero, size: canvasSize)
         contentSize = canvasSize
-        minimumZoomScale = min(bounds.width / canvasSize.width, bounds.height / canvasSize.height)
+        minimumZoomScale = min(bounds.width / canvasSize.width, maximumZoomScale)
         setZoomScale(minimumZoomScale, animated: false)
         contentOffset = .zero
         hasFitted = true

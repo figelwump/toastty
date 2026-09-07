@@ -5,6 +5,19 @@ final class ToasttyMobileRouteTests: XCTestCase {
     private let workspaceID = UUID()
     private let conversationID = UUID()
 
+    func testConversationPushReplacementAndPopPreservePreviewContext() {
+        let preview = ToasttyMobileRoute.panelPreview(workspaceID: workspaceID, panelID: UUID())
+        let context: [ToasttyMobileRoute] = [.workspace(workspaceID), preview]
+        let pushed = context.synchronized(with: SelectedConversationPresentation(id: conversationID))
+        XCTAssertEqual(pushed, context + [.conversation(conversationID)])
+        XCTAssertEqual(pushed.synchronized(with: nil), context)
+        let replacement = UUID()
+        // External conversation selection also keeps the previous reading context.
+        XCTAssertEqual(pushed.synchronized(with: SelectedConversationPresentation(id: replacement)),
+                       context + [.conversation(replacement)])
+        XCTAssertFalse(context.containsConversation)
+    }
+
     func testSynchronizedAppendsConversationOnTopOfCurrentPath() {
         let selection = SelectedConversationPresentation(id: conversationID)
 

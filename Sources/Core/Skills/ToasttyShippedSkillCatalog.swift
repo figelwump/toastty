@@ -21,6 +21,10 @@ public enum ToasttyShippedSkillCatalog {
             summary: "Open plans and Markdown files for review inside Toastty."
         ),
         ToasttyShippedSkillDescriptor(
+            name: "toastty-read-terminal",
+            summary: "Read output from another terminal in the same workspace."
+        ),
+        ToasttyShippedSkillDescriptor(
             name: "toastty-scratchpad",
             summary: "Create and update visual diagrams, mockups, and summaries."
         ),

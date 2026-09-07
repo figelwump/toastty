@@ -6,6 +6,7 @@ SOURCE_SKILLS_DIR="$ROOT_DIR/.agents/skills"
 DEFAULT_SKILLS=(
   "toastty-capabilities"
   "toastty-open-markdown"
+  "toastty-read-terminal"
   "toastty-scratchpad"
   "toastty-send-diagnostics"
 )
