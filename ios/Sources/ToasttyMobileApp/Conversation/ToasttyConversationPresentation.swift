@@ -18,7 +18,7 @@ struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
         case toolStarted(callID: String, name: String, detail: String?)
         case toolFinished(callID: String, name: String, outcome: ConversationToolOutcome, detail: String?)
         case statusChanged(state: String, availability: String)
-        case interaction(RemotePendingInteraction)
+        case interaction(ToasttyInteractionPresentation)
         case interactionResolved(interactionID: RemotePendingInteraction.ID, resolution: RemotePendingInteraction.State)
         case subagentSummary(name: String, phase: ConversationSubagentPhase, detail: String?)
         case sessionBindingChanged(reason: ConversationBindingChangeReason)
@@ -28,6 +28,19 @@ struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
     let timestamp: Date
     let provider: AgentKind
     let content: Content
+}
+
+struct ToasttyInteractionPresentation: Equatable, Sendable {
+    var interaction: RemotePendingInteraction
+    var responseClosedReason: RemoteQuestionAnswerRejectionReason?
+
+    init(
+        interaction: RemotePendingInteraction,
+        responseClosedReason: RemoteQuestionAnswerRejectionReason? = nil
+    ) {
+        self.interaction = interaction
+        self.responseClosedReason = responseClosedReason
+    }
 }
 
 /// Identity of one rendered transcript block. Long assistant messages split
@@ -335,6 +348,7 @@ enum ToasttyConversationPresentationAdapter {
         prependAnchorID: ToasttyTranscriptRowID? = nil
     ) -> ToasttyConversationPresentationState {
         let resolutions = interactionResolutions(in: events)
+        let responseClosures = interactionResponseClosures(in: events)
         var toolNames: [String: String] = [:]
         let rows = events.compactMap { event -> ToasttyTranscriptRow? in
             switch event {
@@ -383,14 +397,25 @@ enum ToasttyConversationPresentationAdapter {
                     )
                 case .interactionPresented(var payload):
                     if let resolution = resolutions[payload.id] {
-                        payload.state = resolution
+                        payload.state = resolution.resolution
+                        payload.answers = resolution.answers
+                        payload.responseID = nil
+                    } else if responseClosures[payload.id] != nil {
+                        payload.responseID = nil
                     }
-                    content = .interaction(payload)
+                    content = .interaction(ToasttyInteractionPresentation(
+                        interaction: payload,
+                        responseClosedReason: responseClosures[payload.id]
+                    ))
                 case .interactionResolved(let payload):
                     content = .interactionResolved(
                         interactionID: payload.interactionID,
                         resolution: payload.resolution
                     )
+                case .interactionResponseClosed:
+                    // The presented card carries the response-channel state.
+                    // A second marker would imply that the native question ended.
+                    return nil
                 case .subagentSummary(let payload):
                     content = .subagentSummary(
                         name: payload.displayName,
@@ -432,11 +457,42 @@ enum ToasttyConversationPresentationAdapter {
 
     private static func interactionResolutions(
         in events: [CompatibleConversationEvent]
-    ) -> [RemotePendingInteraction.ID: RemotePendingInteraction.State] {
+    ) -> [RemotePendingInteraction.ID: ConversationInteractionResolvedPayload] {
         events.reduce(into: [:]) { resolutions, event in
             guard case .known(let known) = event,
                   case .interactionResolved(let payload) = known.payload else { return }
-            resolutions[payload.interactionID] = payload.resolution
+            if let previous = resolutions[payload.interactionID],
+               previous.resolution == .resolved {
+                resolutions[payload.interactionID] = ConversationInteractionResolvedPayload(
+                    interactionID: payload.interactionID,
+                    resolution: .resolved,
+                    answers: payload.answers ?? previous.answers
+                )
+            } else {
+                resolutions[payload.interactionID] = ConversationInteractionResolvedPayload(
+                    interactionID: payload.interactionID,
+                    resolution: payload.resolution,
+                    answers: payload.answers ?? resolutions[payload.interactionID]?.answers
+                )
+            }
+        }
+    }
+
+    private static func interactionResponseClosures(
+        in events: [CompatibleConversationEvent]
+    ) -> [RemotePendingInteraction.ID: RemoteQuestionAnswerRejectionReason] {
+        events.reduce(into: [:]) { closures, event in
+            guard case .known(let known) = event else { return }
+            switch known.payload {
+            case .interactionResponseClosed(let payload):
+                closures[payload.interactionID] = payload.reason
+            case .interactionPresented(let payload):
+                closures[payload.id] = nil
+            case .interactionResolved(let payload):
+                closures[payload.interactionID] = nil
+            default:
+                break
+            }
         }
     }
 

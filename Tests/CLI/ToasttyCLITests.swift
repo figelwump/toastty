@@ -999,7 +999,7 @@ struct ToasttyCLITests {
             ]
         )
 
-        guard case .sessionIngestAgentEvent(let sessionID, let parsedPanelID, let source) = invocation.command else {
+        guard case .sessionIngestAgentEvent(let sessionID, let parsedPanelID, let source, let respondToQuestions) = invocation.command else {
             Issue.record("expected session ingest command")
             return
         }
@@ -1007,6 +1007,7 @@ struct ToasttyCLITests {
         #expect(sessionID == "sess-env")
         #expect(parsedPanelID == panelID)
         #expect(source == .claudeHooks)
+        #expect(!respondToQuestions)
     }
 
     @Test
@@ -1021,7 +1022,7 @@ struct ToasttyCLITests {
             ]
         )
 
-        guard case .sessionIngestAgentEvent(let sessionID, let parsedPanelID, let source) = invocation.command else {
+        guard case .sessionIngestAgentEvent(let sessionID, let parsedPanelID, let source, let respondToQuestions) = invocation.command else {
             Issue.record("expected session ingest command")
             return
         }
@@ -1029,6 +1030,7 @@ struct ToasttyCLITests {
         #expect(sessionID == "sess-env")
         #expect(parsedPanelID == nil)
         #expect(source == .mimocodePlugin)
+        #expect(!respondToQuestions)
     }
 
     @Test

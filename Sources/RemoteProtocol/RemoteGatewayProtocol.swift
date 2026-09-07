@@ -34,6 +34,8 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// A client that has actually displayed the current live edge may clear
     /// the host panel's unread notification state without focusing the Mac.
     case conversationReadAcknowledgement = "conversation_read_acknowledgement"
+    /// Live structured questions can be answered through their provider hook.
+    case questionAnswers = "question_answers"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -53,6 +55,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .nativeBearerPairing,
             .conversationBackwardPaging,
             .conversationReadAcknowledgement,
+            .questionAnswers,
         ]
     ) {
         self.protocolVersion = protocolVersion

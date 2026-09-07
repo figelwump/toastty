@@ -4,6 +4,53 @@ import Testing
 @testable import CoreState
 
 struct ConversationProjectorTests {
+    @Test func questionChannelExpiryKeepsNativeQuestionAndCompletionEnrichesAnswers() throws {
+        var projector = Self.makeClaudeProjector()
+        let question = RemoteInteractionQuestion(id: "q", header: "Choice", question: "Pick one", options: [
+            .init(id: "a", label: "First"), .init(id: "b", label: "Second"),
+        ])
+        func observation(_ fingerprint: String, _ payload: ProviderObservationPayload) -> ProviderTranscriptObservation {
+            .init(timestamp: Self.epochDate.addingTimeInterval(1), fingerprint: fingerprint, payload: payload)
+        }
+        let presented = observation("question", .interactionPresented(.init(kind: .question,
+            providerCallID: "call", prompt: question.question, questions: [question],
+            responseID: "response", responseExpiresAt: Self.epochDate.addingTimeInterval(300))))
+        projector.ingest(presented)
+        let interaction = try #require(projector.pendingInteractions.first)
+        #expect(interaction.questions == [question])
+        #expect(interaction.responseID == "response")
+        projector.ingest(observation("closed", .transcript(.interactionResponseClosed(.init(
+            interactionID: interaction.id, reason: .expired)))))
+        #expect(projector.pendingInteractions.count == 1)
+        #expect(projector.pendingInteractions[0].responseID == nil)
+        #expect(projector.pendingInteractions[0].state == .pending)
+        projector.ingest(observation("finished", .transcript(.toolFinished(.init(callID: "call")))))
+        #expect(projector.pendingInteractions.isEmpty)
+        let answers = [RemoteInteractionAnswer(questionID: "q", selectedOptionIDs: ["b"])]
+        let completion = observation("accepted", .transcript(.interactionResolved(.init(
+            interactionID: interaction.id, resolution: .resolved, answers: answers))))
+        let events = projector.ingest(completion)
+        #expect(events.contains { event in
+            guard case .interactionResolved(let value) = event.payload else { return false }
+            return value.answers == answers
+        })
+        #expect(projector.ingest(completion).isEmpty)
+        #expect(projector.inputAvailability == .unavailable(reason: .working))
+    }
+
+    @Test func historicalQuestionCannotExposeLiveResponseAuthority() {
+        var projector = Self.makeClaudeProjector()
+        projector.ingest(.init(timestamp: Self.epochDate, fingerprint: "historical",
+            payload: .interactionPresented(.init(kind: .question, providerCallID: "old", prompt: "Old",
+                responseID: "old-response", responseExpiresAt: Self.epochDate.addingTimeInterval(300))),
+            mayAuthorizeCurrentRuntime: false))
+        #expect(projector.pendingInteractions.isEmpty)
+        #expect(projector.events.contains { event in
+            guard case .interactionPresented(let value) = event.payload else { return false }
+            return value.responseID == nil && value.responseExpiresAt == nil
+        })
+    }
+
     static let conversationID = RemoteConversationID(rawValue: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
     static let bindingID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     static let resumedBindingID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!

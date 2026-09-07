@@ -52,6 +52,9 @@ final class SessionRuntimeStore: ObservableObject {
     @Published private(set) var sessionRegistry = SessionRegistry()
     @Published private(set) var providerConversationRevision: UInt64 = 0
 
+    var claudeQuestionBroker = ClaudeQuestionBroker()
+    private var claudeQuestionWatchdog: Task<Void, Never>?
+
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     private let agentHookDispatcher: AgentHookDispatcher?
@@ -223,6 +226,9 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     func reset() {
+        claudeQuestionBroker.clear()
+        claudeQuestionWatchdog?.cancel()
+        claudeQuestionWatchdog = nil
         sessionRegistry = SessionRegistry()
         lastAcceptedHookStatusKindBySessionID = [:]
         pendingHookReadyBySessionID = [:]
@@ -296,6 +302,7 @@ final class SessionRuntimeStore: ObservableObject {
             // merely because its capture timestamp changed.
             return true
         }
+        invalidateClaudeQuestionBinding(sessionID: managedSessionID)
         nativeBindingConfirmationBySessionID[managedSessionID] = candidate
         return true
     }
@@ -355,6 +362,9 @@ final class SessionRuntimeStore: ObservableObject {
             return false
         }
 
+        if providerConversationFeedsBySessionID[managedSessionID] != nil {
+            claudeQuestionBroker.clear(sessionID: managedSessionID)
+        }
         let sessionObservation = ProviderTranscriptObservation(
             timestamp: date,
             providerIdentity: nativeSessionID,
@@ -2172,6 +2182,7 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func clearSessionRuntimeState(sessionID: String) {
+        invalidateClaudeQuestionBinding(sessionID: sessionID)
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
@@ -4885,4 +4896,89 @@ private func truncatedLogMetadataValue(_ value: String?, limit: Int) -> String? 
     guard normalized.count > limit else { return normalized }
     let endIndex = normalized.index(normalized.startIndex, offsetBy: limit - 3)
     return String(normalized[..<endIndex]) + "..."
+}
+
+
+extension SessionRuntimeStore {
+    private func invalidateClaudeQuestionBinding(sessionID: String) {
+        claudeQuestionBroker.invalidate(sessionID: sessionID, reason: .notBound)
+        publishClaudeQuestionChanges(at: Date())
+        claudeQuestionBroker.clear(sessionID: sessionID)
+    }
+
+    func claudeQuestionIdentity(sessionID: String, panelID: UUID) -> ClaudeQuestionBroker.Identity? {
+        guard let active = sessionRegistry.activeSession(sessionID: sessionID),
+              active.agent == .claude, active.panelID == panelID,
+              let binding = nativeSessionBindingConfirmation(for: sessionID),
+              binding.agent == .claude, binding.panelID == panelID else { return nil }
+        return .init(sessionID: sessionID, bindingID: binding.bindingID, panelID: panelID,
+                     nativeSessionID: binding.nativeSessionID, transcriptPath: binding.sessionFilePath)
+    }
+
+    func handleClaudeQuestion(_ request: ClaudeQuestionHookRequest, at now: Date = Date()) -> ClaudeQuestionHookReply {
+        guard let identity = claudeQuestionIdentity(sessionID: request.sessionID, panelID: request.panelID) else {
+            return .init(status: .unavailable)
+        }
+        if providerConversationFeed(managedSessionID: request.sessionID) == nil {
+            _ = resetProviderConversationFeed(managedSessionID: request.sessionID, provider: .claude,
+                nativeSessionID: identity.nativeSessionID, snapshotID: "claude-hook:\(identity.bindingID)", at: now)
+        }
+        let reply = claudeQuestionBroker.handle(request, identity: identity, at: now)
+        if request.phase == .begin, reply.status == .pending {
+            updateStatus(sessionID: request.sessionID,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs input",
+                    detail: "Claude Code is waiting for your answers"),
+                at: now)
+        }
+        publishClaudeQuestionChanges(at: now)
+        if claudeQuestionWatchdog == nil, !claudeQuestionBroker.entries.isEmpty {
+            claudeQuestionWatchdog = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(1)) } catch { break }
+                    guard let self else { return }
+                    self.claudeQuestionBroker.expire(at: Date())
+                    self.publishClaudeQuestionChanges(at: Date())
+                    if self.claudeQuestionBroker.entries.isEmpty {
+                        self.claudeQuestionWatchdog = nil
+                        return
+                    }
+                }
+            }
+        }
+        return reply
+    }
+
+    func reconcileClaudeQuestionTranscript(_ observations: [ProviderTranscriptObservation], sessionID: String, panelID: UUID) {
+        guard let identity = claudeQuestionIdentity(sessionID: sessionID, panelID: panelID) else { return }
+        claudeQuestionBroker.reconcile(observations, identity: identity)
+        publishClaudeQuestionChanges(at: Date())
+    }
+
+    func submitClaudeQuestion(_ request: RemoteQuestionAnswerRequest, sessionID: String, panelID: UUID,
+                              at now: Date = Date()) -> RemoteQuestionAnswerResult {
+        guard let identity = claudeQuestionIdentity(sessionID: sessionID, panelID: panelID) else {
+            return .rejected(reason: .notBound)
+        }
+        let result = claudeQuestionBroker.submit(request, identity: identity, at: now)
+        publishClaudeQuestionChanges(at: now)
+        return result
+    }
+
+    private func publishClaudeQuestionChanges(at now: Date) {
+        for change in claudeQuestionBroker.drainChanges() {
+            guard let feed = providerConversationFeed(managedSessionID: change.identity.sessionID),
+                  feed.nativeSessionID == change.identity.nativeSessionID else { continue }
+            let suffix: String
+            switch change.payload {
+            case .interactionPresented: suffix = "presented"
+            case .transcript(.interactionResolved): suffix = "resolved"
+            default: suffix = "closed"
+            }
+            _ = ingestProviderConversationObservation(managedSessionID: change.identity.sessionID,
+                provider: .claude, nativeSessionID: change.identity.nativeSessionID, snapshotID: feed.snapshotID,
+                observation: .init(timestamp: now, providerIdentity: change.identity.nativeSessionID,
+                    fingerprint: "claude-question:\(change.providerCallID):\(change.responseID ?? "native"):\(suffix)",
+                    payload: change.payload, mayAuthorizeCurrentRuntime: true))
+        }
+    }
 }

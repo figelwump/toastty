@@ -13,6 +13,8 @@ struct ToasttyMobileRootView: View {
     @State private var composerDraftState = ToasttyComposerDraftState()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
     @State private var fixtureComposerIsReserved = false
+    @State private var fixtureInteractionAnswerState: ToasttyInteractionAnswerState?
+    @State private var fixtureInteractionAcceptedAnswers: [RemoteInteractionAnswer]?
     @State private var diagnostics = ToasttyDiagnosticsState()
     @State private var diagnosedSessionState: AppSessionState?
     private let forcesPairingPrivacyShield: Bool
@@ -25,6 +27,20 @@ struct ToasttyMobileRootView: View {
         _fixtureSendItems = State(initialValue: Self.initialFixtureSendItems(
             for: configuration.fixtureScenario
         ))
+        if configuration.fixtureScenario == .interactionAnswer {
+            let key = ToasttyInteractionAnswerKey(
+                interactionID: ToasttyConversationFixture.questionInteractionID,
+                responseID: ToasttyConversationFixture.questionResponseID,
+                inputEpoch: ToasttyConversationFixture.questionEpoch
+            )
+            _fixtureInteractionAnswerState = State(initialValue: ToasttyInteractionAnswerState(
+                key: key,
+                questions: ToasttyConversationFixture.questions
+            ))
+        } else {
+            _fixtureInteractionAnswerState = State(initialValue: nil)
+        }
+        _fixtureInteractionAcceptedAnswers = State(initialValue: nil)
         forcesPairingPrivacyShield = configuration.fixtureScenario == .pairingPrivacy
         fixtureScenario = configuration.fixtureScenario
         delaysFixtureSubmission = configuration.fixtureScenario == .gatedSend
@@ -262,6 +278,9 @@ struct ToasttyMobileRootView: View {
             loadOlder: conversationLoadOlderAction(for: conversationID),
             submitDraft: conversationSubmitAction(for: conversationID),
             dismissSendReceipt: conversationReceiptDismissAction(for: conversationID),
+            interactionAnswerStates: conversationInteractionAnswerStates(for: conversationID),
+            editInteractionAnswer: conversationInteractionEditAction(for: conversationID),
+            submitInteractionAnswer: conversationInteractionSubmitAction(for: conversationID),
             onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID)
         )
     }
@@ -340,6 +359,11 @@ struct ToasttyMobileRootView: View {
                 sendItems: conversationID == Self.fixtureOpenPromptConversationID
                     ? fixtureSendItems
                     : []
+            )
+        case .interactionAnswer:
+            return ToasttyConversationFixture.questionPresentation(
+                for: conversationID,
+                answers: fixtureInteractionAcceptedAnswers
             )
         case .connecting, .unpaired, .cameraDenied, .scannerUnsupported,
              .pairingFailure, .pairingPrivacy, .scannerFailure, .credentialCorrupt, nil:
@@ -427,6 +451,67 @@ struct ToasttyMobileRootView: View {
                 return
             }
             Task { await controller.dismissSendReceipt(clientRequestID) }
+        }
+    }
+
+    private func conversationInteractionAnswerStates(
+        for conversationID: UUID
+    ) -> [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] {
+        if fixtureScenario == .interactionAnswer,
+           let state = fixtureInteractionAnswerState {
+            return [state.key.interactionID: state]
+        }
+        guard let controller = sessionController.liveController?.activeConversationController,
+              controller.conversationID == conversationID else { return [:] }
+        return controller.interactionAnswerStates
+    }
+
+    private func conversationInteractionEditAction(
+        for conversationID: UUID
+    ) -> (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void {
+        { interactionID, edit in
+            if fixtureScenario == .interactionAnswer,
+               var state = fixtureInteractionAnswerState,
+               state.key.interactionID == interactionID {
+                state.apply(edit)
+                fixtureInteractionAnswerState = state
+                return
+            }
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else { return }
+            controller.editInteractionAnswer(interactionID: interactionID, edit: edit)
+        }
+    }
+
+    private func conversationInteractionSubmitAction(
+        for conversationID: UUID
+    ) -> (RemotePendingInteraction.ID) -> Void {
+        { interactionID in
+            if fixtureScenario == .interactionAnswer,
+               var state = fixtureInteractionAnswerState,
+               state.key.interactionID == interactionID,
+               state.canSubmit,
+               let answers = state.canonicalAnswers {
+                state.status = .submitting
+                fixtureInteractionAnswerState = state
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard var current = fixtureInteractionAnswerState,
+                          current.key == state.key else { return }
+                    current.status = .awaitingClaude
+                    fixtureInteractionAnswerState = current
+                    try? await Task.sleep(for: .milliseconds(700))
+                    guard var waiting = fixtureInteractionAnswerState,
+                          waiting.key == state.key else { return }
+                    waiting.status = .resolved(answers)
+                    fixtureInteractionAnswerState = waiting
+                    fixtureInteractionAcceptedAnswers = answers
+                }
+                return
+            }
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else { return }
+            Task { await controller.submitInteractionAnswer(interactionID: interactionID) }
         }
     }
 

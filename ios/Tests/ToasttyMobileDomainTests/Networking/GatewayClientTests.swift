@@ -133,6 +133,69 @@ final class GatewayClientTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
     }
 
+    func testQuestionAnswerUsesNativeBearerOriginAndSemanticBody() async throws {
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"status":"submitted"}"#.utf8)),
+            .json(Data(#"{"status":"duplicate"}"#.utf8)),
+            .json(Data(#"{"status":"rejected","reason":"expired"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.tail.example/base")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "native-token"))
+        )
+
+        let submitted = try await client.answerQuestion(Self.questionRequest)
+        let duplicate = try await client.answerQuestion(Self.questionRequest)
+        let rejected = try await client.answerQuestion(Self.questionRequest)
+        XCTAssertEqual(submitted, .submitted)
+        XCTAssertEqual(duplicate, .duplicate)
+        XCTAssertEqual(
+            rejected,
+            .rejected(reason: .expired)
+        )
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url?.path }, Array(
+            repeating: "/api/conversation.question.answer",
+            count: 3
+        ))
+        XCTAssertTrue(requests.allSatisfy { $0.httpMethod == "POST" })
+        XCTAssertTrue(requests.allSatisfy {
+            $0.value(forHTTPHeaderField: "Authorization") == "Bearer native-token"
+                && $0.value(forHTTPHeaderField: "Origin") == "https://toastty.tail.example"
+                && $0.value(forHTTPHeaderField: "Cookie") == nil
+        })
+        XCTAssertEqual(
+            try ConversationEventCoding.makeDecoder().decode(
+                RemoteQuestionAnswerRequest.self,
+                from: try XCTUnwrap(requests.first?.httpBody)
+            ),
+            Self.questionRequest
+        )
+    }
+
+    func testQuestionAnswerRefusesCookieCredentialBeforeTransport() async throws {
+        let transport = RecordingHTTPTransport(responses: [])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.cookie(
+                name: RemoteGatewayProtocol.credentialCookieName,
+                value: "browser-cookie"
+            ))
+        )
+
+        do {
+            _ = try await client.answerQuestion(Self.questionRequest)
+            XCTFail("Expected native Bearer admission to fail")
+        } catch let failure as GatewayFailure {
+            XCTAssertEqual(failure, .unauthenticated(code: nil, message: nil))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     func testSendTransportUsesSameEncodedBytesAsAdmissionForUnicodeAndEscaping() async throws {
         let text = String(repeating: "🐈\n\"\\", count: 500)
         var request = Self.sendRequest
@@ -462,6 +525,17 @@ final class GatewayClientTests: XCTestCase {
             counter: 42
         ),
         text: "Hello"
+    )
+    private static let questionRequest = RemoteQuestionAnswerRequest(
+        conversationID: conversationID,
+        interactionID: RemotePendingInteraction.ID(rawValue: "question-1"),
+        responseID: "response-1",
+        expectedInputEpoch: RemoteInputEpoch(
+            bindingID: UUID(uuidString: "D0000000-0000-0000-0000-000000000001")!,
+            counter: 3
+        ),
+        clientRequestID: "answer-request-1",
+        answers: [RemoteInteractionAnswer(questionID: "0", selectedOptionIDs: ["1"])]
     )
     private static let helloJSON = Data(
         #"{"capabilities":["browser_cookie_pairing"],"minimumSupportedProtocolVersion":"1.0","protocolVersion":"1.0"}"#.utf8

@@ -29,17 +29,20 @@ public actor ConnectionCoordinator {
         public var phase: ConnectionCoordinatorPhase
         public var consecutiveFailureCount: Int
         public var latestTransportFailure: NativeTransportFailure?
+        public var capabilities: Set<RemoteGatewayCapability>
 
         public init(
             connectionGeneration: UInt64 = 0,
             phase: ConnectionCoordinatorPhase = .idle,
             consecutiveFailureCount: Int = 0,
-            latestTransportFailure: NativeTransportFailure? = nil
+            latestTransportFailure: NativeTransportFailure? = nil,
+            capabilities: Set<RemoteGatewayCapability> = []
         ) {
             self.connectionGeneration = connectionGeneration
             self.phase = phase
             self.consecutiveFailureCount = consecutiveFailureCount
             self.latestTransportFailure = latestTransportFailure
+            self.capabilities = capabilities
         }
     }
 
@@ -491,6 +494,85 @@ public actor ConnectionCoordinator {
         return .enqueued(clientRequestID: clientRequestID)
     }
 
+    public func answerQuestion(
+        _ request: RemoteQuestionAnswerRequest
+    ) async throws -> RemoteQuestionAnswerResult {
+        guard state.phase == .live else { return .rejected(reason: .notBound) }
+        guard activeCapabilities.contains(.questionAnswers) else {
+            return .rejected(reason: .unsupported)
+        }
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return .rejected(reason: .sendScopeDenied)
+        }
+        guard activeConversationIDs.contains(request.conversationID),
+              let runtime = conversationRuntimes[request.conversationID],
+              let snapshot = authoritativeSessionSnapshot,
+              let summary = snapshot.conversations.first(where: {
+                  $0.conversationID == request.conversationID
+              }) else {
+            return .rejected(reason: .notBound)
+        }
+        if case .unavailable(reason: .known(.sessionWritesDisabled)) = summary.inputAvailability {
+            return .rejected(reason: .sessionWritesDisabled)
+        }
+        guard case .pendingInteraction(let ids) = summary.inputAvailability,
+              ids.contains(request.interactionID) else {
+            return .rejected(reason: .notPending)
+        }
+        let runtimeState = await runtime.currentState()
+        guard runtimeState.phase == .live,
+              let interaction = Self.currentInteraction(
+                  request.interactionID,
+                  in: runtimeState.events
+              ),
+              interaction.state == .pending else {
+            return .rejected(reason: .notPending)
+        }
+        guard interaction.responseID == request.responseID else {
+            return .rejected(reason: .notPending)
+        }
+        guard interaction.inputEpoch == request.expectedInputEpoch else {
+            return .rejected(reason: .epochMismatch)
+        }
+        guard let questions = interaction.questions,
+              RemoteQuestionAnswerValidation.canonicalAnswers(
+                  request.answers,
+                  for: questions
+              ) == request.answers else {
+            return .rejected(reason: .invalidAnswers)
+        }
+        let result = try await gateway.answerQuestion(request)
+        if result == .rejected(reason: .sendScopeDenied) {
+            sendScopeDeniedByHost = true
+            await publishComposerAuthorities()
+            await publish()
+        }
+        return result
+    }
+
+    private static func currentInteraction(
+        _ interactionID: RemotePendingInteraction.ID,
+        in events: [CompatibleConversationEvent]
+    ) -> RemotePendingInteraction? {
+        var interaction: RemotePendingInteraction?
+        for event in events {
+            guard case .known(let known) = event else { continue }
+            switch known.payload {
+            case .interactionPresented(let value) where value.id == interactionID:
+                interaction = value
+            case .interactionResolved(let value) where value.interactionID == interactionID:
+                interaction?.state = value.resolution
+                interaction?.answers = value.answers
+                interaction?.responseID = nil
+            case .interactionResponseClosed(let value) where value.interactionID == interactionID:
+                interaction?.responseID = nil
+            default:
+                break
+            }
+        }
+        return interaction
+    }
+
     public func dismissSendReceipt(
         conversationID: RemoteConversationID,
         clientRequestID: String
@@ -641,6 +723,7 @@ public actor ConnectionCoordinator {
         let hello = try await gateway.hello()
         try ensureCurrentGeneration(generation)
         activeCapabilities = Set(hello.capabilities)
+        state.capabilities = activeCapabilities
 
         let seed = try await gateway.sessions()
         try ensureCurrentGeneration(generation)
@@ -1879,6 +1962,7 @@ public actor ConnectionCoordinator {
     }
 
     private func publish() async {
+        state.capabilities = activeCapabilities
         await stateStream.yield(state)
     }
 }

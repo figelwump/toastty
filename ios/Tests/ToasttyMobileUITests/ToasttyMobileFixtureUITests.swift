@@ -230,6 +230,59 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-ready-composer-focused", of: app)
     }
 
+    func testQuestionFixtureSubmitsSingleMultiAndCustomAnswersThenShowsAcceptedResult() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "interaction-answer"]
+        )
+        openGatedSendConversation(in: app)
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        let prefix = "toastty-mobile-interaction-fixture-question-interaction-question-"
+        for _ in 0..<4 { transcript.swipeDown() }
+        attachScreenshot(named: "fixture-question-answer-form", of: app)
+
+        func tap(_ identifier: String) {
+            let button = app.buttons[identifier]
+            XCTAssertTrue(button.waitForExistence(timeout: 5), identifier)
+            // XCUITest can report a partially clipped row as hittable even
+            // when its synthesized tap lands below the composer inset.
+            for _ in 0..<8 {
+                let status = app.descendants(matching: .any)["toastty-mobile-composer-status"].firstMatch
+                let bottom = min(transcript.frame.maxY, status.exists ? status.frame.minY : transcript.frame.maxY) - 16
+                let top = transcript.frame.minY + 8
+                if button.isHittable, button.frame.minY >= top, button.frame.maxY <= bottom { break }
+                if button.frame.minY < top { transcript.swipeDown() } else { transcript.swipeUp() }
+            }
+            XCTAssertTrue(button.isHittable, identifier)
+            button.tap()
+        }
+
+        tap("\(prefix)0-option-0")
+        tap("\(prefix)1-option-0")
+        tap("\(prefix)1-option-1")
+        tap("\(prefix)2-custom")
+
+        let custom = app.textFields["\(prefix)2-custom-text"]
+        XCTAssertTrue(custom.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["\(prefix)2-custom"].value as? String, "Selected")
+        custom.tap()
+        custom.typeText("Mention the semantic answer flow")
+
+        tap("toastty-mobile-interaction-submit-fixture-question-interaction")
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "toastty-mobile-interaction-accepted-fixture-question-interaction"
+            ].waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.staticTexts["Claude accepted"].exists)
+        XCTAssertTrue(app.staticTexts["Approach"].exists)
+        XCTAssertTrue(app.staticTexts["Checks"].exists)
+        XCTAssertTrue(app.staticTexts["Release note"].exists)
+        XCTAssertTrue(app.staticTexts["Small change"].exists)
+        XCTAssertTrue(app.staticTexts["Domain tests, UI test"].exists)
+        XCTAssertTrue(app.staticTexts["Mention the semantic answer flow"].exists)
+        attachScreenshot(named: "fixture-question-answer-accepted", of: app)
+    }
+
     func testFixtureCurrentBuildDeepLinksRouteWorkspaceAndConversation() throws {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"

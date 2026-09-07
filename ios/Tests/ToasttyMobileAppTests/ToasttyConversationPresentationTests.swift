@@ -57,9 +57,9 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         guard case .interaction(let interaction) = state.rows[5].content else {
             return XCTFail("Expected interaction card")
         }
-        XCTAssertEqual(interaction.id, interactionID)
+        XCTAssertEqual(interaction.interaction.id, interactionID)
         XCTAssertEqual(
-            interaction.state,
+            interaction.interaction.state,
             .resolved,
             "A later resolution must update the earlier card without reordering it"
         )

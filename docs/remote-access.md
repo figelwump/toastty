@@ -77,6 +77,21 @@ terminal rejects the send. An accepted send means Toastty handed it to the
 terminal; the transcript event carrying the same request ID is the later
 confirmation.
 
+Claude Code sessions launched or resumed through Toastty can also answer
+`AskUserQuestion` forms from the phone. Choose an option, select multiple options
+where offered, or enter a custom answer, then submit the complete form. The
+desktop question remains available. The phone waits for Claude's completion
+event before showing the accepted answers, including when you answer on the Mac
+first.
+
+Question answers require a native paired device with send access and remote
+replies enabled for that session. A question can be answered remotely for up to
+five minutes while its launch hook remains connected. If that connection ends,
+the question expires, or the provider's form is unsupported, continue on the
+Mac. Other tool permission requests remain read-only on the phone. Existing
+Claude sessions must be relaunched or resumed through the updated Toastty to
+install the answer hook.
+
 Toastty Mobile reconnects automatically after transient network loss and
 reloads from Toastty's current snapshots when it detects an event gap. Keep
 Toastty running and Remote Access enabled; Tailscale Serve alone cannot reach a
@@ -174,6 +189,11 @@ support conversations; update Toastty on the Mac to enable previews.
   message text, concise tool activity, state, workspace/panel placement, and
   working directories when present. It does not receive raw provider JSONL or
   raw terminal frames.
+- Answerable Claude questions include their question text, options, optional
+  previews, and accepted answers. The phone sends option identifiers and custom
+  answer text; the Mac applies them only to the exact pending question through
+  Claude's hook response. This does not grant tool permissions or change
+  Claude's permission settings.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These

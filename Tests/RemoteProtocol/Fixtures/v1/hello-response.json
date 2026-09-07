@@ -1,1 +1,1 @@
-{"capabilities":["workspace_panels","local_file_preview","workspace_panel_preview","browser_cookie_pairing","native_bearer_pairing","conversation_backward_paging","conversation_read_acknowledgement"],"minimumSupportedProtocolVersion":"1.0","protocolVersion":"1.0"}
+{"capabilities":["workspace_panels","local_file_preview","workspace_panel_preview","browser_cookie_pairing","native_bearer_pairing","conversation_backward_paging","conversation_read_acknowledgement","question_answers"],"minimumSupportedProtocolVersion":"1.0","protocolVersion":"1.0"}

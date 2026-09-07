@@ -25,6 +25,9 @@ protocol LiveConnectionRuntime: Sendable {
         text: String,
         composerStamp: ConversationComposerStamp
     ) async -> ConversationSendOutcome
+    func answerQuestion(
+        _ request: RemoteQuestionAnswerRequest
+    ) async throws -> RemoteQuestionAnswerResult
     func dismissSendReceipt(
         conversationID: RemoteConversationID,
         clientRequestID: String
@@ -32,6 +35,14 @@ protocol LiveConnectionRuntime: Sendable {
     func acknowledgeConversationRead(
         _ request: RemoteConversationReadAcknowledgementRequest
     ) async throws -> RemoteConversationReadAcknowledgementResponse?
+}
+
+extension LiveConnectionRuntime {
+    func answerQuestion(
+        _ request: RemoteQuestionAnswerRequest
+    ) async throws -> RemoteQuestionAnswerResult {
+        .rejected(reason: .unsupported)
+    }
 }
 
 struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
@@ -88,6 +99,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
             text: text,
             composerStamp: composerStamp
         )
+    }
+
+    func answerQuestion(
+        _ request: RemoteQuestionAnswerRequest
+    ) async throws -> RemoteQuestionAnswerResult {
+        try await coordinator.answerQuestion(request)
     }
 
     func dismissSendReceipt(
@@ -288,6 +305,9 @@ final class LiveSessionsController {
                     composerStamp: stamp
                 )
             },
+            answerQuestion: { [runtime] request in
+                try await runtime.answerQuestion(request)
+            },
             dismissSendReceipt: { [runtime] clientRequestID in
                 await runtime.dismissSendReceipt(
                     conversationID: remoteID,
@@ -299,7 +319,7 @@ final class LiveSessionsController {
             }
         )
         controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }
-        controller.consumeConnectionPhase(coordinatorState.phase)
+        controller.consumeConnectionState(coordinatorState)
         activeConversationController = controller
         await controller.start()
 
@@ -375,7 +395,7 @@ final class LiveSessionsController {
     func consumeCoordinatorState(_ state: ConnectionCoordinator.State) {
         coordinatorState = state
         finishManualRefreshIfNeeded(for: state.phase)
-        activeConversationController?.consumeConnectionPhase(state.phase)
+        activeConversationController?.consumeConnectionState(state)
         applyPresentation()
         // Terminal admission/authorization state must be the final callback.
         // In particular, the stale projection presented for a retained 403

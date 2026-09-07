@@ -3,6 +3,50 @@ import Foundation
 import RemoteProtocol
 
 enum ToasttyConversationFixture {
+    static let questionInteractionID = RemotePendingInteraction.ID(
+        rawValue: "fixture-question-interaction"
+    )
+    static let questionResponseID = "fixture-question-response"
+    static let questionEpoch = RemoteInputEpoch(
+        bindingID: UUID(uuidString: "D1000000-0000-0000-0000-000000000099")!,
+        counter: 12
+    )
+    static let questions = [
+        RemoteInteractionQuestion(
+            id: "0",
+            header: "Approach",
+            question: "Which implementation should Claude use?",
+            options: [
+                .init(
+                    id: "0",
+                    label: "Small change",
+                    detail: "Keep the current data flow",
+                    preview: "Controller → semantic request → host"
+                ),
+                .init(id: "1", label: "Broad refactor", detail: "Replace the surrounding feature"),
+            ]
+        ),
+        RemoteInteractionQuestion(
+            id: "1",
+            header: "Checks",
+            question: "Which checks should run?",
+            options: [
+                .init(id: "0", label: "Domain tests"),
+                .init(id: "1", label: "UI test"),
+                .init(id: "2", label: "Remote build"),
+            ],
+            multiSelect: true
+        ),
+        RemoteInteractionQuestion(
+            id: "2",
+            header: "Release note",
+            question: "What should the release note say?",
+            options: [
+                .init(id: "0", label: "Use the standard note"),
+                .init(id: "1", label: "Skip the note"),
+            ]
+        ),
+    ]
     private static let projectionRunID = UUID(
         uuidString: "D2000000-0000-0000-0000-000000000001"
     )!
@@ -91,7 +135,12 @@ enum ToasttyConversationFixture {
                         detail: "Exercising every event kind and large Dynamic Type."
                     )
                 ),
-                row(conversationID, 7, timestamp, .interaction(resolvedInteraction)),
+                row(
+                    conversationID,
+                    7,
+                    timestamp,
+                    .interaction(ToasttyInteractionPresentation(interaction: resolvedInteraction))
+                ),
                 row(
                     conversationID,
                     8,
@@ -129,7 +178,12 @@ enum ToasttyConversationFixture {
                     timestamp,
                     .assistantMessage(text: longMessage, phase: .final)
                 ),
-                row(conversationID, 14, timestamp, .interaction(currentInteraction)),
+                row(
+                    conversationID,
+                    14,
+                    timestamp,
+                    .interaction(ToasttyInteractionPresentation(interaction: currentInteraction))
+                ),
             ],
             phase: phase,
             revision: .initial,
@@ -169,6 +223,55 @@ enum ToasttyConversationFixture {
             sendItems: sendItems,
             phase: .live,
             revision: sendItems.isEmpty ? .initial : .appended,
+            historyTruncated: false
+        )
+    }
+
+    static func questionPresentation(
+        for conversationID: UUID,
+        answers: [RemoteInteractionAnswer]? = nil
+    ) -> ToasttyConversationPresentationState {
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        let state: RemotePendingInteraction.State = answers == nil ? .pending : .resolved
+        let interaction = RemotePendingInteraction(
+            id: questionInteractionID,
+            kind: .question,
+            providerCallID: "fixture-question-call",
+            prompt: "Claude needs your answers before it can continue.",
+            inputEpoch: questionEpoch,
+            presentedAt: timestamp,
+            state: state,
+            questions: questions,
+            responseID: answers == nil ? questionResponseID : nil,
+            responseExpiresAt: Date(timeIntervalSince1970: 1_786_410_000),
+            answers: answers
+        )
+        var rows = [
+            row(
+                conversationID,
+                1,
+                timestamp,
+                .assistantMessage(text: "I need a few choices before I continue.", phase: .commentary)
+            ),
+            row(
+                conversationID,
+                2,
+                timestamp,
+                .interaction(ToasttyInteractionPresentation(interaction: interaction))
+            ),
+        ]
+        if answers != nil {
+            rows.append(row(
+                conversationID,
+                3,
+                timestamp,
+                .interactionResolved(interactionID: questionInteractionID, resolution: .resolved)
+            ))
+        }
+        return ToasttyConversationPresentationState(
+            rows: rows,
+            phase: .live,
+            revision: answers == nil ? .initial : .appended,
             historyTruncated: false
         )
     }

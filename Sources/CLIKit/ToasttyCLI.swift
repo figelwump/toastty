@@ -99,7 +99,7 @@ enum CLICommand: Equatable {
         snapshotID: String,
         observation: ProviderTranscriptObservation
     )
-    case sessionIngestAgentEvent(sessionID: String, panelID: UUID?, source: AgentEventSource)
+    case sessionIngestAgentEvent(sessionID: String, panelID: UUID?, source: AgentEventSource, respondToQuestions: Bool = false)
     case sessionStop(sessionID: String, panelID: UUID?, reason: String?)
     case sessionScopeShow(sessionID: String)
     case sessionScopeSetCurrent(sessionID: String, panelID: UUID)
@@ -572,7 +572,7 @@ enum CLICommand: Equatable {
             return "reset provider conversation for \(sessionID)"
         case .sessionProviderConversationObservation(let sessionID, _, _, _, _, _):
             return "processed provider conversation event for \(sessionID)"
-        case .sessionIngestAgentEvent(_, _, let source):
+        case .sessionIngestAgentEvent(_, _, let source, _):
             return "processed \(source.rawValue) event"
         case .sessionStop(let sessionID, _, _):
             return "stopped \(sessionID)"
@@ -631,12 +631,13 @@ public enum ToasttyCLI {
                     callerSessionID: callerSessionID
                 )
 
-            case .sessionIngestAgentEvent(let sessionID, let panelID, let source):
+            case .sessionIngestAgentEvent(let sessionID, let panelID, let source, let respondToQuestions):
                 return try runSessionIngestAgentEvent(
                     options: invocation.options,
                     source: source,
                     sessionID: sessionID,
-                    panelID: panelID
+                    panelID: panelID,
+                    respondToQuestions: respondToQuestions
                 )
 
             case .doctor(let doctorOptions):
@@ -811,7 +812,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] session scope set [--session <id>] --workspace <id> [--workspace <id> ...]
       toastty [--json] [--socket-path <path>] session scope add [--session <id>] --workspace <id> [--workspace <id> ...]
       toastty [--json] [--socket-path <path>] session scope clear [--session <id>]
-      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|cursor-hooks|opencode-plugin|mimocode-plugin|pi-extension [--session <id>] [--panel <id>]
+      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|cursor-hooks|opencode-plugin|mimocode-plugin|pi-extension [--session <id>] [--panel <id>] [--respond-to-questions]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
@@ -1341,7 +1342,8 @@ public enum ToasttyCLI {
         case "ingest-agent-event":
             let parsed = try parseCommandArguments(
                 remainingArguments,
-                valueOptions: ["--source", "--session", "--panel"]
+                valueOptions: ["--source", "--session", "--panel"],
+                flagOptions: ["--respond-to-questions"]
             )
 
             guard parsed.positionals.isEmpty else {
@@ -1366,7 +1368,8 @@ public enum ToasttyCLI {
                     in: parsed,
                     environment: environment
                 ),
-                source: source
+                source: source,
+                respondToQuestions: parsed.hasFlag("--respond-to-questions")
             )
 
         case "stop":
@@ -1898,9 +1901,22 @@ public enum ToasttyCLI {
         options: CLIOptions,
         source: AgentEventSource,
         sessionID: String,
-        panelID: UUID?
+        panelID: UUID?,
+        respondToQuestions: Bool
     ) throws -> Int32 {
         let payload = try readAgentEventPayload(source: source)
+        let questionResult: ClaudeQuestionHookRunner.Result
+        if respondToQuestions && source == .claudeHooks {
+            questionResult = ClaudeQuestionHookRunner(
+                send: ClaudeQuestionHookRunner.socketTransport(socketPath: options.socketPath)
+            ).run(payload: payload, sessionID: sessionID, panelID: panelID)
+        } else {
+            questionResult = .init()
+        }
+        if questionResult.suppressTelemetry {
+            if let response = questionResult.providerResponse { try writeStdout(response) }
+            return 0
+        }
         let eventSummary = ingestEventSummary(source: source, payload: payload)
         let commands: [CLICommand]
         do {
@@ -1930,6 +1946,9 @@ public enum ToasttyCLI {
                 )
             }
         }
+
+        // Hook response mode reserves stdout exclusively for provider JSON.
+        if respondToQuestions && source == .claudeHooks { return 0 }
 
         let result = SessionIngestResult(processedCount: commands.count)
         if options.jsonOutput {

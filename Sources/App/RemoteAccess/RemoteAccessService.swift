@@ -53,6 +53,15 @@ final class RemoteAccessFacadeBridge: RemoteSessionFacade, @unchecked Sendable {
 }
 
 /// Bridges the gateway's synchronous main-actor send call into the service.
+final class RemoteAccessQuestionAnswerBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+    func answer(_ request: RemoteQuestionAnswerRequest, device: RemoteDeviceRecord) -> RemoteQuestionAnswerResult {
+        MainActor.assumeIsolated {
+            service?.performQuestionAnswer(request, device: device) ?? .rejected(reason: .notBound)
+        }
+    }
+}
+
 final class RemoteAccessSendBridge: @unchecked Sendable {
     weak var service: RemoteAccessService?
 
@@ -301,6 +310,7 @@ final class RemoteAccessService: ObservableObject {
     private let projectionStore = RemoteConversationProjectionStore()
     private let facadeBridge = RemoteAccessFacadeBridge()
     private let sendBridge = RemoteAccessSendBridge()
+    private let questionAnswerBridge = RemoteAccessQuestionAnswerBridge()
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
     private var coordinator = RemoteInputCoordinator()
     private let handler: RemoteGatewayRequestHandler
@@ -416,6 +426,9 @@ final class RemoteAccessService: ObservableObject {
             sendHandler: { [sendBridge] request, device in
                 sendBridge.send(request, device: device)
             },
+            questionAnswerHandler: { [questionAnswerBridge] request, device in
+                questionAnswerBridge.answer(request, device: device)
+            },
             readAcknowledgementHandler: { [readAcknowledgementBridge] request, device in
                 readAcknowledgementBridge.acknowledge(request, device: device)
             }
@@ -429,6 +442,7 @@ final class RemoteAccessService: ObservableObject {
         self.devices = deviceStore.devices
         facadeBridge.service = self
         sendBridge.service = self
+        questionAnswerBridge.service = self
         readAcknowledgementBridge.service = self
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -2054,6 +2068,21 @@ final class RemoteAccessService: ObservableObject {
         return workspace.tab(id: tabID)?.unreadPanelIDs.contains(panelID) == true
     }
 
+    func performQuestionAnswer(_ request: RemoteQuestionAnswerRequest, device: RemoteDeviceRecord) -> RemoteQuestionAnswerResult {
+        guard device.scopes.contains(.send) else { return .rejected(reason: .sendScopeDenied) }
+        guard sessionWritePolicy.isEnabled(for: request.conversationID) else { return .rejected(reason: .sessionWritesDisabled) }
+        guard isReady,
+              let panelID = panelIDByConversationID[request.conversationID],
+              let sessionID = activeSessionIDByConversationID[request.conversationID] else {
+            return .rejected(reason: .notBound)
+        }
+        guard let interaction = projectionStore.pendingInteractions(for: request.conversationID)
+            .first(where: { $0.id == request.interactionID }) else { return .rejected(reason: .notPending) }
+        guard interaction.inputEpoch == request.expectedInputEpoch else { return .rejected(reason: .epochMismatch) }
+        guard interaction.responseID == request.responseID else { return .rejected(reason: .notPending) }
+        return sessionRuntimeStore.submitClaudeQuestion(request, sessionID: sessionID, panelID: panelID)
+    }
+
     // MARK: - Gated free-form send
 
     /// Performs a remote send synchronously on the main actor. The gate check
@@ -2266,6 +2295,10 @@ final class RemoteAccessService: ObservableObject {
         _ observations: [ProviderTranscriptObservation],
         for conversationID: RemoteConversationID
     ) -> [ProviderTranscriptObservation] {
+        if let sessionID = activeSessionIDByConversationID[conversationID],
+           let panelID = panelIDByConversationID[conversationID] {
+            sessionRuntimeStore.reconcileClaudeQuestionTranscript(observations, sessionID: sessionID, panelID: panelID)
+        }
         let stamped = pendingSendCorrelator.stamp(observations, for: conversationID)
         for observation in stamped {
             guard case .transcript(.userMessage(let payload)) = observation.payload,

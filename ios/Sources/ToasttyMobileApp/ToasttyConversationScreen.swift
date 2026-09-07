@@ -19,6 +19,9 @@ struct ToasttyConversationScreen: View {
     let loadOlder: () -> Void
     let submitDraft: () -> Bool
     let dismissSendReceipt: (String) -> Void
+    let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
+    let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
+    let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let onVisibleLiveEdge: (MobileSessionStatus) -> Void
 
     init(
@@ -31,6 +34,12 @@ struct ToasttyConversationScreen: View {
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping () -> Bool = { false },
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
+        editInteractionAnswer: @escaping (
+            RemotePendingInteraction.ID,
+            ToasttyInteractionAnswerEdit
+        ) -> Void = { _, _ in },
+        submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in }
     ) {
         self.conversationID = conversationID
@@ -42,6 +51,9 @@ struct ToasttyConversationScreen: View {
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
         self.dismissSendReceipt = dismissSendReceipt
+        self.interactionAnswerStates = interactionAnswerStates
+        self.editInteractionAnswer = editInteractionAnswer
+        self.submitInteractionAnswer = submitInteractionAnswer
         self.onVisibleLiveEdge = onVisibleLiveEdge
     }
 
@@ -52,6 +64,9 @@ struct ToasttyConversationScreen: View {
                     state: resolvedPresentation,
                     loadOlder: loadOlder,
                     dismissSendReceipt: dismissSendReceipt,
+                    interactionAnswerStates: interactionAnswerStates,
+                    editInteractionAnswer: editInteractionAnswer,
+                    submitInteractionAnswer: submitInteractionAnswer,
                     readAcknowledgementEpoch: conversation.state,
                     jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
                     onVisibleLiveEdge: {
