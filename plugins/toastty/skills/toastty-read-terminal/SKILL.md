@@ -25,6 +25,13 @@ fi
 
 Check `.ok == true` on every JSON response before reading `.result`.
 
+Sandboxed runtimes such as Codex may deny the CLI's connection to the Toastty
+Unix socket on the first call (`EPERM`/`EACCES`, "Operation not permitted", or
+a connect failure with no response). That is the agent sandbox, not Toastty.
+Request the narrowest permission the runtime offers to connect to that exact
+socket and rerun the same command once. Do not use `sudo`, disable the sandbox
+for the session, change socket permissions, or pick a different socket path.
+
 ## Choosing The Pane
 
 Metadata first, text last. Do not read every pane.
