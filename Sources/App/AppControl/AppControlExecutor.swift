@@ -2645,7 +2645,9 @@ extension AppControlExecutor {
             lines = Array(lines.suffix(tail))
             truncated = true
         }
-        var joined = lines.joined(separator: "\n")
+        // Untouched text keeps its original bytes (including any trailing
+        // newline) so existing callers see exactly what they did before.
+        var joined = truncated ? lines.joined(separator: "\n") : text
         if joined.utf8.count > byteLimit {
             truncated = true
             var utf8 = Array(joined.utf8.suffix(byteLimit))

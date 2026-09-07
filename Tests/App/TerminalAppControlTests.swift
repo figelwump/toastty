@@ -745,7 +745,8 @@ final class TerminalAppControlTests: XCTestCase {
             id: AppControlQueryID.terminalVisibleText.rawValue,
             args: ["panelID": .string(fixture.panelID.uuidString)]
         )
-        XCTAssertEqual(viewport.string("text"), "line-1\nline-2\nline-3")
+        // Unbounded reads return the surface text byte-for-byte, trailing newline included.
+        XCTAssertEqual(viewport.string("text"), "line-1\nline-2\nline-3\n")
         XCTAssertEqual(viewport.int("lineCount"), 3)
         XCTAssertEqual(viewport.bool("truncated"), false)
         XCTAssertEqual(viewport.bool("includesScrollback"), false)
@@ -790,6 +791,11 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertEqual(untouched.text, "a\nb")
         XCTAssertEqual(untouched.lineCount, 2)
         XCTAssertFalse(untouched.truncated)
+
+        let trailingNewline = AppControlExecutor.boundedTerminalText("a\nb\n", tail: nil, byteLimit: 1024)
+        XCTAssertEqual(trailingNewline.text, "a\nb\n", "unbounded reads must return the original bytes")
+        XCTAssertEqual(trailingNewline.lineCount, 2)
+        XCTAssertFalse(trailingNewline.truncated)
     }
 
     func testForeignReadOnPrivateTerminalIsDeniedAndOwnSessionIsExempt() throws {

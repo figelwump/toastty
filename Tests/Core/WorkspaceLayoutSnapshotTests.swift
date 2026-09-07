@@ -1132,6 +1132,52 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(restoredState.selectedWindowID == secondWindowID)
         try StateValidator.validate(restoredState)
     }
+
+    @Test
+    func snapshotPersistsTerminalAgentReadPolicyAcrossRestore() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Private",
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(title: "psql", shell: "zsh", cwd: "/tmp/db", agentReadPolicy: .denied)
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+
+        let encoded = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: state))
+        let decoded = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: encoded)
+        let restored = decoded.makeAppState()
+        guard case .terminal(let terminalState) = restored.workspacesByID[workspaceID]?.panels[panelID] else {
+            Issue.record("expected restored terminal panel")
+            return
+        }
+        #expect(terminalState.agentReadPolicy == .denied)
+        #expect(terminalState.allowsAgentReads == false)
+
+        // Layouts written before the field existed decode to the default.
+        let legacy = Data(#"{"shell":"zsh","launchWorkingDirectory":"/tmp","cwd":"/tmp"}"#.utf8)
+        let legacySnapshot = try JSONDecoder().decode(WorkspaceLayoutTerminalPanelSnapshot.self, from: legacy)
+        #expect(legacySnapshot.agentReadPolicy == nil)
+    }
+
 }
 
 private struct LegacyTerminalSnapshot: Codable {

@@ -102,6 +102,9 @@ struct TerminalReadActivityIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isFlashing = false
     @State private var settleTask: Task<Void, Never>?
+    /// Read count the idle glyph was last shown for. The glyph mounts only
+    /// after the first read changes the count, so `onChange` alone misses it.
+    @State private var lastFlashedReadCount = 0
 
     private static let flashDurationNanoseconds: UInt64 = 1_000_000_000
 
@@ -135,12 +138,18 @@ struct TerminalReadActivityIndicator: View {
                     shortcutNumberForSession: shortcutNumberForSession
                 )
             )
+            .onAppear {
+                if model.totalReadCount > lastFlashedReadCount {
+                    flash()
+                }
+            }
             .onChange(of: model.totalReadCount) { _, _ in
                 flash()
             }
             .onDisappear {
                 settleTask?.cancel()
                 settleTask = nil
+                isFlashing = false
             }
         case .privateToAgents:
             menu {
@@ -149,6 +158,11 @@ struct TerminalReadActivityIndicator: View {
             .accessibilityLabel("Private to agents")
             .accessibilityIdentifier("panel.header.read-private.\(model.panelID.uuidString)")
             .help(TerminalReadActivityTooltip.privateText)
+            .onAppear {
+                // Reads that arrive while private never flashed; do not flash
+                // them retroactively when the user allows reads again.
+                lastFlashedReadCount = model.totalReadCount
+            }
         }
     }
 
@@ -194,6 +208,7 @@ struct TerminalReadActivityIndicator: View {
     }
 
     private func flash() {
+        lastFlashedReadCount = model.totalReadCount
         settleTask?.cancel()
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
             isFlashing = true

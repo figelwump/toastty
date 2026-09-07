@@ -923,7 +923,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 y: 0
             ),
             bottom_right: ghostty_point_s(
-                tag: GHOSTTY_POINT_VIEWPORT,
+                // The screen bottom, not the viewport bottom, so a user who has
+                // scrolled up does not hide the newest output from the reader.
+                tag: includeScrollback ? GHOSTTY_POINT_SCREEN : GHOSTTY_POINT_VIEWPORT,
                 coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
                 x: 0,
                 y: 0

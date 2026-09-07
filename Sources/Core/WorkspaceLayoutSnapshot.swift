@@ -47,19 +47,22 @@ public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable
     public var profileBinding: TerminalProfileBinding?
     public var resumeRecord: ManagedAgentResumeRecord?
     public var remoteConversationID: RemoteConversationID?
+    public var agentReadPolicy: TerminalAgentReadPolicy?
 
     public init(
         shell: String,
         launchWorkingDirectory: String,
         profileBinding: TerminalProfileBinding? = nil,
         resumeRecord: ManagedAgentResumeRecord? = nil,
-        remoteConversationID: RemoteConversationID? = nil
+        remoteConversationID: RemoteConversationID? = nil,
+        agentReadPolicy: TerminalAgentReadPolicy? = nil
     ) {
         self.shell = shell
         self.launchWorkingDirectory = launchWorkingDirectory
         self.profileBinding = profileBinding
         self.resumeRecord = resumeRecord
         self.remoteConversationID = remoteConversationID
+        self.agentReadPolicy = agentReadPolicy
     }
 
     init(terminalState: TerminalPanelState) {
@@ -68,6 +71,7 @@ public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable
         profileBinding = terminalState.profileBinding
         resumeRecord = terminalState.resumeRecord
         remoteConversationID = terminalState.remoteConversationID
+        agentReadPolicy = terminalState.agentReadPolicy
     }
 }
 
@@ -78,6 +82,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         case profileBinding
         case resumeRecord
         case remoteConversationID
+        case agentReadPolicy
         case cwd
     }
 
@@ -92,6 +97,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         profileBinding = try container.decodeIfPresent(TerminalProfileBinding.self, forKey: .profileBinding)
         resumeRecord = try container.decodeIfPresent(ManagedAgentResumeRecord.self, forKey: .resumeRecord)
         remoteConversationID = try container.decodeIfPresent(RemoteConversationID.self, forKey: .remoteConversationID)
+        agentReadPolicy = try container.decodeIfPresent(TerminalAgentReadPolicy.self, forKey: .agentReadPolicy)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -101,6 +107,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         try container.encodeIfPresent(profileBinding, forKey: .profileBinding)
         try container.encodeIfPresent(resumeRecord, forKey: .resumeRecord)
         try container.encodeIfPresent(remoteConversationID, forKey: .remoteConversationID)
+        try container.encodeIfPresent(agentReadPolicy, forKey: .agentReadPolicy)
         // Preserve downgrade compatibility while older builds still decode the
         // legacy terminal snapshot schema from `cwd`.
         try container.encode(launchWorkingDirectory, forKey: .cwd)
@@ -416,7 +423,8 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
                         launchWorkingDirectory: terminalSnapshot.launchWorkingDirectory,
                         profileBinding: terminalSnapshot.profileBinding,
                         resumeRecord: terminalSnapshot.resumeRecord,
-                        remoteConversationID: terminalSnapshot.remoteConversationID
+                        remoteConversationID: terminalSnapshot.remoteConversationID,
+                        agentReadPolicy: terminalSnapshot.agentReadPolicy
                     )
                 )
             case .web(let webState):
