@@ -5,6 +5,39 @@ import XCTest
 
 @MainActor
 final class ToasttyComposerTypingTests: XCTestCase {
+    func testComputedStateBindingPreservesCaretAcrossGrowingLines() async throws {
+        let prefix = "Here’s another thought taking a step back here what if we used open claw for the coordinator. And the idea is "
+        for width: CGFloat in [281, 290, 310] {
+            let host = UIHostingController(rootView: ComposerStateTypingHarness(width: width))
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; window.rootViewController = nil }
+            host.view.layoutIfNeeded()
+            await settleLayout()
+            let textView = try XCTUnwrap(findComposer(in: host.view))
+            textView.autocorrectionType = .no
+            textView.inlinePredictionType = .no
+            XCTAssertTrue(textView.becomeFirstResponder())
+            textView.insertText(prefix)
+            await settleLayout()
+            let initialHeight = textView.bounds.height
+            var expected = prefix
+            for character in "that this would keep the words in order " {
+                textView.insertText(String(character))
+                expected.append(character)
+                XCTAssertEqual(textView.selectedRange, NSRange(location: expected.utf16.count, length: 0),
+                               "Immediately after \(character), width \(width)")
+                await settleLayout()
+                XCTAssertEqual(textView.text, expected)
+                XCTAssertEqual(textView.selectedRange, NSRange(location: expected.utf16.count, length: 0),
+                               "After layout for \(character), width \(width)")
+            }
+            XCTAssertGreaterThan(textView.bounds.height, initialHeight)
+        }
+    }
+
     func testIncrementalTypingPreservesInsertionPointAcrossSoftWrapsAndBindingEchoes() async throws {
         let (window, model, textView) = try await makeComposer()
         defer { window.isHidden = true; window.rootViewController = nil }
@@ -143,5 +176,24 @@ private struct ComposerTypingHarness: View {
                 placeholder: "Message", isEnabled: true, accessibilityLabel: "Message", accessibilityHint: "")
                 .frame(width: 180)
         }
+    }
+}
+
+private struct ComposerStateTypingHarness: View {
+    let width: CGFloat
+    @State private var drafts = ToasttyComposerDraftState()
+    @State private var focused = false
+    private let conversationID = UUID()
+
+    var body: some View {
+        ToasttyComposerTextView(
+            text: Binding(
+                get: { drafts.draft(for: conversationID) },
+                set: { drafts.updateDraft($0, for: conversationID) }
+            ),
+            isFocused: $focused,
+            placeholder: "Message", isEnabled: true, accessibilityLabel: "Message", accessibilityHint: ""
+        )
+        .frame(width: width)
     }
 }

@@ -2,6 +2,43 @@ import XCTest
 
 @MainActor
 final class ToasttyMobileComposerTypingUITests: XCTestCase {
+    func testOnscreenTypingPreservesRecordedDraftAcrossLineGrowth() {
+        let app = XCUIApplication()
+        app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_SCENARIO"] = "gated-send"
+        app.launch()
+        let home = app.descendants(matching: .any)["toastty-mobile-home"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
+        let session = app.buttons["toastty-mobile-grouped-card-B1000000-0000-0000-0000-000000000007"]
+        for _ in 0..<12 where !session.isHittable { home.swipeUp() }
+        XCTAssertTrue(session.isHittable)
+        session.tap()
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        var expected = "Here’s another thought taking a step back here what if we used open claw for the coordinator. And the idea is "
+        app.typeText(expected)
+        let initialHeight = input.frame.height
+        for character in "that this would keep the words in order " {
+            let label = character == " " ? "space" : String(character)
+            let lowercaseKey = keyboard.keys[label]
+            let key = lowercaseKey.exists ? lowercaseKey : keyboard.keys[label.uppercased()]
+            XCTAssertTrue(key.exists)
+            key.tap()
+            expected.append(character)
+            // UIKit includes inline predictions in the accessibility value;
+            // compare the typed prefix until a space commits the whole word.
+            XCTAssertTrue((input.value as? String)?.lowercased().hasPrefix(expected.lowercased()) == true,
+                           "Typing \(character) must retain the insertion point across a wrap")
+            if character == " " {
+                XCTAssertEqual((input.value as? String)?.lowercased(), expected.lowercased())
+            }
+        }
+        XCTAssertGreaterThan(input.frame.height, initialHeight)
+    }
+
     func testOnscreenKeyboardTapsPreserveWordOrderAcrossFirstWrap() {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
