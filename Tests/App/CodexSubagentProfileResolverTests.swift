@@ -184,6 +184,54 @@ struct CodexSubagentProfileResolverTests {
     }
 
     @Test
+    func rolloutLookupGivesUpAtDeadlineWhenChildNeverAppears() async throws {
+        let fixture = try makeFixture(day: "16")
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let resolver = CodexSubagentProfileResolver(
+            retryDelayNanoseconds: 5_000_000,
+            rolloutLookupDeadlineNanoseconds: 60_000_000
+        )
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let rolloutURL = await resolver.resolveRolloutURL(
+            childThreadID: "child-never-written",
+            parentRolloutURL: fixture.parentRolloutURL
+        )
+        let elapsed = clock.now - started
+
+        #expect(rolloutURL == nil)
+        // Must stop near the deadline, not spin forever and not bail early.
+        #expect(elapsed >= .milliseconds(55))
+        #expect(elapsed < .seconds(2))
+    }
+
+    @Test
+    func rolloutLookupStillResolvesLateChildWithinDeadline() async throws {
+        let fixture = try makeFixture(day: "16")
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let childThreadID = "child-late"
+        let childURL = fixture.dayURL.appendingPathComponent("rollout-\(childThreadID).jsonl")
+        let resolver = CodexSubagentProfileResolver(
+            retryDelayNanoseconds: 5_000_000,
+            maximumRetryDelayNanoseconds: 20_000_000,
+            rolloutLookupDeadlineNanoseconds: 2_000_000_000
+        )
+
+        let writer = Task.detached {
+            try await Task.sleep(nanoseconds: 120_000_000)
+            try writeLines([#"{"type":"turn_context","payload":{"model":"m","effort":"low"}}"#], to: childURL)
+        }
+        let rolloutURL = await resolver.resolveRolloutURL(
+            childThreadID: childThreadID,
+            parentRolloutURL: fixture.parentRolloutURL
+        )
+        try await writer.value
+
+        #expect(rolloutURL?.standardizedFileURL == childURL.standardizedFileURL)
+    }
+
+    @Test
     func refusesAmbiguousThreadRollouts() async throws {
         let fixture = try makeFixture(day: "16")
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }

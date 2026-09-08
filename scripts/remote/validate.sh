@@ -25,6 +25,7 @@ LOCAL_ARTIFACTS_DIR=""
 REMOTE_PREFLIGHT_ERROR=""
 REMOTE_CUSTOM_CLEANUP_SOCKET_PATH=""
 REMOTE_CUSTOM_CLEANUP_APP_PID=""
+REMOTE_CUSTOM_CLEANUP_CAFFEINATE_PID=""
 REMOTE_CUSTOM_CLEANUP_TERM_ATTEMPTS=20
 
 usage() {
@@ -115,6 +116,10 @@ cleanup_remote_custom_mode() {
 
   if [[ -n "$REMOTE_CUSTOM_CLEANUP_SOCKET_PATH" ]]; then
     rm -f "$REMOTE_CUSTOM_CLEANUP_SOCKET_PATH" || true
+  fi
+  if [[ -n "${REMOTE_CUSTOM_CLEANUP_CAFFEINATE_PID:-}" ]]; then
+    kill "$REMOTE_CUSTOM_CLEANUP_CAFFEINATE_PID" >/dev/null 2>&1 || true
+    REMOTE_CUSTOM_CLEANUP_CAFFEINATE_PID=""
   fi
   if remote_custom_pid_is_safe "$cleanup_pid"; then
     while IFS= read -r process_pid; do
@@ -934,6 +939,10 @@ run_remote_custom_mode() {
   TOASTTY_DERIVED_PATH="$derived_path" \
   "$app_binary" >"$artifacts_dir/app.log" 2>&1 &
   app_pid=$!
+  # Keep the display awake for the app's lifetime; see test.sh for why
+  # AppKit animations wedge the process when the display is asleep.
+  caffeinate -disu -t 3600 >/dev/null 2>&1 &
+  REMOTE_CUSTOM_CLEANUP_CAFFEINATE_PID=$!
   REMOTE_CUSTOM_CLEANUP_APP_PID="$app_pid"
 
   for _ in $(seq 1 200); do

@@ -1217,7 +1217,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         defer {
             fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
             try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
-            try? fixture.fileManager.removeItem(at: rolloutURL)
+            removeRolloutFixture(rolloutURL)
         }
 
         XCTAssertTrue(fixture.store.send(
@@ -1905,7 +1905,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexRolloutClaimStartsCollabWatcherForActiveSession() throws {
         let fixture = try makePlannerFixture()
         let rolloutURL = temporaryJSONLURL()
-        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
 
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -1939,7 +1939,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexRolloutClaimBeforeLaunchRegistrationStartsCollabWatcher() throws {
         let launchStart = Date(timeIntervalSince1970: 1_800_000_000)
         let rolloutURL = temporaryJSONLURL()
-        defer { try? FileManager.default.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
         let fixture = try makePlannerFixture(
             terminalState: TerminalPanelState(
                 title: "Terminal 1",
@@ -1976,7 +1976,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexRolloutWatcherIgnoresStalePreexistingResumeRecord() throws {
         let launchStart = Date(timeIntervalSince1970: 1_800_000_000)
         let rolloutURL = temporaryJSONLURL()
-        defer { try? FileManager.default.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
         let fixture = try makePlannerFixture(
             terminalState: TerminalPanelState(
                 title: "Terminal 1",
@@ -2012,8 +2012,8 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         let firstRolloutURL = temporaryJSONLURL()
         let secondRolloutURL = temporaryJSONLURL()
         defer {
-            try? fixture.fileManager.removeItem(at: firstRolloutURL)
-            try? fixture.fileManager.removeItem(at: secondRolloutURL)
+            removeRolloutFixture(firstRolloutURL)
+            removeRolloutFixture(secondRolloutURL)
         }
 
         let plan = try fixture.planner.prepareManagedLaunch(
@@ -2106,7 +2106,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexRolloutWatcherReusesRuntimeCursorWhenSamePathReattaches() async throws {
         let fixture = try makePlannerFixture()
         let rolloutURL = temporaryJSONLURL()
-        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
 
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -2191,7 +2191,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexRolloutWatcherRejectsFinalDrainEventsAfterDetach() async throws {
         let fixture = try makePlannerFixture()
         let rolloutURL = temporaryJSONLURL()
-        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
 
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -2243,7 +2243,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexRolloutWatcherAttachesWhenCodexInstrumentationFails() async throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let rolloutURL = temporaryJSONLURL()
-        defer { try? FileManager.default.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
 
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -2278,7 +2278,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexRolloutWatcherDoesNotAttachForNonCodexSession() throws {
         let fixture = try makePlannerFixture()
         let rolloutURL = temporaryJSONLURL()
-        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
 
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -2323,7 +2323,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             )
         )
         let rolloutURL = temporaryJSONLURL()
-        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
 
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -2391,7 +2391,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexRolloutWatcherProjectsCurrentCollaborationLifecycle() async throws {
         let fixture = try makePlannerFixture()
         let rolloutURL = temporaryJSONLURL()
-        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+        defer { removeRolloutFixture(rolloutURL) }
 
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -2491,8 +2491,8 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         let firstRolloutURL = temporaryJSONLURL()
         let secondRolloutURL = temporaryJSONLURL()
         defer {
-            try? fixture.fileManager.removeItem(at: firstRolloutURL)
-            try? fixture.fileManager.removeItem(at: secondRolloutURL)
+            removeRolloutFixture(firstRolloutURL)
+            removeRolloutFixture(secondRolloutURL)
         }
 
         let plan = try fixture.planner.prepareManagedLaunch(
@@ -2659,8 +2659,8 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         let childRolloutURL = parentRolloutURL.deletingLastPathComponent()
             .appendingPathComponent("rollout-\(childThreadID).jsonl")
         defer {
-            try? FileManager.default.removeItem(at: parentRolloutURL)
-            try? FileManager.default.removeItem(at: childRolloutURL)
+            removeRolloutFixture(parentRolloutURL)
+            removeRolloutFixture(childRolloutURL)
         }
         let terminalTimestamp = childStartedAt.addingTimeInterval(1)
             .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
@@ -2738,8 +2738,8 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         let childRolloutURL = parentRolloutURL.deletingLastPathComponent()
             .appendingPathComponent("rollout-\(childThreadID).jsonl")
         defer {
-            try? FileManager.default.removeItem(at: parentRolloutURL)
-            try? FileManager.default.removeItem(at: childRolloutURL)
+            removeRolloutFixture(parentRolloutURL)
+            removeRolloutFixture(childRolloutURL)
         }
         let fixture = try makePlannerFixture(
             nowProvider: { launchStart },
@@ -2824,8 +2824,8 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         let childRolloutURL = parentRolloutURL.deletingLastPathComponent()
             .appendingPathComponent("rollout-\(childThreadID).jsonl")
         defer {
-            try? FileManager.default.removeItem(at: parentRolloutURL)
-            try? FileManager.default.removeItem(at: childRolloutURL)
+            removeRolloutFixture(parentRolloutURL)
+            removeRolloutFixture(childRolloutURL)
         }
         let staleTimestamp = childStartedAt.addingTimeInterval(-1)
             .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
@@ -3360,9 +3360,26 @@ private func codexSessionLogURL(from plan: ManagedAgentLaunchPlan) throws -> URL
     return URL(fileURLWithPath: path)
 }
 
+/// Rollout fixtures live in a private directory rather than the shared temp
+/// root: the planner's subagent watchers enumerate the parent rollout's
+/// directory while waiting for a child rollout, and on a busy host the temp
+/// root can hold thousands of entries.
 private func temporaryJSONLURL() -> URL {
-    FileManager.default.temporaryDirectory
-        .appendingPathComponent("toastty-codex-rollout-\(UUID().uuidString).jsonl", isDirectory: false)
+    let directoryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("toastty-codex-rollout-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    return directoryURL.appendingPathComponent("rollout-parent.jsonl", isDirectory: false)
+}
+
+/// Removes a rollout fixture and its private directory when that directory is
+/// one of ours; other paths are removed as plain files.
+private func removeRolloutFixture(_ url: URL) {
+    let directoryURL = url.deletingLastPathComponent()
+    if directoryURL.lastPathComponent.hasPrefix("toastty-codex-rollout-") {
+        try? FileManager.default.removeItem(at: directoryURL)
+    } else {
+        try? FileManager.default.removeItem(at: url)
+    }
 }
 
 private func codexResumeRecord(

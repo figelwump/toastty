@@ -42,13 +42,26 @@ actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
     private let fileManager: FileManager
     private let maximumProfileResolutionAttempts: Int
     private let retryDelayNanoseconds: UInt64
+    private let maximumRetryDelayNanoseconds: UInt64
+    private let rolloutLookupDeadlineNanoseconds: UInt64
     private let maximumPrefixByteCount: Int
     private let maximumMetadataLineByteCount: Int
 
+    /// - Parameters:
+    ///   - retryDelayNanoseconds: Initial delay between rollout directory
+    ///     scans. Each pending scan doubles it up to `maximumRetryDelayNanoseconds`,
+    ///     so a child that never writes a rollout costs one directory
+    ///     enumeration every few seconds rather than four per second.
+    ///   - rolloutLookupDeadlineNanoseconds: Total time `resolveRolloutURL`
+    ///     keeps looking before giving up. Codex writes the child rollout
+    ///     within seconds of the lifecycle event, so a long wait means the
+    ///     child was cancelled or the parent rollout path is wrong.
     init(
         fileManager: FileManager = .default,
         maximumAttempts: Int = 16,
         retryDelayNanoseconds: UInt64 = 250_000_000,
+        maximumRetryDelayNanoseconds: UInt64 = 4_000_000_000,
+        rolloutLookupDeadlineNanoseconds: UInt64 = 5 * 60 * 1_000_000_000,
         maximumPrefixByteCount: Int = 512 * 1_024,
         maximumMetadataLineByteCount: Int = 32 * 1_024
     ) {
@@ -58,6 +71,8 @@ actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
         self.fileManager = fileManager
         self.maximumProfileResolutionAttempts = maximumAttempts
         self.retryDelayNanoseconds = retryDelayNanoseconds
+        self.maximumRetryDelayNanoseconds = max(retryDelayNanoseconds, maximumRetryDelayNanoseconds)
+        self.rolloutLookupDeadlineNanoseconds = rolloutLookupDeadlineNanoseconds
         self.maximumPrefixByteCount = maximumPrefixByteCount
         self.maximumMetadataLineByteCount = maximumMetadataLineByteCount
     }
@@ -102,6 +117,9 @@ actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
             return nil
         }
 
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .nanoseconds(Int64(clamping: rolloutLookupDeadlineNanoseconds)))
+        var delayNanoseconds = retryDelayNanoseconds
         while Task.isCancelled == false {
             switch lookupRolloutURL(
                 childThreadID: childThreadID,
@@ -112,12 +130,16 @@ actor CodexSubagentProfileResolver: CodexSubagentProfileResolving {
             case .unavailable:
                 return nil
             case .pending:
-                if retryDelayNanoseconds > 0 {
+                guard clock.now < deadline else {
+                    return nil
+                }
+                if delayNanoseconds > 0 {
                     do {
-                        try await Task.sleep(nanoseconds: retryDelayNanoseconds)
+                        try await Task.sleep(nanoseconds: delayNanoseconds)
                     } catch {
                         return nil
                     }
+                    delayNanoseconds = min(delayNanoseconds &* 2, maximumRetryDelayNanoseconds)
                 } else {
                     await Task.yield()
                 }

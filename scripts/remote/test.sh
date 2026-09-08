@@ -1222,6 +1222,19 @@ EOF
         test >"$xcodebuild_log" 2>&1
     ) &
     xcodebuild_pid=$!
+      # AppKit window animations in the test host never finish while the
+      # display is asleep. Each leaks a dispatch worker thread; once the pool
+      # is exhausted, socket-backed and concurrency tests hang until the
+      # watchdog fires. Wake the display and hold it for the whole run.
+      # `-u` alone only declares activity for 5 s, and a locked session turns
+      # the display back off right after, so hold every assertion for the
+      # run's whole timeout window and release it when xcodebuild exits.
+      display_hold_seconds="$timeout_seconds"
+      if [[ "$display_hold_seconds" == "0" ]]; then
+        display_hold_seconds=14400
+      fi
+      caffeinate -disu -t "$display_hold_seconds" >/dev/null 2>&1 &
+      caffeinate_pid=$!
 
       if [[ "$timeout_seconds" != "0" ]]; then
         (
@@ -1258,6 +1271,14 @@ EOF
       :
     else
       exit_code=$?
+    fi
+    if [[ -n "${caffeinate_pid:-}" ]]; then
+      kill "$caffeinate_pid" >/dev/null 2>&1 || true
+      caffeinate_pid=""
+    fi
+    if [[ "$exit_code" == "0" ]]; then
+      :
+    else
       status="fail"
       if [[ -f "$timeout_marker" ]]; then
         exit_code=124

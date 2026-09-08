@@ -38,6 +38,8 @@ sv exec -- scripts/remote/test.sh -- ...
 
 Pass `xcodebuild` flags after `--`. The wrapper defaults workspace, scheme, configuration, and destination when omitted. It owns the `test` action, `-derivedDataPath`, and `-resultBundlePath`.
 
+The remote wrappers wake the host display and hold it awake (`caffeinate -u`, then `caffeinate -dis` bound to the run) for the duration of a run. AppKit window animations inside the test host never complete while the display is asleep, and each one leaks a dispatch worker thread; once the pool fills, socket-backed and concurrency tests hang until the watchdog fires. If a full `ToasttyApp` gate hangs in `AutomationSocketServerAppControlTests` after `ToasttyUserSkillCatalogTests`/`ToasttySkillArtifactSweeperTests` timeouts, check `pmset -g log | grep "Display is turned"` on the host first.
+
 Prefer omitting `-destination` for remote tests. If a destination is required, use `platform=macOS,arch=arm64` unless intentionally testing Rosetta. Remote `x86_64` test destinations are blocked by default after Rosetta hangs left orphaned `xcodebuild` or test-host processes; only override with `TOASTTY_ALLOW_REMOTE_X86_64_TESTS=1` when intentionally validating Rosetta.
 
 Use `--scope`, `--ref`, and `--run-label` as needed. Remote `xcodebuild` is killed after `TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS` seconds (default `3600`; set `0` to disable), and the wrapper cleans up the spawned process tree on timeout or interruption.
