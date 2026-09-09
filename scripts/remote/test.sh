@@ -45,6 +45,8 @@ Runs `xcodebuild test` on the dedicated remote macOS validation host over SSH.
 The wrapper creates a disposable remote worktree, syncs the requested local
 change scope into it, runs the test invocation there, copies the artifacts back
 locally, and removes the remote worktree unless told otherwise.
+macOS tests require Ghostty in the generated project, including focused suites.
+Install Ghostty artifacts in the remote source checkout before running them.
 
 Options:
   --platform macos|ios                   Project graph to test (default: macos)
@@ -1199,7 +1201,19 @@ EOF
         fi
       fi
     else
-      ./scripts/dev/bootstrap-worktree.sh >/dev/null
+      if ! ./scripts/dev/bootstrap-worktree.sh >>"$xcodebuild_log" 2>&1; then
+        exit_code=$SETUP_ERROR_EXIT_CODE
+        status="setup_error"
+        failure_summary="macOS project generation failed; see xcodebuild.log"
+      elif [[ ! -f "$remote_worktree_dir/toastty.xcodeproj/project.pbxproj" ]] \
+        || ! grep -qw 'TOASTTY_HAS_GHOSTTY_KIT' "$remote_worktree_dir/toastty.xcodeproj/project.pbxproj"; then
+        exit_code=$SETUP_ERROR_EXIT_CODE
+        status="setup_error"
+        failure_summary="Remote macOS tests require Ghostty-backed coverage. Install GhosttyKit artifacts in the remote source checkout's Dependencies/ and regenerate without TUIST_DISABLE_GHOSTTY or TOASTTY_DISABLE_GHOSTTY."
+      else
+        log "Ghostty-backed macOS app and test coverage is enabled."
+        printf 'Ghostty-backed macOS app and test coverage is enabled.\n' >>"$xcodebuild_log"
+      fi
     fi
 
     if [[ "$status" == "setup_error" ]]; then
@@ -1219,7 +1233,7 @@ EOF
         "${xcodebuild_args[@]}" \
         -derivedDataPath "$derived_path" \
         -resultBundlePath "$result_bundle" \
-        test >"$xcodebuild_log" 2>&1
+        test >>"$xcodebuild_log" 2>&1
     ) &
     xcodebuild_pid=$!
       # AppKit window animations in the test host never finish while the
