@@ -138,7 +138,34 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     }
 
     var placeholder: String {
-        "Message \(agentDisplayName)…"
+        switch gate {
+        case .enabled:
+            "Message \(agentDisplayName)…"
+        case .disabled(.deviceScope):
+            "Read-only on this iPhone"
+        case .disabled(.sessionWrites):
+            "Remote input is off"
+        case .disabled(.localDraft):
+            "Draft in progress on Mac"
+        case .disabled(.pendingInteraction):
+            "Pending request — input paused"
+        case .disabled(.connection(.reconnecting)):
+            "Reconnecting to Mac…"
+        case .disabled(.connection(.catchingUp)):
+            "Syncing with Mac…"
+        case .disabled(.prompt(.starting)):
+            "Session starting…"
+        case .disabled(.prompt(.working)):
+            "Agent working…"
+        case .disabled(.prompt(.offline)):
+            "Session offline"
+        case .disabled(.prompt(.closed)):
+            "Input unavailable"
+        case .disabled(.prompt(.unsupported)):
+            "Read-only in this app version"
+        case .disabled(.prompt(.sending)):
+            "Sending message…"
+        }
     }
 
     func canSubmit(draft: String) -> Bool {

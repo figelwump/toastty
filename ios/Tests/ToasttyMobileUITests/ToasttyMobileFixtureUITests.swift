@@ -186,6 +186,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(status.waitForExistence(timeout: 5))
         XCTAssertEqual(status.label, "Agent working. Composer locked.")
         XCTAssertEqual(status.value as? String, "In progress")
+        XCTAssertEqual(composerInput(in: app).value as? String, "Agent working…")
         attachScreenshot(named: "fixture-conversation-working", of: app)
 
         // A conversation pushed from a workspace pops back to that workspace,

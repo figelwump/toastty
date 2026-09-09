@@ -115,17 +115,29 @@ final class ToasttyComposerPresentationTests: XCTestCase {
         XCTAssertTrue(working.gateMessage.contains("working"))
     }
 
-    func testComposerPlaceholderDoesNotMislabelEveryDisabledStateAsALocalDraft() {
-        let enabled = presentation(enabledAuthority)
-        let localDraft = presentation(authority(
-            availability: .localDraft(epoch: stamp.inputEpoch),
-            failure: .inputUnavailable
-        ))
-        let catchingUp = presentation(authority(failure: .transcriptNotCaughtUp))
-
-        XCTAssertEqual(enabled.placeholder, "Message Codex…")
-        XCTAssertEqual(localDraft.placeholder, "Message Codex…")
-        XCTAssertEqual(catchingUp.placeholder, "Message Codex…")
+    func testComposerPlaceholderExplainsEachBlockedStateAndInvitesInputOnlyWhenEnabled() {
+        XCTAssertEqual(presentation(enabledAuthority).placeholder, "Message Codex…")
+        let cases: [(ToasttyComposerDisabledReason, String)] = [
+            (.deviceScope, "Read-only on this iPhone"),
+            (.sessionWrites, "Remote input is off"),
+            (.localDraft, "Draft in progress on Mac"),
+            (.pendingInteraction, "Pending request — input paused"),
+            (.connection(.reconnecting), "Reconnecting to Mac…"),
+            (.connection(.catchingUp), "Syncing with Mac…"),
+            (.prompt(.starting), "Session starting…"),
+            (.prompt(.working), "Agent working…"),
+            (.prompt(.offline), "Session offline"),
+            (.prompt(.closed), "Input unavailable"),
+            (.prompt(.unsupported), "Read-only in this app version"),
+            (.prompt(.sending), "Sending message…"),
+        ]
+        for (reason, expected) in cases {
+            let subject = ToasttyComposerPresentation(
+                agentDisplayName: "Codex",
+                gate: .disabled(reason)
+            )
+            XCTAssertEqual(subject.placeholder, expected, "\(reason)")
+        }
     }
 
     func testDraftValidationRejectsWhitespaceButDoesNotInventATextLimit() {
