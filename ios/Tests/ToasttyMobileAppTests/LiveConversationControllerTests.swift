@@ -170,6 +170,34 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertFalse(subject.transcriptPresentation.isLoadingOlder)
     }
 
+    func testPrependingHistoryAnchorsToMessageAfterHiddenStatus() {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        let status = CompatibleConversationEvent.statusChanged(CompatibleStatusChangedEvent(
+            conversationID: conversationID,
+            sequence: 7,
+            eventID: "status-7",
+            schemaVersion: 1,
+            timestamp: Date(timeIntervalSince1970: 7),
+            provider: .codex,
+            providerIdentity: nil,
+            turnID: nil,
+            state: .known(.working),
+            inputAvailability: .unavailable(reason: .known(.working))
+        ))
+        subject.consume(state(runID: runID(1), events: [status, event(8)]))
+        let visibleID = subject.transcriptPresentation.rows.first?.id
+        XCTAssertEqual(visibleID?.sequence, 8)
+
+        subject.consume(state(runID: runID(1), events: [event(6), status, event(8)]))
+
+        XCTAssertEqual(subject.change, .prepend)
+        XCTAssertEqual(subject.prependAnchorID, visibleID)
+        XCTAssertEqual(subject.transcriptPresentation.prependAnchorID, visibleID)
+    }
+
     func testLoadOlderActionRunsOnlyWhenEligibleAndNotAlreadyLoading() async {
         let recorder = LoadOlderRecorder()
         let subject = LiveConversationController(

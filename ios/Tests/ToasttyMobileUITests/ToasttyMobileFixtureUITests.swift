@@ -424,7 +424,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         }
     }
 
-    func testFixtureTranscriptExposesEveryEventKindWithStableSequenceIdentifiers() {
+    func testFixtureTranscriptPreservesContentWithoutHistoricalStatusRows() {
         let app = launchFixtureConversation()
         let transcript = app.descendants(matching: .any)["toastty-mobile-transcript"]
         XCTAssertTrue(transcript.waitForExistence(timeout: 5))
@@ -458,7 +458,6 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             (3, "inspect the shared contract"),
             (6, "Transcript QA"),
             (7, "Choose the safe rollout strategy"),
-            (8, "waiting for input"),
             (9, "interaction resolved"),
             (10, "session resumed"),
             (11, "Transcript ready"),
@@ -477,6 +476,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
                 "Sequence \(sequence) should expose its semantic content to accessibility; got \(row.label)"
             )
         }
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-transcript-row-8"].exists)
         let oldestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-1"]
         XCTAssertTrue(
             scrollToOlder(oldestRow, in: app),
@@ -533,6 +533,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "Opening at the live tail must not show the jump affordance"
         )
 
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-transcript-row-8"].exists)
         let oldestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-1"]
         XCTAssertTrue(scrollToOlder(oldestRow, in: app))
 
@@ -613,6 +614,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
         XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-transcript-loading-older"].exists)
 
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-transcript-row-8"].exists)
         let oldestRow = app.descendants(matching: .any)["toastty-mobile-transcript-row-1"]
         XCTAssertTrue(scrollToOlder(oldestRow, in: app))
         XCTAssertTrue(oldestRow.label.localizedCaseInsensitiveContains("session connected"))

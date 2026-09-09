@@ -143,15 +143,6 @@ enum ToasttyConversationFixture {
                 ),
                 row(
                     conversationID,
-                    8,
-                    timestamp,
-                    .statusChanged(
-                        state: "waiting for input",
-                        availability: "interaction pending on Mac"
-                    )
-                ),
-                row(
-                    conversationID,
                     9,
                     timestamp,
                     .interactionResolved(interactionID: interactionID, resolution: .resolved)

@@ -5,7 +5,7 @@ import XCTest
 @testable import ToasttyMobileDomain
 
 final class ToasttyConversationPresentationTests: XCTestCase {
-    func testAdapterRendersEveryKnownEventKindInSequenceAndDropsUnknownRows() throws {
+    func testAdapterPreservesMessagesAndInteractionsWhileOmittingStatusAndUnknownRows() throws {
         let state = ToasttyConversationPresentationAdapter.makeState(
             events: allKnownEventsWithUnknownMiddle(),
             projectionRunID: runID(1),
@@ -15,10 +15,10 @@ final class ToasttyConversationPresentationTests: XCTestCase {
             historyTruncated: false
         )
 
-        XCTAssertEqual(state.rows.map(\.id.sequence), Array(1...9).map(UInt64.init))
-        XCTAssertEqual(state.rows.map(\.id.projectionRunID), Array(repeating: runID(1).rawValue, count: 9))
-        XCTAssertEqual(state.rows.map(\.id.projectionGeneration), Array(repeating: 7, count: 9))
-        XCTAssertEqual(state.rows.map(\.id.conversationID), Array(repeating: conversationID.rawValue, count: 9))
+        XCTAssertEqual(state.rows.map(\.id.sequence), [1, 2, 3, 4, 6, 7, 8, 9].map(UInt64.init))
+        XCTAssertEqual(state.rows.map(\.id.projectionRunID), Array(repeating: runID(1).rawValue, count: 8))
+        XCTAssertEqual(state.rows.map(\.id.projectionGeneration), Array(repeating: 7, count: 8))
+        XCTAssertEqual(state.rows.map(\.id.conversationID), Array(repeating: conversationID.rawValue, count: 8))
         XCTAssertFalse(state.rows.contains { [10, 11].contains($0.id.sequence) })
 
         guard case .userMessage(let text, let origin) = state.rows[0].content else {
@@ -48,13 +48,7 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         XCTAssertEqual(outcome, .succeeded)
         XCTAssertEqual(detail, "output")
 
-        guard case .statusChanged(let status, let availability) = state.rows[4].content else {
-            return XCTFail("Expected status row")
-        }
-        XCTAssertEqual(status, "waiting for input")
-        XCTAssertEqual(availability, "interaction pending on Mac")
-
-        guard case .interaction(let interaction) = state.rows[5].content else {
+        guard case .interaction(let interaction) = state.rows[4].content else {
             return XCTFail("Expected interaction card")
         }
         XCTAssertEqual(interaction.interaction.id, interactionID)
@@ -64,20 +58,20 @@ final class ToasttyConversationPresentationTests: XCTestCase {
             "A later resolution must update the earlier card without reordering it"
         )
 
-        guard case .interactionResolved(let resolvedID, let resolution) = state.rows[6].content else {
+        guard case .interactionResolved(let resolvedID, let resolution) = state.rows[5].content else {
             return XCTFail("Expected interaction-resolution marker")
         }
         XCTAssertEqual(resolvedID, interactionID)
         XCTAssertEqual(resolution, .resolved)
 
-        guard case .subagentSummary(let name, let phase, let detail) = state.rows[7].content else {
+        guard case .subagentSummary(let name, let phase, let detail) = state.rows[6].content else {
             return XCTFail("Expected subagent row")
         }
         XCTAssertEqual(name, "Verifier")
         XCTAssertEqual(phase, .updated)
         XCTAssertEqual(detail, "checked")
 
-        guard case .sessionBindingChanged(let reason) = state.rows[8].content else {
+        guard case .sessionBindingChanged(let reason) = state.rows[7].content else {
             return XCTFail("Expected binding marker")
         }
         XCTAssertEqual(reason, .runtimeResumed)
@@ -431,6 +425,18 @@ final class ToasttyConversationPresentationTests: XCTestCase {
                 sequence: 10,
                 payload: .sendDeliveryUnconfirmed(.init(clientRequestID: "send-1"))
             ),
+            .statusChanged(CompatibleStatusChangedEvent(
+                conversationID: conversationID,
+                sequence: 12,
+                eventID: "compatible-status",
+                schemaVersion: 1,
+                timestamp: Date(timeIntervalSince1970: 12),
+                provider: .codex,
+                providerIdentity: nil,
+                turnID: nil,
+                state: .known(.working),
+                inputAvailability: .unavailable(reason: .known(.working))
+            )),
             .unknown(
                 conversationID: conversationID,
                 sequence: 11,

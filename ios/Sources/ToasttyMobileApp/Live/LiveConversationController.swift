@@ -324,19 +324,8 @@ final class LiveConversationController {
             previousProjectionGeneration: previousProjectionGeneration,
             hasConsumedState: hasConsumedState
         ) : .metadataOnly
-        if change == .prepend,
-           let projectionRunID,
-           let projectionGeneration,
-           let sequence = firstRenderedSequence(in: previousEvents) {
-            prependAnchorID = ToasttyTranscriptRowID(
-                projectionRunID: projectionRunID.rawValue,
-                projectionGeneration: projectionGeneration,
-                conversationID: conversationID,
-                sequence: sequence
-            )
-        } else {
-            prependAnchorID = nil
-        }
+        // Anchor to the previous visible rows; status events have no transcript row.
+        prependAnchorID = change == .prepend ? transcriptPresentation.rows.first?.id : nil
         hasConsumedState = true
         resolvePhase()
         if contentChanged {
@@ -414,15 +403,6 @@ final class LiveConversationController {
                 EventIdentity(sequence: sequence, eventID: "unknown:\(kind)")
             }
         }
-    }
-
-    private func firstRenderedSequence(
-        in values: [CompatibleConversationEvent]
-    ) -> UInt64? {
-        values.first { event in
-            if case .unknown = event { return false }
-            return true
-        }?.sequence
     }
 
     private func resolvePhase() {

@@ -1247,8 +1247,6 @@ private struct ToasttyTranscriptRowView: View {
                 isUser: false,
                 metadata: phase == .commentary && (chunk?.isLast ?? true) ? "commentary" : nil
             )
-        case .statusChanged(let state, let availability):
-            marker(icon: "circle.dotted", text: "\(state) · \(availability)")
         case .interaction:
             EmptyView()
         case .interactionResolved(_, let resolution):

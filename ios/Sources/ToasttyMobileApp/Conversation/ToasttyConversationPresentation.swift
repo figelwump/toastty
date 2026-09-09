@@ -17,7 +17,6 @@ struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
         case assistantMessage(text: String, phase: ConversationAssistantMessagePhase)
         case toolStarted(callID: String, name: String, detail: String?)
         case toolFinished(callID: String, name: String, outcome: ConversationToolOutcome, detail: String?)
-        case statusChanged(state: String, availability: String)
         case interaction(ToasttyInteractionPresentation)
         case interactionResolved(interactionID: RemotePendingInteraction.ID, resolution: RemotePendingInteraction.State)
         case subagentSummary(name: String, phase: ConversationSubagentPhase, detail: String?)
@@ -147,7 +146,7 @@ struct ToasttyTranscriptBlock: Identifiable, Equatable, Sendable {
 }
 
 /// One user turn: the user message anchor plus the work (tool batches,
-/// commentary, status markers) between it and its first final response.
+/// commentary) between it and its first final response.
 /// Interaction cards are never part of a turn's foldable work — they stay
 /// visible so pending prompts cannot hide.
 struct ToasttyTranscriptTurn: Equatable, Sendable {
@@ -203,7 +202,7 @@ struct ToasttyTranscriptTurn: Equatable, Sendable {
                     } else if currentID != nil {
                         hasResponse = true
                     }
-                case .subagentSummary, .statusChanged, .interactionResolved,
+                case .subagentSummary, .interactionResolved,
                      .sessionBindingChanged:
                     if currentID != nil, hasResponse == false {
                         workBlockIDs.append(block.id)
@@ -354,21 +353,9 @@ enum ToasttyConversationPresentationAdapter {
             switch event {
             case .unknown:
                 return nil
-            case .statusChanged(let value):
-                return ToasttyTranscriptRow(
-                    id: rowID(
-                        projectionRunID: projectionRunID,
-                        projectionGeneration: projectionGeneration,
-                        conversationID: value.conversationID,
-                        sequence: value.sequence
-                    ),
-                    timestamp: value.timestamp,
-                    provider: value.provider,
-                    content: .statusChanged(
-                        state: statusLabel(value.state),
-                        availability: availabilityLabel(value.inputAvailability)
-                    )
-                )
+            case .statusChanged:
+                // Live status belongs in the header and composer, not chat history.
+                return nil
             case .known(let value):
                 let content: ToasttyTranscriptRow.Content
                 switch value.payload {
@@ -390,11 +377,8 @@ enum ToasttyConversationPresentationAdapter {
                         outcome: payload.outcome,
                         detail: payload.detail
                     )
-                case .statusChanged(let payload):
-                    content = .statusChanged(
-                        state: statusLabel(.known(payload.state)),
-                        availability: availabilityLabel(payload.inputAvailability)
-                    )
+                case .statusChanged:
+                    return nil
                 case .interactionPresented(var payload):
                     if let resolution = resolutions[payload.id] {
                         payload.state = resolution.resolution
@@ -511,40 +495,4 @@ enum ToasttyConversationPresentationAdapter {
         )
     }
 
-    private static func statusLabel(_ state: MobileSessionDisplayState) -> String {
-        switch state {
-        case .known(let value):
-            switch value {
-            case .starting: "session starting"
-            case .working: "agent working"
-            case .awaitingInput: "waiting for input"
-            case .ready: "session ready"
-            case .interrupted: "session interrupted"
-            case .ended: "session ended"
-            case .error: "session error"
-            case .offline: "session offline"
-            }
-        case .unsupported:
-            "session status changed"
-        }
-    }
-
-    private static func availabilityLabel(_ availability: CompatibleInputAvailability) -> String {
-        switch availability {
-        case .openPrompt: "reply available"
-        case .localDraft: "desktop draft in progress"
-        case .pendingInteraction: "interaction pending on Mac"
-        case .unavailable(let reason): reason.rawValue.replacingOccurrences(of: "_", with: " ")
-        case .unsupported: "read-only"
-        }
-    }
-
-    private static func availabilityLabel(_ availability: RemoteInputAvailability) -> String {
-        switch availability {
-        case .openPrompt: "reply available"
-        case .localDraft: "desktop draft in progress"
-        case .pendingInteraction: "interaction pending on Mac"
-        case .unavailable(let reason): reason.rawValue.replacingOccurrences(of: "_", with: " ")
-        }
-    }
 }
