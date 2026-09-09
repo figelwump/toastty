@@ -44,7 +44,11 @@ public enum ToasttyMobileFixture {
                     cwd: "~/GiantThings/repos/toastty", agent: .claude,
                     title: "Mobile gateway design", status: .needsApproval,
                     availability: .pendingInteraction(preview: "Review the gateway command on the Mac"),
-                    age: "2m", last: "Allow Toastty to run the focused iOS tests?"
+                    age: "2m", last: "Allow Toastty to run the focused iOS tests?",
+                    executionProfile: RemoteSessionExecutionProfile(
+                        modelIdentifier: "claude-opus-long-provider-model-identifier-for-accessibility-layout",
+                        reasoningEffort: "high"
+                    )
                 ),
                 conversation(
                     2, workspaceID: toasttyID, workspaceTitle: "toastty",
@@ -101,7 +105,10 @@ public enum ToasttyMobileFixture {
                     cwd: "~/…/toastty-worktrees/release", agent: .codex,
                     title: "Changelog + tag", status: .ready,
                     availability: .openPrompt,
-                    age: "9m", last: "Which build number should I use?"
+                    age: "9m", last: "Which build number should I use?",
+                    executionProfile: RemoteSessionExecutionProfile(
+                        modelIdentifier: "gpt-6", reasoningEffort: "xhigh"
+                    )
                 ),
                 conversation(
                     8, workspaceID: releaseID, workspaceTitle: "release 0.9.0",
@@ -164,7 +171,8 @@ public enum ToasttyMobileFixture {
         status: RemoteSessionPresentationStatus,
         availability: MobileInputAvailability,
         age: String,
-        last: String
+        last: String,
+        executionProfile: RemoteSessionExecutionProfile? = nil
     ) -> MobileConversation {
         MobileConversation(
             id: UUID(uuidString: String(format: "B1000000-0000-0000-0000-%012d", number))!,
@@ -180,7 +188,8 @@ public enum ToasttyMobileFixture {
                 secondsAtReceipt: ageSeconds(age),
                 receivedAtMonotonicTime: fixtureReceiptTime
             ),
-            lastActivity: last
+            lastActivity: last,
+            executionProfile: executionProfile
         )
     }
 

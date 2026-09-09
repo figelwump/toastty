@@ -183,8 +183,7 @@ private extension ClaudeTranscriptParser {
     }
 
     mutating func parseAssistantRecord(_ object: [String: Any], timestamp: Date) -> [ProviderTranscriptObservation] {
-        guard let message = object["message"] as? [String: Any],
-              let blocks = message["content"] as? [[String: Any]] else {
+        guard let message = object["message"] as? [String: Any] else {
             return []
         }
         let stopReason = Self.nonEmptyString(message["stop_reason"])
@@ -192,6 +191,20 @@ private extension ClaudeTranscriptParser {
         let recordUUID = Self.nonEmptyString(object["uuid"])
 
         var observations: [ProviderTranscriptObservation] = []
+        let profile = RemoteSessionExecutionProfile(modelIdentifier: message["model"] as? String)
+        // Claude's local API-error messages use a synthetic model marker;
+        // they do not report a new provider model for the conversation.
+        if !profile.isEmpty, profile.modelIdentifier != "<synthetic>", object["isApiErrorMessage"] as? Bool != true {
+            observations.append(ProviderTranscriptObservation(
+                timestamp: timestamp,
+                turnID: currentTurnID,
+                providerIdentity: recordUUID,
+                fingerprint: recordUUID.map { "execution_profile:\($0)" }
+                    ?? fingerprintWithOccurrence("execution_profile:\(profile.modelIdentifier ?? "")"),
+                payload: .executionProfileReported(profile)
+            ))
+        }
+        guard let blocks = message["content"] as? [[String: Any]] else { return observations }
         var textIndex = 0
         for block in blocks {
             switch block["type"] as? String {

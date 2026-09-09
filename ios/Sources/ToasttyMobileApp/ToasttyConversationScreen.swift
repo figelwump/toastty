@@ -196,6 +196,12 @@ struct ToasttyConversationScreen: View {
     private func composerBar(_ conversation: MobileConversation) -> some View {
         let presentation = composer ?? lockedComposerFallback(conversation)
         return VStack(alignment: .leading, spacing: 8) {
+            if let profile = ToasttySessionExecutionProfilePresentation(
+                profile: conversation.executionProfile,
+                isLastReported: controller.freshness != .live
+            ) {
+                ToasttySessionExecutionProfileView(presentation: profile)
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 composerField(presentation)
                     .frame(maxWidth: .infinity)

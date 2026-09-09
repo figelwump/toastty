@@ -199,6 +199,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     /// back to `activityAge` when it is absent.
     public let stateEnteredAge: MobileActivityAge?
     public let lastActivity: String
+    public let executionProfile: RemoteSessionExecutionProfile?
 
     public var age: String {
         activityAge?.label(atMonotonicTime: ProcessInfo.processInfo.systemUptime) ?? fixedAge
@@ -242,7 +243,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         age: String,
         activityAge: MobileActivityAge? = nil,
         stateEnteredAge: MobileActivityAge? = nil,
-        lastActivity: String
+        lastActivity: String,
+        executionProfile: RemoteSessionExecutionProfile? = nil
     ) {
         self.id = id
         self.workspaceID = workspaceID
@@ -256,6 +258,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         self.activityAge = activityAge
         self.stateEnteredAge = stateEnteredAge
         self.lastActivity = lastActivity
+        self.executionProfile = executionProfile.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     public init(
@@ -270,7 +273,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         age: String,
         activityAge: MobileActivityAge? = nil,
         stateEnteredAge: MobileActivityAge? = nil,
-        lastActivity: String
+        lastActivity: String,
+        executionProfile: RemoteSessionExecutionProfile? = nil
     ) {
         self.init(
             id: id,
@@ -284,7 +288,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             age: age,
             activityAge: activityAge,
             stateEnteredAge: stateEnteredAge,
-            lastActivity: lastActivity
+            lastActivity: lastActivity,
+            executionProfile: executionProfile
         )
     }
 

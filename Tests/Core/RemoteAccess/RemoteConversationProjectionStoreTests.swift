@@ -538,3 +538,21 @@ struct RemoteConversationProjectionStoreTests {
         #expect(first == second)
     }
 }
+
+extension RemoteConversationProjectionStoreTests {
+    @Test func sessionSnapshotsPublishProfileWithoutTranscriptEventsAndResnapshotClearsIt() throws {
+        let store = Self.makeStore()
+        let initial = try #require(store.sessionList(at: Self.startDate).conversations.first)
+        store.ingest([
+            .init(timestamp: Self.startDate.addingTimeInterval(1), fingerprint: "model-report",
+                  payload: .executionProfileReported(.init(modelIdentifier: "gpt-6", reasoningEffort: "high")))
+        ], for: Self.conversationID)
+        let updated = try #require(store.sessionList(at: Self.startDate.addingTimeInterval(2)).conversations.first)
+        #expect(updated.executionProfile == .init(modelIdentifier: "gpt-6", reasoningEffort: "high"))
+        #expect(updated.latestSequence == initial.latestSequence)
+        #expect(updated.inputAvailability == initial.inputAvailability)
+        store.forceResnapshot(for: Self.conversationID, bindingID: Self.bindingID, at: Self.startDate.addingTimeInterval(3))
+        let rebuilt = try #require(store.sessionList(at: Self.startDate.addingTimeInterval(4)).conversations.first)
+        #expect(rebuilt.executionProfile == nil)
+    }
+}

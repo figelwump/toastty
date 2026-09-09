@@ -30,6 +30,8 @@ public struct ConversationProjector: Sendable {
     public private(set) var pendingInteractions: [RemotePendingInteraction]
     public private(set) var providerSessionID: String?
     public private(set) var providerSessionFilePath: String?
+    public private(set) var executionProfile: RemoteSessionExecutionProfile?
+    private var executionProfileReportedAt: Date?
     public private(set) var updatedAt: Date
     /// Whether a live managed runtime is currently bound. While false, every
     /// transition is forced to offline/read-only: replaying a historical
@@ -86,6 +88,8 @@ public struct ConversationProjector: Sendable {
         self.pendingInteractions = []
         self.providerSessionID = nil
         self.providerSessionFilePath = nil
+        self.executionProfile = nil
+        self.executionProfileReportedAt = nil
         self.updatedAt = date
         self.currentEpoch = RemoteInputEpoch(bindingID: bindingID, counter: 0)
         self.didBootstrapConfirmedPromptForCurrentBinding = false
@@ -202,7 +206,18 @@ public struct ConversationProjector: Sendable {
             }
 
         case .providerSessionObserved(let sessionID):
+            if let previousID = providerSessionID, previousID != sessionID {
+                clearExecutionProfile()
+            }
             providerSessionID = sessionID
+
+        case .executionProfileReported(let profile):
+            // Historical metadata is useful for read-only display, but must
+            // neither authorize input nor roll a newer report backward.
+            if executionProfileReportedAt.map({ observation.timestamp >= $0 }) ?? true {
+                executionProfile = profile.isEmpty ? nil : profile
+                executionProfileReportedAt = observation.timestamp
+            }
 
         case .contextCompacted:
             break
@@ -236,11 +251,18 @@ public struct ConversationProjector: Sendable {
             break
         }
         if let providerSessionID {
+            if let previousID = self.providerSessionID, previousID != providerSessionID {
+                clearExecutionProfile()
+            }
             self.providerSessionID = providerSessionID
         }
         if clearsProviderSessionFilePath {
+            if self.providerSessionFilePath != nil { clearExecutionProfile() }
             self.providerSessionFilePath = nil
         } else if let providerSessionFilePath {
+            if let previousPath = self.providerSessionFilePath, previousPath != providerSessionFilePath {
+                clearExecutionProfile()
+            }
             self.providerSessionFilePath = providerSessionFilePath
         }
 
@@ -580,6 +602,11 @@ public struct ConversationProjector: Sendable {
                 at: date
             ))
         }
+    }
+
+    private mutating func clearExecutionProfile() {
+        executionProfile = nil
+        executionProfileReportedAt = nil
     }
 
     private static func availabilityMateriallyDiffers(

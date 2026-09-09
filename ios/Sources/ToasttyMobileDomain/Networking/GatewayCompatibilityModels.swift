@@ -64,6 +64,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
     public var placement: RemoteConversationPlacement
     public var cwd: String?
     public var statusDetail: String?
+    public var executionProfile: RemoteSessionExecutionProfile?
     public var state: MobileSessionDisplayState
     public var presentationStatus: CompatibleSessionPresentationStatus?
     public var inputAvailability: CompatibleInputAvailability
@@ -79,6 +80,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         placement: RemoteConversationPlacement,
         cwd: String?,
         statusDetail: String? = nil,
+        executionProfile: RemoteSessionExecutionProfile? = nil,
         state: MobileSessionDisplayState,
         presentationStatus: CompatibleSessionPresentationStatus? = nil,
         inputAvailability: CompatibleInputAvailability,
@@ -97,6 +99,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
             self.cwd = nil
         }
         self.statusDetail = RemoteConversationSummary.normalizedStatusDetail(statusDetail)
+        self.executionProfile = executionProfile.flatMap { $0.isEmpty ? nil : $0 }
         self.state = state
         self.presentationStatus = presentationStatus
         self.inputAvailability = inputAvailability
@@ -184,7 +187,8 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                     statusDetail: summary.statusDetail,
                     availability: availability,
                     status: status
-                )
+                ),
+                executionProfile: summary.executionProfile
             )
         }
         stateTransitions.retain(mobileConversations.map(\.id))

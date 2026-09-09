@@ -606,6 +606,40 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         }
     }
 
+    func testExecutionProfileDecodesDefensivelyAndMapsEachSnapshotWithoutStaleFields() throws {
+        let cases: [(Any?, RemoteSessionExecutionProfile?)] = [
+            (nil, nil),
+            (NSNull(), nil),
+            ("unsupported", nil),
+            (["futureField": "ignored"], nil),
+            (["modelIdentifier": " ", "reasoningEffort": 3], nil),
+            (["modelIdentifier": "Provider/Model-vNext", "reasoningEffort": "xHigh",
+              "futureField": true],
+             RemoteSessionExecutionProfile(modelIdentifier: "Provider/Model-vNext", reasoningEffort: "xHigh")),
+            (["modelIdentifier": "switched-model", "reasoningEffort": false],
+             RemoteSessionExecutionProfile(modelIdentifier: "switched-model")),
+            (["modelIdentifier": 42, "reasoningEffort": "adaptive"],
+             RemoteSessionExecutionProfile(reasoningEffort: "adaptive")),
+            ([:], nil),
+            (nil, nil),
+        ]
+        var transitions = MobileStateTransitionTracker()
+        for (wireValue, expected) in cases {
+            let data = try sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull(),
+                executionProfile: wireValue
+            )
+            let snapshot = try decoder.decodeSessionListResponse(data)
+            XCTAssertEqual(snapshot.conversations.first?.executionProfile, expected)
+            let home = snapshot.presentation(
+                hostName: "Mac",
+                stateTransitions: &transitions
+            )
+            XCTAssertEqual(home.workspaces.first?.conversations.first?.executionProfile, expected)
+        }
+    }
+
     private func fixtureData(named name: String) throws -> Data {
         let url = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: name, withExtension: "json", subdirectory: "v1")
@@ -618,7 +652,8 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         preview: Any,
         presentationStatus: String? = nil,
         cwd: Any? = nil,
-        statusDetail: Any? = nil
+        statusDetail: Any? = nil,
+        executionProfile: Any? = nil
     ) throws -> Data {
         var conversation: [String: Any] = [
             "conversationID": "11111111-1111-1111-1111-111111111111",
@@ -637,6 +672,9 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         }
         if let cwd {
             conversation["cwd"] = cwd
+        }
+        if let executionProfile {
+            conversation["executionProfile"] = executionProfile
         }
         if let statusDetail {
             conversation["statusDetail"] = statusDetail

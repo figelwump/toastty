@@ -26,6 +26,7 @@ import CryptoKit
 public struct CodexRolloutTranscriptParser: Sendable {
     public private(set) var malformedLineCount: Int = 0
     private var currentTurnID: String?
+    private var isSubagentStream = false
     /// Occurrence counters keyed by content hash, so identical un-identified
     /// records (for example the user typing "yes" twice) fingerprint uniquely
     /// by position while replayed bytes fingerprint identically.
@@ -48,11 +49,21 @@ public struct CodexRolloutTranscriptParser: Sendable {
         case "session_meta":
             return parseSessionMeta(object, timestamp: timestamp)
         case "turn_context":
-            if let payload = object["payload"] as? [String: Any],
-               let turnID = Self.nonEmptyString(payload["turn_id"]) {
+            guard let payload = object["payload"] as? [String: Any] else { return [] }
+            if let turnID = Self.nonEmptyString(payload["turn_id"]) {
                 currentTurnID = turnID
             }
-            return []
+            guard !isSubagentStream else { return [] }
+            let profile = RemoteSessionExecutionProfile(
+                modelIdentifier: payload["model"] as? String,
+                reasoningEffort: payload["effort"] as? String
+            )
+            guard !profile.isEmpty else { return [] }
+            return [makeObservation(
+                timestamp: timestamp,
+                fingerprint: fingerprintWithOccurrence("execution_profile:\(Self.contentHash(trimmed))"),
+                payload: .executionProfileReported(profile)
+            )]
         case "response_item":
             return parseResponseItem(object, timestamp: timestamp)
         case "event_msg":
@@ -89,6 +100,13 @@ private extension CodexRolloutTranscriptParser {
         }
         // Subagent rollout files carry agent_role/parent_thread_id; the root
         // projection must not ingest them as root session identity.
+        let source = payload["source"] as? [String: Any]
+        isSubagentStream = Self.nonEmptyString(payload["agent_role"]) != nil
+            || Self.nonEmptyString(payload["parent_thread_id"]) != nil
+            || Self.nonEmptyString(source?["subagent"]) != nil
+            || source?["subagent"] is [String: Any]
+        // Additional source markers only filter execution metadata. Preserve
+        // the existing identity rule used by the rest of the projection.
         if Self.nonEmptyString(payload["agent_role"]) != nil {
             return []
         }

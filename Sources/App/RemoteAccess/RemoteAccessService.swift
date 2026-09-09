@@ -1698,6 +1698,7 @@ final class RemoteAccessService: ObservableObject {
                         panelID: candidate.panelID
                     ),
                     cwd: candidate.cwd,
+                    executionProfile: projector.executionProfile,
                     state: projector.state,
                     presentationStatus: candidate.presentationStatus,
                     statusDetail: candidate.statusDetail,
@@ -1948,12 +1949,20 @@ final class RemoteAccessService: ObservableObject {
             // before it enters the projection, so the sending device can tell
             // its own send apart from another device's identical text.
             let stamped = stampPendingSends(observations, for: conversationID)
+            let previousProfile = projectionStore.projectorState(for: conversationID)?.executionProfile
             let emitted = projectionStore.ingest(stamped, for: conversationID)
             refreshPromptStabilization(for: conversationID)
             // A newly ingested transcript can open the prompt; keep the
             // coordinator in step before broadcasting.
             syncCoordinatorAvailability(for: conversationID)
-            broadcastEvents(emitted, for: conversationID)
+            // Profile reports have no transcript sequence or lifecycle event.
+            // Publish them through the session list even when nothing else
+            // changed, so an in-session model switch reaches subscribers.
+            broadcastEvents(
+                emitted,
+                for: conversationID,
+                sessionListChanged: previousProfile != projectionStore.projectorState(for: conversationID)?.executionProfile
+            )
 
         case .fileReplaced:
             // Unreconcilable rewrite: discard this conversation's sequence
@@ -1977,22 +1986,27 @@ final class RemoteAccessService: ObservableObject {
 
     // MARK: - Broadcasting
 
-    private func broadcastEvents(_ events: [ConversationEvent], for conversationID: RemoteConversationID) {
-        guard events.isEmpty == false else { return }
+    private func broadcastEvents(
+        _ events: [ConversationEvent],
+        for conversationID: RemoteConversationID,
+        sessionListChanged: Bool = false
+    ) {
         guard isEnabled, let projector = projectionStore.projectorState(for: conversationID) else {
             return
         }
-        server.broadcast(.conversationEvents(ConversationEventPage(
-            conversationID: conversationID,
-            projectionRunID: projectionStore.runID,
-            projectionGeneration: projector.generation,
-            events: events,
-            latestSequence: projector.latestSequence,
-            firstAvailableSequence: projector.firstAvailableSequence,
-            historyTruncated: projector.firstAvailableSequence > 1
-        )))
+        if !events.isEmpty {
+            server.broadcast(.conversationEvents(ConversationEventPage(
+                conversationID: conversationID,
+                projectionRunID: projectionStore.runID,
+                projectionGeneration: projector.generation,
+                events: events,
+                latestSequence: projector.latestSequence,
+                firstAvailableSequence: projector.firstAvailableSequence,
+                historyTruncated: projector.firstAvailableSequence > 1
+            )))
+        }
         // Status-bearing events change the list rows too.
-        if events.contains(where: { $0.kind == .statusChanged || $0.kind == .sessionBindingChanged }) {
+        if sessionListChanged || events.contains(where: { $0.kind == .statusChanged || $0.kind == .sessionBindingChanged }) {
             broadcastSessionList()
         }
     }
