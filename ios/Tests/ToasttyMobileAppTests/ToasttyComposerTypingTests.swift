@@ -131,12 +131,83 @@ final class ToasttyComposerTypingTests: XCTestCase {
         XCTAssertEqual(textView.selectedRange, NSRange(location: model.text.utf16.count, length: 0))
     }
 
-    private func makeComposer() async throws -> (UIWindow, ComposerTypingModel, ToasttyComposerUIKitTextView) {
-        let model = ComposerTypingModel()
-        let host = UIHostingController(rootView: ComposerTypingHarness(model: model))
+    func testStaleBindingEchoDuringWrapKeepsCaretAtEnd() async throws {
+        let prefix = "Here’s another thought taking a step back here what if we used open claw for the coordinator. And the idea is "
+        let model = ComposerStalePublishModel()
+        let host = UIHostingController(rootView: ComposerStalePublishHarness(model: model, width: 281))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 320, height: 500)
+        window.frame = CGRect(x: 0, y: 0, width: 360, height: 640)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        for _ in 0..<40 where findComposer(in: host.view) == nil {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            await settleLayout()
+        }
+        let textView = try XCTUnwrap(findComposer(in: host.view))
+        XCTAssertTrue(textView.becomeFirstResponder())
+        await settleLayout()
+        textView.insertText(prefix)
+        await settleLayout()
+        model.holdPublished = true
+        textView.insertText("h")
+        XCTAssertEqual(textView.text, prefix + "h")
+        XCTAssertEqual(model.published, prefix)
+        model.poke += 1
+        await settleLayout()
+        model.holdPublished = false
+        model.published = prefix + "h"
+        model.poke += 1
+        await settleLayout()
+        XCTAssertEqual(textView.text, prefix + "h")
+        XCTAssertEqual(
+            textView.selectedRange,
+            NSRange(location: (prefix + "h").utf16.count, length: 0),
+            "A stale SwiftUI echo during wrap must keep the caret at the end"
+        )
+    }
+
+    func testTextDidChangeNotificationRerenderDuringWrap() async throws {
+        let prefix = "Here’s another thought taking a step back here what if we used open claw for the coordinator. And the idea is "
+        let (window, model, textView) = try await makeComposer(width: 281)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        textView.insertText(prefix)
+        await settleLayout()
+        let token = NotificationCenter.default.addObserver(
+            forName: UITextView.textDidChangeNotification,
+            object: textView,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                model.revision += 1
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        textView.insertText("h")
+        await settleLayout()
+        textView.insertText("a")
+        await settleLayout()
+        textView.insertText("t")
+        await settleLayout()
+        XCTAssertEqual(textView.text, prefix + "hat")
+        XCTAssertEqual(
+            textView.selectedRange,
+            NSRange(location: (prefix + "hat").utf16.count, length: 0)
+        )
+    }
+
+    private func makeComposer() async throws -> (UIWindow, ComposerTypingModel, ToasttyComposerUIKitTextView) {
+        try await makeComposer(width: 180)
+    }
+
+    private func makeComposer(width: CGFloat) async throws -> (UIWindow, ComposerTypingModel, ToasttyComposerUIKitTextView) {
+        let model = ComposerTypingModel()
+        let host = UIHostingController(rootView: ComposerTypingHarness(model: model, width: width))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: max(320, width + 40), height: 500)
         window.rootViewController = host
         window.makeKeyAndVisible()
         for _ in 0..<40 where findComposer(in: host.view) == nil {
@@ -169,12 +240,43 @@ private final class ComposerTypingModel: ObservableObject {
 
 private struct ComposerTypingHarness: View {
     @ObservedObject var model: ComposerTypingModel
+    var width: CGFloat = 180
     var body: some View {
         VStack {
             Text("Revision \(model.revision)")
             ToasttyComposerTextView(text: $model.text, isFocused: $model.focused,
                 placeholder: "Message", isEnabled: true, accessibilityLabel: "Message", accessibilityHint: "")
-                .frame(width: 180)
+                .frame(width: width)
+        }
+    }
+}
+
+@MainActor
+private final class ComposerStalePublishModel: ObservableObject {
+    @Published var published = ""
+    @Published var focused = false
+    @Published var poke = 0
+    var holdPublished = false
+}
+
+private struct ComposerStalePublishHarness: View {
+    @ObservedObject var model: ComposerStalePublishModel
+    let width: CGFloat
+    var body: some View {
+        VStack {
+            Text("poke \(model.poke)")
+            ToasttyComposerTextView(
+                text: Binding(
+                    get: { model.published },
+                    set: { newValue in
+                        if model.holdPublished { return }
+                        model.published = newValue
+                    }
+                ),
+                isFocused: $model.focused,
+                placeholder: "Message", isEnabled: true, accessibilityLabel: "Message", accessibilityHint: ""
+            )
+            .frame(width: width)
         }
     }
 }

@@ -49,14 +49,21 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         synchronize(textView)
 
         if textView.text != text, textView.markedTextRange == nil {
-            let selection = textView.selectedRange
-            textView.text = text
-            textView.selectedRange = Self.clampedSelection(
-                selection,
-                utf16Count: text.utf16.count
-            )
-            textView.textDidChange()
-            textView.requestSelectionVisibility()
+            let uiKitText = textView.text ?? ""
+            let isStaleEcho = textView.isFirstResponder
+                && text.isEmpty == false
+                && uiKitText.hasPrefix(text)
+                && uiKitText.utf16.count > text.utf16.count
+            if isStaleEcho == false {
+                let selection = textView.selectedRange
+                textView.text = text
+                textView.selectedRange = Self.clampedSelection(
+                    selection,
+                    utf16Count: text.utf16.count
+                )
+                textView.textDidChange()
+                textView.requestSelectionVisibility()
+            }
         }
 
         if isFocused, isEnabled {
@@ -388,3 +395,4 @@ final class ToasttyComposerUIKitTextView: UITextView {
         )
     }
 }
+
