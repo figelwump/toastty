@@ -4355,20 +4355,63 @@ final class SessionRuntimeStore: ObservableObject {
         guard status.kind == .working else {
             return
         }
+        guard let store,
+              let currentRecord = sessionRegistry.sessionsByID[sessionID] else {
+            return
+        }
+        let workspace = store.state.workspacesByID[currentRecord.workspaceID]
+        let wasUnread = panelIsUnread(panelID: currentRecord.panelID, in: workspace)
+        let applicationActive = isApplicationActive()
+        let panelFocused = isPanelCurrentlyFocused(currentRecord.panelID, state: store.state)
+        var cleanupReason = "previous_status_not_actionable"
+        var cleanupOutcome = "skipped"
+        defer {
+            // Capture decisions only at the start of work with an unread panel,
+            // rather than logging every progress update during the turn.
+            if previousRecord?.status?.kind != .working, wasUnread {
+                ToasttyLog.info(
+                    "Managed session unread cleanup decision",
+                    category: .terminal,
+                    metadata: [
+                        "session_id": sessionID,
+                        "panel_id": currentRecord.panelID.uuidString,
+                        "workspace_id": currentRecord.workspaceID.uuidString,
+                        "session_tab_id": workspace?.tabID(containingPanelID: currentRecord.panelID)?.uuidString ?? "none",
+                        "selected_tab_id": workspace?.selectedTabID?.uuidString ?? "none",
+                        "previous_status_kind": previousRecord?.status?.kind.rawValue ?? "none",
+                        "next_status_kind": status.kind.rawValue,
+                        "panel_unread_before": boolMetadata(wasUnread),
+                        "selected_tab_contains_unread_panel": boolMetadata(workspace?.unreadPanelIDs.contains(currentRecord.panelID) == true),
+                        "panel_unread_after": boolMetadata(panelIsUnread(
+                            panelID: currentRecord.panelID,
+                            in: store.state.workspacesByID[currentRecord.workspaceID]
+                        )),
+                        "application_active": boolMetadata(applicationActive),
+                        "panel_focused": boolMetadata(panelFocused),
+                        "outcome": cleanupOutcome,
+                        "reason": cleanupReason,
+                    ]
+                )
+            }
+        }
         guard let previousKind = previousRecord?.status?.kind,
               isActionableStatusKind(previousKind) else {
             return
         }
-        guard let store,
-              let currentRecord = sessionRegistry.sessionsByID[sessionID],
-              currentRecord.isActive,
-              currentRecord.usesSessionStatusNotifications else {
+        guard currentRecord.isActive else {
+            cleanupReason = "session_inactive"
             return
         }
-        guard isApplicationActive() || !isPanelCurrentlyFocused(currentRecord.panelID, state: store.state) else {
+        guard currentRecord.usesSessionStatusNotifications else {
+            cleanupReason = "status_notifications_disabled"
+            return
+        }
+        guard applicationActive || !panelFocused else {
+            cleanupReason = "focused_panel_in_inactive_app"
             return
         }
         guard store.state.workspacesByID[currentRecord.workspaceID]?.unreadPanelIDs.contains(currentRecord.panelID) == true else {
+            cleanupReason = "panel_not_unread_in_selected_tab"
             return
         }
 
@@ -4381,6 +4424,11 @@ final class SessionRuntimeStore: ObservableObject {
                 panelID: currentRecord.panelID
             )
         )
+        cleanupOutcome = panelIsUnread(
+            panelID: currentRecord.panelID,
+            in: store.state.workspacesByID[currentRecord.workspaceID]
+        ) ? "retained" : "cleared"
+        cleanupReason = "mark_panel_notifications_read"
     }
 
     private func isPanelCurrentlyFocused(_ panelID: UUID, state: AppState) -> Bool {
