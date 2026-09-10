@@ -42,12 +42,13 @@ fi
    - If no clear setup instruction exists, assume no bootstrap is required.
    - If setup commands are needed, run them from the new worktree root after creating the worktree and before launching the next session. Stop on the first setup failure and report it.
    - Do not add trust-changing commands such as `direnv allow` unless the user requested or approved them for that worktree.
-5. Create the new worktree with the bundled helper, passing the selected branch prefix explicitly:
+5. Select the base following **Base selection** below, then create the new worktree with the bundled helper. Pass both the selected branch prefix and the resolved base commit explicitly:
 
 ```bash
 "$WORKTREE_CREATE_SKILL_DIR/scripts/create-worktree.sh" \
   --slug browser-link-routing \
   --branch-prefix feat \
+  --base-ref "$WORKTREE_BASE_COMMIT" \
   --json
 ```
 
@@ -113,6 +114,18 @@ fi
     - `parent_scope_status` is `set_current` when the helper scoped an unscoped parent, `already_scoped` when it preserved an existing parent scope, `disabled` when `--no-scope-parent` was used, and `startup_command` for explicit startup-command launches.
     - `session_id` is absent and `scope_set` is `false` only for `--startup-command` or fallback `terminal.send-text` launches; use those paths only for explicit validation or fully custom shell setup.
 12. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, parent scope status, child scope status, handoff file path, Scratchpad export path/status, and whether setup was skipped or which explicit setup commands ran.
+
+## Base selection
+
+Choose the base before creating the task branch or worktree. The parent checkout is the worktree this workflow was invoked from; the landing branch may be checked out elsewhere. Uncommitted parent changes are not included in a Git base, regardless of how it is selected. Do not automatically stash, commit, or transfer those changes.
+
+- Honor an explicit base or an agreed continuation of an existing feature branch. Do not replace that choice with the landing branch just because it is newer.
+- Otherwise, identify the intended landing branch and its remote from the user's instructions, repository guidance, and Git tracking/default-branch metadata. Do not hardcode `main` or `origin`, or assume the current feature branch's upstream is the landing branch. Ask if the intended branch or remote remains ambiguous.
+- Fetch the identified remote branch before selecting its tip. Use the commit obtained by that successful fetch, for example by reading `FETCH_HEAD` immediately after fetching that single branch. Do not rely on a remote-tracking ref that the fetch may not update, or require its SHA to change to prove success. Do not use a fetch refspec that writes to a local branch. Fetching may update local remote-tracking refs, but base selection must leave the parent checkout's branch, files, and local landing branch unchanged.
+- Compare the fetched tip with the local landing branch using commit ancestry. If the local branch is absent, equal to, or behind the fetched branch, select the fetched tip without pulling into or updating the local landing branch.
+- If the local landing branch has unpublished commits or has diverged, explain the relationship and relevant commits. Use the agreed task intent to determine whether those commits belong in the new task; if intent does not settle that choice, ask before creating the worktree. Do not automatically merge, rebase, reset, or discard commits to reconcile the branches.
+- For a local-only repository with no remote base, select the identified local base and record that remote freshness does not apply. If fetching fails, report that freshness could not be verified. Use a cached or local fallback only when the user has explicitly allowed that fallback in the task or accepts it now. If the remote reports that the branch does not exist, resolve the intended branch before continuing; offline permission does not settle a missing or renamed branch.
+- Verify that the selected ref resolves to a locally available commit, then resolve its full SHA and assign it to `WORKTREE_BASE_COMMIT` for the helper invocation. Record in `WORKTREE_HANDOFF.md` the source ref, intended landing branch and remote when applicable, selected SHA, local/remote relationship, selection reason, and whether fetching succeeded, failed, or was skipped. An explicit base or continuation that skips fetching must not be described as the latest remote state.
 
 ## Child workflow
 
@@ -191,6 +204,7 @@ Include:
 - the task goal
 - relevant user constraints or preferences from the current thread
 - current status
+- selected base commit, source ref, landing branch/remote, selection reason, and fetch status from **Base selection**
 - linked Scratchpad exported HTML path and metadata when the current session has one
 - any existing plan/design file paths
 - any settled implementation decisions from the current thread
@@ -246,6 +260,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 - For a structured managed launch, confirm the new workspace has the actual branch and `Working` status chips before the child starts, and that the handoff includes the later status/PR update requirements.
 - Confirm the handoff document opened in the right panel of the new workspace.
 - If the parent session had a linked Scratchpad, confirm `WORKTREE_HANDOFF.md` includes the exported Scratchpad path and metadata. If lookup found no linked Scratchpad, confirm the workflow did not scan or guess from other Scratchpad panels.
+- Confirm the new branch started at `WORKTREE_BASE_COMMIT`, the handoff records its source and fetch status, and base selection left the parent checkout unchanged.
 - Confirm setup was handled according to the current repo's instructions: either explicit setup commands ran successfully, or no clear setup requirement was found and setup was skipped.
 - For validation or debugging, you can override the startup command:
 

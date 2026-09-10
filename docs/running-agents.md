@@ -387,6 +387,12 @@ permitted to implement, review, and verify the change. The child uses subagents
 and chooses available models and reasoning levels as appropriate to each task.
 Workspace chips show its branch, task status, and PR.
 
+Before branching, the launcher honors an explicit base or continuation; otherwise
+it fetches the intended landing branch and compares it with the local branch. It
+resolves local-only or divergent commits against task intent, pins the selected
+commit, and records the choice and fetch status in the handoff. It leaves the
+parent checkout unchanged and uses a stale fallback only with explicit permission.
+
 For PR-based implementation tasks, the child prepares one draft PR per worktree.
 The PR carries intent, decisions, review/check evidence, human testing steps,
 dependencies, deployment implications, and an explicit coordinator handoff with

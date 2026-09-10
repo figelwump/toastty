@@ -49,6 +49,54 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "feat/pop-1234")
     }
 
+    func testCreateWorktreeScriptUsesExplicitCommitWithoutChangingParentCheckout() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-explicit-base")
+        defer { try? fileManager.removeItem(at: rootURL) }
+        let repoURL = try makeGitRepository(named: "repo", in: rootURL)
+        let baseResult = try runExecutable("/usr/bin/git", arguments: ["rev-parse", "HEAD"], currentDirectoryURL: repoURL)
+        try assertSuccessful(baseResult)
+        let baseCommit = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try assertSuccessful(runExecutable(
+            "/usr/bin/git", arguments: ["checkout", "-b", "feat/parent"], currentDirectoryURL: repoURL
+        ))
+        try assertSuccessful(runExecutable(
+            "/usr/bin/git",
+            arguments: ["-c", "user.name=Toastty Tests", "-c", "user.email=toastty-tests@example.invalid",
+                        "commit", "--allow-empty", "-m", "parent-only work"],
+            currentDirectoryURL: repoURL
+        ))
+        let parentHead = try runExecutable("/usr/bin/git", arguments: ["rev-parse", "HEAD"], currentDirectoryURL: repoURL)
+        try assertSuccessful(parentHead)
+        XCTAssertNotEqual(parentHead.stdout, baseResult.stdout)
+        let parentFileURL = repoURL.appendingPathComponent("README.md")
+        try Data("uncommitted parent work\n".utf8).write(to: parentFileURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "create-worktree.sh"), environment: [:],
+            arguments: ["--slug", "explicit-base", "--branch-prefix", "feat",
+                        "--base-ref", baseCommit, "--parent-dir", rootURL.path, "--json"],
+            currentDirectoryURL: repoURL
+        )
+        try assertSuccessful(result)
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["base_ref"] as? String, baseCommit)
+        let childURL = URL(fileURLWithPath: try XCTUnwrap(payload["worktree_path"] as? String), isDirectory: true)
+        let childHead = try runExecutable("/usr/bin/git", arguments: ["rev-parse", "HEAD"], currentDirectoryURL: childURL)
+        try assertSuccessful(childHead)
+        XCTAssertEqual(childHead.stdout, baseResult.stdout)
+        XCTAssertEqual(try String(contentsOf: childURL.appendingPathComponent("README.md"), encoding: .utf8), "# repo\n")
+
+        let finalParentHead = try runExecutable("/usr/bin/git", arguments: ["rev-parse", "HEAD"], currentDirectoryURL: repoURL)
+        try assertSuccessful(finalParentHead)
+        XCTAssertEqual(finalParentHead.stdout, parentHead.stdout)
+        let parentBranch = try runExecutable("/usr/bin/git", arguments: ["branch", "--show-current"], currentDirectoryURL: repoURL)
+        try assertSuccessful(parentBranch)
+        XCTAssertEqual(parentBranch.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "feat/parent")
+        XCTAssertEqual(try String(contentsOf: parentFileURL, encoding: .utf8), "uncommitted parent work\n")
+    }
+
     func testCreateWorktreeScriptRejectsMissingSlug() throws {
         let fileManager = FileManager.default
         let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-missing-slug")

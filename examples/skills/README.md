@@ -19,6 +19,13 @@ opt-in examples, not shipped skills or automatically loaded repository skills.
   Toastty workspaces in the current repository. Review-only requests stop at
   the report.
 
+Before creating a worktree, the launcher honors an explicit base or continuation.
+Otherwise it fetches the intended landing branch, resolves any local-only or
+divergent commits against the task intent, and selects the base. It passes a
+pinned commit to the helper and records that choice in the handoff; it
+does not pull into or rewrite the parent checkout. Fetch failures require an
+explicitly accepted fallback.
+
 ## PR handoff and project coordination
 
 For implementation work in repositories that use PRs, the default is one draft
