@@ -193,6 +193,36 @@ struct CodexApprovalReconciliationTests {
     }
 
     @Test
+    func autoReviewedTurnIsIgnoredWhileQueuedInputHasNoRootTurnContext() {
+        var reconciler = CodexApprovalReconciler(authority: .hooks)
+        let automaticRoot = root(current: context(
+            policy: .string("on-request"),
+            reviewer: .string("auto_review")
+        ))
+        #expect(reconciler.reduce(request(), root: automaticRoot).decision == .suppress(reason: .autoReviewApproval))
+
+        let pendingRoot = root(turn: nil, pendingFingerprint: "queued-input", current: nil)
+        let repeated = reconciler.reduce(request(), root: pendingRoot)
+        #expect(repeated.decision == .ignore(reason: .autoReviewedStaleTurn))
+        #expect(repeated.didMutateHistory == false)
+        #expect(repeated.snapshot.autoReviewedTurnIDs == ["turn"])
+
+        let withoutPendingInput = reconciler.reduce(request(), root: root(turn: nil, current: nil))
+        #expect(withoutPendingInput.decision == .ignore(reason: .autoReviewedStaleTurn))
+        #expect(withoutPendingInput.didMutateHistory == false)
+
+        #expect(reconciler.reduce(request(turn: "new-turn"), root: pendingRoot).decision == .deferForContext(reason: .missingRootTurn))
+        #expect(reconciler.reduce(request(thread: "other-thread"), root: pendingRoot).decision == .ignore(reason: .threadMismatch))
+
+        // Once the same turn has explicit human context, history must not hide it.
+        let humanRoot = root(current: context(
+            policy: .string("on-request"),
+            reviewer: .string("user")
+        ))
+        #expect(reconciler.reduce(request(), root: humanRoot).decision == .accept(reason: .humanApproval))
+    }
+
+    @Test
     func everySuppressionBranchRecordsOnlySourceObservedNonemptyTurn() {
         let cases: [SuppressionCase] = [
             SuppressionCase(

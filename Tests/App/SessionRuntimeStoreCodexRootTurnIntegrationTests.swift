@@ -444,6 +444,40 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexQueuedInputDoesNotDeferApprovalForAlreadyAutoReviewedTurn() {
+        let sessionID = "sess-codex-queued-input-auto-review"
+        let startedAt = Date(timeIntervalSince1970: 1_700_002_700)
+        let store = SessionRuntimeStore()
+        startCodexReconciliationSession(store, sessionID: sessionID, source: .hooks, at: startedAt)
+        recordAutoReviewedCodexTurn(
+            store,
+            sessionID: sessionID,
+            threadID: "thread-root",
+            turnID: "turn-running",
+            at: startedAt
+        )
+        let workingStatus = store.sessionRegistry.activeSession(sessionID: sessionID)?.status
+        #expect(workingStatus?.kind == .working)
+
+        store.recordCodexRootTurnInput(
+            sessionID: sessionID,
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Queued follow-up"),
+            threadID: "thread-root"
+        )
+        #expect(store.codexRootTurnSnapshotForTesting(sessionID: sessionID)?.rootTurnID == nil)
+        #expect(store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: sessionID) == ["turn-running"])
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: codexReconciliationPermissionEvent(threadID: "thread-root", turnID: "turn-running"),
+            at: startedAt.addingTimeInterval(3)
+        ) == false)
+        // No pending approval means no timeout can later surface a false badge.
+        #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID) == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status == workingStatus)
+    }
+
+    @Test
     func codexDuplicateRootInputDoesNotResolvePendingApprovalTwice() {
         let sessionID = "sess-codex-duplicate-root-resolution"
         let startedAt = Date(timeIntervalSince1970: 1_700_002_600)

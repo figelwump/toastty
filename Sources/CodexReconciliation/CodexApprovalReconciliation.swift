@@ -170,15 +170,17 @@ public struct CodexApprovalReconciler: Equatable, Sendable {
         guard let requestTurnID = request.turnID else {
             return .suppress(reason: .missingRequestTurn)
         }
+        // Queued input can clear root turn context before the running turn ends.
+        // Honor its recorded suppression before deferring for the next context.
+        if requestTurnID != root.rootTurnID,
+           autoReviewedTurnIDs.contains(requestTurnID) {
+            return .ignore(reason: .autoReviewedStaleTurn)
+        }
         guard let rootTurnID = root.rootTurnID else {
             guard root.pendingRootInputFingerprint != nil else {
                 return .suppress(reason: .missingRootTurn)
             }
             return .deferForContext(reason: .missingRootTurn)
-        }
-        if requestTurnID != rootTurnID,
-           autoReviewedTurnIDs.contains(requestTurnID) {
-            return .ignore(reason: .autoReviewedStaleTurn)
         }
         if requestTurnID != rootTurnID,
            hasApplicableReviewer(root: root) {
