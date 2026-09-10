@@ -940,7 +940,9 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
 
     @MainActor
     private func runDeferredMainQueueWork() {
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        let drained = expectation(description: "Previously enqueued main queue work ran")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 2)
     }
 }
 

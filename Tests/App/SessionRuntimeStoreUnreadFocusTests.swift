@@ -5,6 +5,8 @@ import Testing
 @testable import ToasttyApp
 
 extension SessionRuntimeStoreTests {
+    // Tests that enable status notifications inject a no-op sender: these tests
+    // cover unread/focus state, and must not open macOS notification prompts.
     @Test
     func updateStatusMarksUnfocusedPanelUnreadWhenSessionNeedsAttention() throws {
         let appState = makeTwoPanelAppState()
@@ -103,7 +105,9 @@ extension SessionRuntimeStoreTests {
     func handleCommandFinishedMarksBackgroundProcessWatchReadyAndUnread() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
@@ -142,7 +146,9 @@ extension SessionRuntimeStoreTests {
     func handleCommandFinishedMarksBackgroundProcessWatchErrorAndUnread() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
@@ -214,7 +220,9 @@ extension SessionRuntimeStoreTests {
     func focusPanelRemovesReadyProcessWatchAfterRead() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
@@ -282,7 +290,10 @@ extension SessionRuntimeStoreTests {
     func updateStatusCollapsesReadyToIdleWhenFocusedApprovalIsResolved() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore(isApplicationActive: { true })
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in },
+            isApplicationActive: { true }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
@@ -366,7 +377,9 @@ extension SessionRuntimeStoreTests {
     func focusPanelRemovesErroredProcessWatchAfterRead() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
@@ -400,7 +413,9 @@ extension SessionRuntimeStoreTests {
     func stopSessionForPanelIfOlderThanKeepsCompletedProcessWatchAliveUntilRead() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
@@ -440,7 +455,10 @@ extension SessionRuntimeStoreTests {
     func updateStatusClearsUnreadWhenManagedSessionReturnsToWorking() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore(isApplicationActive: { true })
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in },
+            isApplicationActive: { true }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
@@ -483,7 +501,10 @@ extension SessionRuntimeStoreTests {
     func updateStatusKeepsUnreadWhenFocusedManagedSessionReturnsToWorkingInInactiveApp() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore(isApplicationActive: { false })
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in },
+            isApplicationActive: { false }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let focusedPanelID = try #require(selection.workspace.focusedPanelID)
@@ -524,7 +545,10 @@ extension SessionRuntimeStoreTests {
     func updateStatusClearsUnreadWhenBackgroundManagedSessionReturnsToWorkingInInactiveApp() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore(isApplicationActive: { false })
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in },
+            isApplicationActive: { false }
+        )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
