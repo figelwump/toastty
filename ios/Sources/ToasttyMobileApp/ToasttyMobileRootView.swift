@@ -27,6 +27,7 @@ struct ToasttyMobileRootView: View {
         _fixtureSendItems = State(initialValue: Self.initialFixtureSendItems(
             for: configuration.fixtureScenario
         ))
+#if DEBUG
         if configuration.fixtureScenario == .interactionAnswer {
             let key = ToasttyInteractionAnswerKey(
                 interactionID: ToasttyConversationFixture.questionInteractionID,
@@ -40,6 +41,9 @@ struct ToasttyMobileRootView: View {
         } else {
             _fixtureInteractionAnswerState = State(initialValue: nil)
         }
+#else
+        _fixtureInteractionAnswerState = State(initialValue: nil)
+#endif
         _fixtureInteractionAcceptedAnswers = State(initialValue: nil)
         forcesPairingPrivacyShield = configuration.fixtureScenario == .pairingPrivacy
         fixtureScenario = configuration.fixtureScenario

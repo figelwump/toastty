@@ -1276,6 +1276,73 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
+    func testExecutionProfileRemainsAboveComposerWithKeyboardAndDisabledNotice() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+        let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
+        let input = composerInput(in: app)
+        XCTAssertTrue(profile.waitForExistence(timeout: 5))
+        XCTAssertEqual(profile.label, "Model: gpt-6. Reasoning: xhigh")
+        XCTAssertLessThanOrEqual(profile.frame.maxY, input.frame.minY)
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.typeText("Use build 413")
+        XCTAssertTrue(profile.isHittable)
+        XCTAssertLessThanOrEqual(profile.frame.maxY, input.frame.minY)
+        attachScreenshot(named: "execution-profile-keyboard", of: app)
+        app.buttons["toastty-mobile-composer-send"].tap()
+        let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(profile.exists)
+        XCTAssertLessThanOrEqual(profile.frame.maxY, input.frame.minY)
+        XCTAssertLessThanOrEqual(input.frame.maxY, status.frame.minY)
+        attachScreenshot(named: "execution-profile-disabled-notice", of: app)
+    }
+
+    func testLongExecutionProfileWrapsAtAccessibilityXXXLAboveDisabledComposer() {
+        let app = launchFixtureApp(launchArguments: [
+            "-UIPreferredContentSizeCategoryName",
+            UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
+        ])
+        openFixtureConversation(in: app)
+        let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
+        let input = composerInput(in: app)
+        let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
+        XCTAssertTrue(profile.waitForExistence(timeout: 5))
+        XCTAssertEqual(profile.label,
+                       "Model: claude-opus-long-provider-model-identifier-for-accessibility-layout. Reasoning: high")
+        XCTAssertGreaterThan(profile.frame.height, 40, "The long identifier should wrap at accessibility size")
+        XCTAssertGreaterThanOrEqual(profile.frame.minX, 0)
+        XCTAssertLessThanOrEqual(profile.frame.maxX, app.frame.maxX)
+        XCTAssertLessThanOrEqual(profile.frame.maxY, input.frame.minY)
+        XCTAssertTrue(status.exists)
+        XCTAssertLessThanOrEqual(input.frame.maxY, status.frame.minY)
+        attachScreenshot(named: "execution-profile-accessibility-xxxl", of: app)
+    }
+
+    func testUnreportedExecutionProfileHasNoComposerRow() {
+        let app = launchFixtureApp()
+        openWorkspace(toasttyWorkspaceID, in: app)
+        let session = app.buttons["toastty-mobile-workspace-session-\(workingConversationID)"]
+        XCTAssertTrue(scrollWorkspaceTo(session, in: app))
+        session.tap()
+        XCTAssertTrue(composerInput(in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["toastty-mobile-session-execution-profile"].exists)
+    }
+
+    func testDisconnectedExecutionProfileIsLastReported() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting"]
+        )
+        openFixtureConversation(in: app)
+        let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
+        XCTAssertTrue(profile.waitForExistence(timeout: 5))
+        XCTAssertTrue(profile.label.hasPrefix("Last reported. Model: "))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
+    }
+
     private func topOfKeyboardObstruction(_ keyboard: XCUIElement) -> CGFloat {
         var top = keyboard.frame.minY
         for element in keyboard.descendants(matching: .any).allElementsBoundByIndex {

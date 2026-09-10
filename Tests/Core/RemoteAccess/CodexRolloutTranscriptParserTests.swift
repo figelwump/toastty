@@ -13,6 +13,7 @@ struct CodexRolloutTranscriptParserTests {
             "providerSession",
             "user:Add a retry to the sync job",
             "turnStarted:turn-001",
+            "profile:gpt-5.5:high",
             "assistant(commentary):Looking at the sync job first.",
             "toolStarted:exec_command:call_0001",
             "toolFinished:call_0001:succeeded",
@@ -205,8 +206,66 @@ struct CodexRolloutTranscriptParserTests {
             return "turnEnded:\(turnID ?? "nil"):\(reason.rawValue)"
         case .providerSessionObserved:
             return "providerSession"
+        case .executionProfileReported(let profile):
+            return "profile:\(profile.modelIdentifier ?? "nil"):\(profile.reasoningEffort ?? "nil")"
         case .contextCompacted:
             return "contextCompacted"
+        }
+    }
+}
+
+struct CodexExecutionProfileParserTests {
+    @Test func nullOrFalseSubagentMarkersDoNotHideRootIdentityOrMetadata() {
+        for marker in ["null", "false"] {
+            let contents = "{\"timestamp\":\"2026-08-07T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"root\",\"source\":{\"subagent\":\(marker)}}}\n" +
+                #"{"timestamp":"2026-08-07T10:00:01Z","type":"turn_context","payload":{"model":"root-model"}}"#
+            let observations = CodexRolloutTranscriptParser.parseContents(contents).observations
+            #expect(observations.contains { $0.payload == .providerSessionObserved(providerSessionID: "root") })
+            #expect(observations.contains { $0.payload == .executionProfileReported(.init(modelIdentifier: "root-model")) })
+        }
+    }
+
+    @Test func profileFilteringDoesNotBroadenExistingSessionIdentityExclusion() {
+        let contents = #"{"timestamp":"2026-08-07T10:00:00Z","type":"session_meta","payload":{"id":"session","parent_thread_id":"parent","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}}}"#
+        let observations = CodexRolloutTranscriptParser.parseContents(contents).observations
+        #expect(observations.contains { $0.payload == .providerSessionObserved(providerSessionID: "session") })
+    }
+
+    @Test func structuredTurnContextsPreserveModelSwitchesAndReplayIdentity() {
+        let contents = [
+            #"{"timestamp":"2026-08-07T10:00:00Z","type":"session_meta","payload":{"id":"root","model":"not-authoritative"}}"#,
+            #"{"timestamp":"2026-08-07T10:00:01Z","type":"turn_context","payload":{"model":"model-a","effort":"high"}}"#,
+            #"{"timestamp":"2026-08-07T10:00:02Z","type":"turn_context","payload":{"model":"model-b"}}"#,
+            #"{"timestamp":"2026-08-07T10:00:03Z","type":"turn_context","payload":{"model":"model-a","effort":"high"}}"#,
+            #"{"timestamp":"2026-08-07T10:00:04Z","type":"event_msg","payload":{"type":"agent_message","message":"model=model-text effort=low"}}"#,
+            #"{"timestamp":"2026-08-07T10:00:05Z","type":"turn_context","payload":{"model":" ","effort":" "}}"#,
+        ].joined(separator: "\n")
+        let observations = CodexRolloutTranscriptParser.parseContents(contents).observations
+        let reports = observations.filter { if case .executionProfileReported = $0.payload { return true }; return false }
+        #expect(reports.compactMap { observation -> RemoteSessionExecutionProfile? in
+            guard case .executionProfileReported(let profile) = observation.payload else { return nil }
+            return profile
+        } == [
+            .init(modelIdentifier: "model-a", reasoningEffort: "high"),
+            .init(modelIdentifier: "model-b"),
+            .init(modelIdentifier: "model-a", reasoningEffort: "high"),
+        ])
+        #expect(Set(reports.map(\.fingerprint)).count == 3)
+        #expect(CodexRolloutTranscriptParser.parseContents(contents).observations == observations)
+        var projector = ConversationProjectorTests.makeProjector()
+        for observation in observations { projector.ingest(observation) }
+        #expect(projector.executionProfile == .init(modelIdentifier: "model-a", reasoningEffort: "high"))
+        for observation in observations { projector.ingest(observation) }
+        #expect(projector.executionProfile == .init(modelIdentifier: "model-a", reasoningEffort: "high"))
+    }
+
+    @Test func childSessionMetadataCannotReportTheRootProfile() {
+        for marker in [#""agent_role":"worker""#, #""parent_thread_id":"parent""#, #""source":{"subagent":{"thread_spawn":{}}}"#] {
+            let contents = "{\"timestamp\":\"2026-08-07T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child\",\(marker)}}\n" +
+                #"{"timestamp":"2026-08-07T10:00:01Z","type":"turn_context","payload":{"model":"child-model","effort":"low"}}"#
+            let result = CodexRolloutTranscriptParser.parseContents(contents)
+            #expect(result.malformedLineCount == 0)
+            #expect(!result.observations.contains { if case .executionProfileReported = $0.payload { return true }; return false })
         }
     }
 }

@@ -57,6 +57,22 @@ through Toastty's injected instrumentation; that history remains available
 only while the current Toastty app process retains it and is rebuilt from the
 provider when a managed launch or resume exposes a snapshot.
 
+Toastty Mobile shows the session's reported model and reasoning above the
+message field. Codex reports these in structured turn metadata; Claude Code
+reports its model in assistant message metadata, without a reasoning value.
+Other providers currently omit these fields. Unreported values stay hidden;
+Toastty does not infer them from message text or configured defaults. The line
+shows the latest report for the conversation, not the model used for every
+earlier message, and is labelled **Last reported** while connection updates
+are paused. Long values wrap up to two lines, with the complete values
+available to VoiceOver. The line is read-only and does not change the session's
+settings.
+
+The host sends an optional `executionProfile` object in conversation summaries,
+with optional `modelIdentifier` and `reasoningEffort` strings. Either the host
+or iOS app can be updated first: older hosts omit the object, and older clients
+ignore it. Both updates are needed to display reported values on the phone.
+
 **Ready** is an unread-completion presentation, shared with Toastty on the Mac.
 When Toastty Mobile has rendered a conversation through the transcript's live
 edge, it acknowledges that boundary to the Mac. The Mac clears the panel's

@@ -408,6 +408,10 @@ if hasGhosttyXCFramework {
         "Carbon",
     ])
     appTestTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_HAS_GHOSTTY_KIT"
+} else if ghosttyIntegrationDisabled {
+    // Record the explicit fallback request in the generated test target so
+    // direct xcodebuild runs satisfy the same coverage contract as check.sh.
+    appTestTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_EXPLICIT_GHOSTTY_TEST_FALLBACK"
 }
 
 let appTargetSettings: Settings = .settings(base: appTargetSettingsBase)

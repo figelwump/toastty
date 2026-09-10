@@ -101,6 +101,9 @@ public enum ProviderObservationPayload: Equatable, Sendable {
     /// Provider session identity observed (`session_meta` /
     /// `session_configured`). Runtime binding remains a host decision.
     case providerSessionObserved(providerSessionID: String)
+    /// A complete report of the root session's current execution metadata.
+    /// Missing fields replace earlier values; this never opens a prompt.
+    case executionProfileReported(RemoteSessionExecutionProfile)
     /// The provider compacted its context. Informational: replayed records are
     /// handled by fingerprint dedup, not by this marker.
     case contextCompacted
@@ -158,6 +161,7 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
         case turnStarted
         case turnEnded
         case providerSessionObserved
+        case executionProfileReported
         case contextCompacted
     }
 
@@ -211,6 +215,10 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
             )
         case .contextCompacted:
             payload = .contextCompacted
+        case .executionProfileReported:
+            payload = .executionProfileReported(
+                try container.decode(RemoteSessionExecutionProfile.self, forKey: .payload)
+            )
         }
     }
 
@@ -244,6 +252,9 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
         case .contextCompacted:
             try container.encode(PayloadKind.contextCompacted, forKey: .payloadKind)
             try container.encodeNil(forKey: .payload)
+        case .executionProfileReported(let profile):
+            try container.encode(PayloadKind.executionProfileReported, forKey: .payloadKind)
+            try container.encode(profile, forKey: .payload)
         }
     }
 }

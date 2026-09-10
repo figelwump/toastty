@@ -363,6 +363,7 @@ extension RemoteConversationProjectionStore: RemoteSessionFacade {
             title: descriptor.title,
             placement: descriptor.placement,
             cwd: descriptor.cwd,
+            executionProfile: projector.executionProfile,
             state: projector.state,
             inputAvailability: projector.inputAvailability,
             projectionGeneration: projector.generation,

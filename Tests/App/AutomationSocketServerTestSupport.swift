@@ -48,6 +48,7 @@ extension AutomationSocketServerTestSupport {
     @MainActor
     func makeServer(
         socketPath: String,
+        sessionRuntimeStore: SessionRuntimeStore? = nil,
         automationConfig: AutomationConfig? = nil,
         terminalCommandRouter: (any TerminalCommandRouting)? = nil,
         agentCatalogProvider: (any AgentCatalogProviding)? = nil,
@@ -79,7 +80,7 @@ extension AutomationSocketServerTestSupport {
         let store = AppStore(persistTerminalFontPreference: false)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
-        let sessionRuntimeStore = SessionRuntimeStore()
+        let sessionRuntimeStore = sessionRuntimeStore ?? SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
         let resolvedAgentCatalogProvider = agentCatalogProvider ?? TestAgentCatalogProvider()

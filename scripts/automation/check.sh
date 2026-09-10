@@ -106,12 +106,6 @@ run_app_tests() {
     -destination "platform=macOS,arch=${ARCH}"
   )
 
-  if ghostty_fallback_explicitly_requested; then
-    xcodebuild_arguments+=(
-      'OTHER_SWIFT_FLAGS=$(inherited) -DTOASTTY_EXPLICIT_GHOSTTY_TEST_FALLBACK'
-    )
-  fi
-
   xcodebuild "${xcodebuild_arguments[@]}"
 }
 

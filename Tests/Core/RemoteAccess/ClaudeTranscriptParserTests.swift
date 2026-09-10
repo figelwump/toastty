@@ -12,11 +12,14 @@ struct ClaudeTranscriptParserTests {
         #expect(described == [
             "providerSession",
             "user:Add a retry to the sync job",
+            "profile:claude-opus-5:nil",
             "assistant(commentary):Looking at the sync job first.",
             "toolStarted:Bash:toolu_0001",
             "toolFinished:toolu_0001:succeeded",
+            "profile:claude-opus-5:nil",
             "assistant(final):Added a retry with backoff to sync.py.",
             "user:Also log each retry.",
+            "profile:claude-opus-5:nil",
             "assistant(final):Retries now log through the sync logger.",
         ])
     }
@@ -157,6 +160,8 @@ struct ClaudeTranscriptParserTests {
             return "turnEnded:\(turnID ?? "nil"):\(reason.rawValue)"
         case .providerSessionObserved:
             return "providerSession"
+        case .executionProfileReported(let profile):
+            return "profile:\(profile.modelIdentifier ?? "nil"):\(profile.reasoningEffort ?? "nil")"
         case .contextCompacted:
             return "contextCompacted"
         }
@@ -276,5 +281,48 @@ struct ClaudeProjectionFidelityTests {
         #expect(followingTranscriptEvents.allSatisfy { $0.turnID == "prompt-task-only" })
         #expect(projector.state == stateBeforeNotice)
         #expect(projector.inputAvailability == availabilityBeforeNotice)
+    }
+}
+
+struct ClaudeExecutionProfileParserTests {
+    @Test func syntheticErrorRecordsPreserveReportedModelAndRemainReadable() {
+        // Provider error envelope: https://github.com/anthropics/claude-code/issues/22843.
+        let contents = [
+            #"{"type":"assistant","uuid":"real","timestamp":"2026-08-07T10:00:01Z","message":{"model":"model-a"}}"#,
+            #"{"type":"assistant","uuid":"synthetic","timestamp":"2026-08-07T10:00:02Z","message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error"}]}}"#,
+            #"{"type":"assistant","uuid":"error","timestamp":"2026-08-07T10:00:03Z","isApiErrorMessage":true,"message":{"model":"unconfirmed-model","content":[{"type":"text","text":"Try again"}]}}"#,
+        ].joined(separator: "\n")
+        let observations = ClaudeTranscriptParser.parseContents(contents).observations
+        let profiles = observations.compactMap { observation -> RemoteSessionExecutionProfile? in
+            guard case .executionProfileReported(let profile) = observation.payload else { return nil }
+            return profile
+        }
+        #expect(profiles == [.init(modelIdentifier: "model-a")])
+        let text = observations.compactMap { observation -> String? in
+            guard case .transcript(.assistantMessage(let message)) = observation.payload else { return nil }
+            return message.text
+        }
+        #expect(text == ["API Error", "Try again"])
+    }
+
+    @Test func assistantModelWithoutContentReportsMetadataAndIgnoresSidechainsAndText() {
+        let contents = [
+            #"{"type":"assistant","uuid":"a","timestamp":"2026-08-07T10:00:01Z","message":{"model":"model-a"}}"#,
+            #"{"type":"assistant","uuid":"b","timestamp":"2026-08-07T10:00:02Z","message":{"model":"model-b","content":[]}}"#,
+            #"{"type":"assistant","uuid":"child","isSidechain":true,"timestamp":"2026-08-07T10:00:03Z","message":{"model":"child-model"}}"#,
+            #"{"type":"assistant","uuid":"a-again","timestamp":"2026-08-07T10:00:04Z","message":{"model":"model-a"}}"#,
+            #"{"type":"assistant","uuid":"text","timestamp":"2026-08-07T10:00:05Z","message":{"content":[{"type":"text","text":"model=pretend reasoning=high"}]}}"#,
+        ].joined(separator: "\n")
+        let observations = ClaudeTranscriptParser.parseContents(contents).observations
+        let profiles = observations.compactMap { observation -> RemoteSessionExecutionProfile? in
+            guard case .executionProfileReported(let profile) = observation.payload else { return nil }
+            return profile
+        }
+        #expect(profiles == [.init(modelIdentifier: "model-a"), .init(modelIdentifier: "model-b"), .init(modelIdentifier: "model-a")])
+        #expect(ClaudeTranscriptParser.parseContents(contents).observations == observations)
+        var projector = ConversationProjectorTests.makeClaudeProjector()
+        for observation in observations { projector.ingest(observation) }
+        #expect(projector.executionProfile == .init(modelIdentifier: "model-a"))
+        #expect(!projector.inputAvailability.allowsRemoteSend)
     }
 }

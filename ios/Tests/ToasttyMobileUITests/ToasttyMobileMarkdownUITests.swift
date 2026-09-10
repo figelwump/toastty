@@ -33,7 +33,23 @@ final class ToasttyMobileMarkdownUITests: XCTestCase {
     func testTablesRemainReadableAtAccessibilityTextSize() {
         let app = openTables(accessibility: true)
         let transcript = app.scrollViews["toastty-mobile-transcript"]
-        for _ in 0..<5 where !app.staticTexts["Component"].isHittable { transcript.swipeDown() }
+        // The scroll view's accessibility frame includes the navigation and
+        // composer insets. A default swipe can hit Jump to latest or the
+        // composer at large text sizes. Drag through the visible left gutter.
+        let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
+        let input = app.textViews["toastty-mobile-composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        let navigationBar = app.navigationBars.firstMatch
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 5))
+        let bottom = min(transcript.frame.maxY, profile.exists ? profile.frame.minY : input.frame.minY) - 20
+        let top = max(transcript.frame.minY, navigationBar.frame.maxY) + 20
+        XCTAssertGreaterThan(bottom, top, "The transcript must have visible space above the composer")
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let scrollStart = origin.withOffset(CGVector(dx: transcript.frame.minX + 8, dy: top))
+        let scrollEnd = origin.withOffset(CGVector(dx: transcript.frame.minX + 8, dy: bottom))
+        for _ in 0..<12 where !app.staticTexts["Component"].isHittable {
+            scrollStart.press(forDuration: 0.05, thenDragTo: scrollEnd)
+        }
         XCTAssertTrue(app.staticTexts["Component"].isHittable)
         // At AXXXL the table extends below the composer. Swipe within its
         // visible header instead of the offscreen center of its full frame.
