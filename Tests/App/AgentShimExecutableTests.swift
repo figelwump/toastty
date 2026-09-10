@@ -311,14 +311,21 @@ private struct AgentShimExecutableFixture {
             )
         }
         if realBinaryAvailableOnlyToDirectProbe {
-            let profileURL = rootURL.appendingPathComponent(".zprofile", isDirectory: false)
-            try """
+            let profile = """
             if [[ -e "$ZDOTDIR/.initial-path-probe-complete" ]]; then
               export PATH="$ZDOTDIR/bin:$PATH"
             else
               : > "$ZDOTDIR/.initial-path-probe-complete"
             fi
-            """.write(to: profileURL, atomically: true, encoding: .utf8)
+            """
+            // The shim probes the account's login shell, which is bash on CI.
+            for profileName in [".zprofile", ".bash_profile"] {
+                try profile.write(
+                    to: rootURL.appendingPathComponent(profileName, isDirectory: false),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
         }
 
         return Self(
@@ -365,6 +372,11 @@ private struct AgentShimExecutableFixture {
         environment[ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey] =
             ownerRecordInInitialEnvironment ? ownerRecordURL.path : nil
         environment["ZDOTDIR"] = rootURL.path
+        if includeRealBinInInitialPath == false {
+            // Bash reads its login profile from HOME; isolate the child shell
+            // just as ZDOTDIR isolates zsh, without touching the user's files.
+            environment["HOME"] = rootURL.path
+        }
         environment["TOASTTY_LOG_DISABLE"] = "1"
         environment["TOASTTY_FAKE_CLI_LOG"] = cliLogURL.path
         environment["TOASTTY_FAKE_AGENT_LOG"] = agentLogURL.path

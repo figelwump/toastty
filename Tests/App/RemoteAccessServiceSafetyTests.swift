@@ -5,6 +5,46 @@ import Testing
 @testable import ToasttyApp
 
 struct RemoteAccessServiceSafetyTests {
+    @MainActor
+    @Test func rootModelSwitchesPublishWithoutTranscriptOrInputChanges() async throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let original = fixture.summary
+        #expect(original.executionProfile == nil)
+
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        // Repeated values with the same timestamp are distinct reports in
+        // file order. The third report must not be deduplicated against A.
+        for model in ["model-A", "model-B", "model-A"] {
+            fixture.server.removeAllBroadcasts()
+            let line = #"{"timestamp":"2026-08-07T10:00:05.200Z","type":"turn_context","payload":{"model":"\#(model)","effort":"high"}}"# + "\n"
+            try transcript.write(contentsOf: Data(line.utf8))
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline,
+                  !fixture.server.sessionListSnapshots.contains(where: { snapshot in
+                      snapshot.conversations.contains {
+                          $0.conversationID == fixture.conversationID && $0.executionProfile?.modelIdentifier == model
+                      }
+                  }) {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let delivered = try #require(fixture.server.sessionListSnapshots.last?.conversations.first {
+                $0.conversationID == fixture.conversationID
+            })
+            #expect(delivered.executionProfile == .init(modelIdentifier: model, reasoningEffort: "high"))
+            #expect(delivered.latestSequence == original.latestSequence)
+            #expect(delivered.inputAvailability == original.inputAvailability)
+            #expect(delivered.state == original.state)
+            #expect(fixture.summary.executionProfile == delivered.executionProfile)
+            #expect(!fixture.server.broadcasts.contains {
+                if case .conversationEvents = $0 { return true }
+                return false
+            })
+        }
+    }
+
     @Test func readAcknowledgementAcceptsAuthoritativeEmptyAndRejectsStaleBoundaries() {
         let runID = RemoteProjectionRunID()
         let empty = RemoteConversationReadAcknowledgementRequest(

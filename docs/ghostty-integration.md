@@ -127,6 +127,9 @@ TUIST_DISABLE_GHOSTTY=1 tuist generate
 
 `TOASTTY_DISABLE_GHOSTTY=1` is a compatibility alias used by `Project.swift`
 and automation scripts. Prefer `TUIST_DISABLE_GHOSTTY=1` for new commands.
+When fallback is explicitly requested, the generated app test target also defines
+`TOASTTY_EXPLICIT_GHOSTTY_TEST_FALLBACK`, allowing its coverage canary to distinguish
+an intentional fallback run from missing Ghostty artifacts.
 
 Current selection behavior:
 

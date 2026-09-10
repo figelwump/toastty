@@ -164,3 +164,51 @@ struct RemoteProtocolBoundaryTests {
         )
     }
 }
+
+struct RemoteExecutionProfileCodingTests {
+    @Test func summaryProfileIsOptionalAndSupportsPartialReports() throws {
+        var summary = RemoteConversationSummary(
+            conversationID: RemoteConversationID(), provider: .codex, title: "Session",
+            state: .starting, inputAvailability: .unavailable(reason: .starting),
+            latestSequence: 0, updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let encoder = ConversationEventCoding.makeEncoder()
+        let decoder = ConversationEventCoding.makeDecoder()
+        let oldData = try encoder.encode(summary)
+        let oldObject = try #require(JSONSerialization.jsonObject(with: oldData) as? [String: Any])
+        #expect(oldObject["executionProfile"] == nil)
+        #expect(try decoder.decode(RemoteConversationSummary.self, from: oldData).executionProfile == nil)
+        for profile in [
+            RemoteSessionExecutionProfile(modelIdentifier: "gpt-6", reasoningEffort: "high"),
+            RemoteSessionExecutionProfile(modelIdentifier: "provider/custom-model"),
+            RemoteSessionExecutionProfile(reasoningEffort: "adaptive"),
+        ] {
+            summary.executionProfile = profile
+            let data = try encoder.encode(summary)
+            #expect(try decoder.decode(RemoteConversationSummary.self, from: data) == summary)
+        }
+        summary.executionProfile = RemoteSessionExecutionProfile()
+        #expect(summary.executionProfile == nil)
+        let emptyObject = try #require(JSONSerialization.jsonObject(with: encoder.encode(summary)) as? [String: Any])
+        #expect(emptyObject["executionProfile"] == nil)
+    }
+
+    @Test func profileNormalizationRejectsUnusableFieldsWithoutLosingValidFields() throws {
+        let decoder = ConversationEventCoding.makeDecoder()
+        for value in ["bad\u{0000}model", "bad\u{0085}model", "bad\u{202E}model", String(repeating: "m", count: 201)] {
+            let data = try JSONSerialization.data(withJSONObject: ["modelIdentifier": value, "reasoningEffort": "high"])
+            let profile = try decoder.decode(RemoteSessionExecutionProfile.self, from: data)
+            #expect(profile.modelIdentifier == nil)
+            #expect(profile.reasoningEffort == "high")
+        }
+        #expect(RemoteSessionExecutionProfile(modelIdentifier: "  gpt-6  ", reasoningEffort: " high ") ==
+            RemoteSessionExecutionProfile(modelIdentifier: "gpt-6", reasoningEffort: "high"))
+        #expect(RemoteSessionExecutionProfile(modelIdentifier: " ", reasoningEffort: "\n").isEmpty)
+        #expect(RemoteSessionExecutionProfile(reasoningEffort: String(repeating: "e", count: 81)).isEmpty)
+        #expect(RemoteSessionExecutionProfile(modelIdentifier: String(repeating: "m", count: 200)).modelIdentifier?.count == 200)
+        #expect(RemoteSessionExecutionProfile(reasoningEffort: String(repeating: "e", count: 80)).reasoningEffort?.count == 80)
+        for identifier in ["provider/Model-vNext_1.2:custom", "模型-🧑‍💻"] {
+            #expect(RemoteSessionExecutionProfile(modelIdentifier: identifier).modelIdentifier == identifier)
+        }
+    }
+}

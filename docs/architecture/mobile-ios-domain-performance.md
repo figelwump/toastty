@@ -47,6 +47,31 @@ The hardware and toolchain records were captured separately through the required
 
 Use repeated clean remote runs when calibrating this provisional gate. Keep the input and measurement boundaries stable so later results remain comparable.
 
+During the September 2026 CI investigation, one GitHub Release run measured
+1.0715 seconds while another run of the same commit passed. The failing test
+took 3.492 seconds overall, including fixture preparation outside the measured
+operation. The benchmark's event decoding and reduction path was unchanged from
+the task baseline, so this did not establish a performance regression.
+
+A targeted remote iOS Simulator check of `910abfe8` plus test/build fixes ran the
+unchanged Release benchmark three times, relaunching the test process for each
+iteration. It measured 0.0771, 0.0782, and 0.0780 seconds, with 31,588,352 bytes
+of incremental resident memory in each iteration. Evidence is retained under
+`artifacts/remote-tests/ios-ci-performance-repeat/`. The one-second and 100 MiB
+budgets remain unchanged; these simulator measurements do not establish timing
+on every GitHub runner or physical device.
+
+```bash
+sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
+  --run-label ios-ci-performance-repeat -- \
+  -configuration Release ENABLE_TESTABILITY=YES \
+  -only-testing:ToasttyMobileDomainTests/ConversationRuntimePerformanceTests \
+  -test-iterations 3 -test-repetition-relaunch-enabled YES
+```
+
+This command builds and tests a disposable remote checkout and simulator. It
+does not connect to a production host or run a local simulator.
+
 ## Transcript preparation
 
 `LiveConversationController` shares immutable rows, Markdown blocks, and turns across connection and send-delivery metadata updates. A regression test applies these updates to 5,000 events and verifies that the prepared transcript is reused; an appended event requires new preparation. Long messages are parsed as one Markdown document before attributed blocks are split for layout, preserving code fences and reference links across cells. Markdown tables retain their header, row, column alignment, and inline attributes from Foundation’s parser. Wide tables scroll horizontally; long tables split only between rows and repeat their header, with at most 24 body rows per table section. A single oversized row stays intact even when it exceeds the soft chunk budget. Foundation omits entirely empty trailing table rows, so those rows cannot be reconstructed from attributed content.

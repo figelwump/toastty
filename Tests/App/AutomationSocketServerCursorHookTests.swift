@@ -72,7 +72,13 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
     func cursorHookSocketPathGatesCompletionToRootConversationAndCurrentGeneration() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
-            try makeServer(socketPath: socketPath)
+            try makeServer(
+                socketPath: socketPath,
+                sessionRuntimeStore: SessionRuntimeStore(
+                    sendSessionStatusNotification: { _, _, _, _, _ in },
+                    isApplicationActive: { false }
+                )
+            )
         }
         defer {
             withExtendedLifetime(server.server) {}

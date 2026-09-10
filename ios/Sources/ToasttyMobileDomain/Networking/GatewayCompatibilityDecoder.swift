@@ -144,6 +144,12 @@ public struct GatewayCompatibilityDecoder: Sendable {
             placement: placement,
             cwd: try object.optionalString("cwd"),
             statusDetail: object.lossyString("statusDetail"),
+            executionProfile: object.lossyObject("executionProfile").map {
+                RemoteSessionExecutionProfile(
+                    modelIdentifier: $0.lossyString("modelIdentifier"),
+                    reasoningEffort: $0.lossyString("reasoningEffort")
+                )
+            },
             state: decodeDisplayState(try object.requiredString("state")),
             presentationStatus: decodePresentationStatus(
                 try object.optionalString("presentationStatus")

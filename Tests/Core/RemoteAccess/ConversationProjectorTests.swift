@@ -702,3 +702,77 @@ struct ConversationProjectorTests {
         }
     }
 }
+
+struct ConversationExecutionProfileTests {
+    private static let date = ConversationProjectorTests.epochDate
+
+    private static func report(_ id: String, _ profile: RemoteSessionExecutionProfile, offset: TimeInterval = 0) -> ProviderTranscriptObservation {
+        .init(timestamp: date.addingTimeInterval(offset), fingerprint: id,
+              payload: .executionProfileReported(profile), mayAuthorizeCurrentRuntime: false)
+    }
+
+    @Test func profileReplacesFieldsByNewestTimestampWithoutEmittingEventsOrOpeningInput() throws {
+        var projector = ConversationProjectorTests.makeProjector()
+        let state = projector.state
+        let availability = projector.inputAvailability
+        let count = projector.events.count
+        let full = Self.report("full", .init(modelIdentifier: "model-a", reasoningEffort: "high"), offset: 2)
+        #expect(projector.ingest(full).isEmpty)
+        #expect(projector.executionProfile == .init(modelIdentifier: "model-a", reasoningEffort: "high"))
+        projector.ingest(Self.report("older", .init(modelIdentifier: "old"), offset: 1))
+        #expect(projector.executionProfile?.modelIdentifier == "model-a")
+        projector.ingest(Self.report("partial", .init(modelIdentifier: "model-b"), offset: 2))
+        #expect(projector.executionProfile == .init(modelIdentifier: "model-b"))
+        #expect(projector.ingest(full).isEmpty)
+        #expect(projector.executionProfile == .init(modelIdentifier: "model-b"))
+        #expect(projector.state == state)
+        #expect(projector.inputAvailability == availability)
+        #expect(projector.events.count == count)
+        let encoded = try ConversationEventCoding.makeEncoder().encode(full)
+        #expect(try ConversationEventCoding.makeDecoder().decode(ProviderTranscriptObservation.self, from: encoded) == full)
+        projector.ingest(Self.report("empty", .init(), offset: 3))
+        #expect(projector.executionProfile == nil)
+    }
+
+    @Test func runtimeExitAndSameIdentityResumeRetainProfileButRebindingClearsIt() {
+        var projector = ConversationProjectorTests.makeProjector()
+        let bindingID = ConversationProjectorTests.bindingID
+        projector.noteBinding(reason: .runtimeBound, providerSessionID: "session-a",
+                              providerSessionFilePath: "/tmp/a.jsonl", bindingID: bindingID, at: Self.date)
+        projector.ingest(Self.report("a", .init(modelIdentifier: "model-a"), offset: 1))
+        projector.noteBinding(reason: .runtimeEnded, bindingID: bindingID, at: Self.date.addingTimeInterval(2))
+        #expect(projector.executionProfile?.modelIdentifier == "model-a")
+        let offlineState = projector.state
+        let offlineAvailability = projector.inputAvailability
+        projector.ingest(Self.report("historical", .init(modelIdentifier: "model-b"), offset: 3))
+        #expect(projector.executionProfile?.modelIdentifier == "model-b")
+        #expect(projector.state == offlineState)
+        #expect(projector.inputAvailability == offlineAvailability)
+        projector.noteBinding(reason: .runtimeResumed, providerSessionID: "session-a",
+                              providerSessionFilePath: "/tmp/a.jsonl", bindingID: UUID(), at: Self.date.addingTimeInterval(4))
+        #expect(projector.executionProfile?.modelIdentifier == "model-b")
+        projector.noteBinding(reason: .runtimeResumed, providerSessionID: "session-b",
+                              bindingID: UUID(), at: Self.date.addingTimeInterval(5))
+        #expect(projector.executionProfile == nil)
+        // A new identity must not inherit the previous report's timestamp boundary.
+        projector.ingest(Self.report("new-session", .init(reasoningEffort: "low")))
+        #expect(projector.executionProfile == .init(reasoningEffort: "low"))
+        projector.noteBinding(reason: .runtimeResumed, providerSessionFilePath: "/tmp/b.jsonl",
+                              bindingID: UUID(), at: Self.date.addingTimeInterval(6))
+        #expect(projector.executionProfile == nil)
+        projector.ingest(Self.report("new-file", .init(modelIdentifier: "model-c")))
+        projector.noteBinding(reason: .runtimeResumed, clearsProviderSessionFilePath: true,
+                              bindingID: UUID(), at: Self.date.addingTimeInterval(7))
+        #expect(projector.executionProfile == nil)
+    }
+
+    @Test func changedObservedProviderIdentityClearsReportedMetadata() {
+        var projector = ConversationProjectorTests.makeProjector()
+        projector.ingest(.init(timestamp: Self.date, fingerprint: "session-a", payload: .providerSessionObserved(providerSessionID: "a")))
+        projector.ingest(Self.report("profile", .init(modelIdentifier: "model-a")))
+        projector.ingest(.init(timestamp: Self.date, fingerprint: "same-session", payload: .providerSessionObserved(providerSessionID: "a")))
+        #expect(projector.executionProfile?.modelIdentifier == "model-a")
+        projector.ingest(.init(timestamp: Self.date, fingerprint: "session-b", payload: .providerSessionObserved(providerSessionID: "b")))
+        #expect(projector.executionProfile == nil)
+    }
+}

@@ -101,6 +101,39 @@ public enum RemoteSessionPresentationStatus: String, Codable, Equatable, Hashabl
     case error
 }
 
+/// The latest model and reasoning values reported by the conversation's
+/// provider. These are display metadata, never defaults or input authority.
+public struct RemoteSessionExecutionProfile: Codable, Equatable, Sendable {
+    public let modelIdentifier: String?
+    public let reasoningEffort: String?
+
+    public init(modelIdentifier: String? = nil, reasoningEffort: String? = nil) {
+        self.modelIdentifier = Self.normalizedValue(modelIdentifier, limit: 200)
+        self.reasoningEffort = Self.normalizedValue(reasoningEffort, limit: 80)
+    }
+
+    public var isEmpty: Bool { modelIdentifier == nil && reasoningEffort == nil }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            modelIdentifier: try container.decodeIfPresent(String.self, forKey: .modelIdentifier),
+            reasoningEffort: try container.decodeIfPresent(String.self, forKey: .reasoningEffort)
+        )
+    }
+
+    private static func normalizedValue(_ value: String?, limit: Int) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty,
+              value == RemoteWirePreviewText.sanitized(value, maximumGraphemeCount: limit) else {
+            return nil
+        }
+        // Reject invalid or overlong identifiers rather than showing a
+        // shortened string that could name a different provider model.
+        return value
+    }
+}
+
 /// One conversation row in the session list.
 public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     public static let maximumStatusDetailLength = 240
@@ -110,6 +143,11 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     public var title: String
     public var placement: RemoteConversationPlacement
     public var cwd: String?
+    private var storedExecutionProfile: RemoteSessionExecutionProfile?
+    public var executionProfile: RemoteSessionExecutionProfile? {
+        get { storedExecutionProfile }
+        set { storedExecutionProfile = newValue?.isEmpty == false ? newValue : nil }
+    }
     public var state: RemoteSessionState
     /// Exact desktop status when the host can associate this conversation with
     /// a panel. Optional so older encoded snapshots and status-less panels keep
@@ -142,6 +180,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         title: String,
         placement: RemoteConversationPlacement = RemoteConversationPlacement(),
         cwd: String? = nil,
+        executionProfile: RemoteSessionExecutionProfile? = nil,
         state: RemoteSessionState,
         presentationStatus: RemoteSessionPresentationStatus? = nil,
         statusDetail: String? = nil,
@@ -156,6 +195,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         self.title = title
         self.placement = placement
         self.cwd = cwd
+        self.storedExecutionProfile = executionProfile?.isEmpty == false ? executionProfile : nil
         self.state = state
         self.presentationStatus = presentationStatus
         self.storedStatusDetail = Self.normalizedStatusDetail(statusDetail)
@@ -174,6 +214,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
             title: try container.decode(String.self, forKey: .title),
             placement: try container.decode(RemoteConversationPlacement.self, forKey: .placement),
             cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
+            executionProfile: try container.decodeIfPresent(RemoteSessionExecutionProfile.self, forKey: .executionProfile),
             state: try container.decode(RemoteSessionState.self, forKey: .state),
             presentationStatus: try container.decodeIfPresent(
                 RemoteSessionPresentationStatus.self,
@@ -198,6 +239,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         try container.encode(title, forKey: .title)
         try container.encode(placement, forKey: .placement)
         try container.encodeIfPresent(cwd, forKey: .cwd)
+        try container.encodeIfPresent(executionProfile, forKey: .executionProfile)
         try container.encode(state, forKey: .state)
         try container.encodeIfPresent(presentationStatus, forKey: .presentationStatus)
         try container.encodeIfPresent(statusDetail, forKey: .statusDetail)
@@ -226,6 +268,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         case title
         case placement
         case cwd
+        case executionProfile
         case state
         case presentationStatus
         case statusDetail

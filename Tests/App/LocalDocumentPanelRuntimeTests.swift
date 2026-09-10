@@ -1561,7 +1561,8 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         try await waitUntil { metadataCallCount >= 2 }
 
         runtime.overwriteAfterConflict(baseContentRevision: baseRevision)
-        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(runtime.automationState().currentBootstrap?.isSaving == true)
+        try await waitUntil { runtime.automationState().currentBootstrap?.isSaving == false }
 
         let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         XCTAssertFalse(bootstrap.isEditing)
