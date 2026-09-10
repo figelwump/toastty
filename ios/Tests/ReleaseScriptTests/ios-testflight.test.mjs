@@ -388,6 +388,7 @@ test("asset catalog supplies the Toastty amber AccentColor expected by actool", 
 test("workflow and names-only manifest expose all release inputs without enabling push upload", () => {
   const workflow = fs.readFileSync(workflowPath, "utf8");
   const mobileWorkflow = fs.readFileSync(mobileWorkflowPath, "utf8");
+  const mobileFilters = read(".github/ci-paths.yml");
   const secrets = fs.readFileSync(secretsManifest, "utf8");
   const requiredSecrets = [
     "APP_STORE_CONNECT_API_KEY_ID",
@@ -422,10 +423,11 @@ test("workflow and names-only manifest expose all release inputs without enablin
   assert.match(workflow, /Tests\/RemoteProtocol\/\*\*/);
   assert.match(workflow, /\.node-version/);
   assert.match(workflow, /\.tool-versions/);
-  assert.match(mobileWorkflow, /'\.node-version'/);
-  assert.match(mobileWorkflow, /'\.tool-versions'/);
-  assert.match(mobileWorkflow, /'\.github\/workflows\/ios-testflight\.yml'/);
-  assert.match(mobileWorkflow, /'scripts\/ci\/ios-testflight\.sh'/);
+  assert.match(mobileWorkflow, /filters: \.github\/ci-paths\.yml/);
+  assert.match(mobileFilters, /'\.node-version'/);
+  assert.match(mobileFilters, /'\.tool-versions'/);
+  assert.match(mobileFilters, /'\.github\/workflows\/ios-testflight\.yml'/);
+  assert.match(mobileFilters, /'scripts\/ci\/ios-testflight\.sh'/);
   assert.match(mobileWorkflow, /node --test ios\/Tests\/ScriptTests\/\*\.test\.mjs ios\/Tests\/ReleaseScriptTests\/\*\.test\.mjs/);
   assert.match(mobileWorkflow, /configuration: \[Debug, Release\]/);
   assert.match(workflow, /TOASTTY_IOS_CONFIGURATION: Release/);

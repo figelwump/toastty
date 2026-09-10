@@ -1,0 +1,12 @@
+{
+  "name": "toastty-ci-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test workflow.test.mjs"
+  },
+  "devDependencies": {
+    "picomatch": "4.0.3",
+    "yaml": "2.8.1"
+  }
+}
