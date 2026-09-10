@@ -506,9 +506,19 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
         XCTAssertTrue(overlay.hasPendingCursorReassertion)
 
         NSCursor.arrow.set()
+        // AppKit can change the global cursor after our callback runs while the queue drains.
+        // Observe this overlay's deferred request without replacing its scheduling.
+        var reassertedCursors: [NSCursor] = []
+        overlay.cursorSetter = { cursor in
+            reassertedCursors.append(cursor)
+            cursor.set()
+        }
+        XCTAssertEqual(overlay.deferredCursorReassertionCount, 0)
+
         runDeferredMainQueueWork()
 
-        XCTAssertTrue(NSCursor.current === NSCursor.resizeLeftRight)
+        XCTAssertEqual(reassertedCursors.count, 1)
+        XCTAssertTrue(try XCTUnwrap(reassertedCursors.first) === NSCursor.resizeLeftRight)
         XCTAssertEqual(overlay.deferredCursorReassertionCount, 1)
     }
 
