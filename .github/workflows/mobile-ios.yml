@@ -1,8 +1,9 @@
-name: Mobile iOS
+name: Toastty CI
 
 on:
   pull_request:
   push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -19,38 +20,27 @@ jobs:
     outputs:
       ios: ${{ steps.filter.outputs.ios }}
       macos: ${{ steps.filter.outputs.macos }}
+      web: ${{ steps.filter.outputs.web }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Test CI selection and gate
+        run: |
+          npm ci --prefix Tests/CI --no-audit --no-fund
+          npm test --prefix Tests/CI
+
       - name: Select affected graphs
         id: filter
+        if: github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@v3
         with:
-          filters: |
-            ios:
-              - '.github/workflows/mobile-ios.yml'
-              - '.github/workflows/ios-testflight.yml'
-              - 'ios/**'
-              - 'Sources/RemoteProtocol/**'
-              - 'Tests/RemoteProtocol/**'
-              - 'scripts/remote/test.sh'
-              - 'scripts/ci/ios-testflight.sh'
-              - '.node-version'
-              - '.tool-versions'
-            macos:
-              - '.github/workflows/mobile-ios.yml'
-              - 'Project.swift'
-              - 'Tuist/**'
-              - 'Sources/RemoteProtocol/**'
-              - 'Tests/RemoteProtocol/**'
-              - 'Sources/Core/RemoteAccess/**'
-              - 'Tests/Core/RemoteAccess/**'
-              - 'Sources/App/RemoteAccess/**'
-              - 'Tests/App/RemoteAccess*'
-              - 'scripts/dev/**'
-              - 'scripts/remote/test.sh'
-              - '.tool-versions'
+          filters: .github/ci-paths.yml
 
   ios:
     name: iOS tests (${{ matrix.configuration }})
@@ -138,14 +128,48 @@ jobs:
             ONLY_ACTIVE_ARCH=YES \
             test
 
+      - name: Build unsigned macOS Release app
+        run: |
+          xcodebuild \
+            -workspace toastty.xcworkspace \
+            -scheme ToasttyApp \
+            -configuration Release \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath artifacts/ci-macos/Derived \
+            -resultBundlePath artifacts/ci-macos/ReleaseBuild.xcresult \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
+            build
+
       - name: Upload macOS test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: macos-contract-tests-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/ci-macos/
+          path: artifacts/ci-macos/*.xcresult
           if-no-files-found: warn
           retention-days: 14
+
+  web:
+    name: Web panel tests
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Test web panels and generated bundles
+        run: |
+          for panel in WebPanels/LocalDocumentApp WebPanels/ScratchpadApp; do
+            npm ci --prefix "$panel" --no-audit --no-fund
+            npm test --prefix "$panel"
+          done
 
   gate:
     name: Mobile iOS gate
@@ -154,6 +178,7 @@ jobs:
       - changes
       - ios
       - macos
+      - web
     runs-on: ubuntu-latest
     steps:
       - name: Require selected graph checks
@@ -161,7 +186,20 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           IOS_RESULT: ${{ needs.ios.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+          IOS_SELECTED: ${{ needs.changes.outputs.ios }}
+          MACOS_SELECTED: ${{ needs.changes.outputs.macos }}
+          WEB_SELECTED: ${{ needs.changes.outputs.web }}
+          MANUAL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           test "$CHANGES_RESULT" = success
-          case "$IOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
-          case "$MACOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
+          require_result() {
+            if [[ "$MANUAL_RUN" == true || "$1" == true ]]; then
+              test "$2" = success
+            else
+              case "$2" in success|skipped) ;; *) return 1 ;; esac
+            fi
+          }
+          require_result "$IOS_SELECTED" "$IOS_RESULT"
+          require_result "$MACOS_SELECTED" "$MACOS_RESULT"
+          require_result "$WEB_SELECTED" "$WEB_RESULT"

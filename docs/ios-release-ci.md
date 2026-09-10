@@ -71,7 +71,7 @@ run on every release-relevant push.
 
 ## First internal build
 
-1. Make sure the exact release commit is on `main` and the normal `Mobile iOS`
+1. Make sure the exact release commit is on `main` and the normal `Toastty CI`
    workflow is green, and complete the disposable-host validation below.
 2. In GitHub Actions, open `iOS TestFlight` and run it from `main` with
    `upload=false` and `run_tests=true`.
