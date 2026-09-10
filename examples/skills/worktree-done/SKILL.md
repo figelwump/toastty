@@ -1,14 +1,15 @@
 ---
 name: worktree-done
-description: Review, integrate, or finish a Toastty worktree task or PR from a project coordinator or another session outside the task. Assess codebase consistency and in-flight work, then perform authorized integration and local task cleanup.
+description: Review, integrate, or finish a Toastty worktree task or PR from a session outside the task. When no target is named, discover open PRs and local worktrees with open Toastty workspaces in the current repository. Assess each task, then perform authorized integration and local task cleanup.
 ---
 
 # Worktree Done
 
 This example personal skill assesses and, when authorized, lands a task using
 its repository's integration and verification rules. The finishing session can
-be a project coordinator or the original parent; the original parent need not
-stay active. The user can name the task or PR without supplying a commit SHA.
+be the original parent or another session; the original parent need not stay
+active. The user can name the task or PR without supplying a commit SHA, or omit
+the target to process the discovered tasks in the current repository.
 
 ## Resolve the task and authority
 
@@ -16,7 +17,7 @@ stay active. The user can name the task or PR without supplying a commit SHA.
   `error: worktree-done must run inside a Toastty-managed agent session`.
   Use `toastty-capabilities` to discover the running CLI's supported queries
   and actions before controlling sessions or workspaces.
-- Resolve the task using the durable local launch/coordination record,
+- Resolve the task using the durable local launch record,
   `git worktree list --porcelain`, `WORKTREE_HANDOFF.md`, and live
   workspace/session metadata.
   Match branch and canonical checkout path, then workspace and session IDs;
@@ -36,7 +37,7 @@ stay active. The user can name the task or PR without supplying a commit SHA.
   outside both the target checkout and target workspace. Canonicalize paths
   through symlinks and compare directory boundaries, not string prefixes. If
   invoked from the child, prepare the readiness handoff and direct the user
-  to a coordinator or other finishing session; do not delete the active session
+  to run this skill from another session; do not delete the active session
   or expand its workspace scope.
 - A request to merge and clean up authorizes both actions; do not ask again
   at each step. A merge-only request does not authorize termination or deletion.
@@ -45,9 +46,38 @@ stay active. The user can name the task or PR without supplying a commit SHA.
   task branch, PR state, or child workspace. Do not advance into landing,
   evidence archiving for cleanup, process termination, or deletion without the
   corresponding authorization. Keep feedback in the finishing report or
-  coordination note;
+  task record;
   posting PR comments or requesting changes from the child needs authorization
   for that action, which may already be part of the task.
+
+## Discover tasks when no target is named
+
+- Honor an explicit task, PR, or repository scope. Otherwise infer the repository
+  from the current checkout and Toastty session metadata; ask only if those
+  cannot identify one repository. Do not search all of the user's repositories.
+- Discover all open PRs in that repository, including additional result pages,
+  and local Git worktrees matched to currently open Toastty workspaces. Use
+  canonical checkout paths and branch/repository identity, not workspace titles.
+  Include local tasks without PRs; an open workspace is discovery evidence, not
+  proof that its task is ready. Exclude the landing checkout from local task
+  candidates. If PR access is unavailable, continue with local discovery and
+  report the access limit rather than treating it as zero open PRs.
+- Combine both sources into one task list, deduplicating a PR and its matching
+  local worktree. Preserve repository identity for fork PRs; a matching branch
+  name alone does not establish a local resource association. Report uncertain
+  matches without guessing which resources belong to the PR.
+- Briefly state the discovered scope, then assess every candidate through the
+  workflow below without asking the user to choose one. Discovery does not
+  grant merge, push, session-control, or cleanup authority; apply the user's
+  existing authorization to each task and prepare any remaining approval as
+  one concrete batch. Respect workspace scope and the finishing-session rule;
+  retain a task containing the current session and report its handoff separately.
+- Use dependencies and overlapping changes to choose an order. Recheck the
+  destination and affected assessments after each integration. Keep blocked,
+  draft, or still-active tasks pending and continue with independent candidates;
+  do not land dependent work past a blocker. End with a result or blocker for
+  every candidate, or state that no candidates were found with any discovery
+  limits. This is one discovery pass, not an ongoing monitor.
 
 ## Establish readiness
 
@@ -86,7 +116,7 @@ Integration requires a completed project assessment of the exact task commit.
 Run this pass before merging if no current assessment exists, even when
 integration is authorized without a separate review request. It also supports
 review-only requests and complements
-repository-required independent review, CI, and human testing.
+repository-required independent review and CI; human testing follows deployment.
 
 - Review the task diff in the context of existing code: design and ownership
   boundaries, established abstractions and naming, duplicate capability,
@@ -115,7 +145,7 @@ repository-required independent review, CI, and human testing.
   limits, blocking findings, optional suggestions, and any recommended merge
   order. Unresolved material conflicts or correctness risks block integration;
   cosmetic preferences do not become new gates. Keep the report in the durable
-  coordination/task record; a Scratchpad can present it. Publish findings on the
+  task record; a Scratchpad can present it. Publish findings on the
   PR only when authorized.
 - The task owner owns fixes. Return actionable findings to the user and, when
   authorized, resume the existing child for accepted corrections. If that agent
@@ -131,8 +161,8 @@ repository-required independent review, CI, and human testing.
   recheck the live PR/task head, target branch, and relevant peer heads against
   this assessment. A changed task head needs fresh readiness evidence; changes
   to the target or related work need an updated conflict/interaction assessment
-  and affected checks. Observe repository requirements for human testing and
-  approval. No permanent monitoring service is part of this workflow.
+  and affected checks. Observe repository requirements for approval; human testing
+  follows deployment unless the PR names a pre-merge manual check. No permanent monitoring service is part of this workflow.
 
 ## Preserve evidence, land, and verify
 
@@ -154,14 +184,13 @@ repository-required independent review, CI, and human testing.
   Validate the actual landed result with the repository's required checks,
   including generation/build and runtime checks when applicable. Record the
   landed SHA and the exact commands, targets, and results in the durable task
-  or coordination record. Earlier child checks do not prove that integration works.
+  record. Earlier child checks do not prove that integration works.
 - If validation fails, keep the child workspace, worktree, and branch available
   while making authorized, scoped corrections. Do not claim completion merely
   because the merge succeeded.
-- Preserve the PR-to-landed-commit correspondence in the coordination record.
-  Integration does not prove deployment. If a `project-orchestrator` is tracking
-  this work, retain its outstanding release targets after workspace cleanup;
-  use the repository release workflow to establish delivery separately.
+- Preserve the PR-to-landed-commit correspondence in the task record.
+  Integration does not prove deployment. Use the repository release workflow
+  to establish delivery separately.
 
 ## Authorized cleanup
 

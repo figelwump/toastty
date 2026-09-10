@@ -383,14 +383,18 @@ build your own development workflow with Toastty. Copy them into `~/.toastty/ski
 and customize them. `worktree-create` continues an agreed task in its own Git
 worktree and background Toastty workspace. It preserves the plan and local task
 identity; the child uses its runtime's native persistent goal when available and
-permitted to implement, review, and verify the change.
+permitted to implement, review, and verify the change. The child uses subagents
+and chooses available models and reasoning levels as appropriate to each task.
+Workspace chips show its branch, task status, and PR.
 
 For PR-based implementation tasks, the child prepares one draft PR per worktree.
 The PR carries intent, decisions, review/check evidence, human testing steps,
 dependencies, deployment implications, and an explicit coordinator handoff with
-the validated commit. PR existence does not imply readiness, and a new head
-invalidates prior evidence. Local-only tasks use a durable task note. Child
-Scratchpads are optional visual aids; the handoff must stand on its own.
+the validated commit. Once required agent review and automated checks cover the
+committed tip, the child marks the PR ready for review; rework returns it to draft.
+PR existence does not imply readiness, and a new head invalidates prior evidence.
+Local-only tasks use a durable task note. Child Scratchpads are optional visual
+aids; the handoff must stand on its own.
 
 Use the personal `project-orchestrator` skill in one project session to watch PRs
 and assigned local work while you work. It maintains a Scratchpad dashboard of
@@ -408,9 +412,13 @@ repository's release workflow to reconcile shared deployment needs into a concre
 plan. No new deployment engine is provided. A watch/review request alone does not
 authorize messages, publication, integration, cleanup, or deployment.
 
-After review and human testing, an authorized coordinator or another session can
-use `worktree-done` to integrate the named task, validate the landed result, and
-clean up its assigned local resources. It matches the PR and local task identity,
+After required review and automated verification, an authorized coordinator or
+another session can use `worktree-done` to integrate the named task, validate the
+landed result, and clean up its assigned local resources. Without a named target,
+it discovers open PRs and local worktrees with open Toastty workspaces in the
+current repository. Discovery does not authorize integration or cleanup. Human
+testing follows deployment unless the user explicitly requested a pre-merge
+manual check. The finishing session matches the PR and local task identity,
 preserves the handoff and any optional Scratchpad, and follows the repository's
 rules. With cleanup authorized it stops task-owned processes, closes the task
 workspace, and safely removes the worktree and merged local branch. A merge-only

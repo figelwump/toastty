@@ -14,7 +14,9 @@ before the agent command in the structured launch path.
 --startup-command replaces the structured launch with a literal terminal command
 and cannot be combined with --agent-command or --initial-command.
 Structured launches scope the current parent session before creating the child
-workspace unless --no-scope-parent is passed.
+workspace unless --no-scope-parent is passed. They initialize git-branch
+(when Git metadata is available) and task-status workspace annotations.
+Explicit --startup-command launches do not manage task annotations.
 EOF
 }
 
@@ -152,6 +154,18 @@ if [[ ! -s "$handoff_file" ]]; then
   exit 1
 fi
 
+branch_label=""
+if [[ -z "$startup_command" ]]; then
+  if ! branch_label="$(git -C "$worktree_path" symbolic-ref --quiet --short HEAD 2>/dev/null)"; then
+    if revision="$(git -C "$worktree_path" rev-parse --short HEAD 2>/dev/null)"; then
+      branch_label="Detached at $revision"
+    else
+      echo "warning: Git metadata unavailable at $worktree_path; only task status will be annotated" >&2
+    fi
+  fi
+  branch_label="$(PYTHONUTF8=1 python3 -c 'import sys; s=sys.argv[1]; print(s if len(s)<=80 else s[:77]+"...")' "$branch_label")"
+fi
+
 shell_quote() {
   python3 - "$1" <<'PY'
 import shlex
@@ -190,12 +204,41 @@ run_cli_json() {
   "$TOASTTY_CLI_PATH" --json "$@"
 }
 
+# Annotation actions are checked even if a CLI returns an error envelope with exit 0.
+run_annotation_cli() {
+  local response
+  if ! response="$(run_cli_json "$@")"; then
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
+  if ! python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    valid = isinstance(data, dict) and data.get("ok") is True
+except (ValueError, TypeError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+' <<<"$response"; then
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
+}
+
+workspace_id=""
+task_status_initialized="false"
+child_launched="false"
 parent_session_id=""
 parent_scope_set="false"
 parent_scope_rollback_on_error="false"
 
 rollback_parent_scope_if_needed() {
   local exit_code="$?"
+  if [[ "$exit_code" -ne 0 && "$task_status_initialized" == "true" && "$child_launched" != "true" ]]; then
+    if ! run_annotation_cli action run workspace.set-annotation --workspace "$workspace_id" key=task-status "text=Needs attention"; then
+      echo "warning: could not mark workspace $workspace_id as needing attention after launch failure" >&2
+    fi
+  fi
   if [[ "$exit_code" -ne 0 && "$parent_scope_rollback_on_error" == "true" && "$parent_scope_set" == "true" && -n "$parent_session_id" ]]; then
     local rollback_output
     if ! rollback_output="$(run_cli_json session scope clear --session "$parent_session_id" 2>&1)"; then
@@ -362,6 +405,25 @@ if [[ -z "$workspace_id" ]]; then
   exit 1
 fi
 
+if [[ -z "$startup_command" ]]; then
+  # Stable keys share the runtime's existing color claims; never supply a new color.
+  if ! run_annotation_cli query run annotation.keys \
+    || ! run_annotation_cli query run workspace.snapshot --workspace "$workspace_id"; then
+    echo "error: could not inspect annotations for created workspace $workspace_id; no child was launched" >&2
+    exit 1
+  fi
+  if [[ -n "$branch_label" ]] && ! run_annotation_cli action run workspace.set-annotation --workspace "$workspace_id" key=git-branch "text=$branch_label"; then
+    echo "error: could not initialize annotations for created workspace $workspace_id; no child was launched" >&2
+    exit 1
+  fi
+  if ! run_annotation_cli action run workspace.set-annotation --workspace "$workspace_id" key=task-status text=Working; then
+    echo "error: could not initialize annotations for created workspace $workspace_id; no child was launched" >&2
+    exit 1
+  fi
+  # Set before launching: a fast child must not have its newer status overwritten.
+  task_status_initialized="true"
+fi
+
 if [[ -f "$handoff_file" ]]; then
   local_document_output=""
   if ! local_document_output="$(
@@ -408,6 +470,7 @@ if [[ -z "$startup_command" ]]; then
   done
 
   if [[ "$launch_succeeded" == "true" ]]; then
+    child_launched="true"
     panel_id="$(extract_json_result_field "panelID" <<<"$launch_output")"
     if ! session_id="$(extract_json_result_field "sessionID" <<<"$launch_output" 2>/dev/null)"; then
       echo "error: agent.launch response did not include sessionID; cannot scope workspace handoff" >&2

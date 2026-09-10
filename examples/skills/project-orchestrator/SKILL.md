@@ -76,7 +76,8 @@ shared task record. Scratchpad presents the current project state.
   require reassessing affected interactions, not every unrelated task. Use a
   disposable integration check only for a specific risk and candidate order.
   Refresh evidence before authorized integration. Required independent review
-  and human testing remain separate gates.
+  remains a merge gate. Follow `worktree-done` for human testing: it follows
+  deployment unless the user explicitly requested a pre-merge manual check.
 
 ## Maintain the project dashboard
 

@@ -6,24 +6,30 @@ opt-in examples, not shipped skills or automatically loaded repository skills.
 
 - [worktree-create](worktree-create/SKILL.md) creates a worktree, preserves the
   task intent and local resource identity, launches a scoped child workspace,
-  and guides implementation through review, verification, and a PR handoff.
+  and guides implementation through review, verification, and a PR handoff. The
+  child uses subagents and selects models and reasoning levels as appropriate,
+  and maintains workspace chips for the branch, task status, and PR.
 - [project-orchestrator](project-orchestrator/SKILL.md) watches the project's PRs
   and assigned local tasks during a working session, maintains a Scratchpad
   dashboard, reviews interactions, and coordinates authorized integration,
   pushing, deployment, and cleanup through repository workflows.
-- [worktree-done](worktree-done/SKILL.md) assesses and integrates a named task
-  from the coordinator or another session outside that task, verifies the landed
-  result, and performs authorized cleanup. Review-only requests stop at the report.
+- [worktree-done](worktree-done/SKILL.md) assesses tasks from a session outside
+  the task, verifies authorized integration, and performs authorized cleanup.
+  Without a named target, it discovers open PRs and local worktrees with open
+  Toastty workspaces in the current repository. Review-only requests stop at
+  the report.
 
 ## PR handoff and project coordination
 
 For implementation work in repositories that use PRs, the default is one draft
 PR per worktree. The child owns implementation, required agent review/CI, and
 subsequent fixes. Its PR explains intent, decisions, verification, human testing,
-dependencies, and deployment implications. An explicit handoff signals readiness
-for coordinator assessment; `ValidatedCommit` identifies the commit covered by
-required automated verification. Draft status, pending checks, external approvals,
-and human testing remain distinct. A new head invalidates old readiness.
+dependencies, and deployment implications. Once required agent review and
+automated checks cover the committed tip, the child records `ValidatedCommit`
+and marks the PR ready for review to signal readiness for coordinator assessment.
+Rework returns the PR to draft and invalidates old readiness. External approvals
+remain separate merge gates. Human testing follows deployment unless the user
+explicitly requested a pre-merge manual check.
 Local-only work uses an equivalent durable task note. Child Scratchpads are optional.
 
 Run one project coordinator while you work. It can assess design and interactions
@@ -49,6 +55,9 @@ The coordinator is a skill-driven agent session, not a service installed by thes
 examples; monitoring ends when its session stops. On resume it reobserves state
 from durable records. Repository-specific review, verification, and release rules
 remain authoritative.
+
+The worktree handoff can bind an optional `toastty-watcher` command when it is
+already installed. That command is not included in these example packages.
 
 ## Copy and customize
 

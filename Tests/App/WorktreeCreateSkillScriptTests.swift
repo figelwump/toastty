@@ -105,8 +105,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-script")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -135,8 +134,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-success")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -178,6 +176,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(invocationLines.contains("--json query run terminal.state --panel 33333333-3333-3333-3333-333333333333"))
         XCTAssertTrue(invocationLines.contains("--json action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke activate=false"))
         XCTAssertFalse(invocationLines.contains(where: { $0.contains("workspace.snapshot") }))
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("annotation") }))
         XCTAssertFalse(invocationLines.contains(where: { $0.contains("session scope") }))
         XCTAssertTrue(invocationLines.contains("action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path)"))
         XCTAssertTrue(invocationLines.contains("--json query run terminal.state --workspace 44444444-4444-4444-4444-444444444444"))
@@ -192,8 +191,13 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-default-agent")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
+
+        try assertSuccessful(runExecutable(
+            "/usr/bin/git",
+            arguments: ["checkout", "-b", "feat/worktree-status"],
+            currentDirectoryURL: worktreeURL
+        ))
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -250,6 +254,49 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertLessThan(showIndex, parentScopeIndex)
         XCTAssertLessThan(parentScopeIndex, workspaceCreateIndex)
         XCTAssertLessThan(workspaceCreateIndex, childScopeIndex)
+
+        let annotationKeysIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json query run annotation.keys"))
+        let snapshotIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json query run workspace.snapshot --workspace 44444444-4444-4444-4444-444444444444"))
+        let branchIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=git-branch text=feat/worktree-status"))
+        let statusIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=task-status text=Working"))
+        let launchIndex = try XCTUnwrap(invocationLines.firstIndex(of: agentLaunchLine))
+        XCTAssertLessThan(workspaceCreateIndex, annotationKeysIndex)
+        XCTAssertLessThan(annotationKeysIndex, snapshotIndex)
+        XCTAssertLessThan(snapshotIndex, branchIndex)
+        XCTAssertLessThan(branchIndex, statusIndex)
+        XCTAssertLessThan(statusIndex, launchIndex)
+        XCTAssertEqual(invocationLines.filter { $0.contains("key=task-status") }.count, 1)
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("color=") }))
+    }
+
+    func testOpenSessionScriptStopsBeforeLaunchWhenAnnotationReturnsErrorEnvelope() throws {
+        for failedOperation in ["annotation.keys", "workspace.snapshot", "key=git-branch", "key=task-status"] {
+            let result = try runAnnotationScenario(environment: ["FAKE_ANNOTATION_ERROR_AT": failedOperation])
+
+            XCTAssertEqual(result.exitCode, 1, failedOperation)
+            XCTAssertTrue(result.stderr.contains("annotation failure"), failedOperation)
+            XCTAssertTrue(result.stderr.contains("no child was launched"), failedOperation)
+            XCTAssertTrue(result.invocations.contains(where: { $0.contains(failedOperation) }), failedOperation)
+            XCTAssertFalse(result.invocations.contains(where: { $0.contains("agent.launch") }), failedOperation)
+            XCTAssertFalse(result.invocations.contains(where: { $0.contains("terminal.send-text") }), failedOperation)
+            XCTAssertFalse(result.invocations.contains(where: { $0.contains("panel.create.local-document") }), failedOperation)
+            XCTAssertTrue(result.invocations.contains("--json session scope clear --session 77777777-7777-7777-7777-777777777777"), failedOperation)
+        }
+    }
+
+    func testOpenSessionScriptMarksTaskNeedsAttentionWhenDocumentOrManagedLaunchFails() throws {
+        for failure in ["FAKE_DOCUMENT_FAILURE", "FAKE_AGENT_LAUNCH_FAILURE"] {
+            let result = try runAnnotationScenario(environment: [failure: "1"])
+
+            XCTAssertEqual(result.exitCode, 1, failure)
+            let statusInvocations = result.invocations.filter { $0.contains("key=task-status") }
+            XCTAssertEqual(statusInvocations, [
+                "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=task-status text=Working",
+                "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=task-status text=Needs attention",
+            ], failure)
+            XCTAssertFalse(result.invocations.contains(where: { $0.contains("terminal.send-text") }), failure)
+            XCTAssertTrue(result.invocations.contains("--json session scope clear --session 77777777-7777-7777-7777-777777777777"), failure)
+        }
     }
 
     func testOpenSessionScriptPreservesManagedClaudeAgentByDefault() throws {
@@ -257,8 +304,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-claude-agent")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
         let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
@@ -292,8 +338,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-scoped-parent")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -340,8 +385,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-no-parent-scope")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -387,8 +431,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-parent-context")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -424,8 +467,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-parent-panel-context")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -461,8 +503,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-parent-scope-stderr")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -501,8 +542,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-parent-rollback")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -548,8 +588,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-missing-session")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -585,6 +624,8 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             .map(String.init)
         XCTAssertTrue(invocationLines.contains("--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
         XCTAssertFalse(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertEqual(invocationLines.filter { $0.contains("key=task-status") }.count, 1)
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("text=Needs attention") }))
     }
 
     func testOpenSessionScriptFailsClearlyWhenScopeSetFails() throws {
@@ -592,8 +633,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-scope-failure")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -628,6 +668,8 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             .split(whereSeparator: \.isNewline)
             .map(String.init)
         XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertEqual(invocationLines.filter { $0.contains("key=task-status") }.count, 1)
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("text=Needs attention") }))
     }
 
     func testOpenSessionScriptHonorsAgentCommandOverride() throws {
@@ -635,8 +677,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-agent-override")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -679,8 +720,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-fallback")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -733,8 +773,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-initial-commands")
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
-        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
 
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
@@ -838,6 +877,40 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(result.stderr.contains("--agent-command must be a single executable name"))
     }
 
+    private func runAnnotationScenario(
+        environment: [String: String]
+    ) throws -> (exitCode: Int32, stderr: String, invocations: [String]) {
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-annotations")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md")
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log")
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+        _ = try makeExecutableScript(named: "sleep", contents: "#!/bin/sh\nexit 0", in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "PATH": "\(rootURL.path):/usr/bin:/bin:/usr/sbin:/sbin",
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
+            ].merging(environment) { _, new in new },
+            arguments: [
+                "--workspace-name", "annotations",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        return (result.exitCode, result.stderr, invocations)
+    }
+
     private func sendTextInvocationLine(invocationLogURL: URL) throws -> String {
         let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
         return try XCTUnwrap(
@@ -876,6 +949,14 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             if [ \"${1:-}\" = \"--json\" ]; then
               shift
             fi
+            if [ -n "${FAKE_ANNOTATION_ERROR_AT:-}" ]; then
+              case "$*" in
+                *"${FAKE_ANNOTATION_ERROR_AT}"*)
+                  printf '%s\\n' '{"ok":false,"error":{"message":"annotation failure"}}'
+                  exit 0
+                  ;;
+              esac
+            fi
             case \"$1 $2 $3\" in
               \"query run terminal.state\")
                 if [ \"${4:-}\" = \"--panel\" ]; then
@@ -898,6 +979,16 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 cat <<'EOF'
             {"result":{"windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444"}}
             EOF
+                ;;
+              "query run annotation.keys"|"query run workspace.snapshot"|"action run workspace.set-annotation")
+                printf '%s\\n' '{"ok":true,"result":{}}'
+                ;;
+              "action run panel.create.local-document")
+                if [ "${FAKE_DOCUMENT_FAILURE:-0}" = "1" ]; then
+                  printf 'document failure\\n' >&2
+                  exit 1
+                fi
+                printf '%s\\n' '{"ok":true,"result":{}}'
                 ;;
               \"action run agent.launch\")
                 if [ "${FAKE_AGENT_LAUNCH_FAILURE:-0}" = "1" ]; then
