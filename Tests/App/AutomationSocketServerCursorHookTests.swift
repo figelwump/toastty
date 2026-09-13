@@ -68,8 +68,8 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
         }
     }
 
-    @Test
-    func cursorHookSocketPathGatesCompletionToRootConversationAndCurrentGeneration() async throws {
+    @Test(arguments: [false, true])
+    func cursorHookSocketPathGatesCompletionToRootConversationAndCurrentGeneration(promptBeforeStartup: Bool) async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
             try makeServer(
@@ -100,6 +100,23 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
             )
         }
 
+        if promptBeforeStartup {
+            let prompt = try sendCursorEvent(
+                socketPath: socketPath,
+                sessionID: sessionID,
+                panelID: server.panelID,
+                eventName: "beforeSubmitPrompt",
+                conversationID: "conversation-root",
+                generationID: "generation-1",
+                status: SessionStatus(kind: .working, summary: "Working")
+            )
+            #expect(prompt.result?.string("status") == "accepted")
+            let pendingStatus = await MainActor.run {
+                server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.status
+            }
+            #expect(pendingStatus == nil)
+        }
+
         let sessionStart = try sendCursorEvent(
             socketPath: socketPath,
             sessionID: sessionID,
@@ -117,19 +134,51 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
         var status = await MainActor.run {
             server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.status
         }
-        #expect(status?.kind == .idle)
-        #expect(status?.detail == "Cursor is ready")
+        #expect(status?.kind == (promptBeforeStartup ? .working : .idle))
+        if !promptBeforeStartup {
+            #expect(status?.detail == "Cursor is ready")
+            let prompt = try sendCursorEvent(
+                socketPath: socketPath,
+                sessionID: sessionID,
+                panelID: server.panelID,
+                eventName: "beforeSubmitPrompt",
+                conversationID: "conversation-root",
+                generationID: "generation-1",
+                status: SessionStatus(kind: .working, summary: "Working")
+            )
+            #expect(prompt.result?.string("status") == "accepted")
+        }
 
-        let prompt = try sendCursorEvent(
+        let tool = try sendCursorEvent(
             socketPath: socketPath,
             sessionID: sessionID,
             panelID: server.panelID,
-            eventName: "beforeSubmitPrompt",
+            eventName: "preToolUse",
             conversationID: "conversation-root",
             generationID: "generation-1",
-            status: SessionStatus(kind: .working, summary: "Working")
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Reading a file")
         )
-        #expect(prompt.result?.string("status") == "accepted")
+        #expect(tool.result?.string("status") == "accepted")
+        status = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.status
+        }
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Reading a file")
+
+        let duplicateStart = try sendCursorEvent(
+            socketPath: socketPath,
+            sessionID: sessionID,
+            panelID: server.panelID,
+            eventName: "sessionStart",
+            conversationID: "conversation-root",
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Cursor is ready")
+        )
+        #expect(duplicateStart.result?.string("status") == "ignored")
+        status = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.status
+        }
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Reading a file")
 
         let nestedStop = try sendCursorEvent(
             socketPath: socketPath,
@@ -200,8 +249,148 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
             sessionID: sessionID,
             event: promptEvent(generationID: "generation-unclaimed"),
             at: Date(timeIntervalSince1970: 1_700_000_001)
-        ) == false)
+        ))
         #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status == nil)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: stopEvent(generationID: "generation-unclaimed"),
+            at: Date(timeIntervalSince1970: 1_700_000_002)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status == nil)
+    }
+
+    @MainActor
+    @Test func cursorPendingPromptForDifferentConversationIsDiscarded() {
+        let sessionID = "sess-pending-child"
+        let store = makeCursorSessionStore(sessionID: sessionID)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: promptEvent(conversationID: "conversation-child", generationID: "generation-child"),
+            at: Date(timeIntervalSince1970: 1_700_000_001)
+        ))
+        establishRoot(in: store, sessionID: sessionID)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .idle)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: stopEvent(generationID: "generation-child"),
+            at: Date(timeIntervalSince1970: 1_700_000_002)
+        ) == false)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: promptEvent(generationID: "generation-root"),
+            at: Date(timeIntervalSince1970: 1_700_000_003)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
+    }
+
+    @MainActor
+    @Test func cursorLatestValidPendingPromptSurvivesMalformedEvents() {
+        let sessionID = "sess-pending-latest"
+        let store = makeCursorSessionStore(sessionID: sessionID)
+        for generationID in ["generation-1", "generation-2"] {
+            #expect(store.handleCursorHookEvent(
+                sessionID: sessionID,
+                event: promptEvent(generationID: generationID),
+                at: Date(timeIntervalSince1970: 1_700_000_001)
+            ))
+        }
+        let malformedEvents = [
+            CursorHookEvent(
+                hookEventName: "beforeSubmitPrompt",
+                conversationID: "conversation-root",
+                generationID: nil,
+                status: SessionStatus(kind: .working, summary: "Working")
+            ),
+            CursorHookEvent(
+                hookEventName: "beforeSubmitPrompt",
+                conversationID: nil,
+                generationID: "generation-invalid",
+                status: SessionStatus(kind: .working, summary: "Working")
+            ),
+            CursorHookEvent(
+                hookEventName: "sessionStart",
+                conversationID: "conversation-root",
+                generationID: nil,
+                status: nil
+            ),
+            CursorHookEvent(
+                hookEventName: "stop",
+                conversationID: "conversation-root",
+                generationID: "generation-2",
+                status: SessionStatus(kind: .working, summary: "Working")
+            ),
+        ]
+        for event in malformedEvents {
+            #expect(store.handleCursorHookEvent(
+                sessionID: sessionID,
+                event: event,
+                at: Date(timeIntervalSince1970: 1_700_000_002)
+            ) == false)
+        }
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status == nil)
+        establishRoot(in: store, sessionID: sessionID)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: stopEvent(generationID: "generation-1"),
+            at: Date(timeIntervalSince1970: 1_700_000_003)
+        ) == false)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: stopEvent(generationID: "generation-2"),
+            at: Date(timeIntervalSince1970: 1_700_000_004)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .ready)
+    }
+
+    @MainActor
+    @Test(arguments: ["stop", "sessionEnd"], [false, true])
+    func cursorPendingPromptIsRetiredOnlyByMatchingTerminalEvent(eventName: String, matchesConversation: Bool) {
+        let sessionID = "sess-pending-terminal"
+        let store = makeCursorSessionStore(sessionID: sessionID)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: promptEvent(generationID: "generation-1"),
+            at: Date(timeIntervalSince1970: 1_700_000_001)
+        ))
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: stopEvent(generationID: "generation-stale"),
+            at: Date(timeIntervalSince1970: 1_700_000_002)
+        ) == false)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: CursorHookEvent(
+                hookEventName: eventName,
+                conversationID: matchesConversation ? "conversation-root" : "conversation-child",
+                generationID: eventName == "stop" ? "generation-1" : nil,
+                status: eventName == "stop" ? SessionStatus(kind: .ready, summary: "Ready") : nil
+            ),
+            at: Date(timeIntervalSince1970: 1_700_000_003)
+        ) == matchesConversation)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status == nil)
+        establishRoot(in: store, sessionID: sessionID)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == (matchesConversation ? .idle : .working))
+    }
+
+    @MainActor
+    @Test func cursorSessionTeardownClearsPendingPrompt() {
+        let sessionID = "sess-pending-restart"
+        let store = makeCursorSessionStore(sessionID: sessionID)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: promptEvent(generationID: "generation-old"),
+            at: Date(timeIntervalSince1970: 1_700_000_001)
+        ))
+        store.stopSession(sessionID: sessionID, at: Date(timeIntervalSince1970: 1_700_000_002))
+        startCursorSession(in: store, sessionID: sessionID, at: Date(timeIntervalSince1970: 1_700_000_003))
+        establishRoot(in: store, sessionID: sessionID)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .idle)
+        #expect(store.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: stopEvent(generationID: "generation-old"),
+            at: Date(timeIntervalSince1970: 1_700_000_004)
+        ) == false)
     }
 
     @MainActor
@@ -258,10 +447,13 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
     }
 
     @MainActor
-    @Test func cursorCloudHandoffDoesNotReportRemoteCompletion() {
+    @Test(arguments: [false, true])
+    func cursorCloudHandoffDoesNotReportRemoteCompletion(promptBeforeStartup: Bool) {
         let sessionID = "sess-cloud-handoff"
         let store = makeCursorSessionStore(sessionID: sessionID)
-        establishRoot(in: store, sessionID: sessionID)
+        if !promptBeforeStartup {
+            establishRoot(in: store, sessionID: sessionID)
+        }
 
         #expect(store.handleCursorHookEvent(
             sessionID: sessionID,
@@ -278,6 +470,10 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
             ),
             at: Date(timeIntervalSince1970: 1_700_000_001)
         ))
+        if promptBeforeStartup {
+            #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status == nil)
+            establishRoot(in: store, sessionID: sessionID)
+        }
         #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
 
         #expect(store.handleCursorHookEvent(
@@ -444,6 +640,12 @@ private extension AutomationSocketServerCursorHookTests {
             sendSessionStatusNotification: { _, _, _, _, _ in },
             isApplicationActive: { false }
         )
+        startCursorSession(in: store, sessionID: sessionID, at: Date(timeIntervalSince1970: 1_700_000_000))
+        return store
+    }
+
+    @MainActor
+    func startCursorSession(in store: SessionRuntimeStore, sessionID: String, at now: Date) {
         store.startSession(
             sessionID: sessionID,
             agent: .cursor,
@@ -453,9 +655,8 @@ private extension AutomationSocketServerCursorHookTests {
             usesSessionStatusNotifications: true,
             cwd: "/tmp/repo",
             repoRoot: "/tmp/repo",
-            at: Date(timeIntervalSince1970: 1_700_000_000)
+            at: now
         )
-        return store
     }
 
     @MainActor

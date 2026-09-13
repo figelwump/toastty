@@ -1285,10 +1285,18 @@ Behavior:
 
 - `sessionID` must identify an active managed Cursor session
 - `panelID` is optional; when present it must match the active session
-- `sessionStart` requires an Idle status, claims the root conversation, and
-  cannot claim a turn
-- `beforeSubmitPrompt` is accepted only for that root conversation and latches
-  its current `generationID`; later tool and terminal events must match both
+- `sessionStart` requires an Idle status and claims the root conversation; its
+  own generation ID cannot claim a turn
+- while no root conversation is confirmed, the latest identified
+  `beforeSubmitPrompt` is accepted into temporary memory without changing
+  visible status or claiming identity. Acceptance advances `stateVersion`.
+  Startup consumes it only if its conversation matches the confirmed root;
+  otherwise it is discarded. A `stop` with the same conversation and generation
+  and a Ready, Idle, or Error status cancels the pending prompt without
+  publishing completion. A `sessionEnd` for the same conversation or managed-session
+  cleanup also discards it
+- `beforeSubmitPrompt` latches its current `generationID` only for the confirmed
+  root conversation; later tool and terminal events must match both
 - `stop` never establishes identity, and an unidentified, nested, or stale
   completion is ignored instead of clearing newer work
 - a matching completed `stop` after a `cloudHandoff` prompt becomes

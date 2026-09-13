@@ -73,6 +73,7 @@ final class SessionRuntimeStore: ObservableObject {
         var cloudHandoff: Bool
     }
     private var cursorHookCorrelationBySessionID: [String: CursorHookCorrelationState] = [:]
+    private var pendingCursorPromptBySessionID: [String: CursorHookEvent] = [:]
     private var nativeBindingConfirmationBySessionID: [
         String: ManagedNativeSessionBindingConfirmation
     ] = [:]
@@ -1791,14 +1792,28 @@ final class SessionRuntimeStore: ObservableObject {
                 generationID: nil,
                 cloudHandoff: false
             )
+            if let pendingPrompt = pendingCursorPromptBySessionID.removeValue(forKey: sessionID),
+               normalizedNonEmpty(pendingPrompt.conversationID) == conversationID {
+                // Interactive Cursor can submit its initial prompt before
+                // sessionStart. Confirm the root before applying that turn,
+                // without publishing an idle status between the two events.
+                return handleCursorHookEvent(sessionID: sessionID, event: pendingPrompt, at: now)
+            }
             updateStatus(sessionID: sessionID, status: status, at: now)
             return true
 
         case "beforeSubmitPrompt":
             guard let conversationID,
-                  let generationID,
-                  let correlation = cursorHookCorrelationBySessionID[sessionID],
-                  correlation.conversationID == conversationID else {
+                  let generationID else {
+                return false
+            }
+            guard let correlation = cursorHookCorrelationBySessionID[sessionID] else {
+                // Keep only the latest candidate; it cannot claim root identity
+                // or change visible status until sessionStart confirms it.
+                pendingCursorPromptBySessionID[sessionID] = event
+                return true
+            }
+            guard correlation.conversationID == conversationID else {
                 return false
             }
 
@@ -1834,6 +1849,17 @@ final class SessionRuntimeStore: ObservableObject {
             return true
 
         case "stop":
+            if cursorHookCorrelationBySessionID[sessionID] == nil,
+               let conversationID, let generationID,
+               let pending = pendingCursorPromptBySessionID[sessionID],
+               normalizedNonEmpty(pending.conversationID) == conversationID,
+               normalizedNonEmpty(pending.generationID) == generationID,
+               let status = event.status,
+               [.ready, .idle, .error].contains(status.kind) {
+                // Do not replay a turn that ended before startup was confirmed.
+                pendingCursorPromptBySessionID.removeValue(forKey: sessionID)
+                return true
+            }
             guard cursorHookEventMatchesActiveRootTurn(
                 sessionID: sessionID,
                 conversationID: conversationID,
@@ -1864,6 +1890,13 @@ final class SessionRuntimeStore: ObservableObject {
             return true
 
         case "sessionEnd":
+            if cursorHookCorrelationBySessionID[sessionID] == nil,
+               let conversationID,
+               let pending = pendingCursorPromptBySessionID[sessionID],
+               normalizedNonEmpty(pending.conversationID) == conversationID {
+                pendingCursorPromptBySessionID.removeValue(forKey: sessionID)
+                return true
+            }
             // SessionEnd describes the whole Cursor conversation, not a turn.
             // Retire the root latch so `/clear` and its aliases can establish
             // the next documented composer conversation. If the conversation
@@ -2187,6 +2220,7 @@ final class SessionRuntimeStore: ObservableObject {
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
+        pendingCursorPromptBySessionID.removeValue(forKey: sessionID)
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
