@@ -580,6 +580,27 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testCrowdedNarrowSessionRowDropsScopeTagAndMovesScopeHelpToRowTooltip() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "scoped-row-narrow",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            displayTitleOverride: "Codex sidebar compact row review",
+            scopedWorkspaceIDs: [],
+            sidebarWidth: CGFloat(WindowState.minSidebarWidth)
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertFalse(
+            textValues.contains("1 scope"),
+            "A header that does not fit should drop the scope tag: \(textValues)"
+        )
+        let tooltipValues = renderedTooltipValues(in: hostingView)
+        XCTAssertTrue(
+            tooltipValues.contains(where: { $0.contains("Scoped to: Workspace 1") }),
+            "Row tooltip should carry the dropped scope tag's help text: \(tooltipValues)"
+        )
+    }
+
     func testWorkspaceScopedSessionTooltipListsEffectiveWorkspaceNames() throws {
         let additionalWorkspaceID = UUID()
         let additionalWorkspace = makeSinglePanelWorkspace(
@@ -1260,7 +1281,8 @@ final class SidebarViewTests: XCTestCase {
         scopedWorkspaceIDs: Set<UUID>? = nil,
         additionalWorkspaces: [WorkspaceState] = [],
         prependAdditionalWorkspaces: Bool = false,
-        sessionPanelPlacement: SessionPanelPlacement = .focused
+        sessionPanelPlacement: SessionPanelPlacement = .focused,
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
     ) throws -> NSView {
         try makeSidebarHarness(
             sessionID: sessionID,
@@ -1270,7 +1292,8 @@ final class SidebarViewTests: XCTestCase {
             scopedWorkspaceIDs: scopedWorkspaceIDs,
             additionalWorkspaces: additionalWorkspaces,
             prependAdditionalWorkspaces: prependAdditionalWorkspaces,
-            sessionPanelPlacement: sessionPanelPlacement
+            sessionPanelPlacement: sessionPanelPlacement,
+            sidebarWidth: sidebarWidth
         ).hostingView
     }
 
@@ -1289,7 +1312,8 @@ final class SidebarViewTests: XCTestCase {
         scopedWorkspaceIDs: Set<UUID>? = nil,
         additionalWorkspaces: [WorkspaceState] = [],
         prependAdditionalWorkspaces: Bool = false,
-        sessionPanelPlacement: SessionPanelPlacement = .focused
+        sessionPanelPlacement: SessionPanelPlacement = .focused,
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
         var state = harnessState.state
@@ -1341,9 +1365,9 @@ final class SidebarViewTests: XCTestCase {
             annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext
         )
-        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: sidebarWidth, height: 600),
             styleMask: [.titled],
             backing: .buffered,
             defer: false

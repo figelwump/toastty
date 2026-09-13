@@ -1189,7 +1189,7 @@ struct SidebarView: View {
             workspaceSessionStatus.children
         )
         let collapsedChildNeedsAttention = childRowsNeedAttention && childRowsExpanded == false
-        let parentTagLabel = parentSessionTagLabel(for: workspaceSessionStatus, in: workspace.id)
+        let parentSessionName = parentSessionName(for: workspaceSessionStatus, in: workspace.id)
         let accessibilityLabel = SidebarSessionPresentation.sessionAccessibilityLabel(
             agentName: workspaceSessionStatus.displayTitle,
             chipKind: chipKind,
@@ -1244,7 +1244,7 @@ struct SidebarView: View {
             childCount: workspaceSessionStatus.children.count,
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
-            parentTagLabel: parentTagLabel,
+            parentSessionName: parentSessionName,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
             }
@@ -1372,7 +1372,7 @@ struct SidebarView: View {
         childCount: Int,
         childRowsExpanded: Bool,
         collapsedChildNeedsAttention: Bool,
-        parentTagLabel: String?,
+        parentSessionName: String?,
         onToggleChildRows: @escaping () -> Void
     ) -> some View {
         let indicatorState = SidebarSessionPresentation.sessionIndicatorState(for: status.kind)
@@ -1387,64 +1387,43 @@ struct SidebarView: View {
         let flashOpacity = isFlashing ? flashingSessionOverlayOpacity : 0
         let detailText = normalizedSessionDetail(status.detail)
 
+        let hasScopeTag = workspaceSessionStatus.isWorkspaceScoped
+        let hasParentTag = parentSessionName != nil
+        let headerRow = { (showsScopeTag: Bool, showsParentTag: Bool) in
+            sessionHeaderRow(
+                workspaceSessionStatus,
+                status: status,
+                projection: projection,
+                indicatorState: indicatorState,
+                chipKind: chipKind,
+                isLaterFlagged: isLaterFlagged,
+                showsUnreadSessionAccent: showsUnreadSessionAccent,
+                scopeTagLabel: scopeTagLabel,
+                scopeHelpText: scopeHelpText,
+                showsScopeTag: showsScopeTag,
+                childCount: childCount,
+                childRowsExpanded: childRowsExpanded,
+                collapsedChildNeedsAttention: collapsedChildNeedsAttention,
+                parentSessionName: parentSessionName,
+                showsParentTag: showsParentTag,
+                onToggleChildRows: onToggleChildRows
+            )
+        }
+
         return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                if indicatorState != .hidden {
-                    SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
+            // Drop the parent tag, then the scope tag, when the header does
+            // not fit at its ideal width. Truncating them instead leaves
+            // stubs like "↖ Cl…" while the agent name still loses width,
+            // because the stack reserves every chip's minimum width before
+            // layout priority applies.
+            ViewThatFits(in: .horizontal) {
+                if hasParentTag {
+                    headerRow(hasScopeTag, true)
                 }
-
-                Self.styledSessionAgentText(
-                    workspaceSessionStatus.displayTitle,
-                    statusKind: status.kind,
-                    showsUnreadSessionAccent: showsUnreadSessionAccent
-                )
-                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                    .lineLimit(1)
-
-                if let chipKind {
-                    sessionStatusChip(kind: chipKind)
+                if hasScopeTag {
+                    headerRow(true, false)
                 }
-
-                if case .waitingOnChildren = projection {
-                    sessionWaitingChip()
-                }
-
-                if workspaceSessionStatus.isWorkspaceScoped {
-                    sessionWorkspaceScopeTag(label: scopeTagLabel, helpText: scopeHelpText)
-                }
-
-                Spacer(minLength: 0)
-
-                if isLaterFlagged {
-                    Image(systemName: "flag.fill")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(
-                            ToastyTheme.accent.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
-                        )
-                        .accessibilityHidden(true)
-                } else if workspaceSessionStatus.agent == .processWatch {
-                    // Watched processes cannot be flagged (see SessionRegistry.setLaterFlag),
-                    // so this slot is mutually exclusive with the flag icon above.
-                    Image(systemName: "bell.fill")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(
-                            ToastyTheme.sidebarSessionWatchIcon.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
-                        )
-                        .accessibilityHidden(true)
-                }
-
-                if let parentTagLabel {
-                    sessionParentTag(label: parentTagLabel)
-                }
-
-                if childCount > 0 {
-                    sessionChildrenDisclosurePill(
-                        count: childCount,
-                        isExpanded: childRowsExpanded,
-                        showsAttention: collapsedChildNeedsAttention,
-                        action: onToggleChildRows
-                    )
-                }
+                headerRow(false, false)
             }
 
             if status.kind != .idle || detailText != nil {
@@ -1472,6 +1451,14 @@ struct SidebarView: View {
         .padding(.vertical, 5)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .backgroundPreferenceValue(SidebarSessionRowCompactHelpTextPreferenceKey.self) { compactHelpText in
+            // When the chosen header variant dropped a tag, the whole row's
+            // tooltip carries that tag's information.
+            if let compactHelpText {
+                SidebarTooltipBridge(text: compactHelpText)
+                    .allowsHitTesting(false)
+            }
+        }
         .background(
             RoundedRectangle(cornerRadius: 5)
                 .fill(
@@ -1495,6 +1482,99 @@ struct SidebarView: View {
                 .stroke(ToastyTheme.accent.opacity(flashOpacity), lineWidth: 1.75)
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    private func sessionHeaderRow(
+        _ workspaceSessionStatus: WorkspaceSessionStatus,
+        status: SessionStatus,
+        projection: SessionStatusProjection,
+        indicatorState: SessionStatusIndicatorState,
+        chipKind: SessionStatusKind?,
+        isLaterFlagged: Bool,
+        showsUnreadSessionAccent: Bool,
+        scopeTagLabel: String,
+        scopeHelpText: String?,
+        showsScopeTag: Bool,
+        childCount: Int,
+        childRowsExpanded: Bool,
+        collapsedChildNeedsAttention: Bool,
+        parentSessionName: String?,
+        showsParentTag: Bool,
+        onToggleChildRows: @escaping () -> Void
+    ) -> some View {
+        let compactHelpText = SidebarSessionPresentation.sessionRowCompactHelpText(
+            parentSessionName: showsParentTag ? nil : parentSessionName,
+            workspaceScopeHelpText: showsScopeTag ? nil : scopeHelpText
+        )
+        let parentTagLabel = parentSessionName.map(SidebarSessionPresentation.parentSessionTagLabel(parentName:))
+
+        return HStack(spacing: 6) {
+            if indicatorState != .hidden {
+                SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
+            }
+
+            Self.styledSessionAgentText(
+                workspaceSessionStatus.displayTitle,
+                statusKind: status.kind,
+                showsUnreadSessionAccent: showsUnreadSessionAccent
+            )
+                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                .lineLimit(1)
+                .layoutPriority(2)
+
+            if let chipKind {
+                sessionStatusChip(kind: chipKind)
+                    .layoutPriority(2)
+            }
+
+            // The waiting, scope, and parent chips keep the default layout
+            // priority so they give up width before the name, status chip,
+            // and disclosure pill. Do not lower them below the spacer:
+            // a lower priority lets the spacer starve them of width even
+            // when the row has room.
+            if case .waitingOnChildren = projection {
+                sessionWaitingChip()
+            }
+
+            if workspaceSessionStatus.isWorkspaceScoped, showsScopeTag {
+                sessionWorkspaceScopeTag(label: scopeTagLabel, helpText: scopeHelpText)
+            }
+
+            Spacer(minLength: 0)
+
+            if isLaterFlagged {
+                Image(systemName: "flag.fill")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(
+                        ToastyTheme.accent.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
+                    )
+                    .accessibilityHidden(true)
+            } else if workspaceSessionStatus.agent == .processWatch {
+                // Watched processes cannot be flagged (see SessionRegistry.setLaterFlag),
+                // so this slot is mutually exclusive with the flag icon above.
+                Image(systemName: "bell.fill")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(
+                        ToastyTheme.sidebarSessionWatchIcon.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
+                    )
+                    .accessibilityHidden(true)
+            }
+
+            if let parentTagLabel, showsParentTag {
+                sessionParentTag(label: parentTagLabel)
+            }
+
+            if childCount > 0 {
+                sessionChildrenDisclosurePill(
+                    count: childCount,
+                    isExpanded: childRowsExpanded,
+                    showsAttention: collapsedChildNeedsAttention,
+                    action: onToggleChildRows
+                )
+                .layoutPriority(1)
+            }
+        }
+        .preference(key: SidebarSessionRowCompactHelpTextPreferenceKey.self, value: compactHelpText)
     }
 
     private func workspaceRowFrameMeasurement(workspaceID: UUID) -> some View {
@@ -1907,6 +1987,7 @@ struct SidebarView: View {
         Text("waiting")
             .font(ToastyTheme.fontWorkspaceSessionChip)
             .foregroundStyle(ToastyTheme.sessionWaitingText)
+            .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(
@@ -2011,6 +2092,7 @@ struct SidebarView: View {
         return Text(label)
             .font(ToastyTheme.fontWorkspaceSessionChip)
             .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+            .lineLimit(1)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(
@@ -2058,7 +2140,11 @@ struct SidebarView: View {
                     .font(.system(size: 8, weight: .bold))
                 Text("\(count)")
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
             }
+            // The pill is a control, so it keeps its intrinsic width instead
+            // of wrapping or dropping the count when the header is squeezed.
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(ToastyTheme.sidebarDisclosureText)
             .padding(.horizontal, 8)
             .padding(.vertical, 1.5)
@@ -2154,40 +2240,13 @@ struct SidebarView: View {
         return Button {
             focusSessionPanel(workspaceID: focusTarget.workspaceID, panelID: focusTarget.panelID)
         } label: {
-            HStack(spacing: 6) {
-                Text(child.panelID == nil ? "" : "↗")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
-                    .frame(width: 9, alignment: .center)
-                    .accessibilityHidden(true)
-
-                sessionChildStatusView(for: child)
-
-                Text(child.displayName)
-                    .font(ToastyTheme.fontWorkspaceSessionChildName)
-                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                if let context = child.context {
-                    Text(context)
-                        .font(ToastyTheme.fontWorkspaceSessionChildContext)
-                        .foregroundStyle(ToastyTheme.sidebarChildContextText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+            // Drop the workspace tag rather than truncate it when the row
+            // does not fit; the hover tip already names the workspace.
+            ViewThatFits(in: .horizontal) {
+                if elapsedText == nil, workspaceTag != nil {
+                    sessionChildRowContent(child, elapsedText: elapsedText, workspaceTag: workspaceTag)
                 }
-
-                Spacer(minLength: 0)
-
-                if let elapsedText {
-                    Text(elapsedText)
-                        .font(ToastyTheme.fontWorkspaceSessionChildMeta)
-                        .foregroundStyle(ToastyTheme.sidebarChildMetaText)
-                        .monospacedDigit()
-                        .fixedSize()
-                } else if let workspaceTag {
-                    sessionParentTag(label: workspaceTag)
-                }
+                sessionChildRowContent(child, elapsedText: elapsedText, workspaceTag: nil)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
@@ -2200,6 +2259,50 @@ struct SidebarView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier("sidebar.workspace.sessionChild.\(child.sidebarStableID)")
+    }
+
+    private func sessionChildRowContent(
+        _ child: SessionChildRow,
+        elapsedText: String?,
+        workspaceTag: String?
+    ) -> some View {
+        HStack(spacing: 6) {
+            Text(child.panelID == nil ? "" : "↗")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                .frame(width: 9, alignment: .center)
+                .accessibilityHidden(true)
+
+            sessionChildStatusView(for: child)
+
+            // The name wins over the command context; the elapsed time is fixed.
+            Text(child.displayName)
+                .font(ToastyTheme.fontWorkspaceSessionChildName)
+                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+
+            if let context = child.context {
+                Text(context)
+                    .font(ToastyTheme.fontWorkspaceSessionChildContext)
+                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 0)
+
+            if let elapsedText {
+                Text(elapsedText)
+                    .font(ToastyTheme.fontWorkspaceSessionChildMeta)
+                    .foregroundStyle(ToastyTheme.sidebarChildMetaText)
+                    .monospacedDigit()
+                    .fixedSize()
+            } else if let workspaceTag {
+                sessionParentTag(label: workspaceTag)
+            }
+        }
     }
 
     static func sessionChildHoverTipModel(
@@ -2295,7 +2398,7 @@ struct SidebarView: View {
         expandedSessionChildrenBySessionID[sessionID] = true
     }
 
-    private func parentSessionTagLabel(
+    private func parentSessionName(
         for workspaceSessionStatus: WorkspaceSessionStatus,
         in workspaceID: UUID
     ) -> String? {
@@ -2304,8 +2407,7 @@ struct SidebarView: View {
               parent.workspaceID != workspaceID else {
             return nil
         }
-        let parentName = parent.displayTitleOverride ?? parent.agent.displayName
-        return "↖ \(parentName)"
+        return parent.displayTitleOverride ?? parent.agent.displayName
     }
 
     private func childWorkspaceTagLabel(
@@ -2691,6 +2793,14 @@ private struct WorkspaceRowFramePreferenceKey: PreferenceKey {
 
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+private struct SidebarSessionRowCompactHelpTextPreferenceKey: PreferenceKey {
+    static let defaultValue: String? = nil
+
+    static func reduce(value: inout String?, nextValue: () -> String?) {
+        value = nextValue() ?? value
     }
 }
 

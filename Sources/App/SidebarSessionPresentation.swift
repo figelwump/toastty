@@ -282,6 +282,26 @@ enum SidebarSessionPresentation {
         return SessionChildFocusTarget(workspaceID: workspaceID, panelID: panelID)
     }
 
+    static func parentSessionTagLabel(parentName: String) -> String {
+        "↖ \(parentName)"
+    }
+
+    /// Tooltip text for a session row whose parent or scope tag was dropped
+    /// because the header did not fit.
+    static func sessionRowCompactHelpText(
+        parentSessionName: String?,
+        workspaceScopeHelpText: String?
+    ) -> String? {
+        var lines: [String] = []
+        if let parentSessionName {
+            lines.append("Parent session: \(parentSessionName)")
+        }
+        if let workspaceScopeHelpText {
+            lines.append(workspaceScopeHelpText)
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
     static func childWorkspaceTagLabel(
         for child: SessionChildRow,
         parentWorkspaceID: UUID,
