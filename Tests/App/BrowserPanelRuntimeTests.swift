@@ -412,6 +412,41 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.sessionID), ["agent"])
     }
 
+    func testScratchpadAnnotationCandidatesUseOwningRightPanelTab() {
+        let panelID = UUID()
+        let agentPanelID = UUID()
+        let ownerTab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: agentPanelID),
+            panels: [agentPanelID: terminalPanel(title: "Agent")],
+            focusedPanelID: agentPanelID,
+            rightAuxPanel: RightAuxPanelState(
+                isVisible: true, activeTabID: panelID, tabIDs: [panelID],
+                tabsByID: [panelID: RightAuxPanelTabState(
+                    id: panelID, identity: .scratchpad(id: panelID), panelID: panelID,
+                    panelState: .web(WebPanelState(definition: .scratchpad))
+                )]
+            )
+        )
+        let workspace = WorkspaceState(
+            id: UUID(), title: "Workspace", selectedTabID: ownerTab.id,
+            tabIDs: [ownerTab.id], tabsByID: [ownerTab.id: ownerTab]
+        )
+        var registry = SessionRegistry()
+        registry.startSession(
+            sessionID: "scratchpad-agent", agent: .codex, panelID: agentPanelID,
+            windowID: UUID(), workspaceID: workspace.id, displayTitleOverride: "Codex",
+            cwd: nil, repoRoot: nil, at: Date()
+        )
+
+        let candidates = BrowserScreenshotSendCandidateBuilder.candidates(
+            workspace: workspace, browserPanelID: panelID, sessionRegistry: registry
+        )
+
+        XCTAssertEqual(candidates.map(\.sessionID), ["scratchpad-agent"])
+        XCTAssertEqual(candidates.map(\.panelID), [agentPanelID])
+    }
+
     func testBrowserScreenshotCandidatesRejectNonBrowserPanel() {
         let terminalPanelID = UUID()
         let tab = WorkspaceTabState(

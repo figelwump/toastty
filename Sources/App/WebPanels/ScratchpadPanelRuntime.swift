@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import Foundation
 import WebKit
@@ -36,7 +37,7 @@ struct ScratchpadPanelDiagnostic: Equatable, Sendable {
 }
 
 @MainActor
-final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
+final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling, WebPanelAnnotationRuntime {
     typealias BridgeScriptCompletion = @MainActor @Sendable (Any?, Error?) -> Void
     typealias BridgeScriptEvaluator = @MainActor (String, @escaping BridgeScriptCompletion) -> Void
     typealias DiagnosticLogger = @MainActor @Sendable (ToasttyLogLevel, String, [String: String]) -> Void
@@ -44,6 +45,14 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
     private static let scriptMessageHandlerName = "toasttyScratchpadPanel"
     private static let externalLinkHandlerName = "toasttyScratchpadExternalLink"
     private static let maxRecentDiagnostics = 20
+
+    let annotationSession = WebPanelAnnotationSession()
+    @Published private(set) var isAnnotationContentReady = false
+    private var annotationObservation: AnyCancellable?
+    private var annotationRenderID: UUID?
+
+    var annotationSource: WebPanelAnnotationSource { .scratchpad }
+    var annotationDisplayZoom: CGFloat { webView.pageZoom }
 
     private let openExternalLink: @MainActor (UUID, URL) -> Void
     private let panelID: UUID
@@ -130,6 +139,10 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         }
 
         super.init()
+
+        annotationObservation = annotationSession.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
 
         webView.interactionDidRequestFocus = { [panelID] in
             interactionDidRequestFocus(panelID)
@@ -269,6 +282,10 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
 
     @discardableResult
     func focusWebView() -> Bool {
+        guard annotationState.isAnnotationModeEnabled == false else {
+            pendingContentFocusRequest = false
+            return true
+        }
         guard let window = webView.window else {
             pendingContentFocusRequest = true
             return false
@@ -337,13 +354,19 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         return configuration
     }
 
-    nonisolated static func bootstrapJavaScript(for bootstrap: ScratchpadPanelBootstrap) -> String? {
+    nonisolated static func bootstrapJavaScript(
+        for bootstrap: ScratchpadPanelBootstrap,
+        annotationRenderID: UUID? = nil
+    ) -> String? {
         let encoder = JSONEncoder()
         guard let data = try? encoder.encode(bootstrap),
               let json = String(data: data, encoding: .utf8) else {
             return nil
         }
-        return bridgeCommandJavaScript(command: "bridge.receiveBootstrap(\(json));")
+        let payload = annotationRenderID.map {
+            "{...\(json), annotationRenderID: \"\($0.uuidString)\"}"
+        } ?? json
+        return bridgeCommandJavaScript(command: "bridge.receiveBootstrap(\(payload));")
     }
 
     nonisolated static func bridgeCommandJavaScript(command: String) -> String {
@@ -407,7 +430,7 @@ extension ScratchpadPanelRuntime {
             disposition: String?,
             diagnosticSource: String
         )
-        case renderReady(displayName: String, revision: Int?)
+        case renderReady(displayName: String, revision: Int?, annotationRenderID: String?)
 
         init?(messageBody: Any) {
             guard let body = messageBody as? [String: Any],
@@ -482,7 +505,11 @@ extension ScratchpadPanelRuntime {
                 guard let displayName = body["displayName"] as? String else {
                     return nil
                 }
-                self = .renderReady(displayName: displayName, revision: optionalInt("revision"))
+                self = .renderReady(
+                    displayName: displayName,
+                    revision: optionalInt("revision"),
+                    annotationRenderID: body["annotationRenderID"] as? String
+                )
             default:
                 return nil
             }
@@ -490,6 +517,7 @@ extension ScratchpadPanelRuntime {
     }
 
     func reloadBootstrap(for webState: WebPanelState) {
+        invalidateAnnotationsForContentChange()
         resetDiagnostics()
         currentBootstrap = Self.bootstrap(
             for: webState,
@@ -602,14 +630,17 @@ extension ScratchpadPanelRuntime {
             return
         }
 
-        if pendingBootstrapScript == nil {
-            guard let currentBootstrap else { return }
-            pendingBootstrapScript = Self.bootstrapJavaScript(for: currentBootstrap)
-        }
+        guard let currentBootstrap else { return }
+        // A bootstrap attempt can replace the iframe, including on theme and
+        // binding updates. Invalidate before asynchronous delivery so an old
+        // capture cannot finish against the newly requested content.
+        invalidateAnnotationsForContentChange()
+        let renderID = UUID()
+        annotationRenderID = renderID
+        pendingBootstrapScript = Self.bootstrapJavaScript(for: currentBootstrap, annotationRenderID: renderID)
         guard let pendingBootstrapScript else { return }
-
         bridgeScriptEvaluator(pendingBootstrapScript) { [weak self] result, error in
-            guard let self else { return }
+            guard let self, self.annotationRenderID == renderID else { return }
             if error == nil, Self.bridgeCommandWasDelivered(result) {
                 self.pendingBootstrapScript = nil
                 self.logDiagnostic(.debug, "Delivered Scratchpad bootstrap to page")
@@ -628,7 +659,8 @@ extension ScratchpadPanelRuntime {
 
     func pushPendingContentFocusIfPossible() {
         guard pendingContentFocusRequest,
-              isPanelBridgeReady else {
+              isPanelBridgeReady,
+              annotationState.isAnnotationModeEnabled == false else {
             return
         }
 
@@ -780,7 +812,15 @@ extension ScratchpadPanelRuntime {
                 metadata: diagnosticMetadata
             )
             logDiagnostic(.warning, "Scratchpad content security policy violation", metadata: metadata)
-        case .renderReady(let displayName, let revision):
+        case .renderReady(let displayName, let revision, let renderID):
+            if let currentBootstrap,
+               let expectedRenderID = annotationRenderID,
+               renderID == expectedRenderID.uuidString,
+               currentBootstrap.displayName == displayName,
+               currentBootstrap.revision == revision {
+                isAnnotationContentReady = currentBootstrap.missingDocument == false
+                    && currentBootstrap.contentHTML?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            }
             logDiagnostic(
                 .debug,
                 "Scratchpad render ready",
@@ -900,6 +940,10 @@ extension ScratchpadPanelRuntime {
 }
 
 extension ScratchpadPanelRuntime: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        invalidateAnnotationsForContentChange()
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         logDiagnostic(
             .debug,
@@ -938,6 +982,72 @@ extension ScratchpadPanelRuntime: WKNavigationDelegate {
         let requestedPath = requestURL.standardizedFileURL.path
         let currentPath = currentAssetURL.standardizedFileURL.path
         decisionHandler(requestedPath == currentPath ? .allow : .cancel)
+    }
+}
+
+extension ScratchpadPanelRuntime {
+    private func invalidateAnnotationsForContentChange() {
+        annotationRenderID = nil
+        isAnnotationContentReady = false
+        annotationSession.invalidateForContentChange()
+    }
+
+    func currentAnnotationViewport() async -> BrowserAnnotationViewport {
+        (try? await measuredAnnotationViewport()) ?? BrowserAnnotationViewport(
+            scrollOffset: .zero,
+            viewportSize: webView.bounds.size
+        )
+    }
+
+    private func measuredAnnotationViewport() async throws -> BrowserAnnotationViewport {
+        let result = try await webView.callAsyncJavaScript(
+            "return await window.ToasttyScratchpadPanel?.getAnnotationViewport();",
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        guard let scrollOffset = BrowserPanelRuntime.annotationScrollOffset(from: result) else {
+            throw BrowserPanelScreenshotError.snapshotUnavailable
+        }
+        return BrowserAnnotationViewport(scrollOffset: scrollOffset, viewportSize: webView.bounds.size)
+    }
+
+    func captureAnnotationSection(capturedAt: Date) async throws -> BrowserAnnotationCapturedSection {
+        guard isAnnotationContentReady,
+              webView.window != nil,
+              webView.isHidden == false,
+              let bootstrap = currentBootstrap else {
+            throw BrowserPanelScreenshotError.snapshotUnavailable
+        }
+        guard webView.bounds.width > 0, webView.bounds.height > 0 else {
+            throw BrowserPanelScreenshotError.emptySnapshotBounds
+        }
+        let generation = currentAnnotationPageGeneration()
+        let viewport = try await measuredAnnotationViewport()
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = webView.bounds
+        let image: NSImage = try await withCheckedThrowingContinuation { continuation in
+            webView.takeSnapshot(with: configuration) { image, error in
+                if let image {
+                    continuation.resume(returning: image)
+                } else {
+                    continuation.resume(throwing: error ?? BrowserPanelScreenshotError.snapshotUnavailable)
+                }
+            }
+        }
+        guard generation == currentAnnotationPageGeneration() else {
+            throw BrowserPanelScreenshotError.snapshotUnavailable
+        }
+        let identity = bootstrap.documentID.map { "Scratchpad \($0.uuidString)" } ?? "Scratchpad"
+        let revision = bootstrap.revision.map { ", revision \($0)" } ?? ""
+        return BrowserAnnotationCapturedSection(
+            pngData: try BrowserPanelScreenshotWriter.pngData(from: image),
+            url: nil,
+            title: "\(bootstrap.displayName) (\(identity)\(revision))",
+            scrollOffset: viewport.scrollOffset,
+            viewportSize: viewport.viewportSize,
+            capturedAt: capturedAt
+        )
     }
 }
 

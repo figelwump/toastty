@@ -44,7 +44,7 @@ enum BrowserScreenshotSendCandidateBuilder {
                 ?? workspace.rightAuxPanelTabLocation(containingPanelID: browserPanelID)?.mainTabID,
               let ownerTab = workspace.tab(id: ownerTabID),
               case .web(let webState) = workspace.panelState(for: browserPanelID),
-              webState.definition == .browser else {
+              webState.definition == .browser || webState.definition == .scratchpad else {
             return []
         }
 

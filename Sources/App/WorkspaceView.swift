@@ -4142,6 +4142,7 @@ struct PanelCardView: View {
             )
         } else if state.definition == .scratchpad {
             ScratchpadPanelView(
+                panelID: panelID,
                 webState: state,
                 runtime: webPanelRuntimeRegistry.scratchpadRuntime(
                     for: panelID,
@@ -4149,7 +4150,13 @@ struct PanelCardView: View {
                     isEffectivelyVisible: isWorkspaceSelected && isTabSelected
                 ),
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
-                isActivePanel: isFocused
+                isActivePanel: isFocused,
+                activatePanel: {
+                    _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                },
+                annotationSendCandidates: browserScreenshotSendCandidates,
+                annotationSendAvailability: browserAnnotationSendAvailability(for:),
+                sendAnnotationPayloadToAgent: sendBrowserAnnotationPayload(_:to:)
             )
             .frame(
                 maxWidth: .infinity,
@@ -4223,6 +4230,25 @@ struct PanelCardView: View {
 
         if let browserHeaderAccessory {
             browserHeaderAccessory
+        }
+
+        if case .web(let webState) = panelState, webState.definition == .scratchpad {
+            let runtime = webPanelRuntimeRegistry.scratchpadRuntime(
+                for: panelID,
+                requestSource: "PanelCardView.annotationHeader",
+                isEffectivelyVisible: isWorkspaceSelected && isTabSelected
+            )
+            WebPanelAnnotationHeaderAccessory(
+                panelID: panelID,
+                runtime: runtime,
+                canAnnotate: runtime.isAnnotationContentReady,
+                sendCandidates: browserScreenshotSendCandidates,
+                activatePanel: {
+                    _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                },
+                sendAvailability: browserAnnotationSendAvailability(for:),
+                sendPayloadToAgent: sendBrowserAnnotationPayload(_:to:)
+            )
         }
 
         if let scratchpadHeaderAccessory {
@@ -4385,7 +4411,7 @@ struct PanelCardView: View {
     private var browserScreenshotSendCandidates: [BrowserScreenshotSendCandidate] {
         guard let workspace = store.state.workspacesByID[workspaceID],
               case .web(let webState) = panelState,
-              webState.definition == .browser else {
+              webState.definition == .browser || webState.definition == .scratchpad else {
             return []
         }
 

@@ -43,6 +43,8 @@ struct BrowserAnnotationCommentEditorView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ToastyTheme.primaryText)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay { BrowserAnnotationPopoverDragArea() }
 
             ZStack(alignment: .topLeading) {
                 BrowserAnnotationCommentTextView(
@@ -131,6 +133,8 @@ struct BrowserAnnotationCommentDetailView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ToastyTheme.primaryText)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay { BrowserAnnotationPopoverDragArea() }
 
             Text(comment)
                 .font(.system(size: 12))
@@ -163,6 +167,37 @@ struct BrowserAnnotationCommentDetailView: View {
         }
         .padding(11)
         .frame(width: 262)
+    }
+}
+
+/// The heading participates in AppKit's native popover detachment and window
+/// dragging, leaving text selection and buttons below it to handle their input.
+private struct BrowserAnnotationPopoverDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        DragAreaView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class DragAreaView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func resetCursorRects() {
+            super.resetCursorRects()
+            addCursorRect(bounds, cursor: .openHand)
+        }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            toolTip = "Drag to move"
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
     }
 }
 

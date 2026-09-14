@@ -1,10 +1,11 @@
 import { scratchpadNativeBridge } from "./nativeBridge";
-import { generatedDiagnosticsMessageType, sandboxedSrcdoc } from "./sandbox";
+import { generatedAnnotationViewportRequestType, generatedDiagnosticsMessageType, sandboxedSrcdoc } from "./sandbox";
 
 type ScratchpadPanelTheme = "light" | "dark";
 
 interface ScratchpadPanelBootstrap {
   contractVersion: 1;
+  annotationRenderID?: string;
   mobileViewport?: boolean;
   documentID: string | null;
   displayName: string;
@@ -17,6 +18,7 @@ interface ScratchpadPanelBootstrap {
 }
 
 type BootstrapListener = (bootstrap: ScratchpadPanelBootstrap | null) => void;
+type AnnotationViewport = { x: number; y: number };
 
 declare global {
   interface Window {
@@ -24,6 +26,7 @@ declare global {
     ToasttyScratchpadPanel?: {
       receiveBootstrap: (bootstrap: ScratchpadPanelBootstrap) => void;
       focusActiveContent: () => boolean;
+      getAnnotationViewport: () => Promise<AnnotationViewport | null>;
       getCurrentBootstrap: () => ScratchpadPanelBootstrap | null;
       subscribe: (listener: BootstrapListener) => () => void;
     };
@@ -36,6 +39,11 @@ let currentGeneratedContentFrame: HTMLIFrameElement | null = null;
 let currentGeneratedContentWindow: Window | null = null;
 let currentGeneratedContentDiagnosticsToken: string | null = null;
 let currentGeneratedContentReady = false;
+let annotationViewportRequestSequence = 0;
+const pendingAnnotationViewports = new Map<string, {
+  resolve: (viewport: AnnotationViewport | null) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}>();
 const diagnosticStringLimit = 2_000;
 const scratchpadSkillInstallSnippet = `Download the Toastty Scratchpad skill from
 https://github.com/figelwump/toastty/tree/main/.agents/skills/toastty-scratchpad
@@ -257,6 +265,14 @@ function installGeneratedContentDiagnosticsBridge() {
       return;
     }
 
+    if (diagnosticEvent.type === "annotationViewport") {
+      const { requestID, x, y } = diagnosticEvent;
+      if (typeof requestID !== "string" || typeof x !== "number" || typeof y !== "number" ||
+          !Number.isFinite(x) || !Number.isFinite(y)) return;
+      finishAnnotationViewportRequest(requestID, { x, y });
+      return;
+    }
+
     if (diagnosticEvent.type === "contentSize") {
       if (!currentBootstrap?.mobileViewport) return;
       const { width, height } = diagnosticEvent;
@@ -285,10 +301,40 @@ function notifyListeners() {
 }
 
 function resetGeneratedContentState() {
+  for (const requestID of pendingAnnotationViewports.keys()) {
+    finishAnnotationViewportRequest(requestID, null);
+  }
   currentGeneratedContentFrame = null;
   currentGeneratedContentWindow = null;
   currentGeneratedContentDiagnosticsToken = null;
   currentGeneratedContentReady = false;
+}
+
+function finishAnnotationViewportRequest(requestID: string, viewport: AnnotationViewport | null) {
+  const pending = pendingAnnotationViewports.get(requestID);
+  if (!pending) return;
+  pendingAnnotationViewports.delete(requestID);
+  clearTimeout(pending.timeout);
+  pending.resolve(viewport);
+}
+
+function getAnnotationViewport(): Promise<AnnotationViewport | null> {
+  if (!currentGeneratedContentReady || !currentGeneratedContentWindow ||
+      !currentGeneratedContentDiagnosticsToken) {
+    return Promise.resolve(null);
+  }
+  const frameWindow = currentGeneratedContentWindow;
+  const sessionToken = currentGeneratedContentDiagnosticsToken;
+  const requestID = String(++annotationViewportRequestSequence);
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => finishAnnotationViewportRequest(requestID, null), 500);
+    pendingAnnotationViewports.set(requestID, { resolve, timeout });
+    try {
+      frameWindow.postMessage({ type: generatedAnnotationViewportRequestType, sessionToken, requestID }, "*");
+    } catch {
+      finishAnnotationViewportRequest(requestID, null);
+    }
+  });
 }
 
 function isBlankUnboundScratchpadDocument(bootstrap: ScratchpadPanelBootstrap): boolean {
@@ -342,6 +388,7 @@ function focusActiveContent(): boolean {
 window.ToasttyScratchpadPanel = {
   receiveBootstrap,
   focusActiveContent,
+  getAnnotationViewport,
   getCurrentBootstrap() {
     return currentBootstrap;
   },
@@ -365,7 +412,7 @@ function renderMissing(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
   message.textContent = bootstrap.message || "This Scratchpad document is unavailable.";
   section.append(title, message);
   root.append(section);
-  scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision);
+  scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision, bootstrap.annotationRenderID ?? null);
 }
 
 function renderEmptyGuidance(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
@@ -459,7 +506,7 @@ function renderEmptyGuidance(root: HTMLElement, bootstrap: ScratchpadPanelBootst
 
   section.append(header, steps, footer);
   root.append(section);
-  scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision);
+  scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision, bootstrap.annotationRenderID ?? null);
 }
 
 function renderDocument(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
@@ -481,9 +528,10 @@ function renderDocument(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) 
     bootstrap.mobileViewport === true
   );
   iframe.addEventListener("load", () => {
+    if (currentGeneratedContentFrame !== iframe) return;
     currentGeneratedContentReady = true;
     currentGeneratedContentWindow = iframe.contentWindow;
-    scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision);
+    scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision, bootstrap.annotationRenderID ?? null);
   }, { once: true });
 
   currentGeneratedContentFrame = iframe;

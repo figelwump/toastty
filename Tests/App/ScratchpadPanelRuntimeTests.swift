@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 @testable import ToasttyApp
 import CoreState
 import WebKit
@@ -6,6 +7,219 @@ import XCTest
 
 @MainActor
 final class ScratchpadPanelRuntimeTests: XCTestCase {
+    func testAnnotationReadinessRejectsEarlierRenderWithSameTitleAndRevision() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let recorder = ScratchpadBridgeScriptRecorder()
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(), documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in }, interactionDidRequestFocus: { _ in },
+            bridgeScriptEvaluator: recorder.evaluate, diagnosticLogger: { _, _, _ in }
+        )
+        let document = try fixture.store.createDocument(title: "Sketch", content: "<h1>Sketch</h1>", sessionLink: nil)
+        let webState = WebPanelState(
+            definition: .scratchpad,
+            scratchpad: ScratchpadState(documentID: document.documentID, revision: document.revision)
+        )
+        runtime.reloadBootstrap(for: webState)
+        runtime.simulateBridgeReadyForTesting()
+        let firstScript = try XCTUnwrap(recorder.scripts.last)
+        let firstRenderID = String(try XCTUnwrap(firstScript.components(separatedBy: "annotationRenderID: \"").last).prefix(36))
+        XCTAssertNotNil(UUID(uuidString: firstRenderID))
+        runtime.reloadBootstrap(for: webState)
+        let nextScript = try XCTUnwrap(recorder.scripts.last)
+        let nextRenderID = String(try XCTUnwrap(nextScript.components(separatedBy: "annotationRenderID: \"").last).prefix(36))
+        XCTAssertNotEqual(firstRenderID, nextRenderID)
+
+        runtime.simulateBridgeMessageForTesting([
+            "type": "renderReady", "displayName": "Sketch", "revision": 1,
+            "annotationRenderID": firstRenderID,
+        ])
+        XCTAssertFalse(runtime.isAnnotationContentReady)
+
+        runtime.simulateBridgeMessageForTesting([
+            "type": "renderReady", "displayName": "Sketch", "revision": 1,
+            "annotationRenderID": nextRenderID,
+        ])
+        XCTAssertTrue(runtime.isAnnotationContentReady)
+    }
+
+    func testSendingScratchpadAnnotationsBuildsPayloadAndClearsOnlyAfterSuccess() async throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(), documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in }, interactionDidRequestFocus: { _ in },
+            diagnosticLogger: { _, _, _ in }
+        )
+        runtime.setAnnotationModeEnabled(true)
+        runtime.recordAnnotation(
+            in: BrowserAnnotationCapturedSection(
+                pngData: BrowserAnnotationTestImage.pngData(width: 40, height: 40),
+                url: nil, title: "Review diagram, revision 1", scrollOffset: .zero,
+                viewportSize: CGSize(width: 40, height: 40), capturedAt: Date()
+            ),
+            kind: .point(CGPoint(x: 0.5, y: 0.5)), comment: "Move this heading"
+        )
+        let candidate = BrowserScreenshotSendCandidate(
+            sessionID: "test-agent", agent: .codex, panelID: UUID(), label: "Test Agent"
+        )
+        let sent = expectation(description: "Scratchpad annotation payload sent through callback")
+        var screenshotURL: URL?
+        BrowserAnnotationSendFlow.send(
+            runtime: runtime, candidate: candidate, availability: { _ in .available }
+        ) { payload, destination in
+            XCTAssertEqual(destination, candidate)
+            XCTAssertTrue(payload.hasPrefix("Scratchpad annotation feedback from Toastty."))
+            XCTAssertTrue(payload.contains("1. Move this heading"))
+            XCTAssertTrue(runtime.annotationState.hasDrafts)
+            if let screenshotLine = payload.components(separatedBy: "\n").first(where: { $0.hasPrefix("Screenshot 1: ") }) {
+                screenshotURL = URL(fileURLWithPath: String(screenshotLine.dropFirst("Screenshot 1: ".count)))
+            }
+            sent.fulfill()
+            return true
+        }
+        await fulfillment(of: [sent], timeout: 5)
+        if let screenshotURL {
+            try? FileManager.default.removeItem(at: screenshotURL)
+        }
+        XCTAssertFalse(runtime.annotationState.hasDrafts)
+        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(runtime.isAnnotationSendInFlight)
+    }
+
+    func testAnnotationCaptureReadsIframeScrollAndIdentifiesScratchpadRevision() async throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let document = try fixture.store.createDocument(
+            title: "Review diagram",
+            content: """
+            <!doctype html><html><head><style>body { margin: 0; height: 2000px; }</style></head>
+            <body><h1>Review diagram</h1><script>
+            window.addEventListener('load', () => window.scrollTo(0, 180));
+            </script></body></html>
+            """,
+            sessionLink: nil
+        )
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(), documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in }, interactionDidRequestFocus: { _ in },
+            diagnosticLogger: { _, _, _ in }
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        window.contentView = container
+        window.orderFront(nil)
+        defer { window.close() }
+        runtime.attachHost(to: container, attachment: PanelHostAttachmentToken.next())
+        runtime.apply(webState: WebPanelState(
+            definition: .scratchpad,
+            scratchpad: ScratchpadState(documentID: document.documentID, revision: document.revision)
+        ))
+        let deadline = Date().addingTimeInterval(10)
+        while runtime.isAnnotationContentReady == false, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(runtime.isAnnotationContentReady)
+
+        let section = try await runtime.captureAnnotationSection(capturedAt: Date(timeIntervalSince1970: 123))
+
+        XCTAssertEqual(section.scrollOffset.y, 180, accuracy: 1)
+        XCTAssertEqual(section.viewportSize, CGSize(width: 320, height: 200))
+        XCTAssertNil(section.url)
+        XCTAssertTrue(section.title?.contains(document.documentID.uuidString) == true)
+        XCTAssertTrue(section.title?.contains("revision 1") == true)
+        XCTAssertEqual(section.capturedAt, Date(timeIntervalSince1970: 123))
+        XCTAssertNotNil(NSBitmapImageRep(data: section.pngData))
+    }
+
+    func testAnnotationDraftsPublishAndInvalidateWhenScratchpadReloads() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(), documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in }, interactionDidRequestFocus: { _ in },
+            diagnosticLogger: { _, _, _ in }
+        )
+        var changeCount = 0
+        let observation = runtime.objectWillChange.sink { changeCount += 1 }
+        defer { observation.cancel() }
+        runtime.setAnnotationModeEnabled(true)
+        let annotation = runtime.recordAnnotation(
+            in: BrowserAnnotationCapturedSection(
+                pngData: Data(), url: nil, title: "Scratchpad",
+                scrollOffset: .zero, viewportSize: CGSize(width: 320, height: 200),
+                capturedAt: Date()
+            ),
+            kind: .point(CGPoint(x: 0.5, y: 0.5)), comment: "Move this heading"
+        )
+        XCTAssertGreaterThan(changeCount, 0)
+        XCTAssertTrue(runtime.updateAnnotationComment(annotationID: annotation.id, comment: "Updated"))
+        XCTAssertEqual(runtime.annotationState.annotationItem(withID: annotation.id)?.comment, "Updated")
+        runtime.setAnnotationEditorActive(true)
+        let generation = runtime.currentAnnotationPageGeneration()
+
+        runtime.reloadBootstrap(for: WebPanelState(
+            definition: .scratchpad,
+            scratchpad: ScratchpadState(documentID: UUID(), revision: 2)
+        ))
+
+        XCTAssertFalse(runtime.annotationState.hasDrafts)
+        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(runtime.isAnnotationEditorActive)
+        XCTAssertGreaterThan(runtime.currentAnnotationPageGeneration(), generation)
+        XCTAssertFalse(runtime.isAnnotationContentReady)
+    }
+
+    func testAnnotationModePreventsWebViewFocusFromStealingEditorFocus() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let recorder = ScratchpadBridgeScriptRecorder()
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(), documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in }, interactionDidRequestFocus: { _ in },
+            bridgeScriptEvaluator: recorder.evaluate, diagnosticLogger: { _, _, _ in }
+        )
+        let window = ScratchpadFocusTestWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        window.contentView?.addSubview(container)
+        runtime.attachHost(to: container, attachment: PanelHostAttachmentToken.next())
+        runtime.setAnnotationModeEnabled(true)
+        runtime.setAnnotationEditorActive(true)
+
+        XCTAssertTrue(runtime.focusWebView())
+        runtime.simulateBridgeMessageForTesting([
+            "type": "renderReady", "displayName": "Sketch", "revision": 1,
+        ])
+
+        XCTAssertEqual(window.makeFirstResponderCallCount, 0)
+        XCTAssertTrue(recorder.scripts.isEmpty)
+        XCTAssertTrue(runtime.isAnnotationEditorActive)
+    }
+
+    func testThemeBootstrapReplacementInvalidatesAnnotations() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let recorder = ScratchpadBridgeScriptRecorder()
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(), documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in }, interactionDidRequestFocus: { _ in },
+            bridgeScriptEvaluator: recorder.evaluate, diagnosticLogger: { _, _, _ in }
+        )
+        runtime.reloadBootstrap(for: WebPanelState(
+            definition: .scratchpad,
+            scratchpad: ScratchpadState(documentID: UUID(), revision: 1)
+        ))
+        runtime.simulateBridgeReadyForTesting()
+        runtime.setAnnotationModeEnabled(true)
+        runtime.setAnnotationEditorActive(true)
+        let generation = runtime.currentAnnotationPageGeneration()
+
+        runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
+
+        XCTAssertGreaterThan(runtime.currentAnnotationPageGeneration(), generation)
+        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(runtime.isAnnotationEditorActive)
+    }
+
     func testExternalLinksRouteOnlyWebURLsFromIsolatedHandler() throws {
         let fixture = try ScratchpadRuntimeFixture()
         let panelID = UUID()

@@ -35,7 +35,7 @@ export type ScratchpadPanelEvent =
       disposition: string | null;
       diagnosticSource: ScratchpadDiagnosticSource;
     }
-  | { type: "renderReady"; displayName: string; revision: number | null };
+  | { type: "renderReady"; displayName: string; revision: number | null; annotationRenderID: string | null };
 
 interface WebKitMessageHandler {
   postMessage: (event: ScratchpadPanelEvent) => void;
@@ -116,7 +116,7 @@ export const scratchpadNativeBridge = {
       diagnosticSource
     });
   },
-  renderReady(displayName: string, revision: number | null) {
-    postEvent({ type: "renderReady", displayName, revision });
+  renderReady(displayName: string, revision: number | null, annotationRenderID: string | null = null) {
+    postEvent({ type: "renderReady", displayName, revision, annotationRenderID });
   }
 };

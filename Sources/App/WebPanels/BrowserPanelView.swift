@@ -23,50 +23,21 @@ struct BrowserPanelView: View {
         VStack(spacing: 0) {
             toolbar
 
-            ZStack {
+            WebPanelAnnotationSurface(
+                panelID: panelID,
+                runtime: runtime,
+                sendCandidates: annotationSendCandidates,
+                activatePanel: activatePanel,
+                sendAvailability: annotationSendAvailability,
+                sendPayloadToAgent: sendAnnotationPayloadToAgent
+            ) {
                 BrowserPanelHostView(
                     runtime: runtime,
                     webState: webState,
                     isEffectivelyVisible: isEffectivelyVisible,
                     shouldFocusWebView: isActivePanel && isEditingAddressField == false
                 )
-
-                BrowserAnnotationOverlayView(
-                    runtime: runtime,
-                    activatePanel: activatePanel
-                )
-
-                if runtime.annotationState.isAnnotationModeEnabled {
-                    Rectangle()
-                        .strokeBorder(ToastyTheme.accent.opacity(0.85), lineWidth: 2)
-                        .allowsHitTesting(false)
-                }
             }
-            .overlay(alignment: .top) {
-                if runtime.annotationState.isAnnotationModeEnabled {
-                    BrowserAnnotationModeToolbar(
-                        panelID: panelID,
-                        runtime: runtime,
-                        sendCandidates: annotationSendCandidates,
-                        sendAvailability: annotationSendAvailability,
-                        sendPayloadToAgent: sendAnnotationPayloadToAgent
-                    )
-                    .padding(.top, 10)
-                }
-            }
-            .overlay(alignment: .bottom) {
-                if let notice = runtime.annotationSendNotice {
-                    BrowserAnnotationNoticeToast(notice: notice) {
-                        runtime.clearAnnotationSendNotice(id: notice.id)
-                    }
-                    .padding(.bottom, 14)
-                }
-            }
-            .frame(
-                maxWidth: .infinity,
-                maxHeight: .infinity,
-                alignment: .topLeading
-            )
         }
         .frame(
             maxWidth: .infinity,
@@ -250,16 +221,18 @@ struct BrowserPanelHeaderAccessory: View {
     let sendAnnotationPayloadToAgent: (String, BrowserScreenshotSendCandidate) -> Bool
 
     @State private var screenshotInFlight = false
-    @State private var isClearConfirmationPresented = false
 
     var body: some View {
         HStack(spacing: 3) {
-            browserAnnotationToggle
-
-            if runtime.annotationState.hasDrafts {
-                browserAnnotationSendMenu
-                browserAnnotationClearButton
-            }
+            WebPanelAnnotationHeaderAccessory(
+                panelID: panelID,
+                runtime: runtime,
+                canAnnotate: runtime.navigationState.displayedURLString != nil,
+                sendCandidates: screenshotInsertCandidates,
+                activatePanel: activatePanel,
+                sendAvailability: annotationSendAvailability,
+                sendPayloadToAgent: sendAnnotationPayloadToAgent
+            )
 
             browserScreenshotMenu
 
@@ -275,98 +248,6 @@ struct BrowserPanelHeaderAccessory: View {
             .help("Browser Actions")
         }
         .frame(minWidth: 0)
-    }
-
-    private var isAnnotationToggleDisabled: Bool {
-        runtime.navigationState.displayedURLString == nil
-    }
-
-    private var browserAnnotationToggle: some View {
-        Button {
-            activatePanel()
-            runtime.setAnnotationModeEnabled(runtime.annotationState.isAnnotationModeEnabled == false)
-        } label: {
-            browserHeaderIcon(
-                systemImage: "pencil.tip.crop.circle",
-                isDisabled: isAnnotationToggleDisabled,
-                isActive: runtime.annotationState.isAnnotationModeEnabled,
-                fontSize: 12
-            )
-            .overlay(alignment: .topTrailing) {
-                if runtime.annotationState.draftCount > 0 {
-                    BrowserAnnotationCountBadge(count: runtime.annotationState.draftCount)
-                        .offset(x: 4, y: -4)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(isAnnotationToggleDisabled)
-        .help(
-            isAnnotationToggleDisabled
-                ? "Load a page to annotate it"
-                : (runtime.annotationState.isAnnotationModeEnabled
-                    ? "Exit Annotation Mode"
-                    : "Annotate Browser Page")
-        )
-        .accessibilityLabel("Annotate Browser Page")
-        .accessibilityIdentifier("panel.header.browser.annotations.toggle.\(panelID.uuidString)")
-    }
-
-    private var isAnnotationSendDisabled: Bool {
-        runtime.isAnnotationSendInFlight || runtime.isAnnotationEditorActive
-    }
-
-    private var browserAnnotationSendMenu: some View {
-        Menu {
-            Section("Send to Agent") {
-                BrowserAnnotationSendMenuItems(
-                    candidates: screenshotInsertCandidates,
-                    availability: annotationSendAvailability,
-                    send: sendAnnotations(to:)
-                )
-            }
-        } label: {
-            browserHeaderIcon(
-                systemImage: "paperplane",
-                isDisabled: isAnnotationSendDisabled,
-                isActive: false
-            )
-        }
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
-        .disabled(isAnnotationSendDisabled)
-        .help(runtime.isAnnotationSendInFlight ? "Sending Annotations" : "Send Browser Annotations to Agent")
-        .accessibilityLabel("Send Browser Annotations to Agent")
-        .accessibilityIdentifier("panel.header.browser.annotations.send.\(panelID.uuidString)")
-    }
-
-    private var browserAnnotationClearButton: some View {
-        Button {
-            isClearConfirmationPresented = true
-        } label: {
-            browserHeaderIcon(
-                systemImage: "xmark.circle",
-                isDisabled: runtime.isAnnotationSendInFlight,
-                isActive: false
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(runtime.isAnnotationSendInFlight)
-        .help("Clear Browser Annotations")
-        .accessibilityLabel("Clear Browser Annotations")
-        .accessibilityIdentifier("panel.header.browser.annotations.clear.\(panelID.uuidString)")
-        .confirmationDialog(
-            BrowserAnnotationCopy.clearConfirmationTitle(
-                draftCount: runtime.annotationState.draftCount
-            ),
-            isPresented: $isClearConfirmationPresented,
-            titleVisibility: .visible
-        ) {
-            Button("Clear All", role: .destructive) {
-                runtime.clearAnnotations(exitAnnotationMode: false)
-            }
-            Button("Cancel", role: .cancel) {}
-        }
     }
 
     private var browserScreenshotMenu: some View {
@@ -472,16 +353,6 @@ struct BrowserPanelHeaderAccessory: View {
                 )
             }
         }
-    }
-
-    private func sendAnnotations(to candidate: BrowserScreenshotSendCandidate) {
-        activatePanel()
-        BrowserAnnotationSendFlow.send(
-            runtime: runtime,
-            candidate: candidate,
-            availability: annotationSendAvailability,
-            sendPayload: sendAnnotationPayloadToAgent
-        )
     }
 
     private func performScreenshotAction(

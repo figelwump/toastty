@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-struct BrowserAnnotationOverlayView: NSViewRepresentable {
-    @ObservedObject var runtime: BrowserPanelRuntime
+struct BrowserAnnotationOverlayView<Runtime: WebPanelAnnotationRuntime>: NSViewRepresentable {
+    @ObservedObject var runtime: Runtime
     let activatePanel: () -> Void
 
     func makeNSView(context: Context) -> BrowserAnnotationOverlayNSView {
@@ -51,7 +51,7 @@ private struct PendingAnnotationDraft {
 }
 
 @MainActor
-private final class BrowserAnnotationPopoverSession: NSObject, NSPopoverDelegate {
+final class BrowserAnnotationPopoverSession: NSObject, NSPopoverDelegate {
     enum Purpose: Equatable {
         case create
         case edit(annotationID: UUID)
@@ -93,6 +93,12 @@ private final class BrowserAnnotationPopoverSession: NSObject, NSPopoverDelegate
         popover.delegate = self
     }
 
+    func popoverShouldDetach(_ popover: NSPopover) -> Bool {
+        // Let AppKit move the existing content into its floating window so
+        // dragging preserves the editor's text, selection, and save callbacks.
+        true
+    }
+
     func popoverDidClose(_ notification: Notification) {
         onClosedExternally?()
     }
@@ -104,7 +110,7 @@ private final class BrowserAnnotationPopoverSession: NSObject, NSPopoverDelegate
 
 @MainActor
 final class BrowserAnnotationOverlayNSView: NSView {
-    weak var runtime: BrowserPanelRuntime?
+    weak var runtime: (any WebPanelAnnotationRuntime)?
     var activatePanel: (() -> Void)?
 
     private var dragStartPoint: CGPoint?

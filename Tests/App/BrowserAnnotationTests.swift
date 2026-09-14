@@ -1,8 +1,29 @@
 @testable import ToasttyApp
 import AppKit
+import Combine
 import CoreState
 import WebKit
 import XCTest
+
+@MainActor
+final class BrowserAnnotationPopoverSessionTests: XCTestCase {
+    func testCreateEditAndDetailPopoversAllowNativeDragging() throws {
+        let annotationID = UUID()
+        for purpose in [
+            BrowserAnnotationPopoverSession.Purpose.create,
+            .edit(annotationID: annotationID),
+            .view(annotationID: annotationID),
+        ] {
+            let session = BrowserAnnotationPopoverSession(purpose: purpose)
+            let delegate = try XCTUnwrap(session.popover.delegate)
+
+            XCTAssertEqual(delegate.popoverShouldDetach?(session.popover), true)
+            // AppKit must reuse the content instead of asking us to build a
+            // second editor whose text and selection could diverge.
+            XCTAssertNil(delegate.detachableWindow?(for: session.popover))
+        }
+    }
+}
 
 final class BrowserAnnotationSendGateTests: XCTestCase {
     func testAgentSessionsAreSendableUnlessApprovalOrErrorBlocksThem() {
@@ -398,6 +419,26 @@ final class BrowserAnnotationCoordinateMapperTests: XCTestCase {
 
 @MainActor
 final class BrowserAnnotationRuntimeTests: XCTestCase {
+    func testRuntimePublishesSharedSessionChanges() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        var publicationCount = 0
+        let observation = runtime.objectWillChange.sink { publicationCount += 1 }
+
+        runtime.annotationSession.setAnnotationModeEnabled(true)
+        XCTAssertGreaterThan(publicationCount, 0)
+        XCTAssertTrue(runtime.annotationState.isAnnotationModeEnabled)
+
+        let countBeforeNotice = publicationCount
+        runtime.annotationSession.postAnnotationSendNotice(message: "Sent", isFailure: false)
+        XCTAssertGreaterThan(publicationCount, countBeforeNotice)
+        XCTAssertEqual(runtime.annotationSendNotice?.message, "Sent")
+        withExtendedLifetime(observation) {}
+    }
+
     func testAnnotationScrollOffsetParsesStringDictionaryWithoutRecursing() {
         let value: [String: Any] = [
             "x": 12.5,
@@ -581,6 +622,47 @@ final class BrowserAnnotationRuntimeTests: XCTestCase {
 }
 
 @MainActor
+final class WebPanelAnnotationSessionTests: XCTestCase {
+    func testContentChangeInvalidatesPendingCapturesAndResetsEditorAndDrafts() {
+        let session = WebPanelAnnotationSession()
+        session.setAnnotationModeEnabled(true)
+        session.setAnnotationEditorActive(true)
+        session.postAnnotationSendNotice(message: "Old content", isFailure: false)
+        session.recordAnnotation(
+            in: BrowserAnnotationCapturedSection(
+                pngData: Data(),
+                url: nil,
+                title: "Scratchpad",
+                scrollOffset: .zero,
+                viewportSize: CGSize(width: 320, height: 240),
+                capturedAt: Date()
+            ),
+            kind: .point(.zero),
+            comment: "Change this"
+        )
+        let generation = session.contentGeneration
+
+        session.invalidateForContentChange()
+
+        XCTAssertNotEqual(session.contentGeneration, generation)
+        XCTAssertFalse(session.annotationState.hasDrafts)
+        XCTAssertFalse(session.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(session.isAnnotationEditorActive)
+        XCTAssertNil(session.annotationSendNotice)
+        XCTAssertEqual(session.annotationState.nextSequenceNumber, 1)
+    }
+
+    func testContentChangeInvalidatesCaptureEvenBeforeDraftAppears() {
+        let session = WebPanelAnnotationSession()
+        let generation = session.contentGeneration
+
+        session.invalidateForContentChange()
+
+        XCTAssertNotEqual(session.contentGeneration, generation)
+    }
+}
+
+@MainActor
 final class BrowserAnnotatedScreenshotRendererTests: XCTestCase {
     func testRendererDrawsNumberedPointOntoPNG() throws {
         let section = BrowserAnnotationSection(
@@ -684,6 +766,17 @@ final class BrowserAnnotatedScreenshotRendererTests: XCTestCase {
 }
 
 final class BrowserAnnotationPayloadBuilderTests: XCTestCase {
+    func testPayloadIdentifiesScratchpadSourceWhileBrowserRemainsDefault() {
+        XCTAssertTrue(
+            BrowserAnnotationPayloadBuilder.payload(renderedSections: [], source: .scratchpad)
+                .hasPrefix("Scratchpad annotation feedback from Toastty.")
+        )
+        XCTAssertTrue(
+            BrowserAnnotationPayloadBuilder.payload(renderedSections: [])
+                .hasPrefix("Browser annotation feedback from Toastty.")
+        )
+    }
+
     func testPayloadGroupsCommentsUnderRenderedScreenshots() {
         let section = BrowserAnnotationSection(
             id: UUID(),

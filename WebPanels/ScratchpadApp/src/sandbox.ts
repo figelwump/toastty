@@ -16,6 +16,7 @@ export const generatedContentCSP = [
 ].join("; ");
 
 export const generatedDiagnosticsMessageType = "toastty:scratchpad-generated-diagnostic:v1";
+export const generatedAnnotationViewportRequestType = "toastty:scratchpad-annotation-viewport-request:v1";
 
 function cspMetaTag() {
   return `<meta http-equiv="Content-Security-Policy" content="${generatedContentCSP.replaceAll(
@@ -79,6 +80,13 @@ function generatedDiagnosticsScript(diagnosticsSessionToken: string, reportsSize
     } catch {
     }
   };
+  window.addEventListener("message", (event) => {
+    const data = event.data;
+    if (event.source !== window.parent || !data ||
+        data.type !== "${generatedAnnotationViewportRequestType}" ||
+        data.sessionToken !== sessionToken || typeof data.requestID !== "string") return;
+    postDiagnostic({ type: "annotationViewport", requestID: data.requestID, x: window.scrollX, y: window.scrollY });
+  });
   if (${JSON.stringify(reportsSize)}) {
     let scheduled = false;
     let previous = "";

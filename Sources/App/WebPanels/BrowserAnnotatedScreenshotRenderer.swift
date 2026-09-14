@@ -170,11 +170,14 @@ struct BrowserAnnotationRenderedSection: Equatable {
 }
 
 enum BrowserAnnotationPayloadBuilder {
-    static func payload(renderedSections: [BrowserAnnotationRenderedSection]) -> String {
+    static func payload(
+        renderedSections: [BrowserAnnotationRenderedSection],
+        source: WebPanelAnnotationSource = .browser
+    ) -> String {
         // Self-describing preamble so receiving agents act on the feedback
         // directly instead of searching for a skill that explains the format.
         var lines: [String] = [
-            "Browser annotation feedback from Toastty.",
+            "\(source.label) annotation feedback from Toastty.",
             "Each numbered comment refers to the matching numbered mark drawn in the screenshot listed above it. Read each screenshot and address the comments.",
             "For small/medium scope changes, go ahead with implementation. Only ask the user for plan review for large changes.",
         ]

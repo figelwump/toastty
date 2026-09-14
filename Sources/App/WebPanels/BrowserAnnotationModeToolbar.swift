@@ -67,7 +67,7 @@ enum BrowserAnnotationCopy {
 @MainActor
 enum BrowserAnnotationSendFlow {
     static func send(
-        runtime: BrowserPanelRuntime,
+        runtime: any WebPanelAnnotationRuntime,
         candidate: BrowserScreenshotSendCandidate,
         availability: (BrowserScreenshotSendCandidate) -> BrowserAnnotationSendAvailability,
         sendPayload: @escaping (String, BrowserScreenshotSendCandidate) -> Bool
@@ -101,7 +101,8 @@ enum BrowserAnnotationSendFlow {
                     from: sections
                 )
                 let payload = BrowserAnnotationPayloadBuilder.payload(
-                    renderedSections: renderedSections
+                    renderedSections: renderedSections,
+                    source: runtime.annotationSource
                 )
                 if sendPayload(payload, candidate) {
                     runtime.clearAnnotations(exitAnnotationMode: true)
@@ -183,9 +184,9 @@ struct BrowserAnnotationCountBadge: View {
 
 /// Floating pill shown over the page while annotation mode is active. Puts
 /// the draft count, send, clear, and exit controls at the point of use.
-struct BrowserAnnotationModeToolbar: View {
+struct BrowserAnnotationModeToolbar<Runtime: WebPanelAnnotationRuntime>: View {
     let panelID: UUID
-    @ObservedObject var runtime: BrowserPanelRuntime
+    @ObservedObject var runtime: Runtime
     let sendCandidates: [BrowserScreenshotSendCandidate]
     let sendAvailability: (BrowserScreenshotSendCandidate) -> BrowserAnnotationSendAvailability
     let sendPayloadToAgent: (String, BrowserScreenshotSendCandidate) -> Bool
@@ -240,7 +241,7 @@ struct BrowserAnnotationModeToolbar: View {
             .buttonStyle(.plain)
             .fixedSize()
             .disabled(isSendDisabled)
-            .help("Send Browser Annotations to Agent")
+            .help("Send \(runtime.annotationSource.label) Annotations to Agent")
             .accessibilityIdentifier("panel.annotationBar.send.\(panelID.uuidString)")
 
             if draftCount > 0 {
@@ -257,7 +258,7 @@ struct BrowserAnnotationModeToolbar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(runtime.isAnnotationSendInFlight)
-                .help("Clear Browser Annotations")
+                .help("Clear \(runtime.annotationSource.label) Annotations")
                 .accessibilityIdentifier("panel.annotationBar.clear.\(panelID.uuidString)")
                 .confirmationDialog(
                     BrowserAnnotationCopy.clearConfirmationTitle(draftCount: draftCount),
