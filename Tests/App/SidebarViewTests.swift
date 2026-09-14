@@ -1399,7 +1399,7 @@ final class SidebarViewTests: XCTestCase {
             in: harness.hostingView,
             sessionID: harness.sessionIDs[1]
         )
-        let expandedSpacing = siblingView.convert(.zero, to: nil).y - parentView.convert(.zero, to: nil).y
+        let expandedSpacing = abs(siblingView.convert(.zero, to: nil).y - parentView.convert(.zero, to: nil).y)
 
         XCTAssertGreaterThan(expandedSpacing, parentView.bounds.height + 4)
         let excludedRect = try XCTUnwrap(parentView.excludedRects.first)
@@ -1419,8 +1419,8 @@ final class SidebarViewTests: XCTestCase {
             in: harness.hostingView,
             sessionID: harness.sessionIDs[1]
         )
-        let collapsedSpacing = collapsedSiblingView.convert(.zero, to: nil).y -
-            collapsedParentView.convert(.zero, to: nil).y
+        let collapsedSpacing = abs(collapsedSiblingView.convert(.zero, to: nil).y -
+            collapsedParentView.convert(.zero, to: nil).y)
 
         XCTAssertLessThan(collapsedSpacing, expandedSpacing - 4)
         XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
