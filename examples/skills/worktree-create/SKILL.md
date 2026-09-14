@@ -1,6 +1,6 @@
 ---
 name: worktree-create
-description: Use this skill when the user asks for /worktree-create or wants to spin the current Toastty thread into a new git worktree and Toastty workspace, optionally run explicit repo setup, persist a handoff or plan file, and launch a new session that preserves the current Codex or Claude Code agent by default.
+description: Use this skill when the user asks for /worktree-create or wants to spin the current Toastty thread into a new git worktree and Toastty workspace, optionally run explicit repo setup, persist a handoff or plan file, and launch a new session with an explicitly selected model and reasoning effort while preserving the current Codex or Claude Code provider by default.
 ---
 
 # Worktree Create
@@ -42,7 +42,7 @@ fi
    - If no clear setup instruction exists, assume no bootstrap is required.
    - If setup commands are needed, run them from the new worktree root after creating the worktree and before launching the next session. Stop on the first setup failure and report it.
    - Do not add trust-changing commands such as `direnv allow` unless the user requested or approved them for that worktree.
-5. Select the base following **Base selection** below, then create the new worktree with the bundled helper. Pass both the selected branch prefix and the resolved base commit explicitly:
+5. Select the child model and reasoning following **Child model and reasoning** below, before creating resources. Select the base following **Base selection** below, then create the new worktree with the bundled helper. Pass both the selected branch prefix and the resolved base commit explicitly:
 
 ```bash
 "$WORKTREE_CREATE_SKILL_DIR/scripts/create-worktree.sh" \
@@ -79,7 +79,7 @@ fi
    - If lookup fails, surface the failure instead of silently omitting Scratchpad context.
    - If lookup succeeds but export fails, retry once. If export still fails, do not pretend there was no Scratchpad; include the lookup metadata and export failure in the handoff and final status. Continue unless the Scratchpad was the explicit source of truth for the delegated task.
 9. Persist the handoff inside the new worktree before launching the next session.
-   - Write `WORKTREE_HANDOFF.md` in the new worktree root.
+   - Write `WORKTREE_HANDOFF.md` in the new worktree root. Record the selected provider, exact model identifier, reasoning effort, and a short task-specific rationale.
    - If the optional `toastty-watcher` command is installed (`command -v toastty-watcher` succeeds), record the child's bind command in the handoff: `toastty-watcher bind . <slug> --self`, run from the worktree root. The child runs it first. Do not pass `--pr`; the watcher attaches the PR by its head branch once it exists.
    - Assign a local status-note path, such as `WORKTREE_STATUS.md` beside the handoff, for the child to use if there is no PR. Include that path in the handoff and the launch record. Keep these task artifacts out of product commits.
    - Record the canonical parent checkout path, parent workspace/session IDs, task branch/path, base commit, and intended landing branch when known. Resolve paths through symlinks. Do not assume the landing branch is `main` or that the starting branch is the landing branch.
@@ -96,7 +96,7 @@ fi
    - For the structured `agent.launch` path, the helper first inspects the current parent session with `session scope show --session "$TOASTTY_SESSION_ID"`. If the parent is unscoped, it runs `session scope set-current --session "$TOASTTY_SESSION_ID"` before workspace creation so the newly created workspace is auto-bound into the parent's effective scope. If the parent is already scoped, the helper preserves that scope and relies on workspace creation to add the new workspace. If the helper scoped an unscoped parent and later fails, it attempts to restore the parent to unrestricted automation before exiting.
    - For the structured `agent.launch` path, the helper immediately scopes the launched child session to the newly created workspace with `session scope set --session <child-session-id> --workspace <new-workspace-id>`. This is a cooperative post-launch scope; treat a scope failure as a launch failure, but report that the workspace/session may already exist.
    - Background-created workspaces stay marked as new in the sidebar until the user visits them once.
-   - The helper preserves `TOASTTY_AGENT=codex` or `TOASTTY_AGENT=claude` by default. Missing or unknown values fall back to `codex`. If the user explicitly requested a different agent for the new session, pass it with `--agent-command <name>`; otherwise omit the flag.
+   - The helper preserves `TOASTTY_AGENT=codex` or `TOASTTY_AGENT=claude` by default. Missing or unknown values fall back to `codex`. If the user explicitly requested a different agent for the new session, pass it with `--agent-command <name>`; otherwise omit the flag. Pass the selected model with `--model` and effort with `--reasoning-effort`; mentioning them only in the prompt does not configure the child.
    - If the user explicitly requested commands that must run inside the launched terminal immediately before the agent starts, pass each command with `--initial-command <command>` so the helper keeps the structured `agent.launch` path. For example, `--initial-command "direnv allow"` runs after `cd <worktree>` and before the agent prompt. If an initial command fails, the agent command is stopped in the terminal, but the workspace creation helper may already have reported launch success.
    - If you intentionally need to leave the parent session unrestricted, pass `--no-scope-parent` and mention that exception in the handoff.
 
@@ -105,15 +105,57 @@ fi
   --workspace-name browser-link-routing \
   --worktree-path /abs/path/to/repo-browser-link-routing \
   --handoff-file /abs/path/to/repo-browser-link-routing/WORKTREE_HANDOFF.md \
+  --model "$WORKTREE_AGENT_MODEL" \
+  --reasoning-effort "$WORKTREE_AGENT_REASONING" \
   --json
 ```
 
 11. Parse the launch helper output to get `workspace_id`, `panel_id`, `session_id`, `scope_set`, and `parent_scope_status`.
-    - Retain these IDs with the repository, task name, branch, canonical worktree path, handoff path, and assigned status-note path in a durable local launch note outside the child worktree, using an ignored artifact location or a directory outside Git. When a project coordinator is assigned, make the note location available in its local coordination record. This lets a later session discover the task without the original parent or its Scratchpad. Do not rewrite the child's handoff after launch to add IDs. Workspace assignment and control scope must still be established before that session acts on the child.
+    - Retain these IDs and the selected provider/model/effort and rationale with the repository, task name, branch, canonical worktree path, handoff path, and assigned status-note path in a durable local launch note outside the child worktree, using an ignored artifact location or a directory outside Git. When a project coordinator is assigned, make the note location available in its local coordination record. This lets a later session discover the task without the original parent or its Scratchpad. Do not rewrite the child's handoff after launch to add IDs. Workspace assignment and control scope must still be established before that session acts on the child.
     - `session_id` is present and `scope_set` is `true` for structured managed launches.
     - `parent_scope_status` is `set_current` when the helper scoped an unscoped parent, `already_scoped` when it preserved an existing parent scope, `disabled` when `--no-scope-parent` was used, and `startup_command` for explicit startup-command launches.
     - `session_id` is absent and `scope_set` is `false` only for `--startup-command` or fallback `terminal.send-text` launches; use those paths only for explicit validation or fully custom shell setup.
-12. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, parent scope status, child scope status, handoff file path, Scratchpad export path/status, and whether setup was skipped or which explicit setup commands ran.
+12. Tell the user the selected provider, model, reasoning effort and short rationale, the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, parent scope status, child scope status, handoff file path, Scratchpad export path/status, and whether setup was skipped or which explicit setup commands ran.
+
+## Child model and reasoning
+
+The launching agent selects the child's model and reasoning effort before launch.
+Do not defer this decision to the child or silently inherit the parent's model.
+Preserve Codex versus Claude Code by default; honor explicit user selections and
+repository requirements, choosing only the fields they leave unspecified.
+
+- For autonomous choices, use the target provider's available model identifiers
+  and supported effort levels from current runtime information or its model
+  selector/catalog. A
+  subagent-only model list is not proof that the standalone CLI supports it.
+  Do not guess identifiers from display names or keep a fixed model catalog in
+  this skill. If no suitable option can be identified, explain what is missing
+  and ask for a selection before launch. Pass an explicitly requested identifier
+  unchanged for provider validation; do not ask the user to reconfirm it.
+- Weigh how settled the plan is, implementation complexity, uncertainty, impact
+  of mistakes, and testing/verification difficulty. Prefer faster models for
+  clear, bounded work; a well-defined but complex implementation can warrant
+  higher reasoning effort on that model. Use a more capable model when discovery,
+  design judgment, or difficult verification dominates. A small diff can still
+  require substantial reasoning. These are decision criteria, not a fixed matrix.
+- Choose exact values and assign `WORKTREE_AGENT_MODEL` and
+  `WORKTREE_AGENT_REASONING` for the helper example. Record one short explanation
+  tied to this task in the handoff and launch summary. Choose autonomously when
+  the available options and task scope are clear; no routine confirmation is needed.
+- Use the built-in `toastty-capabilities` skill to check the live `agent.launch`
+  descriptor supports `model` and `reasoningEffort` for the selected profile.
+  This checks Toastty's ability to pass overrides, not upstream model availability.
+  The helper repeats that capability check before creating a workspace or changing
+  session scope. Unsupported selections stop the launch; do not drop the flags,
+  substitute defaults, or bypass the managed launch through raw terminal input.
+- Codex and Claude launches through this skill require both explicit values.
+  If the user requests another provider that has no configurable effort, select
+  its model explicitly and record reasoning as unsupported rather than inventing
+  an equivalent flag. Custom `--startup-command` launches do not use these flags.
+- The helper reports requested `model` and `reasoning_effort` separately from
+  session IDs. Treat successful launch as command delivery, not proof the provider
+  accepted a model or started successfully. Check available session/runtime evidence
+  and report any rejection or unverified setting without claiming it took effect.
 
 ## Base selection
 
@@ -205,6 +247,7 @@ Keep `WORKTREE_HANDOFF.md` task-specific. The length should match the state of t
 Include:
 
 - the task goal
+- selected provider, exact model identifier, reasoning effort (or unsupported), and selection rationale
 - relevant user constraints or preferences from the current thread
 - current status
 - selected base commit, source ref, landing branch/remote, selection reason, and fetch status from **Base selection**
@@ -241,7 +284,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 - The default launch should use `agent.launch` with structured `cwd`, `initialCommands`, environment, and `initialPrompt` arguments so the new background workspace starts without a separate `terminal.send-text` injection. The launched command still `cd`s into the new worktree, runs any `--initial-command` single-line shell snippets in order with `&&`, and starts the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. Preserve a recognized `TOASTTY_AGENT` value unless the user explicitly requested a different agent with `--agent-command`; otherwise fall back to `codex`.
 - Before the default structured launch creates the workspace, scope the parent if needed with `session scope set-current --session "$TOASTTY_SESSION_ID"`. Do not reset an already scoped parent; preserving the existing scope lets `workspace.create` auto-bind the new workspace without dropping prior explicit workspace assignments.
 - After a structured `agent.launch` succeeds, scope the child session to the created workspace by calling `session scope set --session <sessionID> --workspace <workspaceID>` from the parent. Do not use `session scope set-current` for the child handoff; that command can only target the current parent session and panel. The helper performs this scope call automatically and reports `scope_set`. Because the scope API runs after launch returns the child `sessionID`, this is cooperative workspace isolation, not a hard pre-exec sandbox.
-- `--startup-command` is the explicit escape hatch for validation or fully custom shell setup. It replaces the structured agent launch path and uses `terminal.send-text` after resolving the terminal panel. Do not combine it with `--agent-command` or `--initial-command`.
+- `--startup-command` is the explicit escape hatch for validation or fully custom shell setup. It replaces the structured agent launch path and uses `terminal.send-text` after resolving the terminal panel. Do not combine it with `--agent-command`, `--initial-command`, `--model`, or `--reasoning-effort`.
 - `--no-scope-parent` is the explicit escape hatch for leaving the parent session unrestricted during a structured launch. Use it only when unrestricted parent automation is intentional.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
@@ -254,6 +297,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 
 ## Validation
 
+- Confirm the explicit model/effort match the handoff and launch output; report provider acceptance as unverified if runtime evidence is unavailable.
 - After launch, confirm the helper returned the new workspace ID, terminal panel ID, child session ID, `parent_scope_status` of `set_current` or `already_scoped`, and `scope_set=true` for the default structured launch.
 - If debugging lower-level calls, verify scope directly:
 

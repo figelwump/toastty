@@ -393,6 +393,15 @@ resolves local-only or divergent commits against task intent, pins the selected
 commit, and records the choice and fetch status in the handoff. It leaves the
 parent checkout unchanged and uses a stale fallback only with explicit permission.
 
+Before launch, the parent explicitly chooses the child's model and reasoning effort
+from the target provider's available options. It preserves Codex versus Claude by
+default, honors user choices, and considers uncertainty, implementation complexity,
+and verification difficulty. The handoff and launch summary record the selection
+and rationale. The helper passes `--model` and `--reasoning-effort` through the
+managed launch API and rejects unsupported overrides before creating a workspace;
+it does not silently fall back to defaults. Existing personal copies need the
+updated skill and helper to adopt this behavior.
+
 For PR-based implementation tasks, the child prepares one draft PR per worktree.
 The PR carries intent, decisions, review/check evidence, human testing steps,
 dependencies, deployment implications, and an explicit coordinator handoff with

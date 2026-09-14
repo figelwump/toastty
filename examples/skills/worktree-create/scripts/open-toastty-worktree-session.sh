@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--initial-command <command>]... [--startup-command <command>] [--no-scope-parent] [--json]
+usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--model <model>] [--reasoning-effort <effort>] [--initial-command <command>]... [--startup-command <command>] [--no-scope-parent] [--json]
 
 Creates a new Toastty workspace for a worktree and starts a new terminal command in it.
 By default the helper calls agent.launch with structured cwd, environment, and
@@ -12,7 +12,9 @@ falls back to codex, and allows --agent-command to override it.
 Repeat --initial-command to run single-line shell commands after cwd setup and
 before the agent command in the structured launch path.
 --startup-command replaces the structured launch with a literal terminal command
-and cannot be combined with --agent-command or --initial-command.
+and cannot be combined with --agent-command, --initial-command, --model, or
+--reasoning-effort. Model and reasoning overrides require live agent.launch
+capability metadata for the selected profile and never use a terminal fallback.
 Structured launches scope the current parent session before creating the child
 workspace unless --no-scope-parent is passed. They initialize git-branch
 (when Git metadata is available) and task-status workspace annotations.
@@ -33,12 +35,38 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# Keep syntax checks aligned with AgentLaunchArgumentOverrideAdapter.validatedValue.
+validate_launch_selection() {
+  python3 - "$1" "$2" <<'PYTHON'
+import sys
+import unicodedata
+
+flag, value = sys.argv[1:]
+trimmed = value.strip()
+if not trimmed:
+    message = "value must not be blank"
+elif len(value.encode("utf-8")) > 256:
+    message = "value exceeds 256 UTF-8 bytes"
+elif trimmed.startswith("-"):
+    message = "value must not start with '-'"
+elif any(unicodedata.category(character) in ("Cc", "Cf") for character in value):
+    message = "control characters are not supported"
+else:
+    raise SystemExit(0)
+print(f"error: {flag}: {message}", file=sys.stderr)
+raise SystemExit(64)
+PYTHON
+}
+
 workspace_name=""
 worktree_path=""
 handoff_file=""
 window_id=""
 agent_command=""
 agent_command_overridden=0
+model=""
+reasoning_effort=""
+startup_command_overridden=0
 startup_command=""
 initial_commands=()
 scope_parent="true"
@@ -67,6 +95,19 @@ while [[ $# -gt 0 ]]; do
       agent_command_overridden=1
       shift 2
       ;;
+    --model|--reasoning-effort)
+      if [[ $# -lt 2 ]]; then
+        echo "error: $1 requires a non-blank value" >&2
+        exit 64
+      fi
+      validate_launch_selection "$1" "$2"
+      if [[ "$1" == "--model" ]]; then
+        model="$2"
+      else
+        reasoning_effort="$2"
+      fi
+      shift 2
+      ;;
     --initial-command)
       if [[ -z "${2:-}" ]]; then
         echo "error: --initial-command requires a non-empty command" >&2
@@ -84,6 +125,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --startup-command)
+      startup_command_overridden=1
       startup_command="${2:-}"
       shift 2
       ;;
@@ -121,6 +163,10 @@ fi
 if [[ -z "$workspace_name" || -z "$worktree_path" || -z "$handoff_file" ]]; then
   echo "error: --workspace-name, --worktree-path, and --handoff-file are required" >&2
   usage
+  exit 64
+fi
+if [[ "$startup_command_overridden" == "1" && ( -n "$model" || -n "$reasoning_effort" ) ]]; then
+  echo "error: --model and --reasoning-effort cannot be combined with --startup-command" >&2
   exit 64
 fi
 if [[ "$agent_command_overridden" == "1" && -n "$startup_command" ]]; then
@@ -203,6 +249,35 @@ build_default_startup_command() {
 run_cli_json() {
   "$TOASTTY_CLI_PATH" --json "$@"
 }
+
+# Verify overrides before changing parent scope or creating a workspace.
+if [[ -n "$model" || -n "$reasoning_effort" ]]; then
+  if ! capabilities="$(run_cli_json action list)"; then
+    echo "error: could not inspect agent.launch capabilities; no child was launched" >&2
+    exit 1
+  fi
+  if ! python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if data.get("ok") is not True:
+        raise ValueError("action list returned an error")
+    commands = data["result"]["commands"]
+    launch = next(c for c in commands if c.get("id") == "agent.launch")
+    for name, value in (("model", sys.argv[2]), ("reasoningEffort", sys.argv[3])):
+        if not value:
+            continue
+        parameter = next((p for p in launch["parameters"] if p.get("name") == name), None)
+        profiles = parameter.get("supportedProfileIDs") if parameter else None
+        if not isinstance(profiles, list) or sys.argv[1] not in profiles:
+            raise ValueError(f"agent.launch does not advertise {name} support for profile {sys.argv[1]}")
+except (ValueError, TypeError, KeyError, AttributeError, StopIteration) as error:
+    print(f"error: cannot apply requested launch selections: {error}", file=sys.stderr)
+    raise SystemExit(1)
+' "$agent_command" "$model" "$reasoning_effort" <<<"$capabilities"; then
+    exit 1
+  fi
+fi
 
 # Annotation actions are checked even if a CLI returns an error envelope with exit 0.
 run_annotation_cli() {
@@ -457,6 +532,12 @@ if [[ -z "$startup_command" ]]; then
       launch_args+=("initialCommands=$initial_command")
     done
   fi
+  if [[ -n "$model" ]]; then
+    launch_args+=("model=$model")
+  fi
+  if [[ -n "$reasoning_effort" ]]; then
+    launch_args+=("reasoningEffort=$reasoning_effort")
+  fi
   launch_args+=("initialPrompt=$initial_prompt")
 
   for attempt in $(seq 1 40); do
@@ -494,7 +575,7 @@ if [[ -z "$startup_command" ]]; then
       exit 1
     fi
     scope_set="true"
-  elif [[ "$agent_command" == "codex" || "$agent_command" == "claude" ]]; then
+  elif [[ "$agent_command" == "codex" || "$agent_command" == "claude" || -n "$model" || -n "$reasoning_effort" ]]; then
     echo "error: failed to launch managed agent with agent.launch: $launch_output" >&2
     exit 1
   else
@@ -540,11 +621,11 @@ if [[ "$terminal_available" != "true" ]]; then
 fi
 
 if [[ "$json_output" == "1" ]]; then
-  python3 - "$workspace_name" "$worktree_path" "$handoff_file" "$window_id" "$workspace_id" "$panel_id" "$session_id" "$scope_set" "$startup_command" "$terminal_available" "$parent_scope_status" "$parent_scope_set" <<'PY'
+  python3 - "$workspace_name" "$worktree_path" "$handoff_file" "$window_id" "$workspace_id" "$panel_id" "$session_id" "$scope_set" "$startup_command" "$terminal_available" "$parent_scope_status" "$parent_scope_set" "$model" "$reasoning_effort" <<'PY'
 import json
 import sys
 
-workspace_name, worktree_path, handoff_file, window_id, workspace_id, panel_id, session_id, scope_set, startup_command, terminal_available, parent_scope_status, parent_scope_set = sys.argv[1:]
+workspace_name, worktree_path, handoff_file, window_id, workspace_id, panel_id, session_id, scope_set, startup_command, terminal_available, parent_scope_status, parent_scope_set, model, reasoning_effort = sys.argv[1:]
 payload = {
     "workspace_name": workspace_name,
     "worktree_path": worktree_path,
@@ -554,11 +635,14 @@ payload = {
     "panel_id": panel_id,
     "session_id": session_id or None,
     "scope_set": scope_set == "true",
-    "startup_command": startup_command,
+    "model": model or None,
+    "reasoning_effort": reasoning_effort or None,
     "terminal_available": terminal_available == "true",
     "parent_scope_status": parent_scope_status,
     "parent_scope_set": parent_scope_set == "true",
 }
+if not model and not reasoning_effort:
+    payload["startup_command"] = startup_command
 print(json.dumps(payload, indent=2, sort_keys=True))
 PY
 else
@@ -574,5 +658,7 @@ scope_set=$scope_set
 parent_scope_status=$parent_scope_status
 parent_scope_set=$parent_scope_set
 terminal_available=$terminal_available
+model=$model
+reasoning_effort=$reasoning_effort
 EOF
 fi

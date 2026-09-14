@@ -925,9 +925,114 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(result.stderr.contains("--agent-command must be a single executable name"))
     }
 
+    func testOpenSessionScriptForwardsModelAndReasoningForManagedProfiles() throws {
+        for (profile, model, effort) in [("codex", "gpt-6", "medium"), ("claude", "opus", "high")] {
+            let result = try runAnnotationScenario(
+                environment: ["TOASTTY_AGENT": profile],
+                arguments: ["--model", model, "--reasoning-effort", effort]
+            )
+            XCTAssertEqual(result.exitCode, 0, result.stderr)
+            let launch = try XCTUnwrap(result.invocations.first { $0.contains("action run agent.launch") })
+            XCTAssertTrue(launch.contains("profileID=\(profile)"))
+            XCTAssertTrue(launch.contains("model=\(model)"))
+            XCTAssertTrue(launch.contains("reasoningEffort=\(effort)"))
+            XCTAssertEqual(result.invocations.first, "--json action list")
+            let payload = try jsonObject(from: result.stdout)
+            XCTAssertEqual(payload["model"] as? String, model)
+            XCTAssertEqual(payload["reasoning_effort"] as? String, effort)
+            XCTAssertNil(payload["startup_command"])
+        }
+    }
+
+    func testOpenSessionScriptRejectsUnsupportedSelectionsBeforeMutation() throws {
+        let catalogs = [
+            "{}",
+            "{\"result\":{\"commands\":[{\"id\":\"agent.launch\",\"parameters\":[{\"name\":\"model\",\"supportedProfileIDs\":[\"codex\"]}]}]}}",
+            "{\"ok\":false,\"result\":{\"commands\":[]}}",
+            "{\"ok\":true,\"result\":{\"commands\":[]}}",
+            "{\"ok\":true,\"result\":{\"commands\":[{\"id\":\"agent.launch\",\"parameters\":[]}]}}",
+            "{\"ok\":true,\"result\":{\"commands\":[{\"id\":\"agent.launch\",\"parameters\":[{\"name\":\"model\"}]}]}}",
+            "{\"ok\":true,\"result\":{\"commands\":[{\"id\":\"agent.launch\",\"parameters\":[{\"name\":\"model\",\"supportedProfileIDs\":[\"claude\"]}]}]}}",
+        ]
+        for catalog in catalogs {
+            let result = try runAnnotationScenario(
+                environment: ["TOASTTY_AGENT": "codex", "FAKE_ACTION_CATALOG": catalog],
+                arguments: ["--model", "gpt-6"]
+            )
+            XCTAssertNotEqual(result.exitCode, 0)
+            XCTAssertTrue(result.stderr.contains("cannot apply requested launch selections"))
+            XCTAssertEqual(result.invocations, ["--json action list"])
+        }
+        let reasoning = try runAnnotationScenario(
+            environment: ["TOASTTY_AGENT": "cursor"],
+            arguments: ["--agent-command", "cursor", "--reasoning-effort", "high"]
+        )
+        XCTAssertNotEqual(reasoning.exitCode, 0)
+        XCTAssertEqual(reasoning.invocations, ["--json action list"])
+    }
+
+    func testOpenSessionScriptNeverFallsBackWhenOverridesWereSelected() throws {
+        let result = try runAnnotationScenario(
+            environment: ["FAKE_AGENT_LAUNCH_FAILURE": "1"],
+            arguments: ["--agent-command", "cursor", "--model", "model with spaces"]
+        )
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertTrue(result.invocations.contains { $0.contains("model=model with spaces") })
+        XCTAssertFalse(result.invocations.contains { $0.contains("terminal.send-text") })
+    }
+
+    func testOpenSessionScriptRejectsMissingBlankAndConflictingSelections() throws {
+        for flag in ["--model", "--reasoning-effort"] {
+            for selection in [[flag], [flag, ""], [flag, "  "], [flag, "--json"],
+                              [flag, "chosen", "--startup-command", "echo ready"],
+                              ["--startup-command", "", flag, "chosen"]] {
+                let result = try runScript(
+                    at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+                    environment: ["TOASTTY_CLI_PATH": "/usr/bin/true"],
+                    arguments: [
+                        "--workspace-name", "smoke",
+                        "--worktree-path", "/tmp/toastty-worktree-create-missing",
+                        "--handoff-file", "/tmp/toastty-worktree-create-missing/WORKTREE_HANDOFF.md",
+                    ] + selection
+                )
+                XCTAssertEqual(result.exitCode, 64, result.stderr)
+            }
+        }
+    }
+
+    func testOpenSessionScriptRejectsInvalidSelectionSyntaxBeforeAnyCLIInvocation() throws {
+        let values = [
+            "-", "-model", "  -model", "\nmodel", "model\tname", "model\u{7f}",
+            "model\u{85}", "model\u{200b}", String(repeating: "a", count: 257),
+            String(repeating: "🦉", count: 65),
+        ]
+        for flag in ["--model", "--reasoning-effort"] {
+            for value in values {
+                let result = try runAnnotationScenario(environment: [:], arguments: [flag, value])
+                XCTAssertEqual(result.exitCode, 64, result.stderr)
+                XCTAssertTrue(result.invocations.isEmpty)
+            }
+        }
+    }
+
+    func testOpenSessionScriptPreservesSelectionsAtUTF8ByteLimit() throws {
+        let value = String(repeating: "🦉", count: 64)
+        let result = try runAnnotationScenario(
+            environment: ["TOASTTY_AGENT": "codex"],
+            arguments: ["--model", value, "--reasoning-effort", " high "]
+        )
+        XCTAssertEqual(result.exitCode, 0, result.stderr)
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["model"] as? String, value)
+        XCTAssertEqual(payload["reasoning_effort"] as? String, " high ")
+        XCTAssertTrue(result.invocations.contains { $0.contains("model=\(value)") })
+        XCTAssertTrue(result.invocations.contains { $0.contains("reasoningEffort= high ") })
+    }
+
     private func runAnnotationScenario(
-        environment: [String: String]
-    ) throws -> (exitCode: Int32, stderr: String, invocations: [String]) {
+        environment: [String: String],
+        arguments: [String] = []
+    ) throws -> (exitCode: Int32, stdout: String, stderr: String, invocations: [String]) {
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-annotations")
         defer { try? FileManager.default.removeItem(at: rootURL) }
         let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
@@ -951,12 +1056,12 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 "--worktree-path", worktreeURL.path,
                 "--handoff-file", handoffURL.path,
                 "--json",
-            ]
+            ] + arguments
         )
-        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
-            .split(whereSeparator: \.isNewline)
-            .map(String.init)
-        return (result.exitCode, result.stderr, invocations)
+        let invocationLog = FileManager.default.fileExists(atPath: invocationLogURL.path)
+            ? try String(contentsOf: invocationLogURL, encoding: .utf8) : ""
+        let invocations = invocationLog.split(whereSeparator: \.isNewline).map(String.init)
+        return (result.exitCode, result.stdout, result.stderr, invocations)
     }
 
     private func sendTextInvocationLine(invocationLogURL: URL) throws -> String {
@@ -1005,7 +1110,14 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                   ;;
               esac
             fi
-            case \"$1 $2 $3\" in
+            case \"${1:-} ${2:-} ${3:-}\" in
+              "action list ")
+                if [ -n "${FAKE_ACTION_CATALOG:-}" ]; then
+                  printf '%s\\n' "$FAKE_ACTION_CATALOG"
+                else
+                  printf '%s\\n' '{"ok":true,"result":{"commands":[{"id":"agent.launch","parameters":[{"name":"model","supportedProfileIDs":["codex","claude","cursor"]},{"name":"reasoningEffort","supportedProfileIDs":["codex","claude"]}]}]}}'
+                fi
+                ;;
               \"query run terminal.state\")
                 if [ \"${4:-}\" = \"--panel\" ]; then
                   cat <<'EOF'
