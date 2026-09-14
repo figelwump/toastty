@@ -119,6 +119,38 @@ final class SidebarSessionPresentationTests: XCTestCase {
         )
     }
 
+    func testSessionRowCompactHelpTextCarriesHiddenParentAndScopeInfo() {
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowCompactHelpText(
+                parentSessionName: "Claude",
+                workspaceScopeHelpText: "Scoped to Review."
+            ),
+            "Parent session: Claude\nScoped to Review."
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowCompactHelpText(
+                parentSessionName: "Claude",
+                workspaceScopeHelpText: nil
+            ),
+            "Parent session: Claude"
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowCompactHelpText(
+                parentSessionName: nil,
+                workspaceScopeHelpText: nil,
+                droppedWaitingChipLabel: "waiting"
+            ),
+            "Status: waiting"
+        )
+        XCTAssertNil(
+            SidebarSessionPresentation.sessionRowCompactHelpText(
+                parentSessionName: nil,
+                workspaceScopeHelpText: nil
+            )
+        )
+        XCTAssertEqual(SidebarSessionPresentation.parentSessionTagLabel(parentName: "Claude"), "↖ Claude")
+    }
+
     func testSessionChildRowsDefaultExpandedAndNeedAttentionForApprovalOrError() {
         XCTAssertTrue(
             SidebarSessionPresentation.sessionChildRowsExpanded(

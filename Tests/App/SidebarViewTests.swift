@@ -580,6 +580,104 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testCrowdedNarrowSessionRowDropsScopeTagAndMovesScopeHelpToRowTooltip() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "scoped-row-narrow",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            displayTitleOverride: "Codex sidebar compact row review",
+            scopedWorkspaceIDs: [],
+            sidebarWidth: CGFloat(WindowState.minSidebarWidth)
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertFalse(
+            textValues.contains("1 scope"),
+            "A header that does not fit should drop the scope tag: \(textValues)"
+        )
+        let tooltipValues = renderedTooltipValues(in: hostingView)
+        XCTAssertTrue(
+            tooltipValues.contains(where: { $0.contains("Scoped to: Workspace 1") }),
+            "Row tooltip should carry the dropped scope tag's help text: \(tooltipValues)"
+        )
+    }
+
+    func testCrowdedNarrowSessionRowDropsWaitingChipAndMovesStatusToRowTooltip() throws {
+        let state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let panelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.focusedPanelID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        sessionRuntimeStore.startSession(
+            sessionID: "waiting-row-narrow",
+            agent: .codex,
+            panelID: panelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            displayTitleOverride: "Codex sidebar compact row review",
+            cwd: "/repo/sidebar",
+            repoRoot: "/repo",
+            at: now
+        )
+        sessionRuntimeStore.updateStatus(
+            sessionID: "waiting-row-narrow",
+            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        XCTAssertTrue(sessionRuntimeStore.updateBackgroundActivity(
+            sessionID: "waiting-row-narrow",
+            activity: SessionBackgroundActivity(
+                id: "activity-1",
+                kind: .subagent,
+                displayName: "Explore",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        ))
+        defer { sessionRuntimeStore.reset() }
+
+        let sidebarWidth = CGFloat(WindowState.minSidebarWidth)
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertFalse(
+            textValues.contains("waiting"),
+            "A header that does not fit should drop the waiting chip: \(textValues)"
+        )
+        XCTAssertTrue(
+            textValues.contains(where: { $0.contains("Codex sidebar compact row review, waiting") }),
+            "Accessibility label should still report the waiting projection: \(textValues)"
+        )
+        let tooltipValues = renderedTooltipValues(in: hostingView)
+        XCTAssertTrue(
+            tooltipValues.contains(where: { $0.contains("Status: waiting") }),
+            "Row tooltip should carry the dropped waiting chip's status: \(tooltipValues)"
+        )
+    }
+
     func testWorkspaceScopedSessionTooltipListsEffectiveWorkspaceNames() throws {
         let additionalWorkspaceID = UUID()
         let additionalWorkspace = makeSinglePanelWorkspace(
@@ -1260,7 +1358,8 @@ final class SidebarViewTests: XCTestCase {
         scopedWorkspaceIDs: Set<UUID>? = nil,
         additionalWorkspaces: [WorkspaceState] = [],
         prependAdditionalWorkspaces: Bool = false,
-        sessionPanelPlacement: SessionPanelPlacement = .focused
+        sessionPanelPlacement: SessionPanelPlacement = .focused,
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
     ) throws -> NSView {
         try makeSidebarHarness(
             sessionID: sessionID,
@@ -1270,7 +1369,8 @@ final class SidebarViewTests: XCTestCase {
             scopedWorkspaceIDs: scopedWorkspaceIDs,
             additionalWorkspaces: additionalWorkspaces,
             prependAdditionalWorkspaces: prependAdditionalWorkspaces,
-            sessionPanelPlacement: sessionPanelPlacement
+            sessionPanelPlacement: sessionPanelPlacement,
+            sidebarWidth: sidebarWidth
         ).hostingView
     }
 
@@ -1289,7 +1389,8 @@ final class SidebarViewTests: XCTestCase {
         scopedWorkspaceIDs: Set<UUID>? = nil,
         additionalWorkspaces: [WorkspaceState] = [],
         prependAdditionalWorkspaces: Bool = false,
-        sessionPanelPlacement: SessionPanelPlacement = .focused
+        sessionPanelPlacement: SessionPanelPlacement = .focused,
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
         var state = harnessState.state
@@ -1341,9 +1442,9 @@ final class SidebarViewTests: XCTestCase {
             annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext
         )
-        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: sidebarWidth, height: 600),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
