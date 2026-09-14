@@ -2779,37 +2779,16 @@ struct SidebarSessionMetadataLine: View {
     let showsUnreadSessionAccent: Bool
 
     var body: some View {
-        if cwd != nil || customTabTitle != nil {
-            HStack(spacing: 8) {
-                if let cwd {
-                    Text(cwd)
-                        .font(ToastyTheme.fontWorkspaceSessionPath)
-                        .fontWeight(
-                            SidebarSessionPresentation.sessionBodyFontWeight(
-                                showsUnreadSessionAccent: showsUnreadSessionAccent
-                            )
-                        )
-                        .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Spacer(minLength: 0)
-                }
-
-                if let customTabTitle {
-                    HStack(spacing: 4) {
-                        Image(systemName: "macwindow")
-                            .font(.system(size: 9))
-                        Text(customTabTitle)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
+        if let customTabTitle {
+            SidebarSessionMetadataLayout {
+                directory
+                Text(customTabTitle)
                     .font(ToastyTheme.fontWorkspaceSessionChip)
                     .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .frame(maxWidth: 120)
                     .background(
                         ToastyTheme.sidebarSessionPathText.opacity(0.08),
                         in: RoundedRectangle(cornerRadius: 4)
@@ -2822,9 +2801,64 @@ struct SidebarSessionMetadataLine: View {
                         SidebarTooltipBridge(text: "Tab: \(customTabTitle)")
                             .allowsHitTesting(false)
                     }
-                }
             }
+        } else if cwd != nil {
+            directory
         }
+    }
+
+    @ViewBuilder
+    private var directory: some View {
+        if let cwd {
+            Text(cwd)
+                .font(ToastyTheme.fontWorkspaceSessionPath)
+                .fontWeight(
+                    SidebarSessionPresentation.sessionBodyFontWeight(
+                        showsUnreadSessionAccent: showsUnreadSessionAccent
+                    )
+                )
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Measures the badge at its natural width, capped against the entire metadata
+/// row rather than the narrower proposal an HStack would give either sibling.
+private struct SidebarSessionMetadataLayout: Layout {
+    private let spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let width = proposal.width ?? subviews.reduce(spacing) { $0 + $1.sizeThatFits(.unspecified).width }
+        let sizes = sizes(width: width, subviews: subviews)
+        return CGSize(width: width, height: max(sizes.directory.height, sizes.badge.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        guard subviews.count == 2 else { return }
+        let sizes = sizes(width: bounds.width, subviews: subviews)
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+            proposal: ProposedViewSize(width: sizes.directory.width, height: sizes.directory.height)
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing,
+            proposal: ProposedViewSize(width: sizes.badge.width, height: sizes.badge.height)
+        )
+    }
+
+    private func sizes(width: CGFloat, subviews: Subviews) -> (directory: CGSize, badge: CGSize) {
+        guard subviews.count == 2 else { return (.zero, .zero) }
+        let badgeWidth = min(subviews[1].sizeThatFits(.unspecified).width, max(0, width * 0.4))
+        let badge = subviews[1].sizeThatFits(ProposedViewSize(width: badgeWidth, height: nil))
+        let directory = subviews[0].sizeThatFits(
+            ProposedViewSize(width: max(0, width - badgeWidth - spacing), height: nil)
+        )
+        return (directory, CGSize(width: badgeWidth, height: badge.height))
     }
 }
 

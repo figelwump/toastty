@@ -637,6 +637,30 @@ final class SidebarViewTests: XCTestCase {
         }))
     }
 
+    func testShortTabBadgeFitsItsTextInsteadOfExpandingWithTheRow() throws {
+        for cwd in [".../emptyos", nil] as [String?] {
+            let narrow = try measuredMetadataBadgeFrame(cwd: cwd, title: "hey1", width: 180)
+            let wide = try measuredMetadataBadgeFrame(cwd: cwd, title: "hey1", width: 320)
+            let shorter = try measuredMetadataBadgeFrame(cwd: cwd, title: "x", width: 320)
+            XCTAssertEqual(narrow.width, wide.width, accuracy: 0.5)
+            XCTAssertLessThan(wide.width, 60)
+            XCTAssertGreaterThan(wide.width, shorter.width)
+            XCTAssertEqual(wide.maxX, 320, accuracy: 0.5)
+        }
+    }
+
+    func testLongTabBadgeUsesAtMostFortyPercentOfMetadataRow() throws {
+        let title = String(repeating: "hey", count: 30)
+        for width in [CGFloat(140), 180, 260, 400] {
+            for cwd in [".../emptyos-with-a-long-directory-label", nil] as [String?] {
+                let badge = try measuredMetadataBadgeFrame(cwd: cwd, title: title, width: width)
+                XCTAssertLessThanOrEqual(badge.width, width * 0.4 + 0.5)
+                XCTAssertGreaterThan(badge.width, width * 0.3)
+                XCTAssertEqual(badge.maxX, width, accuracy: 0.5)
+            }
+        }
+    }
+
     func testSessionMetadataLineKeepsOneLineUnderWidthPressure() {
         for width in [CGFloat(180), 260] {
             let short = measuredSessionMetadataSize(cwd: ".../sidebar", title: "review", width: width)
@@ -1730,6 +1754,17 @@ final class SidebarViewTests: XCTestCase {
             ],
             focusedPanelID: panelID
         )
+    }
+
+    private func measuredMetadataBadgeFrame(cwd: String?, title: String, width: CGFloat) throws -> CGRect {
+        let hostingView = NSHostingView(rootView:
+            SidebarSessionMetadataLine(cwd: cwd, customTabTitle: title, showsUnreadSessionAccent: false)
+                .frame(width: width)
+        )
+        hostingView.setFrameSize(hostingView.fittingSize)
+        hostingView.layoutSubtreeIfNeeded()
+        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: title))
+        return badge.convert(badge.bounds, to: hostingView)
     }
 
     private func measuredSessionMetadataSize(cwd: String?, title: String?, width: CGFloat) -> CGSize {
