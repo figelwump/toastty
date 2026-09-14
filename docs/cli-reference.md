@@ -489,7 +489,11 @@ Scratchpad actions are intended for agent and automation integrations:
 not move AppKit keyboard focus. This lets automation prepare or start work in a
 background workspace without causing the user's next physical keystrokes to go
 to that hidden terminal. To make a terminal the interactive keyboard target,
-select/focus the workspace or panel separately before sending text.
+select/focus the workspace or panel separately before sending text. Pass
+`expectedSessionID=<id>` when the caller knows which managed session owns the
+panel; Toastty rejects the request before delivery if that active session is
+missing, ended, or replaced. This check is independent of the selected
+workspace tab and is not bypassed by `allowUnavailable=true`.
 
 Patch JSON uses exact text replacements:
 

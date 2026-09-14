@@ -396,7 +396,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
         case .configReload:
             return .init(id: rawValue, kind: .action, summary: "Reload Toastty configuration and profiles.", selectors: [])
         case .terminalSendText:
-            return .init(id: rawValue, kind: .action, summary: "Send text to a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.text(required: true), .submit(required: false), .allowUnavailable(required: false)])
+            return .init(id: rawValue, kind: .action, summary: "Send text to a terminal panel, optionally only when it still hosts an expected managed session.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.text(required: true), .submit(required: false), .expectedSessionID(required: false), .allowUnavailable(required: false)])
         case .terminalDropImageFiles:
             return .init(id: rawValue, kind: .action, summary: "Drop local files into a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.files(required: true), .cwd(required: false), .allowUnavailable(required: false)])
         }
@@ -526,6 +526,10 @@ private extension AppControlParameterDescriptor {
 
     static func allowUnavailable(required: Bool) -> Self {
         .init(name: "allowUnavailable", summary: "Return availability metadata instead of failing when a terminal surface is unavailable.", valueType: .boolean, required: required)
+    }
+
+    static func expectedSessionID(required: Bool) -> Self {
+        .init(name: "expectedSessionID", summary: "Only deliver when the target panel still hosts this active managed session.", valueType: .string, required: required)
     }
 
     static func contains(required: Bool) -> Self {
