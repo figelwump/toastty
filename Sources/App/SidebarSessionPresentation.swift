@@ -209,6 +209,19 @@ enum SidebarSessionPresentation {
         isFlaggedForLater ? "Clear Later Flag" : "Flag for Later"
     }
 
+    /// Full terminal-session rows refer to main workspace tabs, not auxiliary panel tabs.
+    static func sessionCustomTabTitle(
+        for session: WorkspaceSessionStatus,
+        in workspace: WorkspaceState?
+    ) -> String? {
+        guard let workspace,
+              workspace.id == session.workspaceID,
+              let tabID = workspace.tabID(containingPanelID: session.panelID),
+              let tab = workspace.tab(id: tabID),
+              tab.panels[session.panelID] != nil else { return nil }
+        return tab.customTitle
+    }
+
     static func sessionAccessibilityLabel(
         agentName: String,
         chipKind: SessionStatusKind?,
@@ -217,7 +230,8 @@ enum SidebarSessionPresentation {
         detailText: String?,
         cwd: String?,
         isLaterFlagged: Bool,
-        workspaceScopeHelpText: String? = nil
+        workspaceScopeHelpText: String? = nil,
+        customTabTitle: String? = nil
     ) -> String {
         var components = [agentName]
         if let chipKind {
@@ -238,6 +252,9 @@ enum SidebarSessionPresentation {
         }
         if let cwd {
             components.append(cwd)
+        }
+        if let customTabTitle {
+            components.append("Tab: \(customTabTitle)")
         }
         if isLaterFlagged {
             components.append("flagged for later")

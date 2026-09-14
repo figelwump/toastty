@@ -1190,6 +1190,10 @@ struct SidebarView: View {
         )
         let collapsedChildNeedsAttention = childRowsNeedAttention && childRowsExpanded == false
         let parentSessionName = parentSessionName(for: workspaceSessionStatus, in: workspace.id)
+        let customTabTitle = SidebarSessionPresentation.sessionCustomTabTitle(
+            for: workspaceSessionStatus,
+            in: store.state.workspacesByID[workspaceSessionStatus.workspaceID]
+        )
         let accessibilityLabel = SidebarSessionPresentation.sessionAccessibilityLabel(
             agentName: workspaceSessionStatus.displayTitle,
             chipKind: chipKind,
@@ -1198,7 +1202,8 @@ struct SidebarView: View {
             detailText: normalizedSessionDetail(status.detail),
             cwd: SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd),
             isLaterFlagged: isLaterFlagged,
-            workspaceScopeHelpText: scopeHelpText
+            workspaceScopeHelpText: scopeHelpText,
+            customTabTitle: customTabTitle
         )
         let canFocusPanel = SidebarSessionPresentation.canFocusSessionPanel(
             workspaceSessionStatus.panelID,
@@ -1245,6 +1250,7 @@ struct SidebarView: View {
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
             parentSessionName: parentSessionName,
+            customTabTitle: customTabTitle,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
             }
@@ -1373,6 +1379,7 @@ struct SidebarView: View {
         childRowsExpanded: Bool,
         collapsedChildNeedsAttention: Bool,
         parentSessionName: String?,
+        customTabTitle: String?,
         onToggleChildRows: @escaping () -> Void
     ) -> some View {
         let indicatorState = SidebarSessionPresentation.sessionIndicatorState(for: status.kind)
@@ -1445,18 +1452,11 @@ struct SidebarView: View {
                 )
             }
 
-            if let cwd = SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd) {
-                Text(cwd)
-                    .font(ToastyTheme.fontWorkspaceSessionPath)
-                    .fontWeight(
-                        SidebarSessionPresentation.sessionBodyFontWeight(
-                            showsUnreadSessionAccent: showsUnreadSessionAccent
-                        )
-                    )
-                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            SidebarSessionMetadataLine(
+                cwd: SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd),
+                customTabTitle: customTabTitle,
+                showsUnreadSessionAccent: showsUnreadSessionAccent
+            )
         }
         .padding(.vertical, 5)
         .padding(.horizontal, 8)
@@ -2770,6 +2770,61 @@ struct SidebarView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(SidebarSessionPresentation.workspaceAgentSummaryAccessibilityLabel(summary))
         .accessibilityIdentifier("sidebar.workspace.agentCount")
+    }
+}
+
+struct SidebarSessionMetadataLine: View {
+    let cwd: String?
+    let customTabTitle: String?
+    let showsUnreadSessionAccent: Bool
+
+    var body: some View {
+        if cwd != nil || customTabTitle != nil {
+            HStack(spacing: 8) {
+                if let cwd {
+                    Text(cwd)
+                        .font(ToastyTheme.fontWorkspaceSessionPath)
+                        .fontWeight(
+                            SidebarSessionPresentation.sessionBodyFontWeight(
+                                showsUnreadSessionAccent: showsUnreadSessionAccent
+                            )
+                        )
+                        .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Spacer(minLength: 0)
+                }
+
+                if let customTabTitle {
+                    HStack(spacing: 4) {
+                        Image(systemName: "macwindow")
+                            .font(.system(size: 9))
+                        Text(customTabTitle)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .frame(maxWidth: 120)
+                    .background(
+                        ToastyTheme.sidebarSessionPathText.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 4)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(ToastyTheme.sidebarSessionPathText.opacity(0.16), lineWidth: 1)
+                    }
+                    .background {
+                        SidebarTooltipBridge(text: "Tab: \(customTabTitle)")
+                            .allowsHitTesting(false)
+                    }
+                }
+            }
+        }
     }
 }
 
