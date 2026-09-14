@@ -1389,7 +1389,13 @@ struct SidebarView: View {
 
         let hasScopeTag = workspaceSessionStatus.isWorkspaceScoped
         let hasParentTag = parentSessionName != nil
-        let headerRow = { (showsScopeTag: Bool, showsParentTag: Bool) in
+        let hasWaitingChip: Bool
+        if case .waitingOnChildren = projection {
+            hasWaitingChip = true
+        } else {
+            hasWaitingChip = false
+        }
+        let headerRow = { (showsScopeTag: Bool, showsParentTag: Bool, showsWaitingChip: Bool) in
             sessionHeaderRow(
                 workspaceSessionStatus,
                 status: status,
@@ -1401,6 +1407,7 @@ struct SidebarView: View {
                 scopeTagLabel: scopeTagLabel,
                 scopeHelpText: scopeHelpText,
                 showsScopeTag: showsScopeTag,
+                showsWaitingChip: showsWaitingChip,
                 childCount: childCount,
                 childRowsExpanded: childRowsExpanded,
                 collapsedChildNeedsAttention: collapsedChildNeedsAttention,
@@ -1411,19 +1418,22 @@ struct SidebarView: View {
         }
 
         return VStack(alignment: .leading, spacing: 2) {
-            // Drop the parent tag, then the scope tag, when the header does
-            // not fit at its ideal width. Truncating them instead leaves
-            // stubs like "↖ Cl…" while the agent name still loses width,
-            // because the stack reserves every chip's minimum width before
-            // layout priority applies.
+            // Drop the parent tag, then the scope tag, then the waiting chip
+            // when the header does not fit at its ideal width. Truncating
+            // them instead leaves stubs like "↖ Cl…" while the agent name
+            // still loses width, because the stack reserves every chip's
+            // minimum width before layout priority applies.
             ViewThatFits(in: .horizontal) {
                 if hasParentTag {
-                    headerRow(hasScopeTag, true)
+                    headerRow(hasScopeTag, true, hasWaitingChip)
                 }
                 if hasScopeTag {
-                    headerRow(true, false)
+                    headerRow(true, false, hasWaitingChip)
                 }
-                headerRow(false, false)
+                if hasWaitingChip {
+                    headerRow(false, false, true)
+                }
+                headerRow(false, false, false)
             }
 
             if status.kind != .idle || detailText != nil {
@@ -1495,6 +1505,7 @@ struct SidebarView: View {
         scopeTagLabel: String,
         scopeHelpText: String?,
         showsScopeTag: Bool,
+        showsWaitingChip: Bool,
         childCount: Int,
         childRowsExpanded: Bool,
         collapsedChildNeedsAttention: Bool,
@@ -1502,9 +1513,11 @@ struct SidebarView: View {
         showsParentTag: Bool,
         onToggleChildRows: @escaping () -> Void
     ) -> some View {
+        let waitingChipLabel = SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: projection)
         let compactHelpText = SidebarSessionPresentation.sessionRowCompactHelpText(
             parentSessionName: showsParentTag ? nil : parentSessionName,
-            workspaceScopeHelpText: showsScopeTag ? nil : scopeHelpText
+            workspaceScopeHelpText: showsScopeTag ? nil : scopeHelpText,
+            droppedWaitingChipLabel: showsWaitingChip ? nil : waitingChipLabel
         )
         let parentTagLabel = parentSessionName.map(SidebarSessionPresentation.parentSessionTagLabel(parentName:))
 
@@ -1532,7 +1545,7 @@ struct SidebarView: View {
             // and disclosure pill. Do not lower them below the spacer:
             // a lower priority lets the spacer starve them of width even
             // when the row has room.
-            if case .waitingOnChildren = projection {
+            if waitingChipLabel != nil, showsWaitingChip {
                 sessionWaitingChip()
             }
 

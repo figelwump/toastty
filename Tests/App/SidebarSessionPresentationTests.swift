@@ -134,6 +134,14 @@ final class SidebarSessionPresentationTests: XCTestCase {
             ),
             "Parent session: Claude"
         )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowCompactHelpText(
+                parentSessionName: nil,
+                workspaceScopeHelpText: nil,
+                droppedWaitingChipLabel: "waiting"
+            ),
+            "Status: waiting"
+        )
         XCTAssertNil(
             SidebarSessionPresentation.sessionRowCompactHelpText(
                 parentSessionName: nil,

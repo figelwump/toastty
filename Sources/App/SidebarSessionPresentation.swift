@@ -286,13 +286,17 @@ enum SidebarSessionPresentation {
         "↖ \(parentName)"
     }
 
-    /// Tooltip text for a session row whose parent or scope tag was dropped
-    /// because the header did not fit.
+    /// Tooltip text for a session row whose parent tag, scope tag, or
+    /// waiting chip was dropped because the header did not fit.
     static func sessionRowCompactHelpText(
         parentSessionName: String?,
-        workspaceScopeHelpText: String?
+        workspaceScopeHelpText: String?,
+        droppedWaitingChipLabel: String? = nil
     ) -> String? {
         var lines: [String] = []
+        if let droppedWaitingChipLabel {
+            lines.append("Status: \(droppedWaitingChipLabel)")
+        }
         if let parentSessionName {
             lines.append("Parent session: \(parentSessionName)")
         }
