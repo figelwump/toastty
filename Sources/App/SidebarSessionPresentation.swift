@@ -4,6 +4,55 @@ import SwiftUI
 
 @MainActor
 enum SidebarSessionPresentation {
+    /// Applies a workspace's display preference without changing runtime session order.
+    static func orderedStatuses(
+        _ statuses: [WorkspaceSessionStatus],
+        panelOrder: [UUID]
+    ) -> [WorkspaceSessionStatus] {
+        guard panelOrder.isEmpty == false else { return statuses }
+        var rank: [UUID: Int] = [:]
+        for panelID in panelOrder where rank[panelID] == nil {
+            rank[panelID] = rank.count
+        }
+        return statuses.enumerated().sorted { lhs, rhs in
+            let left = rank[lhs.element.panelID] ?? Int.max
+            let right = rank[rhs.element.panelID] ?? Int.max
+            return left == right ? lhs.offset < rhs.offset : left < right
+        }.map(\.element)
+    }
+
+    struct SessionDropTarget: Equatable {
+        let panelID: UUID
+        let placeAfter: Bool
+    }
+
+    /// Frames include expanded children and use the scroll viewport's coordinates.
+    nonisolated static func sessionDropTarget(
+        orderedRowIDs: [SidebarSessionRowID],
+        frames: [SidebarSessionRowID: CGRect],
+        source: SidebarSessionRowID,
+        pointer: CGPoint,
+        viewportHeight: CGFloat
+    ) -> SessionDropTarget? {
+        guard pointer.x.isFinite, pointer.y.isFinite,
+              pointer.y >= 0, pointer.y < viewportHeight,
+              orderedRowIDs.contains(source),
+              orderedRowIDs.allSatisfy({ $0.workspaceID == source.workspaceID }),
+              orderedRowIDs.count > 1 else { return nil }
+        let measured = orderedRowIDs.compactMap { frames[$0] }
+        guard measured.count == orderedRowIDs.count,
+              measured.allSatisfy({ !$0.isEmpty && !$0.isInfinite && !$0.isNull }) else { return nil }
+        let bounds = measured.reduce(CGRect.null) { $0.union($1) }
+        guard bounds.contains(pointer) else { return nil }
+        let candidates = orderedRowIDs.filter { $0 != source }
+        for row in candidates {
+            if let frame = frames[row], pointer.y < frame.midY {
+                return SessionDropTarget(panelID: row.panelID, placeAfter: false)
+            }
+        }
+        return candidates.last.map { SessionDropTarget(panelID: $0.panelID, placeAfter: true) }
+    }
+
     struct SessionChildFocusTarget: Equatable {
         let workspaceID: UUID
         let panelID: UUID

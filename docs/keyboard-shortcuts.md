@@ -61,6 +61,9 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 
 Dragging workspace rows in the sidebar or tabs in the top tab strip changes this order; the numeric workspace and tab shortcuts follow the current visual order.
 
+Dragging session rows within a workspace changes only their sidebar display
+order. Pane shortcuts and keyboard navigation still follow the pane layout.
+
 ## Command palette
 
 | Shortcut | Action |

@@ -31,6 +31,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Run agents your usual way** — run CLIs from the command line and Toastty picks up live status automatically for supported agents; or launch from the `Agent` menu, top bar, command palette, or keyboard shortcut
 - **Live sidebar status** — working, ready, or error state for Cursor sessions, plus working, needs-approval, ready, or error state for Codex, Claude, OpenCode, MiMo Code, and Pi sessions
 - **Nested agent visibility** — orchestrating sessions show child agents and background work as expandable sidebar rows, including waiting and attention states
+- **Session row ordering** — drag session rows within a workspace to save their sidebar order without changing pane layout, tabs, or shortcuts
 - **Unread badges and notifications** — sidebar badges and macOS notifications when an agent needs you
 - **Jump to the next session that needs you** — `Cmd+Shift+A` rotates through unreads, approval/error sessions, then active work
 - **Mark a session for later** — `Cmd+Shift+L` flags a managed session; the flag clears automatically when the session meaningfully advances
