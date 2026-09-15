@@ -22,6 +22,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         "cwd",
         "detail",
         "expectedRevision",
+        "expectedSessionID",
         "filePath",
         "files",
         "fixture",
