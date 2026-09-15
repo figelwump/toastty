@@ -148,6 +148,8 @@ Terminal command-click integrations use Toastty for common supporting files: sup
 
 Run agents the way you usually do — type `codex`, `cdx`, `claude`, `cursor-agent`, `opencode`, `mimo`, `mimocode`, or `pi` in any terminal pane and Toastty's command shims pick up live status automatically. Or launch from the `Agent` menu, the top bar, the command palette, or a keyboard shortcut. Either way, built-in session telemetry drives sidebar status, unread badges, and desktop notifications, and later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed. Toastty intentionally does not intercept Cursor's generic `agent` alias because that name is not unique to Cursor.
 
+Full sidebar session rows show a custom tab name beside the working directory when you rename the session's tab. Automatically titled tabs and nested child rows do not show this badge. Hover over a truncated badge to see the full name.
+
 Use `Cmd+Shift+L` to mark a managed session for later follow-up without pinning it; later-flagged sessions join the active `Cmd+Shift+A` rotation after urgent unread or approval/error work, and the flag clears automatically when the session meaningfully advances.
 
 Use `Cmd+Shift+M` to watch a busy foreground terminal command and get the same sidebar row, unread, and completion-notification affordances for non-agent terminal work. Watched commands are intentionally not later-flaggable.

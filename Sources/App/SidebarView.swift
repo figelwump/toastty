@@ -1190,6 +1190,10 @@ struct SidebarView: View {
         )
         let collapsedChildNeedsAttention = childRowsNeedAttention && childRowsExpanded == false
         let parentSessionName = parentSessionName(for: workspaceSessionStatus, in: workspace.id)
+        let customTabTitle = SidebarSessionPresentation.sessionCustomTabTitle(
+            for: workspaceSessionStatus,
+            in: store.state.workspacesByID[workspaceSessionStatus.workspaceID]
+        )
         let accessibilityLabel = SidebarSessionPresentation.sessionAccessibilityLabel(
             agentName: workspaceSessionStatus.displayTitle,
             chipKind: chipKind,
@@ -1198,7 +1202,8 @@ struct SidebarView: View {
             detailText: normalizedSessionDetail(status.detail),
             cwd: SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd),
             isLaterFlagged: isLaterFlagged,
-            workspaceScopeHelpText: scopeHelpText
+            workspaceScopeHelpText: scopeHelpText,
+            customTabTitle: customTabTitle
         )
         let canFocusPanel = SidebarSessionPresentation.canFocusSessionPanel(
             workspaceSessionStatus.panelID,
@@ -1245,6 +1250,7 @@ struct SidebarView: View {
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
             parentSessionName: parentSessionName,
+            customTabTitle: customTabTitle,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
             }
@@ -1373,6 +1379,7 @@ struct SidebarView: View {
         childRowsExpanded: Bool,
         collapsedChildNeedsAttention: Bool,
         parentSessionName: String?,
+        customTabTitle: String?,
         onToggleChildRows: @escaping () -> Void
     ) -> some View {
         let indicatorState = SidebarSessionPresentation.sessionIndicatorState(for: status.kind)
@@ -1445,18 +1452,11 @@ struct SidebarView: View {
                 )
             }
 
-            if let cwd = SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd) {
-                Text(cwd)
-                    .font(ToastyTheme.fontWorkspaceSessionPath)
-                    .fontWeight(
-                        SidebarSessionPresentation.sessionBodyFontWeight(
-                            showsUnreadSessionAccent: showsUnreadSessionAccent
-                        )
-                    )
-                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            SidebarSessionMetadataLine(
+                cwd: SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd),
+                customTabTitle: customTabTitle,
+                showsUnreadSessionAccent: showsUnreadSessionAccent
+            )
         }
         .padding(.vertical, 5)
         .padding(.horizontal, 8)
@@ -2770,6 +2770,95 @@ struct SidebarView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(SidebarSessionPresentation.workspaceAgentSummaryAccessibilityLabel(summary))
         .accessibilityIdentifier("sidebar.workspace.agentCount")
+    }
+}
+
+struct SidebarSessionMetadataLine: View {
+    let cwd: String?
+    let customTabTitle: String?
+    let showsUnreadSessionAccent: Bool
+
+    var body: some View {
+        if let customTabTitle {
+            SidebarSessionMetadataLayout {
+                directory
+                Text(customTabTitle)
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(
+                        ToastyTheme.sidebarSessionPathText.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 4)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(ToastyTheme.sidebarSessionPathText.opacity(0.16), lineWidth: 1)
+                    }
+                    .background {
+                        SidebarTooltipBridge(text: "Tab: \(customTabTitle)")
+                            .allowsHitTesting(false)
+                    }
+            }
+        } else if cwd != nil {
+            directory
+        }
+    }
+
+    @ViewBuilder
+    private var directory: some View {
+        if let cwd {
+            Text(cwd)
+                .font(ToastyTheme.fontWorkspaceSessionPath)
+                .fontWeight(
+                    SidebarSessionPresentation.sessionBodyFontWeight(
+                        showsUnreadSessionAccent: showsUnreadSessionAccent
+                    )
+                )
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Measures the badge at its natural width, capped against the entire metadata
+/// row rather than the narrower proposal an HStack would give either sibling.
+private struct SidebarSessionMetadataLayout: Layout {
+    private let spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let width = proposal.width ?? subviews.reduce(spacing) { $0 + $1.sizeThatFits(.unspecified).width }
+        let sizes = sizes(width: width, subviews: subviews)
+        return CGSize(width: width, height: max(sizes.directory.height, sizes.badge.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        guard subviews.count == 2 else { return }
+        let sizes = sizes(width: bounds.width, subviews: subviews)
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+            proposal: ProposedViewSize(width: sizes.directory.width, height: sizes.directory.height)
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing,
+            proposal: ProposedViewSize(width: sizes.badge.width, height: sizes.badge.height)
+        )
+    }
+
+    private func sizes(width: CGFloat, subviews: Subviews) -> (directory: CGSize, badge: CGSize) {
+        guard subviews.count == 2 else { return (.zero, .zero) }
+        let badgeWidth = min(subviews[1].sizeThatFits(.unspecified).width, max(0, width * 0.4))
+        let badge = subviews[1].sizeThatFits(ProposedViewSize(width: badgeWidth, height: nil))
+        let directory = subviews[0].sizeThatFits(
+            ProposedViewSize(width: max(0, width - badgeWidth - spacing), height: nil)
+        )
+        return (directory, CGSize(width: badgeWidth, height: badge.height))
     }
 }
 

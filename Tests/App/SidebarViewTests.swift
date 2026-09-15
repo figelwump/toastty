@@ -580,6 +580,124 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testFullSessionRowShowsCustomTabNameAlongsideScopeAndDirectory() throws {
+        for placement in [SessionPanelPlacement.focused, .backgroundUnread] {
+            let hostingView = try makeSidebarHostingView(
+                sessionID: "custom-tab-row",
+                sessionStatus: SessionStatus(kind: .working, summary: "Working", detail: "Reviewing changes"),
+                scopedWorkspaceIDs: [],
+                sessionPanelPlacement: placement,
+                customTabTitle: "orchestrator"
+            )
+            let textValues = renderedTextValues(in: hostingView)
+            XCTAssertTrue(textValues.contains("1 scope"))
+            XCTAssertTrue(textValues.contains(where: { $0.contains("Tab: orchestrator") && $0.contains(".../sidebar") }))
+            XCTAssertTrue(renderedTooltipValues(in: hostingView).contains("Tab: orchestrator"))
+        }
+    }
+
+    func testFullSessionRowWithNoDirectoryStillShowsCustomTabBadge() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "custom-tab-no-cwd",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
+            customTabTitle: "orchestrator",
+            cwd: nil
+        )
+        XCTAssertTrue(renderedTextValues(in: hostingView).contains(where: { $0.contains("Tab: orchestrator") }))
+        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: "orchestrator"))
+        XCTAssertGreaterThan(badge.bounds.width, 0)
+        XCTAssertGreaterThan(badge.bounds.height, 0)
+    }
+
+    func testFullSessionRowDoesNotExposeAutomaticTabNameAsBadge() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "automatic-tab-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
+            cwd: nil
+        )
+        XCTAssertFalse(renderedTextValues(in: hostingView).contains(where: { $0.contains("Tab:") }))
+    }
+
+    func testLongCustomTabBadgeFitsNarrowRowAndPreservesFullNameInTooltipAndAccessibility() throws {
+        let title = "orchestrator reviewing the complete implementation and tests"
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "custom-tab-long-name",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
+            sidebarWidth: CGFloat(WindowState.minSidebarWidth),
+            customTabTitle: title
+        )
+        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: title))
+        let frame = badge.convert(badge.bounds, to: hostingView)
+        XCTAssertGreaterThan(frame.width, 0)
+        XCTAssertLessThanOrEqual(frame.width, 120.5)
+        XCTAssertGreaterThanOrEqual(frame.minX, 0)
+        XCTAssertLessThanOrEqual(frame.maxX, hostingView.bounds.width + 0.5)
+        XCTAssertTrue(renderedTextValues(in: hostingView).contains(where: {
+            $0.contains("Tab: \(title)") && $0.contains(".../sidebar")
+        }))
+    }
+
+    func testShortTabBadgeFitsItsTextInsteadOfExpandingWithTheRow() throws {
+        for cwd in [".../emptyos", nil] as [String?] {
+            let narrow = try measuredMetadataBadgeFrame(cwd: cwd, title: "hey1", width: 180)
+            let wide = try measuredMetadataBadgeFrame(cwd: cwd, title: "hey1", width: 320)
+            let shorter = try measuredMetadataBadgeFrame(cwd: cwd, title: "x", width: 320)
+            XCTAssertEqual(narrow.width, wide.width, accuracy: 0.5)
+            XCTAssertLessThan(wide.width, 60)
+            XCTAssertGreaterThan(wide.width, shorter.width)
+            XCTAssertEqual(wide.maxX, 320, accuracy: 0.5)
+        }
+    }
+
+    func testLongTabBadgeUsesAtMostFortyPercentOfMetadataRow() throws {
+        let title = String(repeating: "hey", count: 30)
+        for width in [CGFloat(140), 180, 260, 400] {
+            for cwd in [".../emptyos-with-a-long-directory-label", nil] as [String?] {
+                let badge = try measuredMetadataBadgeFrame(cwd: cwd, title: title, width: width)
+                XCTAssertLessThanOrEqual(badge.width, width * 0.4 + 0.5)
+                XCTAssertGreaterThan(badge.width, width * 0.3)
+                XCTAssertEqual(badge.maxX, width, accuracy: 0.5)
+            }
+        }
+    }
+
+    func testSessionMetadataLineKeepsOneLineUnderWidthPressure() {
+        for width in [CGFloat(180), 260] {
+            let short = measuredSessionMetadataSize(cwd: ".../sidebar", title: "review", width: width)
+            let long = measuredSessionMetadataSize(
+                cwd: ".../a-directory-with-a-long-name",
+                title: "orchestrator reviewing the complete implementation and tests",
+                width: width
+            )
+            XCTAssertEqual(long.width, width, accuracy: 0.5)
+            XCTAssertEqual(long.height, short.height, accuracy: 0.5)
+            XCTAssertGreaterThan(long.height, 0)
+        }
+    }
+
+    func testSessionMetadataLineIsEmptyWithoutDirectoryOrCustomName() {
+        let empty = measuredSessionMetadataSize(cwd: nil, title: nil, width: 200)
+        let badgeOnly = measuredSessionMetadataSize(cwd: nil, title: "orchestrator", width: 200)
+        XCTAssertEqual(empty.height, 0)
+        XCTAssertGreaterThan(badgeOnly.height, empty.height)
+    }
+
+    func testCustomTabBadgeTooltipDoesNotSwallowSessionRowClick() throws {
+        let harness = try makeSidebarHarness(
+            sessionID: "custom-tab-click",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
+            sessionPanelPlacement: .backgroundUnread,
+            customTabTitle: "orchestrator"
+        )
+        defer { harness.window.orderOut(nil) }
+        XCTAssertNotEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
+        let badge = try XCTUnwrap(tooltipView(in: harness.hostingView, containing: "orchestrator"))
+        let clickLocation = badge.convert(NSPoint(x: badge.bounds.midX, y: badge.bounds.midY), to: nil)
+        try click(window: harness.window, at: clickLocation)
+        pumpMainRunLoop()
+        XCTAssertEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
+    }
+
     func testCrowdedNarrowSessionRowDropsScopeTagAndMovesScopeHelpToRowTooltip() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "scoped-row-narrow",
@@ -1359,7 +1477,9 @@ final class SidebarViewTests: XCTestCase {
         additionalWorkspaces: [WorkspaceState] = [],
         prependAdditionalWorkspaces: Bool = false,
         sessionPanelPlacement: SessionPanelPlacement = .focused,
-        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        customTabTitle: String? = nil,
+        cwd: String? = "/repo/sidebar"
     ) throws -> NSView {
         try makeSidebarHarness(
             sessionID: sessionID,
@@ -1370,7 +1490,9 @@ final class SidebarViewTests: XCTestCase {
             additionalWorkspaces: additionalWorkspaces,
             prependAdditionalWorkspaces: prependAdditionalWorkspaces,
             sessionPanelPlacement: sessionPanelPlacement,
-            sidebarWidth: sidebarWidth
+            sidebarWidth: sidebarWidth,
+            customTabTitle: customTabTitle,
+            cwd: cwd
         ).hostingView
     }
 
@@ -1390,13 +1512,18 @@ final class SidebarViewTests: XCTestCase {
         additionalWorkspaces: [WorkspaceState] = [],
         prependAdditionalWorkspaces: Bool = false,
         sessionPanelPlacement: SessionPanelPlacement = .focused,
-        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        customTabTitle: String? = nil,
+        cwd: String? = "/repo/sidebar"
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
         var state = harnessState.state
         let windowID = harnessState.windowID
         let workspaceID = harnessState.workspaceID
         let panelID = harnessState.sessionPanelID
+        if let tabID = state.workspacesByID[workspaceID]?.tabID(containingPanelID: panelID) {
+            state.workspacesByID[workspaceID]?.tabsByID[tabID]?.customTitle = customTabTitle
+        }
         if additionalWorkspaces.isEmpty == false,
            let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) {
             let additionalWorkspaceIDs = additionalWorkspaces.map(\.id)
@@ -1423,7 +1550,7 @@ final class SidebarViewTests: XCTestCase {
             windowID: windowID,
             workspaceID: workspaceID,
             displayTitleOverride: displayTitleOverride,
-            cwd: "/repo/sidebar",
+            cwd: cwd,
             repoRoot: "/repo",
             scopedWorkspaceIDs: scopedWorkspaceIDs,
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -1627,6 +1754,29 @@ final class SidebarViewTests: XCTestCase {
             ],
             focusedPanelID: panelID
         )
+    }
+
+    private func measuredMetadataBadgeFrame(cwd: String?, title: String, width: CGFloat) throws -> CGRect {
+        let hostingView = NSHostingView(rootView:
+            SidebarSessionMetadataLine(cwd: cwd, customTabTitle: title, showsUnreadSessionAccent: false)
+                .frame(width: width)
+        )
+        hostingView.setFrameSize(hostingView.fittingSize)
+        hostingView.layoutSubtreeIfNeeded()
+        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: title))
+        return badge.convert(badge.bounds, to: hostingView)
+    }
+
+    private func measuredSessionMetadataSize(cwd: String?, title: String?, width: CGFloat) -> CGSize {
+        let recorder = SidebarLayoutWidthRecorder()
+        let hostingView = NSHostingView(
+            rootView: SidebarProposedWidthRecordingLayout(proposedWidth: width, recorder: recorder) {
+                SidebarSessionMetadataLine(cwd: cwd, customTabTitle: title, showsUnreadSessionAccent: false)
+            }
+        )
+        _ = hostingView.fittingSize
+        hostingView.layoutSubtreeIfNeeded()
+        return CGSize(width: recorder.width, height: recorder.height)
     }
 
     private func measuredAnnotationChipWidth(

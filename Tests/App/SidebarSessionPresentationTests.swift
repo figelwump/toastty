@@ -51,6 +51,119 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertEqual(SidebarSessionPresentation.abbreviatedPathLabel("relative"), "relative")
     }
 
+    func testSessionCustomTabTitleRequiresExplicitNameEvenInSingleTabWorkspace() throws {
+        var workspace = makeWorkspace(title: "Workspace")
+        let tabID = try XCTUnwrap(workspace.selectedTabID)
+        let session = try makeSession(in: workspace)
+
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace))
+        workspace.tabsByID[tabID]?.customTitle = "orchestrator"
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace),
+            "orchestrator"
+        )
+    }
+
+    func testSessionCustomTabTitleUsesContainingTabInsteadOfSelectedTabOrScope() throws {
+        var workspace = makeWorkspace(title: "Workspace")
+        let owningTabID = try XCTUnwrap(workspace.selectedTabID)
+        workspace.tabsByID[owningTabID]?.customTitle = "orchestrator"
+        var session = try makeSession(in: workspace)
+        session.scopedWorkspaceIDs = [UUID()]
+        var selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Automatic title")
+        selectedTab.customTitle = "review"
+        workspace.appendTab(selectedTab, select: true)
+
+        XCTAssertEqual(workspace.selectedTabID, selectedTab.id)
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace),
+            "orchestrator"
+        )
+    }
+
+    func testSessionCustomTabTitleRejectsMissingWorkspaceWrongOwnerPanelAndTab() throws {
+        var workspace = makeWorkspace(title: "Workspace")
+        let tabID = try XCTUnwrap(workspace.selectedTabID)
+        workspace.tabsByID[tabID]?.customTitle = "orchestrator"
+        let session = try makeSession(in: workspace)
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: nil))
+
+        var wrongOwner = session
+        wrongOwner.workspaceID = UUID()
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: wrongOwner, in: workspace))
+
+        var missingPanel = workspace
+        missingPanel.tabsByID[tabID]?.panels.removeValue(forKey: session.panelID)
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: missingPanel))
+
+        var orphanedPanel = workspace
+        orphanedPanel.tabsByID[tabID]?.layoutTree = .slot(slotID: UUID(), panelID: UUID())
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: orphanedPanel))
+
+        workspace.tabsByID.removeValue(forKey: tabID)
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace))
+    }
+
+    func testSessionCustomTabTitleReflectsRenameClearAndPanelMovement() throws {
+        var workspace = makeWorkspace(title: "Workspace")
+        let originalTabID = try XCTUnwrap(workspace.selectedTabID)
+        let session = try makeSession(in: workspace)
+        workspace.tabsByID[originalTabID]?.customTitle = "orchestrator"
+        XCTAssertEqual(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace), "orchestrator")
+
+        workspace.tabsByID[originalTabID]?.customTitle = "renamed"
+        XCTAssertEqual(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace), "renamed")
+        workspace.tabsByID[originalTabID]?.customTitle = nil
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace))
+
+        let panel = try XCTUnwrap(workspace.tabsByID[originalTabID]?.panels[session.panelID])
+        let replacementTab = WorkspaceTabState.bootstrap()
+        workspace.tabsByID[originalTabID]?.customTitle = "renamed"
+        workspace.tabsByID[originalTabID]?.layoutTree = replacementTab.layoutTree
+        workspace.tabsByID[originalTabID]?.panels = replacementTab.panels
+        workspace.tabsByID[originalTabID]?.focusedPanelID = replacementTab.focusedPanelID
+        let destinationTab = WorkspaceTabState(
+            id: UUID(),
+            customTitle: "implementation",
+            layoutTree: .slot(slotID: UUID(), panelID: session.panelID),
+            panels: [session.panelID: panel],
+            focusedPanelID: session.panelID
+        )
+        workspace.appendTab(destinationTab, select: false)
+        XCTAssertEqual(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace), "implementation")
+    }
+
+    func testSessionAccessibilityLabelIncludesFullCustomTabNameWithAndWithoutDirectory() {
+        let title = "orchestrator handling a very long implementation name"
+        for cwd in [".../toastty", nil] as [String?] {
+            let label = SidebarSessionPresentation.sessionAccessibilityLabel(
+                agentName: "Codex",
+                chipKind: nil,
+                detailText: "Reviewing changes",
+                cwd: cwd,
+                isLaterFlagged: false,
+                customTabTitle: title
+            )
+            XCTAssertEqual(
+                label,
+                ["Codex", "Reviewing changes", cwd, "Tab: \(title)"].compactMap { $0 }.joined(separator: ", ")
+            )
+        }
+    }
+
+    private func makeSession(in workspace: WorkspaceState) throws -> WorkspaceSessionStatus {
+        WorkspaceSessionStatus(
+            sessionID: "session-tab-badge",
+            panelID: try XCTUnwrap(workspace.focusedPanelID),
+            workspaceID: workspace.id,
+            agent: .codex,
+            status: SessionStatus(kind: .idle, summary: "Idle"),
+            cwd: "/repo/sidebar",
+            updatedAt: Date(timeIntervalSince1970: 1),
+            isActive: true
+        )
+    }
+
     func testSessionStatusChipKindShowsPersistentUnresolvedAndUnreadReady() {
         XCTAssertNil(
             SidebarSessionPresentation.sessionStatusChipKind(
