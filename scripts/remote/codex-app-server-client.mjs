@@ -304,7 +304,7 @@ async function finish(status, options = {}) {
   process.exit(exitCode);
 }
 
-function sendRequest(method, params) {
+function sendRequest(method, params, timeoutMs = REQUEST_TIMEOUT_MS) {
   const id = nextRequestId;
   nextRequestId += 1;
 
@@ -328,8 +328,8 @@ function sendRequest(method, params) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`${method} timed out after ${REQUEST_TIMEOUT_MS}ms`));
-    }, REQUEST_TIMEOUT_MS);
+      reject(new Error(`${method} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
 
     pending.set(id, { method, resolve, reject, timer });
   });
@@ -656,10 +656,12 @@ socket.onopen = () => {
       serviceTier = threadResponse?.serviceTier ?? null;
       reasoningEffort = threadResponse?.reasoningEffort ?? null;
 
+      // App discovery can take longer than ordinary protocol requests while
+      // the desktop app refreshes its connector catalog.
       const appListResponse = await sendRequest("app/list", {
         threadId: activeThreadId,
         forceRefetch: false,
-      });
+      }, 60_000);
       const appSummary = summarizeAppList(appListResponse);
       appListCount = appSummary.appListCount;
 
