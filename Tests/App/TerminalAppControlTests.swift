@@ -38,6 +38,124 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertEqual(outcome.result?.bool("available"), true)
     }
 
+    func testTerminalSendTextWithExpectedSessionDeliversWhenPanelStillHostsSession() throws {
+        let fixture = try TerminalAppControlFixture()
+        let sessionID = "expected-session"
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: "/tmp/repo",
+            repoRoot: "/tmp/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        var delivered = false
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
+            delivered = true
+            return true
+        }
+
+        _ = try fixture.executor.runAction(
+            id: AppControlActionID.terminalSendText.rawValue,
+            args: [
+                "panelID": .string(fixture.panelID.uuidString),
+                "text": .string("continue"),
+                "expectedSessionID": .string(sessionID),
+            ]
+        )
+
+        XCTAssertTrue(delivered)
+    }
+
+    func testTerminalSendTextWithWrongExpectedSessionRejectsBeforeDelivery() throws {
+        let fixture = try TerminalAppControlFixture()
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "actual-session",
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: "/tmp/repo",
+            repoRoot: "/tmp/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "replacement-session",
+            agent: .claude,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: "/tmp/repo",
+            repoRoot: "/tmp/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_001)
+        )
+        var deliveryCount = 0
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
+            deliveryCount += 1
+            return true
+        }
+
+        XCTAssertThrowsError(try fixture.executor.runAction(
+            id: AppControlActionID.terminalSendText.rawValue,
+            args: [
+                "panelID": .string(fixture.panelID.uuidString),
+                "text": .string("must not send"),
+                "submit": .bool(true),
+                "expectedSessionID": .string("actual-session"),
+                "allowUnavailable": .bool(true),
+            ]
+        ))
+        XCTAssertEqual(deliveryCount, 0)
+    }
+
+    func testTerminalSendTextWithBlankExpectedSessionRejectsAsMalformed() throws {
+        let fixture = try TerminalAppControlFixture()
+        XCTAssertThrowsError(try fixture.executor.runAction(
+            id: AppControlActionID.terminalSendText.rawValue,
+            args: [
+                "panelID": .string(fixture.panelID.uuidString),
+                "text": .string("must not send"),
+                "expectedSessionID": .string(" "),
+            ]
+        ))
+    }
+
+    func testTerminalSendTextWithExpectedSessionRejectsWhenPanelHasNoActiveSession() throws {
+        let fixture = try TerminalAppControlFixture()
+        var deliveryCount = 0
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
+            deliveryCount += 1
+            return true
+        }
+
+        XCTAssertThrowsError(try fixture.executor.runAction(
+            id: AppControlActionID.terminalSendText.rawValue,
+            args: [
+                "panelID": .string(fixture.panelID.uuidString),
+                "text": .string("must not send"),
+                "expectedSessionID": .string("missing-session"),
+            ]
+        ))
+        XCTAssertEqual(deliveryCount, 0)
+    }
+
+    func testTerminalSendTextDescriptorListsExpectedSessionID() throws {
+        let fixture = try TerminalAppControlFixture()
+        let descriptor = try XCTUnwrap(
+            fixture.executor.listActionDescriptors().first {
+                $0.id == AppControlActionID.terminalSendText.rawValue
+            }
+        )
+
+        let expectedSessionParameter = try XCTUnwrap(
+            descriptor.parameters.first { $0.name == "expectedSessionID" }
+        )
+        XCTAssertEqual(expectedSessionParameter.valueType, .string)
+        XCTAssertFalse(expectedSessionParameter.required)
+    }
+
     func testTerminalSendTextFromManagedSessionStampsPendingParentForTargetPanelLaunch() throws {
         let fixture = try TerminalAppControlFixture()
         XCTAssertTrue(fixture.store.send(.splitFocusedSlot(workspaceID: fixture.workspaceID, orientation: .horizontal)))

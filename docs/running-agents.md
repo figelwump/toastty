@@ -650,6 +650,19 @@ Actionable lifecycle events — `needs_approval`, `ready`, and `error` — drive
 
 While a managed agent session is active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel so the session status path stays authoritative.
 
+### Sidebar session order
+
+Drag a top-level session row up or down within its workspace to change its
+sidebar position. Expanded children move with their parent. The order is saved
+per terminal panel, so restarting an agent in the same panel retains its
+position; new panels appear after the saved rows. Closing or moving a panel out
+of the workspace removes its saved position.
+
+This changes only the sidebar display. Pane layout, tabs, focus, workspace
+membership, and keyboard navigation keep their existing order. Press Escape or
+release outside the workspace's session list to cancel a drag. Scroll during a
+drag, or hold the pointer near the sidebar's top or bottom edge to scroll.
+
 ### Nested sessions and background activity
 
 When a managed session launches another managed agent through Toastty automation,

@@ -166,6 +166,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var selectedTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
+    public var sidebarSessionPanelOrder: [UUID]
     public var annotations: [String: WorkspaceAnnotation]
 
     public init(
@@ -175,7 +176,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         selectedTabID: UUID?,
         tabIDs: [UUID],
         tabsByID: [UUID: WorkspaceLayoutTabSnapshot],
-        annotations: [String: WorkspaceAnnotation] = [:]
+        annotations: [String: WorkspaceAnnotation] = [:],
+        sidebarSessionPanelOrder: [UUID] = []
     ) {
         self.id = id
         self.title = title
@@ -184,6 +186,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         self.tabIDs = tabIDs
         self.tabsByID = tabsByID
         self.annotations = annotations
+        self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
+        normalizeSidebarSessionPanelOrder()
     }
 
     init(workspace: WorkspaceState) {
@@ -196,6 +200,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             partialResult[entry.key] = WorkspaceLayoutTabSnapshot(tab: entry.value)
         }
         annotations = workspace.annotations
+        sidebarSessionPanelOrder = workspace.sidebarSessionPanelOrder
+        normalizeSidebarSessionPanelOrder()
     }
 
     public var orderedTabs: [WorkspaceLayoutTabSnapshot] {
@@ -245,7 +251,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
                 partialResult[entry.key] = entry.value.makeWorkspaceTabState()
             },
             annotations: annotations,
-            unreadWorkspaceNotificationCount: 0
+            unreadWorkspaceNotificationCount: 0,
+            sidebarSessionPanelOrder: sidebarSessionPanelOrder
         )
     }
 }
@@ -259,6 +266,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case tabIDs
         case tabsByID
         case annotations
+        case sidebarSessionPanelOrder
         case layoutTree
         case panels
         case focusedPanelID
@@ -296,6 +304,8 @@ extension WorkspaceLayoutWorkspaceSnapshot {
             tabIDs = [legacyTab.id]
             tabsByID = [legacyTab.id: legacyTab]
         }
+        sidebarSessionPanelOrder = try container.decodeIfPresent([UUID].self, forKey: .sidebarSessionPanelOrder) ?? []
+        normalizeSidebarSessionPanelOrder()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -307,12 +317,26 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
         try container.encode(annotations, forKey: .annotations)
+        try container.encode(sidebarSessionPanelOrder, forKey: .sidebarSessionPanelOrder)
         // Preserve a selected-tab legacy mirror while older layout snapshots
         // are still on disk in the field.
         let legacyTab = selectedTabID.flatMap { tabsByID[$0] } ?? tabIDs.first.flatMap { tabsByID[$0] }
         try container.encode(legacyTab?.layoutTree, forKey: .layoutTree)
         try container.encode(legacyTab?.panels ?? [:], forKey: .panels)
         try container.encodeIfPresent(legacyTab?.focusedPanelID, forKey: .focusedPanelID)
+    }
+
+    private mutating func normalizeSidebarSessionPanelOrder() {
+        guard sidebarSessionPanelOrder.isEmpty == false else { return }
+        let terminalPanelIDs = tabsByID.values.reduce(into: Set<UUID>()) { ids, tab in
+            for (panelID, panel) in tab.panels {
+                if case .terminal = panel { ids.insert(panelID) }
+            }
+        }
+        sidebarSessionPanelOrder = WorkspaceState.sanitizedSidebarSessionPanelOrder(
+            sidebarSessionPanelOrder,
+            terminalPanelIDs: terminalPanelIDs
+        )
     }
 
     private var requiredSelectedTab: WorkspaceLayoutTabSnapshot {

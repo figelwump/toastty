@@ -68,6 +68,128 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
+    func testPointerInteractionExcludesLocalDisclosureBoundsFromHitTesting() {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        container.addSubview(view)
+        view.excludedRects = [CGRect(x: 80, y: 4, width: 32, height: 20)]
+
+        let disclosurePoint = view.convert(NSPoint(x: 96, y: 14), to: container)
+        let rowPoint = view.convert(NSPoint(x: 20, y: 14), to: container)
+        XCTAssertNil(view.hitTest(disclosurePoint))
+        XCTAssertTrue(view.hitTest(rowPoint) === view)
+        view.excludedRects = []
+        XCTAssertTrue(view.hitTest(disclosurePoint) === view)
+    }
+
+    @MainActor
+    func testPointerCancellationDoesNotFinishOrRepeatOnMouseUp() throws {
+        let (window, view) = makePointerHarness()
+        defer { window.orderOut(nil) }
+        view.supportsDragScrolling = true
+        var cancellations = 0
+        var completions = 0
+        view.onCancelled = { cancellations += 1 }
+        view.onEnded = { _ in completions += 1 }
+        let point = view.convert(NSPoint(x: 20, y: 15), to: nil)
+        view.mouseDown(with: try pointerMouseEvent(type: .leftMouseDown, location: point, window: window))
+        view.cancelOperation(nil)
+        view.mouseUp(with: try pointerMouseEvent(type: .leftMouseUp, location: point, window: window))
+
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(completions, 0)
+        XCTAssertTrue(window.isMovable)
+    }
+
+    @MainActor
+    func testPointerCancellationIsDeferredDuringInvalidation() throws {
+        let (window, view) = makePointerHarness()
+        defer { window.orderOut(nil) }
+        var cancellations = 0
+        view.onCancelled = { cancellations += 1 }
+        let point = view.convert(NSPoint(x: 20, y: 15), to: nil)
+        view.mouseDown(with: try pointerMouseEvent(type: .leftMouseDown, location: point, window: window))
+        view.invalidate()
+        XCTAssertEqual(cancellations, 0)
+        pumpMainRunLoop()
+        XCTAssertEqual(cancellations, 1)
+    }
+
+    @MainActor
+    func testDeferredPointerCancellationDoesNotCancelNewSequence() throws {
+        let (window, view) = makePointerHarness()
+        defer { window.orderOut(nil) }
+        var cancellations = 0
+        var completions = 0
+        view.onCancelled = { cancellations += 1 }
+        view.onEnded = { _ in completions += 1 }
+        let container = try XCTUnwrap(view.superview)
+        let point = view.convert(NSPoint(x: 20, y: 15), to: nil)
+        view.mouseDown(with: try pointerMouseEvent(type: .leftMouseDown, location: point, window: window))
+        view.removeFromSuperview()
+        container.addSubview(view)
+        view.mouseDown(with: try pointerMouseEvent(type: .leftMouseDown, location: point, window: window))
+        pumpMainRunLoop()
+        XCTAssertEqual(cancellations, 0)
+        XCTAssertFalse(window.isMovable)
+        view.mouseUp(with: try pointerMouseEvent(type: .leftMouseUp, location: point, window: window))
+        XCTAssertEqual(completions, 1)
+    }
+
+    @MainActor
+    func testPointerDragScrollingCancelsOnAppDeactivationOnlyWhenEnabled() throws {
+        for enabled in [false, true] {
+            let (window, view) = makePointerHarness()
+            defer { window.orderOut(nil) }
+            view.supportsDragScrolling = enabled
+            var cancellations = 0
+            var completions = 0
+            view.onCancelled = { cancellations += 1 }
+            view.onEnded = { _ in completions += 1 }
+            let point = view.convert(NSPoint(x: 20, y: 15), to: nil)
+            view.mouseDown(with: try pointerMouseEvent(type: .leftMouseDown, location: point, window: window))
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+            view.mouseUp(with: try pointerMouseEvent(type: .leftMouseUp, location: point, window: window))
+            XCTAssertEqual(cancellations, enabled ? 1 : 0)
+            XCTAssertEqual(completions, enabled ? 0 : 1)
+        }
+    }
+
+    @MainActor
+    func testPointerDragScrollingReportsCurrentLocationAfterScrollWithoutChangingTranslation() throws {
+        for enabled in [false, true] {
+            let (window, view) = makePointerHarness()
+            defer { window.orderOut(nil) }
+            view.supportsDragScrolling = enabled
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+            let document = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 500))
+            view.removeFromSuperview()
+            document.addSubview(view)
+            scrollView.documentView = document
+            window.contentView = scrollView
+            let point = view.convert(NSPoint(x: 20, y: 15), to: nil)
+            let startLocalPoint = view.convert(point, from: nil)
+            var changedValue: PointerInteractionValue?
+            view.onChanged = { changedValue = $0 }
+            view.mouseDown(with: try pointerMouseEvent(type: .leftMouseDown, location: point, window: window))
+            let originalOrigin = scrollView.contentView.bounds.origin
+            scrollView.contentView.scroll(to: NSPoint(x: originalOrigin.x, y: originalOrigin.y + 25))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            XCTAssertNotEqual(scrollView.contentView.bounds.origin, originalOrigin)
+            let movedPoint = NSPoint(x: point.x, y: point.y - 8)
+            view.mouseDragged(with: try pointerMouseEvent(type: .leftMouseDragged, location: movedPoint, window: window))
+            let value = try XCTUnwrap(changedValue)
+            let expected = enabled
+                ? view.convert(movedPoint, from: nil)
+                : NSPoint(x: startLocalPoint.x, y: startLocalPoint.y + 8)
+            XCTAssertEqual(value.location.x, expected.x, accuracy: 0.001)
+            XCTAssertEqual(value.location.y, expected.y, accuracy: 0.001)
+            XCTAssertEqual(value.translation.height, 8, accuracy: 0.001)
+            view.mouseUp(with: try pointerMouseEvent(type: .leftMouseUp, location: movedPoint, window: window))
+        }
+    }
+
+    @MainActor
     func testPointerInteractionViewTrackingAreaRequestsCursorUpdateEvents() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
@@ -851,6 +973,23 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         }
 
         return nil
+    }
+
+    @MainActor
+    private func makePointerHarness() -> (NSWindow, PointerInteractionView) {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        view.usesEventTrackingLoop = false
+        container.addSubview(view)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        return (window, view)
     }
 
     @MainActor

@@ -359,6 +359,11 @@ struct SidebarView: View {
         var targetIndex: Int
     }
 
+    struct SessionDragState: Equatable {
+        let rowID: SidebarSessionPresentation.SidebarSessionRowID
+        var target: SidebarSessionPresentation.SessionDropTarget?
+    }
+
     let windowID: UUID
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -386,6 +391,9 @@ struct SidebarView: View {
     @State private var lastHandledSidebarFlashRequestID: UUID?
     @State private var sidebarFlashClearWorkItem: DispatchWorkItem?
     @State private var sidebarFlashResetWorkItem: DispatchWorkItem?
+    @State private var activeSessionDrag: SessionDragState?
+    @State private var sessionPointerRowID: SidebarSessionPresentation.SidebarSessionRowID?
+    @State private var measuredSessionGroupFrames: [SidebarSessionPresentation.SidebarSessionRowID: CGRect] = [:]
     @State private var activeWorkspaceDrag: WorkspaceDragState?
     @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
     @State private var measuredSessionRowFramesByID: [SidebarSessionPresentation.SidebarSessionRowID: CGRect] = [:]
@@ -541,6 +549,9 @@ struct SidebarView: View {
                     .onPreferenceChange(SidebarSessionRowFramePreferenceKey.self) { framesByID in
                         measuredSessionRowFramesByID = framesByID
                     }
+                    .onPreferenceChange(SidebarSessionGroupFramePreferenceKey.self) { frames in
+                        measuredSessionGroupFrames = frames
+                    }
                     .overlay(alignment: .topLeading) {
                         if let activeWorkspaceDrag,
                            activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex,
@@ -622,9 +633,11 @@ struct SidebarView: View {
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
             pruneTransientWorkspaceDragState()
+            pruneSessionDrag()
             pruneSidebarSessionRowDiagnostics()
         }
         .onChange(of: sessionRuntimeStore.sessionRegistry) { _, _ in
+            pruneSessionDrag()
             pruneSidebarSessionRowDiagnostics()
         }
         .onChange(of: store.pendingRenameWorkspaceRequest) { _, _ in
@@ -641,6 +654,7 @@ struct SidebarView: View {
             schedulePendingSidebarSessionFlashRequestHandling()
         }
         .onDisappear {
+            cancelSessionInteraction()
             cancelWorkspaceDrag()
             sidebarFlashClearWorkItem?.cancel()
             sidebarFlashResetWorkItem?.cancel()
@@ -662,7 +676,7 @@ struct SidebarView: View {
     }
 
     private var sidebarHiddenSessionPillState: SidebarSessionPresentation.HiddenSessionPillState {
-        guard activeWorkspaceDrag == nil else { return .empty }
+        guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return .empty }
 
         return SidebarSessionPresentation.hiddenSessionPillState(
             orderedSessionRowIDs: currentSidebarSessionRowIDs(),
@@ -782,7 +796,7 @@ struct SidebarView: View {
         sourceIndex: Int,
         orderedWorkspaceIDs: [UUID]
     ) -> some View {
-        let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        let sessionStatuses = sidebarSessionStatuses(for: workspace.id)
         let agentSummary = WorkspaceAgentSummary.make(from: sessionStatuses, workspaceID: workspace.id)
         let accessibilityLabel = SidebarSessionPresentation.workspaceAccessibilityLabel(
             for: workspace,
@@ -875,7 +889,7 @@ struct SidebarView: View {
         sourceIndex _: Int,
         orderedWorkspaceIDs _: [UUID]
     ) -> some View {
-        let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        let sessionStatuses = sidebarSessionStatuses(for: workspace.id)
         let agentSummary = WorkspaceAgentSummary.make(from: sessionStatuses, workspaceID: workspace.id)
 
         return workspaceRowChrome(
@@ -1042,7 +1056,7 @@ struct SidebarView: View {
             }
             .contentShape(Rectangle())
             .onHover { isHovering in
-                guard activeWorkspaceDrag == nil else { return }
+                guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
                 if isHovering {
                     hoveredWorkspaceID = workspaceID
                 } else if hoveredWorkspaceID == workspaceID {
@@ -1190,6 +1204,10 @@ struct SidebarView: View {
         )
         let collapsedChildNeedsAttention = childRowsNeedAttention && childRowsExpanded == false
         let parentSessionName = parentSessionName(for: workspaceSessionStatus, in: workspace.id)
+        let customTabTitle = SidebarSessionPresentation.sessionCustomTabTitle(
+            for: workspaceSessionStatus,
+            in: store.state.workspacesByID[workspaceSessionStatus.workspaceID]
+        )
         let accessibilityLabel = SidebarSessionPresentation.sessionAccessibilityLabel(
             agentName: workspaceSessionStatus.displayTitle,
             chipKind: chipKind,
@@ -1198,7 +1216,8 @@ struct SidebarView: View {
             detailText: normalizedSessionDetail(status.detail),
             cwd: SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd),
             isLaterFlagged: isLaterFlagged,
-            workspaceScopeHelpText: scopeHelpText
+            workspaceScopeHelpText: scopeHelpText,
+            customTabTitle: customTabTitle
         )
         let canFocusPanel = SidebarSessionPresentation.canFocusSessionPanel(
             workspaceSessionStatus.panelID,
@@ -1245,6 +1264,7 @@ struct SidebarView: View {
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
             parentSessionName: parentSessionName,
+            customTabTitle: customTabTitle,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
             }
@@ -1264,7 +1284,7 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.plain)
                         .onHover { isHovering in
-                            guard activeWorkspaceDrag == nil else { return }
+                            guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
                             if isHovering {
                                 hoveredPanelID = workspaceSessionStatus.panelID
                             } else if hoveredPanelID == workspaceSessionStatus.panelID {
@@ -1284,6 +1304,14 @@ struct SidebarView: View {
                     toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
                 }
             )
+            .overlayPreferenceValue(SidebarSessionDisclosureAnchorKey.self) { anchors in
+                GeometryReader { geometry in
+                    sessionPointerRegion(
+                        rowID: sessionRowID,
+                        excludedRects: anchors.map { geometry[$0] }
+                    )
+                }
+            }
             .background(sessionRowFrameMeasurement(rowID: sessionRowID))
 
             if workspaceSessionStatus.children.isEmpty == false && childRowsExpanded {
@@ -1292,6 +1320,24 @@ struct SidebarView: View {
                     parentWorkspaceID: workspace.id,
                     parentPanelID: workspaceSessionStatus.panelID
                 )
+            }
+        }
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: SidebarSessionGroupFramePreferenceKey.self,
+                    value: [sessionRowID: geometry.frame(in: .named(SidebarWorkspaceViewportCoordinateSpace.name))]
+                )
+            }
+        }
+        .opacity(activeSessionDrag?.rowID == sessionRowID ? 0.55 : 1)
+        .overlay(alignment: activeSessionDrag?.target?.placeAfter == true ? .bottom : .top) {
+            if activeSessionDrag?.rowID.workspaceID == workspace.id,
+               activeSessionDrag?.target?.panelID == workspaceSessionStatus.panelID {
+                Rectangle()
+                    .fill(ToastyTheme.accent)
+                    .frame(height: 2)
+                    .allowsHitTesting(false)
             }
         }
         .onAppear {
@@ -1373,6 +1419,7 @@ struct SidebarView: View {
         childRowsExpanded: Bool,
         collapsedChildNeedsAttention: Bool,
         parentSessionName: String?,
+        customTabTitle: String?,
         onToggleChildRows: @escaping () -> Void
     ) -> some View {
         let indicatorState = SidebarSessionPresentation.sessionIndicatorState(for: status.kind)
@@ -1445,18 +1492,11 @@ struct SidebarView: View {
                 )
             }
 
-            if let cwd = SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd) {
-                Text(cwd)
-                    .font(ToastyTheme.fontWorkspaceSessionPath)
-                    .fontWeight(
-                        SidebarSessionPresentation.sessionBodyFontWeight(
-                            showsUnreadSessionAccent: showsUnreadSessionAccent
-                        )
-                    )
-                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            SidebarSessionMetadataLine(
+                cwd: SidebarSessionPresentation.abbreviatedPathLabel(workspaceSessionStatus.cwd),
+                customTabTitle: customTabTitle,
+                showsUnreadSessionAccent: showsUnreadSessionAccent
+            )
         }
         .padding(.vertical, 5)
         .padding(.horizontal, 8)
@@ -1585,9 +1625,121 @@ struct SidebarView: View {
                     action: onToggleChildRows
                 )
                 .layoutPriority(1)
+                .anchorPreference(key: SidebarSessionDisclosureAnchorKey.self, value: .bounds) { [$0] }
             }
         }
         .preference(key: SidebarSessionRowCompactHelpTextPreferenceKey.self, value: compactHelpText)
+    }
+
+    private func sidebarSessionStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
+        SidebarSessionPresentation.orderedStatuses(
+            sessionRuntimeStore.workspaceStatuses(for: workspaceID),
+            panelOrder: store.state.workspacesByID[workspaceID]?.sidebarSessionPanelOrder ?? []
+        )
+    }
+
+    private func sessionPointerRegion(
+        rowID: SidebarSessionPresentation.SidebarSessionRowID,
+        excludedRects: [CGRect]
+    ) -> some View {
+        PointerInteractionRegion(
+            name: "session-sidebar-row",
+            metadata: ["workspaceID": rowID.workspaceID.uuidString, "sessionID": rowID.sessionID],
+            excludedRects: excludedRects,
+            supportsDragScrolling: true,
+            onBegan: { _ in
+                cancelWorkspaceDrag()
+                activeSessionDrag = nil
+                sessionPointerRowID = rowID
+            },
+            onChanged: { value in
+                updateSessionDrag(rowID: rowID, value: value)
+            },
+            onEnded: { value in
+                finishSessionInteraction(rowID: rowID, value: value)
+            },
+            onCancelled: {
+                if sessionPointerRowID == rowID {
+                    cancelSessionInteraction()
+                }
+            }
+        )
+    }
+
+    private func sessionDropTarget(
+        rowID: SidebarSessionPresentation.SidebarSessionRowID,
+        value: PointerInteractionValue
+    ) -> SidebarSessionPresentation.SessionDropTarget? {
+        guard let parentFrame = measuredSessionRowFramesByID[rowID] else { return nil }
+        let rows = currentSidebarSessionRowIDs().filter { $0.workspaceID == rowID.workspaceID }
+        return SidebarSessionPresentation.sessionDropTarget(
+            orderedRowIDs: rows,
+            frames: measuredSessionGroupFrames,
+            source: rowID,
+            pointer: CGPoint(x: parentFrame.minX + value.location.x, y: parentFrame.minY + value.location.y),
+            viewportHeight: sidebarWorkspaceListViewportHeight
+        )
+    }
+
+    private func updateSessionDrag(
+        rowID: SidebarSessionPresentation.SidebarSessionRowID,
+        value: PointerInteractionValue
+    ) {
+        guard sessionPointerRowID == rowID else { return }
+        guard currentSidebarSessionRowIDs().contains(rowID) else {
+            cancelSessionInteraction()
+            return
+        }
+        guard activeSessionDrag != nil || Self.workspaceDragActivationExceeded(translation: value.translation) else {
+            return
+        }
+        hoveredPanelID = nil
+        activeSessionDrag = SessionDragState(rowID: rowID, target: sessionDropTarget(rowID: rowID, value: value))
+    }
+
+    private func finishSessionInteraction(
+        rowID: SidebarSessionPresentation.SidebarSessionRowID,
+        value: PointerInteractionValue
+    ) {
+        guard sessionPointerRowID == rowID else { return }
+        // Re-evaluate using live identities and geometry, including any scrolling
+        // or session updates that happened after the last mouse-drag event.
+        updateSessionDrag(rowID: rowID, value: value)
+        let drag = activeSessionDrag
+        cancelSessionInteraction()
+        guard currentSidebarSessionRowIDs().contains(rowID) else { return }
+        if let drag {
+            guard let target = drag.target else { return }
+            let visiblePanelIDs = sidebarSessionStatuses(for: rowID.workspaceID).map(\.panelID)
+            var reordered = visiblePanelIDs.filter { $0 != rowID.panelID }
+            guard let targetIndex = reordered.firstIndex(of: target.panelID) else { return }
+            reordered.insert(rowID.panelID, at: targetIndex + (target.placeAfter ? 1 : 0))
+            guard reordered != visiblePanelIDs else { return }
+            store.send(.moveSidebarSession(
+                workspaceID: rowID.workspaceID,
+                panelID: rowID.panelID,
+                targetPanelID: target.panelID,
+                placeAfter: target.placeAfter,
+                visiblePanelIDs: visiblePanelIDs
+            ))
+        } else if Self.pointerMovementWithinTapTolerance(translation: value.translation),
+                  let workspace = store.state.workspacesByID[rowID.workspaceID],
+                  SidebarSessionPresentation.canFocusSessionPanel(rowID.panelID, in: workspace) {
+            focusSessionPanel(workspaceID: rowID.workspaceID, panelID: rowID.panelID)
+        }
+    }
+
+    private func cancelSessionInteraction() {
+        activeSessionDrag = nil
+        sessionPointerRowID = nil
+    }
+
+    private func pruneSessionDrag() {
+        let currentRows = Set(currentSidebarSessionRowIDs())
+        measuredSessionGroupFrames = measuredSessionGroupFrames.filter { currentRows.contains($0.key) }
+        if let rowID = sessionPointerRowID, currentRows.contains(rowID) == false {
+            cancelSessionInteraction()
+        }
     }
 
     private func workspaceRowFrameMeasurement(workspaceID: UUID) -> some View {
@@ -1720,7 +1872,7 @@ struct SidebarView: View {
             return
         }
 
-        guard activeWorkspaceDrag == nil else { return }
+        guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
         guard Self.pointerMovementWithinTapTolerance(translation: value.translation) else { return }
         ToasttyLog.info(
             "workspace sidebar pointer ended as tap",
@@ -1771,6 +1923,7 @@ struct SidebarView: View {
     }
 
     private func beginWorkspaceInteraction(workspaceID: UUID) {
+        cancelSessionInteraction()
         guard let activeWorkspaceDrag else { return }
         ToasttyLog.info(
             "workspace sidebar stale drag cancelled on new pointer sequence",
@@ -2556,8 +2709,7 @@ struct SidebarView: View {
         return window.workspaceIDs.flatMap { workspaceID -> [SidebarSessionPresentation.SidebarSessionRowID] in
             guard store.state.workspacesByID[workspaceID] != nil else { return [] }
 
-            return sessionRuntimeStore
-                .workspaceStatuses(for: workspaceID)
+            return sidebarSessionStatuses(for: workspaceID)
                 .map { status in
                     SidebarSessionPresentation.SidebarSessionRowID(
                         workspaceID: workspaceID,
@@ -2575,8 +2727,7 @@ struct SidebarView: View {
             window.workspaceIDs.flatMap { workspaceID -> [SidebarSessionPresentation.SidebarSessionRowID] in
                 guard let workspace = store.state.workspacesByID[workspaceID] else { return [] }
 
-                return sessionRuntimeStore
-                    .workspaceStatuses(for: workspaceID)
+                return sidebarSessionStatuses(for: workspaceID)
                     .compactMap { status in
                         guard showsUnreadSessionAccent(for: status.panelID, in: workspace) else {
                             return nil
@@ -2599,8 +2750,7 @@ struct SidebarView: View {
             window.workspaceIDs.flatMap { workspaceID -> [SidebarSessionPresentation.SidebarSessionRowID] in
                 guard store.state.workspacesByID[workspaceID] != nil else { return [] }
 
-                return sessionRuntimeStore
-                    .workspaceStatuses(for: workspaceID)
+                return sidebarSessionStatuses(for: workspaceID)
                     .compactMap { workspaceSessionStatus in
                         guard workspaceSessionStatus.status.kind == .working else {
                             return nil
@@ -2631,8 +2781,7 @@ struct SidebarView: View {
 
         let activePanelIDs = Set(
             window.workspaceIDs.flatMap { workspaceID in
-                sessionRuntimeStore
-                    .workspaceStatuses(for: workspaceID)
+                sidebarSessionStatuses(for: workspaceID)
                     .map(\.panelID)
             }
         )
@@ -2773,6 +2922,95 @@ struct SidebarView: View {
     }
 }
 
+struct SidebarSessionMetadataLine: View {
+    let cwd: String?
+    let customTabTitle: String?
+    let showsUnreadSessionAccent: Bool
+
+    var body: some View {
+        if let customTabTitle {
+            SidebarSessionMetadataLayout {
+                directory
+                Text(customTabTitle)
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(
+                        ToastyTheme.sidebarSessionPathText.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 4)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(ToastyTheme.sidebarSessionPathText.opacity(0.16), lineWidth: 1)
+                    }
+                    .background {
+                        SidebarTooltipBridge(text: "Tab: \(customTabTitle)")
+                            .allowsHitTesting(false)
+                    }
+            }
+        } else if cwd != nil {
+            directory
+        }
+    }
+
+    @ViewBuilder
+    private var directory: some View {
+        if let cwd {
+            Text(cwd)
+                .font(ToastyTheme.fontWorkspaceSessionPath)
+                .fontWeight(
+                    SidebarSessionPresentation.sessionBodyFontWeight(
+                        showsUnreadSessionAccent: showsUnreadSessionAccent
+                    )
+                )
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Measures the badge at its natural width, capped against the entire metadata
+/// row rather than the narrower proposal an HStack would give either sibling.
+private struct SidebarSessionMetadataLayout: Layout {
+    private let spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let width = proposal.width ?? subviews.reduce(spacing) { $0 + $1.sizeThatFits(.unspecified).width }
+        let sizes = sizes(width: width, subviews: subviews)
+        return CGSize(width: width, height: max(sizes.directory.height, sizes.badge.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        guard subviews.count == 2 else { return }
+        let sizes = sizes(width: bounds.width, subviews: subviews)
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+            proposal: ProposedViewSize(width: sizes.directory.width, height: sizes.directory.height)
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing,
+            proposal: ProposedViewSize(width: sizes.badge.width, height: sizes.badge.height)
+        )
+    }
+
+    private func sizes(width: CGFloat, subviews: Subviews) -> (directory: CGSize, badge: CGSize) {
+        guard subviews.count == 2 else { return (.zero, .zero) }
+        let badgeWidth = min(subviews[1].sizeThatFits(.unspecified).width, max(0, width * 0.4))
+        let badge = subviews[1].sizeThatFits(ProposedViewSize(width: badgeWidth, height: nil))
+        let directory = subviews[0].sizeThatFits(
+            ProposedViewSize(width: max(0, width - badgeWidth - spacing), height: nil)
+        )
+        return (directory, CGSize(width: badgeWidth, height: badge.height))
+    }
+}
+
 private struct SidebarRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -2825,5 +3063,24 @@ private struct SidebarSessionRowFramePreferenceKey: PreferenceKey {
         nextValue: () -> [SidebarSessionPresentation.SidebarSessionRowID: CGRect]
     ) {
         value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+private struct SidebarSessionDisclosureAnchorKey: PreferenceKey {
+    static let defaultValue: [Anchor<CGRect>] = []
+
+    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+private struct SidebarSessionGroupFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [SidebarSessionPresentation.SidebarSessionRowID: CGRect] = [:]
+
+    static func reduce(
+        value: inout [SidebarSessionPresentation.SidebarSessionRowID: CGRect],
+        nextValue: () -> [SidebarSessionPresentation.SidebarSessionRowID: CGRect]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }

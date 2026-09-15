@@ -54,6 +54,18 @@ final class SidebarViewTests: XCTestCase {
         let workspaceID: UUID
         let panelID: UUID
         let store: AppStore
+        let sessionRuntimeStore: SessionRuntimeStore
+        let hostingView: NSView
+        let window: NSWindow
+    }
+
+    private struct MultiSessionSidebarHarness {
+        let windowID: UUID
+        let workspaceID: UUID
+        let panelIDs: [UUID]
+        let sessionIDs: [String]
+        let store: AppStore
+        let sessionRuntimeStore: SessionRuntimeStore
         let hostingView: NSView
         let window: NSWindow
     }
@@ -578,6 +590,124 @@ final class SidebarViewTests: XCTestCase {
             textValues.contains(where: { $0.localizedCaseInsensitiveContains("Scoped to: Workspace 1") }),
             "Sidebar accessibility text should describe workspace scope: \(textValues)"
         )
+    }
+
+    func testFullSessionRowShowsCustomTabNameAlongsideScopeAndDirectory() throws {
+        for placement in [SessionPanelPlacement.focused, .backgroundUnread] {
+            let hostingView = try makeSidebarHostingView(
+                sessionID: "custom-tab-row",
+                sessionStatus: SessionStatus(kind: .working, summary: "Working", detail: "Reviewing changes"),
+                scopedWorkspaceIDs: [],
+                sessionPanelPlacement: placement,
+                customTabTitle: "orchestrator"
+            )
+            let textValues = renderedTextValues(in: hostingView)
+            XCTAssertTrue(textValues.contains("1 scope"))
+            XCTAssertTrue(textValues.contains(where: { $0.contains("Tab: orchestrator") && $0.contains(".../sidebar") }))
+            XCTAssertTrue(renderedTooltipValues(in: hostingView).contains("Tab: orchestrator"))
+        }
+    }
+
+    func testFullSessionRowWithNoDirectoryStillShowsCustomTabBadge() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "custom-tab-no-cwd",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
+            customTabTitle: "orchestrator",
+            cwd: nil
+        )
+        XCTAssertTrue(renderedTextValues(in: hostingView).contains(where: { $0.contains("Tab: orchestrator") }))
+        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: "orchestrator"))
+        XCTAssertGreaterThan(badge.bounds.width, 0)
+        XCTAssertGreaterThan(badge.bounds.height, 0)
+    }
+
+    func testFullSessionRowDoesNotExposeAutomaticTabNameAsBadge() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "automatic-tab-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
+            cwd: nil
+        )
+        XCTAssertFalse(renderedTextValues(in: hostingView).contains(where: { $0.contains("Tab:") }))
+    }
+
+    func testLongCustomTabBadgeFitsNarrowRowAndPreservesFullNameInTooltipAndAccessibility() throws {
+        let title = "orchestrator reviewing the complete implementation and tests"
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "custom-tab-long-name",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
+            sidebarWidth: CGFloat(WindowState.minSidebarWidth),
+            customTabTitle: title
+        )
+        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: title))
+        let frame = badge.convert(badge.bounds, to: hostingView)
+        XCTAssertGreaterThan(frame.width, 0)
+        XCTAssertLessThanOrEqual(frame.width, 120.5)
+        XCTAssertGreaterThanOrEqual(frame.minX, 0)
+        XCTAssertLessThanOrEqual(frame.maxX, hostingView.bounds.width + 0.5)
+        XCTAssertTrue(renderedTextValues(in: hostingView).contains(where: {
+            $0.contains("Tab: \(title)") && $0.contains(".../sidebar")
+        }))
+    }
+
+    func testShortTabBadgeFitsItsTextInsteadOfExpandingWithTheRow() throws {
+        for cwd in [".../emptyos", nil] as [String?] {
+            let narrow = try measuredMetadataBadgeFrame(cwd: cwd, title: "hey1", width: 180)
+            let wide = try measuredMetadataBadgeFrame(cwd: cwd, title: "hey1", width: 320)
+            let shorter = try measuredMetadataBadgeFrame(cwd: cwd, title: "x", width: 320)
+            XCTAssertEqual(narrow.width, wide.width, accuracy: 0.5)
+            XCTAssertLessThan(wide.width, 60)
+            XCTAssertGreaterThan(wide.width, shorter.width)
+            XCTAssertEqual(wide.maxX, 320, accuracy: 0.5)
+        }
+    }
+
+    func testLongTabBadgeUsesAtMostFortyPercentOfMetadataRow() throws {
+        let title = String(repeating: "hey", count: 30)
+        for width in [CGFloat(140), 180, 260, 400] {
+            for cwd in [".../emptyos-with-a-long-directory-label", nil] as [String?] {
+                let badge = try measuredMetadataBadgeFrame(cwd: cwd, title: title, width: width)
+                XCTAssertLessThanOrEqual(badge.width, width * 0.4 + 0.5)
+                XCTAssertGreaterThan(badge.width, width * 0.3)
+                XCTAssertEqual(badge.maxX, width, accuracy: 0.5)
+            }
+        }
+    }
+
+    func testSessionMetadataLineKeepsOneLineUnderWidthPressure() {
+        for width in [CGFloat(180), 260] {
+            let short = measuredSessionMetadataSize(cwd: ".../sidebar", title: "review", width: width)
+            let long = measuredSessionMetadataSize(
+                cwd: ".../a-directory-with-a-long-name",
+                title: "orchestrator reviewing the complete implementation and tests",
+                width: width
+            )
+            XCTAssertEqual(long.width, width, accuracy: 0.5)
+            XCTAssertEqual(long.height, short.height, accuracy: 0.5)
+            XCTAssertGreaterThan(long.height, 0)
+        }
+    }
+
+    func testSessionMetadataLineIsEmptyWithoutDirectoryOrCustomName() {
+        let empty = measuredSessionMetadataSize(cwd: nil, title: nil, width: 200)
+        let badgeOnly = measuredSessionMetadataSize(cwd: nil, title: "orchestrator", width: 200)
+        XCTAssertEqual(empty.height, 0)
+        XCTAssertGreaterThan(badgeOnly.height, empty.height)
+    }
+
+    func testCustomTabBadgeTooltipDoesNotSwallowSessionRowClick() throws {
+        let harness = try makeSidebarHarness(
+            sessionID: "custom-tab-click",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
+            sessionPanelPlacement: .backgroundUnread,
+            customTabTitle: "orchestrator"
+        )
+        defer { harness.window.orderOut(nil) }
+        XCTAssertNotEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
+        let badge = try XCTUnwrap(tooltipView(in: harness.hostingView, containing: "orchestrator"))
+        let clickLocation = badge.convert(NSPoint(x: badge.bounds.midX, y: badge.bounds.midY), to: nil)
+        try click(window: harness.window, at: clickLocation)
+        pumpMainRunLoop()
+        XCTAssertEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
     }
 
     func testCrowdedNarrowSessionRowDropsScopeTagAndMovesScopeHelpToRowTooltip() throws {
@@ -1230,6 +1360,190 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testDraggingFirstSessionRowAfterLastUpdatesOnlySidebarOrder() throws {
+        let harness = try makeMultiSessionSidebarHarness(sessionCount: 3)
+        defer { harness.window.orderOut(nil) }
+        let sourceView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[0]
+        )
+        let targetView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[2]
+        )
+        let originalState = harness.store.state
+
+        try drag(
+            view: sourceView,
+            from: NSPoint(x: sourceView.bounds.midX, y: sourceView.bounds.midY),
+            to: sourceView.convert(
+                NSPoint(x: targetView.bounds.midX, y: targetView.bounds.maxY - 1),
+                from: targetView
+            )
+        )
+        pumpMainRunLoop(duration: 0.2)
+
+        let expectedOrder = [harness.panelIDs[1], harness.panelIDs[2], harness.panelIDs[0]]
+        XCTAssertEqual(
+            harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder,
+            expectedOrder
+        )
+        var expectedState = originalState
+        expectedState.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder = expectedOrder
+        XCTAssertEqual(harness.store.state, expectedState)
+    }
+
+    func testDraggingLastSessionRowBeforeFirstUpdatesOnlySidebarOrder() throws {
+        let harness = try makeMultiSessionSidebarHarness(sessionCount: 3)
+        defer { harness.window.orderOut(nil) }
+        let sourceView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[2]
+        )
+        let targetView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[0]
+        )
+        let originalState = harness.store.state
+
+        try drag(
+            view: sourceView,
+            from: NSPoint(x: sourceView.bounds.midX, y: sourceView.bounds.midY),
+            to: sourceView.convert(
+                NSPoint(x: targetView.bounds.midX, y: targetView.bounds.minY + 1),
+                from: targetView
+            )
+        )
+        pumpMainRunLoop(duration: 0.2)
+
+        let expectedOrder = [harness.panelIDs[2], harness.panelIDs[0], harness.panelIDs[1]]
+        XCTAssertEqual(
+            harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder,
+            expectedOrder
+        )
+        var expectedState = originalState
+        expectedState.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder = expectedOrder
+        XCTAssertEqual(harness.store.state, expectedState)
+    }
+
+    func testClickingSessionPointerRegionFocusesPanelWithoutChangingSidebarOrder() throws {
+        let harness = try makeMultiSessionSidebarHarness(sessionCount: 2)
+        defer { harness.window.orderOut(nil) }
+        let targetView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[1]
+        )
+        targetView.usesEventTrackingLoop = false
+
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[0])
+
+        try click(view: targetView, at: NSPoint(x: targetView.bounds.midX, y: targetView.bounds.midY))
+        pumpMainRunLoop(duration: 0.2)
+
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[1])
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
+    }
+
+    func testDraggingSessionRowBackToOriginDoesNotFocusOrReorder() throws {
+        let harness = try makeMultiSessionSidebarHarness(sessionCount: 3)
+        defer { harness.window.orderOut(nil) }
+        let sourceView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[1]
+        )
+        let start = NSPoint(x: sourceView.bounds.midX, y: sourceView.bounds.midY)
+
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[0])
+
+        try drag(view: sourceView, from: start, through: NSPoint(x: start.x, y: start.y + 8), to: start)
+        pumpMainRunLoop(duration: 0.2)
+
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[0])
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
+    }
+
+    func testSessionDragCancelsWhenSourceSessionRestartsBeforeMouseUp() throws {
+        let harness = try makeMultiSessionSidebarHarness(sessionCount: 3)
+        defer { harness.window.orderOut(nil) }
+        let sourceView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[1]
+        )
+        let targetView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[2]
+        )
+        sourceView.usesEventTrackingLoop = false
+        let start = NSPoint(x: sourceView.bounds.midX, y: sourceView.bounds.midY)
+        let dragPoint = sourceView.convert(
+            NSPoint(x: targetView.bounds.midX, y: targetView.bounds.midY),
+            from: targetView
+        )
+
+        try beginDrag(view: sourceView, at: start)
+        try continueDrag(view: sourceView, at: dragPoint)
+        harness.sessionRuntimeStore.stopSession(
+            sessionID: harness.sessionIDs[1],
+            at: Date(timeIntervalSince1970: 1_700_000_010)
+        )
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "session-row-restarted",
+            agent: .codex,
+            panelID: harness.panelIDs[1],
+            windowID: harness.windowID,
+            workspaceID: harness.workspaceID,
+            displayTitleOverride: "Session Restarted",
+            cwd: "/repo/sidebar",
+            repoRoot: "/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_011)
+        )
+        pumpMainRunLoop(duration: 0.2)
+        try endDrag(view: sourceView, at: dragPoint)
+        pumpMainRunLoop(duration: 0.2)
+
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[0])
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
+    }
+
+    func testSessionDisclosureExcludedRectPassesThroughToDisclosureButton() throws {
+        let harness = try makeParentChildSessionSidebarHarness()
+        defer { harness.window.orderOut(nil) }
+        let parentView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[0]
+        )
+        parentView.usesEventTrackingLoop = false
+        let siblingView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[1]
+        )
+        let expandedSpacing = abs(siblingView.convert(.zero, to: nil).y - parentView.convert(.zero, to: nil).y)
+
+        XCTAssertGreaterThan(expandedSpacing, parentView.bounds.height + 4)
+        let excludedRect = try XCTUnwrap(parentView.excludedRects.first)
+        let excludedPoint = NSPoint(x: excludedRect.midX, y: excludedRect.midY)
+        if let superview = parentView.superview {
+            XCTAssertNil(parentView.hitTest(parentView.convert(excludedPoint, to: superview)))
+        }
+
+        try click(window: harness.window, at: parentView.convert(excludedPoint, to: nil))
+        pumpMainRunLoop(duration: 0.2)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let collapsedParentView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[0]
+        )
+        let collapsedSiblingView = try sessionPointerInteractionView(
+            in: harness.hostingView,
+            sessionID: harness.sessionIDs[1]
+        )
+        let collapsedSpacing = abs(collapsedSiblingView.convert(.zero, to: nil).y -
+            collapsedParentView.convert(.zero, to: nil).y)
+
+        XCTAssertLessThan(collapsedSpacing, expandedSpacing - 4)
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
+    }
+
     func testPendingSidebarFlashRequestPulsesAndClearsSelectedSessionRow() throws {
         let harness = try makeSidebarHarness(
             sessionID: "sess-flash",
@@ -1359,7 +1673,9 @@ final class SidebarViewTests: XCTestCase {
         additionalWorkspaces: [WorkspaceState] = [],
         prependAdditionalWorkspaces: Bool = false,
         sessionPanelPlacement: SessionPanelPlacement = .focused,
-        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        customTabTitle: String? = nil,
+        cwd: String? = "/repo/sidebar"
     ) throws -> NSView {
         try makeSidebarHarness(
             sessionID: sessionID,
@@ -1370,7 +1686,9 @@ final class SidebarViewTests: XCTestCase {
             additionalWorkspaces: additionalWorkspaces,
             prependAdditionalWorkspaces: prependAdditionalWorkspaces,
             sessionPanelPlacement: sessionPanelPlacement,
-            sidebarWidth: sidebarWidth
+            sidebarWidth: sidebarWidth,
+            customTabTitle: customTabTitle,
+            cwd: cwd
         ).hostingView
     }
 
@@ -1390,13 +1708,18 @@ final class SidebarViewTests: XCTestCase {
         additionalWorkspaces: [WorkspaceState] = [],
         prependAdditionalWorkspaces: Bool = false,
         sessionPanelPlacement: SessionPanelPlacement = .focused,
-        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        customTabTitle: String? = nil,
+        cwd: String? = "/repo/sidebar"
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
         var state = harnessState.state
         let windowID = harnessState.windowID
         let workspaceID = harnessState.workspaceID
         let panelID = harnessState.sessionPanelID
+        if let tabID = state.workspacesByID[workspaceID]?.tabID(containingPanelID: panelID) {
+            state.workspacesByID[workspaceID]?.tabsByID[tabID]?.customTitle = customTabTitle
+        }
         if additionalWorkspaces.isEmpty == false,
            let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) {
             let additionalWorkspaceIDs = additionalWorkspaces.map(\.id)
@@ -1423,7 +1746,7 @@ final class SidebarViewTests: XCTestCase {
             windowID: windowID,
             workspaceID: workspaceID,
             displayTitleOverride: displayTitleOverride,
-            cwd: "/repo/sidebar",
+            cwd: cwd,
             repoRoot: "/repo",
             scopedWorkspaceIDs: scopedWorkspaceIDs,
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -1458,6 +1781,7 @@ final class SidebarViewTests: XCTestCase {
             workspaceID: workspaceID,
             panelID: panelID,
             store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
             hostingView: hostingView,
             window: window
         )
@@ -1502,6 +1826,7 @@ final class SidebarViewTests: XCTestCase {
             workspaceID: selectedWorkspaceID,
             panelID: selectedPanelID,
             store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
             hostingView: hostingView,
             window: hostWindow
         )
@@ -1542,8 +1867,132 @@ final class SidebarViewTests: XCTestCase {
             workspaceID: workspaceID,
             panelID: panelID,
             store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
             hostingView: hostingView,
             window: window
+        )
+    }
+
+    private func makeMultiSessionSidebarHarness(sessionCount: Int) throws -> MultiSessionSidebarHarness {
+        XCTAssertGreaterThanOrEqual(sessionCount, 2)
+        let panelIDs = (0..<sessionCount).map { _ in UUID() }
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Workspace 1",
+            layoutTree: layoutTree(forPanelIDs: panelIDs),
+            panels: Dictionary(
+                uniqueKeysWithValues: panelIDs.enumerated().map { offset, panelID in
+                    (
+                        panelID,
+                        PanelState.terminal(TerminalPanelState(
+                            title: "Terminal \(offset + 1)",
+                            shell: "zsh",
+                            cwd: "/repo"
+                        ))
+                    )
+                }
+            ),
+            focusedPanelID: panelIDs[0]
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                )
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let sessionIDs = panelIDs.indices.map { "session-row-\($0 + 1)" }
+        for (offset, panelID) in panelIDs.enumerated() {
+            sessionRuntimeStore.startSession(
+                sessionID: sessionIDs[offset],
+                agent: .codex,
+                panelID: panelID,
+                windowID: windowID,
+                workspaceID: workspaceID,
+                displayTitleOverride: "Session \(offset + 1)",
+                cwd: "/repo/sidebar",
+                repoRoot: "/repo",
+                at: now.addingTimeInterval(TimeInterval(offset))
+            )
+            sessionRuntimeStore.updateStatus(
+                sessionID: sessionIDs[offset],
+                status: SessionStatus(kind: .idle, summary: "Idle", detail: "Ready"),
+                at: now.addingTimeInterval(TimeInterval(offset) + 0.5)
+            )
+        }
+
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        waitForSessionPointerViews(sessionIDs, in: hostingView)
+
+        return MultiSessionSidebarHarness(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelIDs: panelIDs,
+            sessionIDs: sessionIDs,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            hostingView: hostingView,
+            window: window
+        )
+    }
+
+    private func makeParentChildSessionSidebarHarness() throws -> MultiSessionSidebarHarness {
+        let harness = try makeMultiSessionSidebarHarness(sessionCount: 2)
+        harness.sessionRuntimeStore.updateBackgroundActivity(
+            sessionID: harness.sessionIDs[0],
+            activity: SessionBackgroundActivity(
+                id: "drag-child",
+                kind: .subagent,
+                displayName: "Drag Child",
+                startedAt: Date(timeIntervalSince1970: 1_700_000_020),
+                lastUpdatedAt: Date(timeIntervalSince1970: 1_700_000_020)
+            ),
+            at: Date(timeIntervalSince1970: 1_700_000_020)
+        )
+        pumpMainRunLoop(duration: 0.2)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        return harness
+    }
+
+    private func layoutTree(forPanelIDs panelIDs: [UUID]) -> LayoutNode {
+        precondition(panelIDs.isEmpty == false)
+        if panelIDs.count == 1 {
+            return .slot(slotID: UUID(), panelID: panelIDs[0])
+        }
+        return .split(
+            nodeID: UUID(),
+            orientation: .vertical,
+            ratio: 1.0 / Double(panelIDs.count),
+            first: .slot(slotID: UUID(), panelID: panelIDs[0]),
+            second: layoutTree(forPanelIDs: Array(panelIDs.dropFirst()))
         )
     }
 
@@ -1627,6 +2076,29 @@ final class SidebarViewTests: XCTestCase {
             ],
             focusedPanelID: panelID
         )
+    }
+
+    private func measuredMetadataBadgeFrame(cwd: String?, title: String, width: CGFloat) throws -> CGRect {
+        let hostingView = NSHostingView(rootView:
+            SidebarSessionMetadataLine(cwd: cwd, customTabTitle: title, showsUnreadSessionAccent: false)
+                .frame(width: width)
+        )
+        hostingView.setFrameSize(hostingView.fittingSize)
+        hostingView.layoutSubtreeIfNeeded()
+        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: title))
+        return badge.convert(badge.bounds, to: hostingView)
+    }
+
+    private func measuredSessionMetadataSize(cwd: String?, title: String?, width: CGFloat) -> CGSize {
+        let recorder = SidebarLayoutWidthRecorder()
+        let hostingView = NSHostingView(
+            rootView: SidebarProposedWidthRecordingLayout(proposedWidth: width, recorder: recorder) {
+                SidebarSessionMetadataLine(cwd: cwd, customTabTitle: title, showsUnreadSessionAccent: false)
+            }
+        )
+        _ = hostingView.fittingSize
+        hostingView.layoutSubtreeIfNeeded()
+        return CGSize(width: recorder.width, height: recorder.height)
     }
 
     private func measuredAnnotationChipWidth(
@@ -1883,6 +2355,59 @@ final class SidebarViewTests: XCTestCase {
         view.mouseUp(with: mouseUp)
     }
 
+    private func drag(
+        view: PointerInteractionView,
+        from start: NSPoint,
+        through dragPoint: NSPoint? = nil,
+        to end: NSPoint
+    ) throws {
+        view.usesEventTrackingLoop = false
+        try beginDrag(view: view, at: start)
+        try continueDrag(view: view, at: dragPoint ?? end)
+        try endDrag(view: view, at: end)
+    }
+
+    private func beginDrag(view: PointerInteractionView, at location: NSPoint) throws {
+        guard let event = pointerMouseEvent(type: .leftMouseDown, view: view, at: location, timestamp: 0, eventNumber: 0) else {
+            throw NSError(domain: "SidebarViewTests", code: 5, userInfo: nil)
+        }
+        view.mouseDown(with: event)
+    }
+
+    private func continueDrag(view: PointerInteractionView, at location: NSPoint) throws {
+        guard let event = pointerMouseEvent(type: .leftMouseDragged, view: view, at: location, timestamp: 0.05, eventNumber: 1) else {
+            throw NSError(domain: "SidebarViewTests", code: 6, userInfo: nil)
+        }
+        view.mouseDragged(with: event)
+    }
+
+    private func endDrag(view: PointerInteractionView, at location: NSPoint) throws {
+        guard let event = pointerMouseEvent(type: .leftMouseUp, view: view, at: location, timestamp: 0.1, eventNumber: 2) else {
+            throw NSError(domain: "SidebarViewTests", code: 7, userInfo: nil)
+        }
+        view.mouseUp(with: event)
+    }
+
+    private func pointerMouseEvent(
+        type: NSEvent.EventType,
+        view: NSView,
+        at location: NSPoint,
+        timestamp: TimeInterval,
+        eventNumber: Int
+    ) -> NSEvent? {
+        NSEvent.mouseEvent(
+            with: type,
+            location: view.convert(location, to: nil),
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: view.window?.windowNumber ?? 0,
+            context: nil,
+            eventNumber: eventNumber,
+            clickCount: 1,
+            pressure: type == .leftMouseUp ? 0 : 1
+        )
+    }
+
     private func click(
         window: NSWindow,
         at location: NSPoint,
@@ -1915,12 +2440,22 @@ final class SidebarViewTests: XCTestCase {
             throw NSError(domain: "SidebarViewTests", code: 4, userInfo: nil)
         }
 
+        let pointerView = enclosingPointerInteractionView(from: window.contentView?.hitTest(location))
+        let previousUsesEventTrackingLoop = pointerView?.usesEventTrackingLoop
+        pointerView?.usesEventTrackingLoop = false
+        defer {
+            if let previousUsesEventTrackingLoop {
+                pointerView?.usesEventTrackingLoop = previousUsesEventTrackingLoop
+            }
+        }
+
         window.sendEvent(mouseDown)
         window.sendEvent(mouseUp)
     }
 
     private func pointerInteractionView(in rootView: NSView, workspaceID: UUID) -> PointerInteractionView? {
         if let pointerView = rootView as? PointerInteractionView,
+           pointerView.logName == "workspace-sidebar-row",
            pointerView.logMetadata["workspaceID"] == workspaceID.uuidString {
             return pointerView
         }
@@ -1931,6 +2466,56 @@ final class SidebarViewTests: XCTestCase {
             }
         }
 
+        return nil
+    }
+
+    private func sessionPointerInteractionView(in rootView: NSView, sessionID: String) throws -> PointerInteractionView {
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            pumpMainRunLoop(duration: 0.05)
+            rootView.layoutSubtreeIfNeeded()
+            if let view = pointerInteractionView(in: rootView, sessionID: sessionID) {
+                view.usesEventTrackingLoop = false
+                return view
+            }
+        }
+        return try XCTUnwrap(pointerInteractionView(in: rootView, sessionID: sessionID))
+    }
+
+    private func waitForSessionPointerViews(_ sessionIDs: [String], in rootView: NSView) {
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            pumpMainRunLoop(duration: 0.05)
+            rootView.layoutSubtreeIfNeeded()
+            let missing = sessionIDs.contains { pointerInteractionView(in: rootView, sessionID: $0) == nil }
+            if missing == false { return }
+        }
+    }
+
+    private func pointerInteractionView(in rootView: NSView, sessionID: String) -> PointerInteractionView? {
+        if let pointerView = rootView as? PointerInteractionView,
+           pointerView.logName == "session-sidebar-row",
+           pointerView.logMetadata["sessionID"] == sessionID {
+            return pointerView
+        }
+
+        for subview in rootView.subviews {
+            if let matchingView = pointerInteractionView(in: subview, sessionID: sessionID) {
+                return matchingView
+            }
+        }
+
+        return nil
+    }
+
+    private func enclosingPointerInteractionView(from view: NSView?) -> PointerInteractionView? {
+        var currentView = view
+        while let view = currentView {
+            if let pointerView = view as? PointerInteractionView {
+                return pointerView
+            }
+            currentView = view.superview
+        }
         return nil
     }
 

@@ -240,6 +240,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var selectedTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: WorkspaceTabState]
+    public var sidebarSessionPanelOrder: [UUID]
     public var annotations: [String: WorkspaceAnnotation]
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
@@ -262,7 +263,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         tabsByID: [UUID: WorkspaceTabState],
         rightAuxPanel: RightAuxPanelState? = nil,
         annotations: [String: WorkspaceAnnotation] = [:],
-        unreadWorkspaceNotificationCount: Int = 0
+        unreadWorkspaceNotificationCount: Int = 0,
+        sidebarSessionPanelOrder: [UUID] = []
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
             preferredSelectedTabID: selectedTabID,
@@ -283,6 +285,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.tabsByID = seededTabsByID
         self.annotations = annotations
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
+        self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
+        normalizeSidebarSessionPanelOrder()
     }
 
     public init(
@@ -299,7 +303,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         unreadWorkspaceNotificationCount: Int = 0,
         recentlyClosedPanels: [ClosedPanelRecord] = [],
         rightAuxPanel: RightAuxPanelState? = nil,
-        annotations: [String: WorkspaceAnnotation] = [:]
+        annotations: [String: WorkspaceAnnotation] = [:],
+        sidebarSessionPanelOrder: [UUID] = []
     ) {
         let tab = WorkspaceTabState(
             id: UUID(),
@@ -321,7 +326,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             tabIDs: [tab.id],
             tabsByID: [tab.id: tab],
             annotations: annotations,
-            unreadWorkspaceNotificationCount: unreadWorkspaceNotificationCount
+            unreadWorkspaceNotificationCount: unreadWorkspaceNotificationCount,
+            sidebarSessionPanelOrder: sidebarSessionPanelOrder
         )
     }
 
@@ -436,6 +442,19 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
                 partialResult.insert(panelID)
             }
         }
+    }
+
+    mutating func normalizeSidebarSessionPanelOrder() {
+        guard sidebarSessionPanelOrder.isEmpty == false else { return }
+        sidebarSessionPanelOrder = Self.sanitizedSidebarSessionPanelOrder(
+            sidebarSessionPanelOrder,
+            terminalPanelIDs: allTerminalPanelIDs
+        )
+    }
+
+    static func sanitizedSidebarSessionPanelOrder(_ order: [UUID], terminalPanelIDs: Set<UUID>) -> [UUID] {
+        var seen: Set<UUID> = []
+        return order.filter { terminalPanelIDs.contains($0) && seen.insert($0).inserted }
     }
 
     public func tab(id tabID: UUID) -> WorkspaceTabState? {
@@ -577,6 +596,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case tabIDs
         case tabsByID
         case annotations
+        case sidebarSessionPanelOrder
         case layoutTree
         case panels
         case focusedPanelID
@@ -632,6 +652,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         let decodedWorkspaceUnread = try container.decodeIfPresent(Int.self, forKey: .unreadWorkspaceNotificationCount)
         let legacyUnreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadNotificationCount)
         unreadWorkspaceNotificationCount = max(0, decodedWorkspaceUnread ?? legacyUnreadCount ?? 0)
+        sidebarSessionPanelOrder = try container.decodeIfPresent([UUID].self, forKey: .sidebarSessionPanelOrder) ?? []
+        normalizeSidebarSessionPanelOrder()
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -643,6 +665,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
         try container.encode(annotations, forKey: .annotations)
+        try container.encode(sidebarSessionPanelOrder, forKey: .sidebarSessionPanelOrder)
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

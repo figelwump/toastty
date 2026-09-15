@@ -31,6 +31,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Run agents your usual way** — run CLIs from the command line and Toastty picks up live status automatically for supported agents; or launch from the `Agent` menu, top bar, command palette, or keyboard shortcut
 - **Live sidebar status** — working, ready, or error state for Cursor sessions, plus working, needs-approval, ready, or error state for Codex, Claude, OpenCode, MiMo Code, and Pi sessions
 - **Nested agent visibility** — orchestrating sessions show child agents and background work as expandable sidebar rows, including waiting and attention states
+- **Session row ordering** — drag session rows within a workspace to save their sidebar order without changing pane layout, tabs, or shortcuts
 - **Unread badges and notifications** — sidebar badges and macOS notifications when an agent needs you
 - **Jump to the next session that needs you** — `Cmd+Shift+A` rotates through unreads, approval/error sessions, then active work
 - **Mark a session for later** — `Cmd+Shift+L` flags a managed session; the flag clears automatically when the session meaningfully advances
@@ -147,6 +148,8 @@ Terminal command-click integrations use Toastty for common supporting files: sup
 </p>
 
 Run agents the way you usually do — type `codex`, `cdx`, `claude`, `cursor-agent`, `opencode`, `mimo`, `mimocode`, or `pi` in any terminal pane and Toastty's command shims pick up live status automatically. Or launch from the `Agent` menu, the top bar, the command palette, or a keyboard shortcut. Either way, built-in session telemetry drives sidebar status, unread badges, and desktop notifications, and later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed. Toastty intentionally does not intercept Cursor's generic `agent` alias because that name is not unique to Cursor.
+
+Full sidebar session rows show a custom tab name beside the working directory when you rename the session's tab. Automatically titled tabs and nested child rows do not show this badge. Hover over a truncated badge to see the full name.
 
 Use `Cmd+Shift+L` to mark a managed session for later follow-up without pinning it; later-flagged sessions join the active `Cmd+Shift+A` rotation after urgent unread or approval/error work, and the flag clears automatically when the session meaningfully advances.
 

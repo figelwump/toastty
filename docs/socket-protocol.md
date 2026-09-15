@@ -286,6 +286,11 @@ Notable action-specific behavior:
   - Automation can target a background workspace without rerouting the user's
     next physical keystrokes to that workspace. Use a separate focus/select
     action when the terminal should become the interactive keyboard target.
+  - accepts optional `args.expectedSessionID`. When supplied, delivery succeeds
+    only if the resolved panel still hosts that active managed session. A
+    missing, ended, or replaced session returns `INVALID_PAYLOAD` before any
+    terminal bytes or submission are sent; `allowUnavailable` cannot bypass
+    this condition.
 - `agent.launch`
   - requires `args.profileID`.
   - optional `args.workspaceID` and `args.panelID` values must be UUID strings;
@@ -686,6 +691,7 @@ Request payload:
 
 - `text: String`
 - `submit?: Bool`
+- `expectedSessionID?: String`
 - `panelID?: UUID string`
 - `workspaceID?: UUID string`
 - `windowID?: UUID string`
@@ -705,6 +711,9 @@ Behavior:
 - When the terminal surface is unavailable:
   - return `available: false` if `allowUnavailable=true`
   - otherwise return `INVALID_PAYLOAD`
+- When `expectedSessionID` is supplied, a missing, ended, or replaced active
+  session returns `INVALID_PAYLOAD` before terminal delivery; this condition is
+  checked before the unavailable-surface behavior.
 
 ### `automation.terminal_drop_image_files`
 

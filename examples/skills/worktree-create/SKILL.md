@@ -157,6 +157,16 @@ repository requirements, choosing only the fields they leave unspecified.
   accepted a model or started successfully. Check available session/runtime evidence
   and report any rejection or unverified setting without claiming it took effect.
 
+When a later callback must send text to a managed session created by this
+workflow, retain the returned `panel_id` and `session_id` and call
+`terminal.send-text` with both `--panel "$panel_id"` and
+`expectedSessionID="$session_id"`. This conditional send works for a panel in
+an unselected workspace tab and fails before delivery if the session ended or
+the panel was reused. Do not rediscover the target through a selected-tab
+`workspace.snapshot`, and do not fall back to an unchecked send. The explicit
+`--startup-command` fallback has no managed session ID, so this condition is
+available only after a successful structured `agent.launch`.
+
 ## Base selection
 
 Choose the base before creating the task branch or worktree. The parent checkout is the worktree this workflow was invoked from; the landing branch may be checked out elsewhere. Uncommitted parent changes are not included in a Git base, regardless of how it is selected. Do not automatically stash, commit, or transfer those changes.

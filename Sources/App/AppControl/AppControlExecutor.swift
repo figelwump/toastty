@@ -578,6 +578,7 @@ final class AppControlExecutor {
             let submit = args.boolValue("submit") ?? false
             let allowUnavailable = args.boolValue("allowUnavailable") ?? false
             let resolved = try resolveTerminalTarget(payload: args)
+            try enforceExpectedSessionIfPresent(args["expectedSessionID"], panelID: resolved.panelID)
             if terminalRuntimeRegistry.sendText(
                 text,
                 submit: submit,
@@ -896,6 +897,21 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("sessionID does not refer to an active session")
         }
         try enforceWorkspaceAutomationAccess(record.workspaceID)
+    }
+
+    func enforceExpectedSessionIfPresent(_ value: AutomationJSONValue?, panelID: UUID) throws {
+        guard let value else { return }
+        guard case .string(let rawSessionID) = value else {
+            throw AutomationSocketError.invalidPayload("expectedSessionID must be a string")
+        }
+        guard let expectedSessionID = normalizedOptionalText(rawSessionID) else {
+            throw AutomationSocketError.invalidPayload("expectedSessionID must be a non-empty string")
+        }
+        guard sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.sessionID == expectedSessionID else {
+            throw AutomationSocketError.invalidPayload(
+                "expectedSessionID does not match the active managed session for panelID \(panelID.uuidString)"
+            )
+        }
     }
 
     func resolveAgentLaunchExistingWorkspaceID(

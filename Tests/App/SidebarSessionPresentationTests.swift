@@ -5,6 +5,72 @@ import XCTest
 
 @MainActor
 final class SidebarSessionPresentationTests: XCTestCase {
+    func testSavedPanelOrderPreservesDefaultAndAppendsUnlistedSessions() {
+        let panels = (0..<4).map { _ in UUID() }
+        let statuses = panels.enumerated().map { index, panelID in
+            WorkspaceSessionStatus(
+                sessionID: "session-\(index)", panelID: panelID, agent: .codex,
+                status: SessionStatus(kind: .working, summary: "Working"),
+                cwd: nil, updatedAt: Date(), isActive: true
+            )
+        }
+        XCTAssertEqual(SidebarSessionPresentation.orderedStatuses(statuses, panelOrder: []), statuses)
+        let saved = [panels[2], UUID(), panels[0], panels[2]]
+        XCTAssertEqual(
+            SidebarSessionPresentation.orderedStatuses(statuses, panelOrder: saved).map(\.panelID),
+            [panels[2], panels[0], panels[1], panels[3]]
+        )
+        var restarted = statuses
+        restarted[2].sessionID = "replacement-session"
+        restarted[2].status = SessionStatus(kind: .ready, summary: "Ready")
+        // A replacement arrives last in registry order but retains its panel's position.
+        let replacement = restarted.remove(at: 2)
+        restarted.append(replacement)
+        XCTAssertEqual(
+            SidebarSessionPresentation.orderedStatuses(restarted, panelOrder: saved).first?.sessionID,
+            "replacement-session"
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.orderedStatuses(statuses.filter { $0.panelID != panels[2] }, panelOrder: saved).map(\.panelID),
+            [panels[0], panels[1], panels[3]]
+        )
+    }
+
+    func testSessionDropTargetsUseExpandedGroupBoundsAndRejectOtherWorkspaces() {
+        let rows = makeSidebarSessionRowIDs(count: 3)
+        let frames = [
+            rows[0]: CGRect(x: 10, y: 20, width: 200, height: 40),
+            rows[1]: CGRect(x: 10, y: 64, width: 200, height: 120),
+            rows[2]: CGRect(x: 10, y: 188, width: 200, height: 40),
+        ]
+        func target(_ source: Int, _ x: CGFloat, _ y: CGFloat) -> SidebarSessionPresentation.SessionDropTarget? {
+            SidebarSessionPresentation.sessionDropTarget(
+                orderedRowIDs: rows, frames: frames, source: rows[source],
+                pointer: CGPoint(x: x, y: y), viewportHeight: 240
+            )
+        }
+        XCTAssertEqual(target(2, 100, 20), .init(panelID: rows[0].panelID, placeAfter: false))
+        XCTAssertEqual(target(0, 100, 227), .init(panelID: rows[2].panelID, placeAfter: true))
+        // Crossing the parent's header alone must not skip its expanded children.
+        XCTAssertEqual(target(0, 100, 100), .init(panelID: rows[1].panelID, placeAfter: false))
+        XCTAssertEqual(target(0, 100, 170), .init(panelID: rows[2].panelID, placeAfter: false))
+        XCTAssertNil(target(0, 100, 10))
+        XCTAssertNil(target(0, 100, 240))
+        XCTAssertNil(target(0, 220, 150))
+        XCTAssertNil(target(0, .nan, 150))
+        var missing = frames
+        missing.removeValue(forKey: rows[1])
+        XCTAssertNil(SidebarSessionPresentation.sessionDropTarget(
+            orderedRowIDs: rows, frames: missing, source: rows[0],
+            pointer: CGPoint(x: 100, y: 150), viewportHeight: 240
+        ))
+        let foreign = makeSidebarSessionRowIDs(count: 1)[0]
+        XCTAssertNil(SidebarSessionPresentation.sessionDropTarget(
+            orderedRowIDs: rows + [foreign], frames: frames, source: rows[0],
+            pointer: CGPoint(x: 100, y: 150), viewportHeight: 240
+        ))
+    }
+
     private func makeWorkspace(
         title: String,
         hasBeenVisited: Bool = true
@@ -49,6 +115,119 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertEqual(SidebarSessionPresentation.abbreviatedPathLabel("/Users/vishal/GiantThings/repos/toastty-session-status"), ".../toastty-session-status")
         XCTAssertEqual(SidebarSessionPresentation.abbreviatedPathLabel("/"), "/")
         XCTAssertEqual(SidebarSessionPresentation.abbreviatedPathLabel("relative"), "relative")
+    }
+
+    func testSessionCustomTabTitleRequiresExplicitNameEvenInSingleTabWorkspace() throws {
+        var workspace = makeWorkspace(title: "Workspace")
+        let tabID = try XCTUnwrap(workspace.selectedTabID)
+        let session = try makeSession(in: workspace)
+
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace))
+        workspace.tabsByID[tabID]?.customTitle = "orchestrator"
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace),
+            "orchestrator"
+        )
+    }
+
+    func testSessionCustomTabTitleUsesContainingTabInsteadOfSelectedTabOrScope() throws {
+        var workspace = makeWorkspace(title: "Workspace")
+        let owningTabID = try XCTUnwrap(workspace.selectedTabID)
+        workspace.tabsByID[owningTabID]?.customTitle = "orchestrator"
+        var session = try makeSession(in: workspace)
+        session.scopedWorkspaceIDs = [UUID()]
+        var selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Automatic title")
+        selectedTab.customTitle = "review"
+        workspace.appendTab(selectedTab, select: true)
+
+        XCTAssertEqual(workspace.selectedTabID, selectedTab.id)
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace),
+            "orchestrator"
+        )
+    }
+
+    func testSessionCustomTabTitleRejectsMissingWorkspaceWrongOwnerPanelAndTab() throws {
+        var workspace = makeWorkspace(title: "Workspace")
+        let tabID = try XCTUnwrap(workspace.selectedTabID)
+        workspace.tabsByID[tabID]?.customTitle = "orchestrator"
+        let session = try makeSession(in: workspace)
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: nil))
+
+        var wrongOwner = session
+        wrongOwner.workspaceID = UUID()
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: wrongOwner, in: workspace))
+
+        var missingPanel = workspace
+        missingPanel.tabsByID[tabID]?.panels.removeValue(forKey: session.panelID)
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: missingPanel))
+
+        var orphanedPanel = workspace
+        orphanedPanel.tabsByID[tabID]?.layoutTree = .slot(slotID: UUID(), panelID: UUID())
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: orphanedPanel))
+
+        workspace.tabsByID.removeValue(forKey: tabID)
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace))
+    }
+
+    func testSessionCustomTabTitleReflectsRenameClearAndPanelMovement() throws {
+        var workspace = makeWorkspace(title: "Workspace")
+        let originalTabID = try XCTUnwrap(workspace.selectedTabID)
+        let session = try makeSession(in: workspace)
+        workspace.tabsByID[originalTabID]?.customTitle = "orchestrator"
+        XCTAssertEqual(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace), "orchestrator")
+
+        workspace.tabsByID[originalTabID]?.customTitle = "renamed"
+        XCTAssertEqual(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace), "renamed")
+        workspace.tabsByID[originalTabID]?.customTitle = nil
+        XCTAssertNil(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace))
+
+        let panel = try XCTUnwrap(workspace.tabsByID[originalTabID]?.panels[session.panelID])
+        let replacementTab = WorkspaceTabState.bootstrap()
+        workspace.tabsByID[originalTabID]?.customTitle = "renamed"
+        workspace.tabsByID[originalTabID]?.layoutTree = replacementTab.layoutTree
+        workspace.tabsByID[originalTabID]?.panels = replacementTab.panels
+        workspace.tabsByID[originalTabID]?.focusedPanelID = replacementTab.focusedPanelID
+        let destinationTab = WorkspaceTabState(
+            id: UUID(),
+            customTitle: "implementation",
+            layoutTree: .slot(slotID: UUID(), panelID: session.panelID),
+            panels: [session.panelID: panel],
+            focusedPanelID: session.panelID
+        )
+        workspace.appendTab(destinationTab, select: false)
+        XCTAssertEqual(SidebarSessionPresentation.sessionCustomTabTitle(for: session, in: workspace), "implementation")
+    }
+
+    func testSessionAccessibilityLabelIncludesFullCustomTabNameWithAndWithoutDirectory() {
+        let title = "orchestrator handling a very long implementation name"
+        for cwd in [".../toastty", nil] as [String?] {
+            let label = SidebarSessionPresentation.sessionAccessibilityLabel(
+                agentName: "Codex",
+                chipKind: nil,
+                detailText: "Reviewing changes",
+                cwd: cwd,
+                isLaterFlagged: false,
+                customTabTitle: title
+            )
+            XCTAssertEqual(
+                label,
+                ["Codex", "Reviewing changes", cwd, "Tab: \(title)"].compactMap { $0 }.joined(separator: ", ")
+            )
+        }
+    }
+
+    private func makeSession(in workspace: WorkspaceState) throws -> WorkspaceSessionStatus {
+        WorkspaceSessionStatus(
+            sessionID: "session-tab-badge",
+            panelID: try XCTUnwrap(workspace.focusedPanelID),
+            workspaceID: workspace.id,
+            agent: .codex,
+            status: SessionStatus(kind: .idle, summary: "Idle"),
+            cwd: "/repo/sidebar",
+            updatedAt: Date(timeIntervalSince1970: 1),
+            isActive: true
+        )
     }
 
     func testSessionStatusChipKindShowsPersistentUnresolvedAndUnreadReady() {

@@ -13,9 +13,12 @@ struct PointerInteractionRegion: NSViewRepresentable {
     var metadata: [String: String]
     var cursor: NSCursor?
     var suppressesWindowMovementWhileHovered: Bool
+    var excludedRects: [CGRect]
+    var supportsDragScrolling: Bool
     var onBegan: (PointerInteractionValue) -> Void
     var onChanged: (PointerInteractionValue) -> Void
     var onEnded: (PointerInteractionValue) -> Void
+    var onCancelled: () -> Void
     var onHoverChanged: (Bool) -> Void
 
     init(
@@ -23,18 +26,24 @@ struct PointerInteractionRegion: NSViewRepresentable {
         metadata: [String: String] = [:],
         cursor: NSCursor? = nil,
         suppressesWindowMovementWhileHovered: Bool = false,
+        excludedRects: [CGRect] = [],
+        supportsDragScrolling: Bool = false,
         onBegan: @escaping (PointerInteractionValue) -> Void = { _ in },
         onChanged: @escaping (PointerInteractionValue) -> Void,
         onEnded: @escaping (PointerInteractionValue) -> Void,
+        onCancelled: @escaping () -> Void = {},
         onHoverChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.name = name
         self.metadata = metadata
         self.cursor = cursor
         self.suppressesWindowMovementWhileHovered = suppressesWindowMovementWhileHovered
+        self.excludedRects = excludedRects
+        self.supportsDragScrolling = supportsDragScrolling
         self.onBegan = onBegan
         self.onChanged = onChanged
         self.onEnded = onEnded
+        self.onCancelled = onCancelled
         self.onHoverChanged = onHoverChanged
     }
 
@@ -47,9 +56,12 @@ struct PointerInteractionRegion: NSViewRepresentable {
         nsView.logMetadata = metadata
         nsView.cursor = cursor
         nsView.suppressesWindowMovementWhileHovered = suppressesWindowMovementWhileHovered
+        nsView.excludedRects = excludedRects
+        nsView.supportsDragScrolling = supportsDragScrolling
         nsView.onBegan = onBegan
         nsView.onChanged = onChanged
         nsView.onEnded = onEnded
+        nsView.onCancelled = onCancelled
         nsView.onHoverChanged = onHoverChanged
     }
 
@@ -72,6 +84,8 @@ final class PointerInteractionView: NSView {
     var logName = "pointer"
     var logMetadata: [String: String] = [:]
     var usesEventTrackingLoop = true
+    var excludedRects: [CGRect] = []
+    var supportsDragScrolling = false
     var suppressesWindowMovementWhileHovered = false {
         didSet {
             guard suppressesWindowMovementWhileHovered != oldValue else { return }
@@ -85,6 +99,7 @@ final class PointerInteractionView: NSView {
     var onBegan: ((PointerInteractionValue) -> Void)?
     var onChanged: ((PointerInteractionValue) -> Void)?
     var onEnded: ((PointerInteractionValue) -> Void)?
+    var onCancelled: (() -> Void)?
     var onHoverChanged: ((Bool) -> Void)?
     var cursor: NSCursor? {
         didSet {
@@ -110,10 +125,26 @@ final class PointerInteractionView: NSView {
     private var startLocation: CGPoint?
     private var dragEventCount = 0
     private var isTrackingPointerSequence = false
+    private var latestPointerEvent: NSEvent?
+    private var dragScrollingActivated = false
 
     override var isFlipped: Bool { true }
 
     override var mouseDownCanMoveWindow: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let localPoint = convert(point, from: superview)
+        guard excludedRects.contains(where: { $0.contains(localPoint) }) == false else { return nil }
+        return super.hitTest(point)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard supportsDragScrolling, startLocation != nil else {
+            super.cancelOperation(sender)
+            return
+        }
+        cancelPointerSequence(reason: "cancel-operation")
+    }
 
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool {
         true
@@ -202,6 +233,7 @@ final class PointerInteractionView: NSView {
         onBegan = nil
         onChanged = nil
         onEnded = nil
+        onCancelled = nil
         onHoverChanged = nil
     }
 
@@ -229,6 +261,22 @@ final class PointerInteractionView: NSView {
         startScreenLocation = sequenceWindow?.convertPoint(toScreen: event.locationInWindow)
         startWindowLocation = event.locationInWindow
         startLocation = convert(event.locationInWindow, from: nil)
+        latestPointerEvent = event
+        dragScrollingActivated = false
+        if supportsDragScrolling {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(cancelForDeactivation),
+                name: NSWindow.didResignKeyNotification,
+                object: sequenceWindow
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(cancelForDeactivation),
+                name: NSApplication.didResignActiveNotification,
+                object: nil
+            )
+        }
         dragEventCount = 0
         logInteraction("mouseDown", event: event)
         onBegan?(
@@ -246,11 +294,19 @@ final class PointerInteractionView: NSView {
             return
         }
         dragEventCount += 1
+        latestPointerEvent = event
+        if supportsDragScrolling, abs(value.translation.height) >= 4 {
+            dragScrollingActivated = true
+        }
         if dragEventCount <= 5 || dragEventCount.isMultiple(of: 10) {
             logInteraction("mouseDragged", event: event, value: value)
         }
         restoreSuppressedWindowFrameIfNeeded(reason: "mouse-dragged")
         onChanged?(value)
+    }
+
+    @objc private func cancelForDeactivation(_: Notification) {
+        cancelPointerSequence(reason: "deactivated")
     }
 
     private func finishPointerSequence(with event: NSEvent) {
@@ -269,6 +325,7 @@ final class PointerInteractionView: NSView {
     private func trackPointerSequence(startingWith event: NSEvent) {
         guard let trackingWindow = event.window ?? window else {
             logTrackingLoop("skipped", event: event, reason: "missing-window")
+            cancelPointerSequence(reason: "missing-window")
             return
         }
 
@@ -278,27 +335,53 @@ final class PointerInteractionView: NSView {
             isTrackingPointerSequence = false
         }
 
+        let eventMask = supportsDragScrolling
+            ? Self.trackingEventMask.union([.scrollWheel, .keyDown])
+            : Self.trackingEventMask
+        var lastInputTime = Date()
         while startWindowLocation != nil {
-            let timeout = Date(timeIntervalSinceNow: 60)
+            let timeout = Date(timeIntervalSinceNow: supportsDragScrolling ? 1.0 / 30 : 60)
             guard let nextEvent = trackingWindow.nextEvent(
-                matching: Self.trackingEventMask,
+                matching: eventMask,
                 until: timeout,
                 inMode: .eventTracking,
                 dequeue: true
             ) else {
+                guard startWindowLocation != nil else { return }
+                if supportsDragScrolling, Date().timeIntervalSince(lastInputTime) < 60 {
+                    updateDragScrolling()
+                    continue
+                }
                 logTrackingLoop("timedOut", event: event)
                 cancelPointerSequence(reason: "tracking-timeout")
                 return
             }
 
+            guard startWindowLocation != nil else { return }
+            lastInputTime = Date()
+
             switch nextEvent.type {
             case .leftMouseDragged:
                 handlePointerDragged(with: nextEvent)
+                if supportsDragScrolling { updateDragScrolling() }
 
             case .leftMouseUp:
                 finishPointerSequence(with: nextEvent)
                 logTrackingLoop("finished", event: nextEvent)
                 return
+
+            case .scrollWheel:
+                latestPointerEvent = nextEvent
+                enclosingScrollView?.scrollWheel(with: nextEvent)
+                reportCurrentPointerLocation()
+
+            case .keyDown:
+                if nextEvent.keyCode == 53 {
+                    cancelPointerSequence(reason: "escape")
+                    return
+                }
+                // Keep existing keyboard handling available during a drag.
+                NSApp.sendEvent(nextEvent)
 
             default:
                 logTrackingLoop("ignored", event: nextEvent)
@@ -309,10 +392,50 @@ final class PointerInteractionView: NSView {
         cancelPointerSequence(reason: "tracking-ended-without-start")
     }
 
+    private func updateDragScrolling() {
+        defer { reportCurrentPointerLocation() }
+        guard dragScrollingActivated,
+              let event = latestPointerEvent,
+              let scrollView = enclosingScrollView else { return }
+
+        let clipView = scrollView.contentView
+        let pointer = clipView.convert(event.locationInWindow, from: nil)
+        let bounds = clipView.bounds
+        let edgeDistance: CGFloat = 24
+        let scrollStep: CGFloat = 10
+        // Do not scroll when the pointer has left the sidebar horizontally.
+        guard pointer.x >= bounds.minX, pointer.x <= bounds.maxX else { return }
+        let delta: CGFloat
+        if pointer.y < bounds.minY + edgeDistance {
+            delta = -scrollStep
+        } else if pointer.y > bounds.maxY - edgeDistance {
+            delta = scrollStep
+        } else {
+            return
+        }
+
+        var proposedBounds = bounds
+        proposedBounds.origin.y += delta
+        let constrainedBounds = clipView.constrainBoundsRect(proposedBounds)
+        if constrainedBounds.origin != bounds.origin {
+            clipView.scroll(to: constrainedBounds.origin)
+            scrollView.reflectScrolledClipView(clipView)
+        }
+    }
+
+    private func reportCurrentPointerLocation() {
+        guard let event = latestPointerEvent,
+              let value = interactionValue(for: event) else { return }
+        onChanged?(value)
+    }
+
     private func cancelPointerSequence(
         reason: String,
         restoreTiming: WindowMovementRestoreTiming = .immediate
     ) {
+        let hadSequence = startLocation != nil
+        let cancelledGeneration = pointerSequenceGeneration
+        let callback = onCancelled
         switch restoreTiming {
         case .immediate:
             restoreSuppressedWindowFrameIfNeeded(reason: reason)
@@ -321,6 +444,19 @@ final class PointerInteractionView: NSView {
 
         case .deferred:
             schedulePointerSequenceWindowMovementRestore(reason: reason)
+        }
+
+        guard hadSequence, let callback else { return }
+        switch restoreTiming {
+        case .immediate:
+            callback()
+        case .deferred:
+            DispatchQueue.main.async { [weak self] in
+                // A removed representable may already have started a fresh
+                // sequence by the time SwiftUI teardown has completed.
+                guard self == nil || self?.pointerSequenceGeneration == cancelledGeneration else { return }
+                callback()
+            }
         }
     }
 
@@ -377,12 +513,16 @@ final class PointerInteractionView: NSView {
     }
 
     private func clearPointerSequenceState() {
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didResignActiveNotification, object: nil)
         pointerSequenceWindow = nil
         startWindowFrame = nil
         startScreenLocation = nil
         startWindowLocation = nil
         startLocation = nil
         dragEventCount = 0
+        latestPointerEvent = nil
+        dragScrollingActivated = false
     }
 
     private func interactionValue(for event: NSEvent) -> PointerInteractionValue? {
@@ -408,7 +548,7 @@ final class PointerInteractionView: NSView {
             return nil
         }
 
-        let location = CGPoint(
+        let location = supportsDragScrolling ? convert(event.locationInWindow, from: nil) : CGPoint(
             x: startLocation.x + translation.width,
             y: startLocation.y + translation.height
         )

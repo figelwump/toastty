@@ -72,6 +72,26 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .moveSidebarSession(let workspaceID, let panelID, let targetPanelID, let placeAfter, let visiblePanelIDs):
+            guard let workspace = state.workspacesByID[workspaceID], panelID != targetPanelID else { return false }
+            let terminalPanelIDs = workspace.allTerminalPanelIDs
+            let visibleOrder = WorkspaceState.sanitizedSidebarSessionPanelOrder(
+                visiblePanelIDs,
+                terminalPanelIDs: terminalPanelIDs
+            )
+            guard visibleOrder.contains(panelID), visibleOrder.contains(targetPanelID) else { return false }
+            var order = WorkspaceState.sanitizedSidebarSessionPanelOrder(
+                workspace.sidebarSessionPanelOrder + visibleOrder,
+                terminalPanelIDs: terminalPanelIDs
+            )
+            order.removeAll { $0 == panelID }
+            guard let targetIndex = order.firstIndex(of: targetPanelID) else { return false }
+            order.insert(panelID, at: targetIndex + (placeAfter ? 1 : 0))
+            guard order != workspace.sidebarSessionPanelOrder else { return false }
+            // This preference must not repair or otherwise change tabs, selection, or pane layout.
+            state.workspacesByID[workspaceID]?.sidebarSessionPanelOrder = order
+            return true
+
         case .createWorkspace(let windowID, let title, let activate):
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
 
@@ -1950,6 +1970,7 @@ public struct AppReducer {
     ) {
         var repairedWorkspace = workspace
         repairedWorkspace.repairTransientTabState()
+        repairedWorkspace.normalizeSidebarSessionPanelOrder()
         state.workspacesByID[workspaceID] = repairedWorkspace
     }
 
