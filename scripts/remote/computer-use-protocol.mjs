@@ -6,6 +6,14 @@ export function isComputerUseServer(name) {
   return name === "computer-use" || name === "cua_repl";
 }
 
+// Native UI operations used by the isolated Toastty verification workflow.
+// Do not include shell, browser navigation, or arbitrary execution tools.
+const toasttyUiTools = new Set([
+  "get_app_state", "get_app_screenshot", "get_app_state_and_screenshot",
+  "click", "drag", "press_key", "scroll", "paste", "type_text",
+  "select_text", "set_value", "perform_secondary_action",
+]);
+
 export function shouldAutoAcceptMcpElicitation(params) {
   if (params?.serverName === "cua_repl") {
     const meta = params._meta;
@@ -15,7 +23,7 @@ export function shouldAutoAcceptMcpElicitation(params) {
     return params.mode === "form" &&
       meta?.connector_id === "computer-use" &&
       meta?.codex_approval_kind === "mcp_tool_call" &&
-      meta?.tool_name === "get_app_state" &&
+      toasttyUiTools.has(meta?.tool_name) &&
       meta?.tool_params?.app === "com.GiantThings.toastty" &&
       schema?.type === "object" &&
       isRecord(schema.properties) &&

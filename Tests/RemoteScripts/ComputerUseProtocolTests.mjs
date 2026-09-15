@@ -29,6 +29,11 @@ test("recognizes the current Toastty app-access request without changing it", ()
   assert.deepEqual(request, before);
   request.message = "Localized app access prompt";
   assert.equal(shouldAutoAcceptMcpElicitation(request), true);
+  for (const tool of ["get_app_state", "get_app_screenshot", "get_app_state_and_screenshot", "click", "drag", "press_key",
+    "scroll", "paste", "type_text", "select_text", "set_value", "perform_secondary_action"]) {
+    request._meta.tool_name = tool;
+    assert.equal(shouldAutoAcceptMcpElicitation(request), true, tool);
+  }
 });
 
 test("declines foreign, incomplete, or broader current-runtime requests", () => {
@@ -41,6 +46,8 @@ test("declines foreign, incomplete, or broader current-runtime requests", () => 
     r => { delete r._meta.codex_approval_kind; },
     r => { r._meta.codex_approval_kind = "other"; },
     r => { r._meta.tool_name = "run_command"; },
+    r => { r._meta.tool_name = "unknown"; },
+    r => { delete r._meta.tool_name; },
     r => { delete r._meta.tool_params; },
     r => { r._meta.tool_params.app = "com.apple.Terminal"; },
     r => { r._meta.tool_params.app = "com.GiantThings.toastty.other"; },
