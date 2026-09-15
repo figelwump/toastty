@@ -1184,3 +1184,98 @@ private struct LegacyTerminalSnapshot: Codable {
     let shell: String
     let cwd: String
 }
+
+
+extension WorkspaceLayoutSnapshotTests {
+    @Test
+    func sidebarSessionOrderPersistsAcrossStateAndLayoutSnapshotRoundTrips() throws {
+        var state = AppState.bootstrap()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        #expect(AppReducer.reduce(action: .createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let order = try workspace.orderedTabs.reversed().map { try #require($0.focusedPanelID) }
+        state.workspacesByID[workspaceID]?.sidebarSessionPanelOrder = order
+        let decodedState = try JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(state))
+        #expect(decodedState == state)
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        #expect(snapshot.workspacesByID[workspaceID]?.sidebarSessionPanelOrder == order)
+        let decodedSnapshot = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: JSONEncoder().encode(snapshot))
+        #expect(decodedSnapshot == snapshot)
+        let restored = decodedSnapshot.makeAppState()
+        #expect(restored.workspacesByID[workspaceID]?.sidebarSessionPanelOrder == order)
+        #expect(restored.workspacesByID[workspaceID]?.tabIDs == workspace.tabIDs)
+        #expect(restored.workspacesByID[workspaceID]?.selectedTabID == workspace.selectedTabID)
+        try StateValidator.validate(restored)
+    }
+
+    @Test
+    func sidebarSessionOrderConstructorsAndDecodersRemoveInvalidAndDuplicateIDs() throws {
+        let terminalID = UUID()
+        let webID = UUID()
+        let invalidID = UUID()
+        let suppliedOrder = [invalidID, terminalID, webID, terminalID]
+        let workspace = WorkspaceState(
+            id: UUID(), title: "Order",
+            layoutTree: .split(
+                nodeID: UUID(), orientation: .horizontal, ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: terminalID),
+                second: .slot(slotID: UUID(), panelID: webID)
+            ),
+            panels: [
+                terminalID: .terminal(TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/tmp")),
+                webID: .web(WebPanelState(definition: .browser, title: "Browser"))
+            ], focusedPanelID: terminalID,
+            sidebarSessionPanelOrder: suppliedOrder
+        )
+        #expect(workspace.sidebarSessionPanelOrder == [terminalID])
+        let tabbedWorkspace = WorkspaceState(
+            id: workspace.id, title: workspace.title, selectedTabID: workspace.selectedTabID,
+            tabIDs: workspace.tabIDs, tabsByID: workspace.tabsByID,
+            sidebarSessionPanelOrder: suppliedOrder
+        )
+        #expect(tabbedWorkspace.sidebarSessionPanelOrder == [terminalID])
+        var malformedWorkspace = workspace
+        malformedWorkspace.sidebarSessionPanelOrder = suppliedOrder
+        let decodedWorkspace = try JSONDecoder().decode(WorkspaceState.self, from: JSONEncoder().encode(malformedWorkspace))
+        #expect(decodedWorkspace.sidebarSessionPanelOrder == [terminalID])
+
+        var state = AppState.bootstrap()
+        state.workspacesByID = [workspace.id: malformedWorkspace]
+        var workspaceSnapshot = try #require(WorkspaceLayoutSnapshot(state: state).workspacesByID[workspace.id])
+        #expect(workspaceSnapshot.sidebarSessionPanelOrder == [terminalID])
+        let constructedSnapshot = WorkspaceLayoutWorkspaceSnapshot(
+            id: workspace.id, title: workspace.title, selectedTabID: workspaceSnapshot.selectedTabID,
+            tabIDs: workspaceSnapshot.tabIDs, tabsByID: workspaceSnapshot.tabsByID,
+            sidebarSessionPanelOrder: suppliedOrder
+        )
+        #expect(constructedSnapshot.sidebarSessionPanelOrder == [terminalID])
+        workspaceSnapshot.sidebarSessionPanelOrder = suppliedOrder
+        let decodedSnapshot = try JSONDecoder().decode(WorkspaceLayoutWorkspaceSnapshot.self, from: JSONEncoder().encode(workspaceSnapshot))
+        #expect(decodedSnapshot.sidebarSessionPanelOrder == [terminalID])
+    }
+
+    @Test
+    func legacyWorkspaceAndSnapshotDecodeWithoutSidebarOrder() throws {
+        let workspace = WorkspaceState.bootstrap()
+        let snapshot = WorkspaceLayoutSnapshot(state: AppState.bootstrap())
+        let workspaceSnapshot = try #require(snapshot.workspacesByID.values.first)
+        // Exercise both the modern tabs shape and the original single-tab mirrors.
+        for removeTabs in [false, true] {
+            var workspaceJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(workspace)) as? [String: Any])
+            var snapshotJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(workspaceSnapshot)) as? [String: Any])
+            workspaceJSON.removeValue(forKey: "sidebarSessionPanelOrder")
+            snapshotJSON.removeValue(forKey: "sidebarSessionPanelOrder")
+            if removeTabs {
+                for key in ["selectedTabID", "tabIDs", "tabsByID"] {
+                    workspaceJSON.removeValue(forKey: key)
+                    snapshotJSON.removeValue(forKey: key)
+                }
+            }
+            let decodedWorkspace = try JSONDecoder().decode(WorkspaceState.self, from: JSONSerialization.data(withJSONObject: workspaceJSON))
+            let decodedSnapshot = try JSONDecoder().decode(WorkspaceLayoutWorkspaceSnapshot.self, from: JSONSerialization.data(withJSONObject: snapshotJSON))
+            #expect(decodedWorkspace.sidebarSessionPanelOrder.isEmpty)
+            #expect(decodedSnapshot.sidebarSessionPanelOrder.isEmpty)
+        }
+    }
+}

@@ -41,6 +41,10 @@ When a change needs real shortcut tracing or only a screenshot/state artifact, p
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.
 
+App discovery has a 60-second startup timeout; ordinary protocol requests keep their 20-second timeout. The runner supports legacy `computer-use` events and current `cua_repl` events. For the current runtime, unattended approval is limited to the Computer Use connector's empty-form app-access requests for native inspection, clicking, dragging, scrolling, keyboard, and text-entry operations for `com.GiantThings.toastty`; other requests are declined. This grants access for the isolated test request and does not save an always-allow permission. If the default model is unavailable to the signed-in account, use the existing invocation-only `CODEX_COMPUTER_USE_MODEL` override with a model available to that account.
+
+Run `node --test Tests/RemoteScripts/ComputerUseProtocolTests.mjs` locally to check approval boundaries and server-name compatibility without connecting to an app or remote host. The full `scripts/automation/check.sh` gate also includes these tests.
+
 ## Remote Xcode Tests
 
 Agent-driven `xcodebuild test` runs should start with:
