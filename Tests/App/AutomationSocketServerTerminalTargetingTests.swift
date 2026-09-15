@@ -179,17 +179,18 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
                     at: Date(timeIntervalSince1970: 1_700_000_000)
                 )
             }
-            var capturedText: String?
-            var capturedSubmit = false
-            var capturedPanelID: UUID?
-            var capturedFocusPolicy: TerminalInputFocusPolicy?
+            let capturedDelivery = await MainActor.run { CapturedTerminalDelivery() }
             await MainActor.run {
                 harness.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting {
                     text, submit, panelID, focusPolicy in
-                    capturedText = text
-                    capturedSubmit = submit
-                    capturedPanelID = panelID
-                    capturedFocusPolicy = focusPolicy
+                    MainActor.assumeIsolated {
+                        capturedDelivery.record(
+                            text: text,
+                            submit: submit,
+                            panelID: panelID,
+                            focusPolicy: focusPolicy
+                        )
+                    }
                     return true
                 }
             }
@@ -206,10 +207,11 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
             )
 
             XCTAssertTrue(response.ok)
-            XCTAssertEqual(capturedText, "background command")
-            XCTAssertTrue(capturedSubmit)
-            XCTAssertEqual(capturedPanelID, backgroundPanelID)
-            XCTAssertEqual(capturedFocusPolicy, .preserveFirstResponder)
+            let delivery = await MainActor.run { capturedDelivery.snapshot() }
+            XCTAssertEqual(delivery.text, "background command")
+            XCTAssertTrue(delivery.submit)
+            XCTAssertEqual(delivery.panelID, backgroundPanelID)
+            XCTAssertEqual(delivery.focusPolicy, .preserveFirstResponder)
             let finalState = await MainActor.run { harness.store.state }
             XCTAssertEqual(finalState.workspacesByID[workspaceID]?.selectedTabID, selectedTab.id)
             XCTAssertEqual(finalState.workspacesByID[workspaceID]?.focusedPanelID, selectedPanelID)
@@ -238,10 +240,10 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
                     at: Date(timeIntervalSince1970: 1_700_000_001)
                 )
             }
-            var deliveryCount = 0
+            let deliveryProbe = await MainActor.run { DeliveryCountProbe() }
             await MainActor.run {
                 harness.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
-                    deliveryCount += 1
+                    MainActor.assumeIsolated { deliveryProbe.increment() }
                     return true
                 }
             }
@@ -260,6 +262,7 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
 
             XCTAssertFalse(response.ok)
             XCTAssertEqual(response.errorMessage, "expectedSessionID does not match the active managed session for panelID \(panelID.uuidString)")
+            let deliveryCount = await MainActor.run { deliveryProbe.value }
             XCTAssertEqual(deliveryCount, 0)
         }
     }
@@ -320,4 +323,42 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
         }
     }
 
+}
+
+@MainActor
+private final class CapturedTerminalDelivery {
+    struct Value: Sendable {
+        let text: String?
+        let submit: Bool
+        let panelID: UUID?
+        let focusPolicy: TerminalInputFocusPolicy?
+    }
+
+    private var value = Value(text: nil, submit: false, panelID: nil, focusPolicy: nil)
+
+    func record(
+        text: String,
+        submit: Bool,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) {
+        value = Value(text: text, submit: submit, panelID: panelID, focusPolicy: focusPolicy)
+    }
+
+    func snapshot() -> Value {
+        return value
+    }
+}
+
+@MainActor
+private final class DeliveryCountProbe {
+    private var count = 0
+
+    func increment() {
+        count += 1
+    }
+
+    var value: Int {
+        return count
+    }
 }
