@@ -66,7 +66,7 @@ shared task record. Scratchpad presents the current project state.
   work for duplication, shared assumptions, conflicts, and ordering. Record the
   task head, target head, and relevant peer heads examined. Git mergeability
   does not prove semantic compatibility. State discovery/coverage limits.
-- Use `worktree-done` for detailed assessment and authorized landing/cleanup.
+- Use `finisher` for detailed assessment and authorized landing/cleanup.
   If absent, continue observation and repository-supported operations; report
   the missing cleanup workflow. The original parent need not be present.
 - Return actionable findings when communication/fixes are authorized; otherwise
@@ -76,7 +76,7 @@ shared task record. Scratchpad presents the current project state.
   require reassessing affected interactions, not every unrelated task. Use a
   disposable integration check only for a specific risk and candidate order.
   Refresh evidence before authorized integration. Required independent review
-  remains a merge gate. Follow `worktree-done` for human testing: it follows
+  remains a merge gate. Follow `finisher` for human testing: it follows
   deployment unless the user explicitly requested a pre-merge manual check.
 
 ## Maintain the project dashboard
@@ -113,7 +113,7 @@ reconciling local/remote history or preparing a combined release. It covers
 unpublished local commits, PR merge correspondence, batching, and partial failure.
 
 When final actions are authorized, use the repository's integration and release
-workflows and `worktree-done` for assigned local cleanup. Keep integration,
+workflows and `finisher` for assigned local cleanup. Keep integration,
 deployment, and cleanup outcomes distinct. Cleanup must not erase the record of
 merged work that still needs shipping. When authority or evidence is missing,
 keep observing independent work and present the concrete pending decision.

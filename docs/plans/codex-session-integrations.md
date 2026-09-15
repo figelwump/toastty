@@ -1,7 +1,7 @@
 # Managed Codex and Claude Skills Plan
 
 > September 2026 update: Plugin 0.4.2 keeps four built-in app skills.
-> `worktree-create` and `worktree-done` are now opt-in personal workflows in
+> `worktree-create` and `finisher` are now opt-in personal workflows in
 > [examples/skills/](../../examples/skills/README.md). Earlier packaging and
 > exclusion decisions below are historical; see the
 > [current workflow](../running-agents.md#worktree-tasks).

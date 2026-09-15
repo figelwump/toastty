@@ -1,9 +1,9 @@
 ---
-name: worktree-done
+name: finisher
 description: Review, integrate, or finish a Toastty worktree task or PR from a session outside the task. When no target is named, discover open PRs and local worktrees with open Toastty workspaces in the current repository. Assess each task, then perform authorized integration and local task cleanup.
 ---
 
-# Worktree Done
+# Finisher
 
 This example personal skill assesses and, when authorized, lands a task using
 its repository's integration and verification rules. The finishing session can
@@ -14,7 +14,7 @@ the target to process the discovered tasks in the current repository.
 ## Resolve the task and authority
 
 - Require `TOASTTY_CLI_PATH` and `TOASTTY_SESSION_ID`. If absent, stop with
-  `error: worktree-done must run inside a Toastty-managed agent session`.
+  `error: finisher must run inside a Toastty-managed agent session`.
   Use `toastty-capabilities` to discover the running CLI's supported queries
   and actions before controlling sessions or workspaces.
 - Resolve the task using the durable local launch record,

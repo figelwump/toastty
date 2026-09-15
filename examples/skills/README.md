@@ -13,7 +13,7 @@ opt-in examples, not shipped skills or automatically loaded repository skills.
   and assigned local tasks during a working session, maintains a Scratchpad
   dashboard, reviews interactions, and coordinates authorized integration,
   pushing, deployment, and cleanup through repository workflows.
-- [worktree-done](worktree-done/SKILL.md) assesses tasks from a session outside
+- [finisher](finisher/SKILL.md) assesses tasks from a session outside
   the task, verifies authorized integration, and performs authorized cleanup.
   Without a named target, it discovers open PRs and local worktrees with open
   Toastty workspaces in the current repository. Review-only requests stop at
@@ -54,7 +54,7 @@ already landed through PR merges, and uses existing release tooling to prepare a
 combined plan with exact revisions, targets, and order. It does not automatically
 publish every local branch or treat a partial release as completion.
 
-Use `worktree-done` for a one-off assessment or authorized integration and cleanup,
+Use `finisher` for a one-off assessment or authorized integration and cleanup,
 or let the coordinator invoke it within its assigned authority. A request to watch
 or review does not authorize PR comments, agent instructions, merges, pushes,
 cleanup, or production changes. Existing authorization persists within its scope.
@@ -78,7 +78,7 @@ import shutil
 
 source = Path("examples/skills")
 destination = Path.home() / ".toastty/skills"
-names = ["worktree-create", "worktree-done", "project-orchestrator"]
+names = ["worktree-create", "finisher", "project-orchestrator"]
 for name in names:
     target = destination / name
     if target.exists() or target.is_symlink():
@@ -96,7 +96,7 @@ The folder name and the frontmatter `name` must match if you rename a skill.
 Run `"$TOASTTY_CLI_PATH" setup skills list` in a Toastty-managed session for a
 read-only inventory, then start a new managed session to load the new packages.
 Codex exposes them as `toastty-user:worktree-create`,
-`toastty-user:worktree-done`, and `toastty-user:project-orchestrator`. An older
+`toastty-user:finisher`, and `toastty-user:project-orchestrator`. An older
 Toastty build may still expose its shipped
 `toastty:worktree-create`; choose the personal version until the app is updated.
 

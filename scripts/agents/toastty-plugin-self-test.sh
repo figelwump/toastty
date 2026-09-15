@@ -84,7 +84,7 @@ user_plugin = user_marketplace / "plugins/toastty-user"
 (user_plugin / ".codex-plugin").mkdir(parents=True)
 manifest["name"] = "toastty-user"
 (user_plugin / ".codex-plugin/plugin.json").write_text(json.dumps(manifest))
-example_names = ("project-orchestrator", "worktree-create", "worktree-done")
+example_names = ("project-orchestrator", "worktree-create", "finisher")
 for name in example_names:
     shutil.copytree(examples / name, user_plugin / "skills" / name)
 marketplace = json.loads((repo_root / ".agents/plugins/marketplace.json").read_text())

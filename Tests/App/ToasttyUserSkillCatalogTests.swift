@@ -334,7 +334,7 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("examples/skills", isDirectory: true)
-        let names = ["project-orchestrator", "worktree-create", "worktree-done"]
+        let names = ["finisher", "project-orchestrator", "worktree-create"]
         for name in names {
             try FileManager.default.copyItem(
                 at: examplesURL.appendingPathComponent(name),

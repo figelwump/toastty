@@ -428,7 +428,7 @@ plan. No new deployment engine is provided. A watch/review request alone does no
 authorize messages, publication, integration, cleanup, or deployment.
 
 After required review and automated verification, an authorized coordinator or
-another session can use `worktree-done` to integrate the named task, validate the
+another session can use `finisher` to integrate the named task, validate the
 landed result, and clean up its assigned local resources. Without a named target,
 it discovers open PRs and local worktrees with open Toastty workspaces in the
 current repository. Discovery does not authorize integration or cleanup. Human
@@ -456,7 +456,7 @@ See [examples/skills/](../examples/skills/README.md) for complete worktree and p
 packages, installation instructions, and guidance on customizing
 their workflow. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
 it is no longer included in the shipped plugin. Existing custom copies are yours
-to keep and edit. `worktree-done` and `project-orchestrator` are also personal examples.
+to keep and edit. `finisher` and `project-orchestrator` are also personal examples.
 
 - **Authoring**: create `~/.toastty/skills/<name>/SKILL.md` with YAML
   frontmatter containing `name` and a non-empty `description`. The directory
