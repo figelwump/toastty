@@ -138,6 +138,132 @@ final class AutomationSocketServerTerminalTargetingTests: AutomationSocketServer
         }
     }
 
+    func testTerminalSendTextChecksExpectedSessionInUnselectedTabWithoutChangingSelection() async throws {
+        var backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
+        let backgroundPanelID = try XCTUnwrap(backgroundTab.focusedPanelID)
+        let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
+        let selectedPanelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "One",
+            selectedTabID: selectedTab.id,
+            tabIDs: [backgroundTab.id, selectedTab.id],
+            tabsByID: [backgroundTab.id: backgroundTab, selectedTab.id: selectedTab]
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+
+        try await withAutomationHarness(state: state) { harness in
+            let sessionID = "background-session"
+            await MainActor.run {
+                harness.sessionRuntimeStore.startSession(
+                    sessionID: sessionID,
+                    agent: .codex,
+                    panelID: backgroundPanelID,
+                    windowID: windowID,
+                    workspaceID: workspaceID,
+                    cwd: "/tmp/repo",
+                    repoRoot: "/tmp/repo",
+                    at: Date(timeIntervalSince1970: 1_700_000_000)
+                )
+            }
+            var capturedText: String?
+            var capturedSubmit = false
+            var capturedPanelID: UUID?
+            var capturedFocusPolicy: TerminalInputFocusPolicy?
+            await MainActor.run {
+                harness.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting {
+                    text, submit, panelID, focusPolicy in
+                    capturedText = text
+                    capturedSubmit = submit
+                    capturedPanelID = panelID
+                    capturedFocusPolicy = focusPolicy
+                    return true
+                }
+            }
+
+            let response = try sendRequest(
+                command: "automation.terminal_send_text",
+                payload: [
+                    "panelID": backgroundPanelID.uuidString,
+                    "text": "background command",
+                    "submit": true,
+                    "expectedSessionID": sessionID,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(capturedText, "background command")
+            XCTAssertTrue(capturedSubmit)
+            XCTAssertEqual(capturedPanelID, backgroundPanelID)
+            XCTAssertEqual(capturedFocusPolicy, .preserveFirstResponder)
+            let finalState = await MainActor.run { harness.store.state }
+            XCTAssertEqual(finalState.workspacesByID[workspaceID]?.selectedTabID, selectedTab.id)
+            XCTAssertEqual(finalState.workspacesByID[workspaceID]?.focusedPanelID, selectedPanelID)
+        }
+    }
+
+    func testTerminalSendTextRejectsStoppedExpectedSessionBeforeSocketDelivery() async throws {
+        let fixture = makeSingleWindowFixture()
+        let panelID = try XCTUnwrap(fixture.state.workspacesByID[fixture.workspaceID]?.focusedPanelID)
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let sessionID = "stopped-session"
+            await MainActor.run {
+                harness.sessionRuntimeStore.startSession(
+                    sessionID: sessionID,
+                    agent: .codex,
+                    panelID: panelID,
+                    windowID: fixture.windowID,
+                    workspaceID: fixture.workspaceID,
+                    cwd: "/tmp/repo",
+                    repoRoot: "/tmp/repo",
+                    at: Date(timeIntervalSince1970: 1_700_000_000)
+                )
+                harness.sessionRuntimeStore.stopSession(
+                    sessionID: sessionID,
+                    at: Date(timeIntervalSince1970: 1_700_000_001)
+                )
+            }
+            var deliveryCount = 0
+            await MainActor.run {
+                harness.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
+                    deliveryCount += 1
+                    return true
+                }
+            }
+
+            let response = try sendRequest(
+                command: "automation.terminal_send_text",
+                payload: [
+                    "panelID": panelID.uuidString,
+                    "text": "must not send",
+                    "submit": true,
+                    "expectedSessionID": sessionID,
+                    "allowUnavailable": true,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorMessage, "expectedSessionID does not match the active managed session for panelID \(panelID.uuidString)")
+            XCTAssertEqual(deliveryCount, 0)
+        }
+    }
+
     func testTerminalStateReturnsOwningWindowForPanelInAnotherWindow() async throws {
         let firstFixture = makeSingleWindowFixture()
         var secondTab = WorkspaceTabState.bootstrap(terminalTitle: "Second Window Terminal")
