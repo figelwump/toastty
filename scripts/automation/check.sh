@@ -16,6 +16,7 @@ TAILSCALE_SERVE_AUTH_PROBE_SELF_TEST="$ROOT_DIR/scripts/automation/tailscale-ser
 CODEX_PLUGIN_SELF_TEST="$ROOT_DIR/scripts/agents/toastty-plugin-self-test.sh"
 CODEX_PLUGIN_VALIDATOR="$ROOT_DIR/scripts/agents/validate-toastty-plugin.py"
 REMOTE_WEB_CLIENT_TEST="$ROOT_DIR/Tests/RemoteWebClient/RemoteWebClientReconnectTests.mjs"
+COMPUTER_USE_PROTOCOL_TEST="$ROOT_DIR/Tests/RemoteScripts/ComputerUseProtocolTests.mjs"
 MANIFEST_VALIDATION_VERSION="9.9.9"
 MANIFEST_VALIDATION_BUILD_NUMBER="42"
 MANIFEST_VALIDATE_LOG=""
@@ -468,6 +469,10 @@ if ! "$TAILSCALE_SERVE_AUTH_PROBE_SELF_TEST"; then
 fi
 
 if ! "$CODEX_PLUGIN_SELF_TEST"; then
+  exit 10
+fi
+
+if ! node --test "$COMPUTER_USE_PROTOCOL_TEST"; then
   exit 10
 fi
 
