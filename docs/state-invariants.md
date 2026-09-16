@@ -92,6 +92,10 @@ These behaviors are intentional current contract, not incidental implementation 
 
 During `WorkspaceState` decode:
 
+- Missing or `null` `sidebarSessionPanelOrder` values default to `[]`. Duplicate
+  IDs and IDs that no longer refer to terminal panels in the workspace are
+  removed, preserving the remaining order. Initialization and layout-snapshot
+  decode apply the same normalization.
 - `unreadWorkspaceNotificationCount` is clamped to `>= 0`.
 - missing `hasBeenVisited` values default to `true` for compatibility with
   older persisted state.
@@ -144,6 +148,10 @@ During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 - restored terminal panels keep `launchWorkingDirectory`
 - restored terminal panels keep `profileBinding` when present so profile-backed
   panes can resume with the same terminal profile ID after restart
+- workspace `sidebarSessionPanelOrder` is restored independently of tab and
+  pane layout order
+- restored terminal panels keep `agentReadPolicy`; missing values allow reads
+  for compatibility with older snapshots
 - restored terminal panels start with blank live `cwd` and wait for authoritative
   runtime metadata
 
@@ -152,6 +160,8 @@ During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 These behaviors are current reducer contract, but `StateValidator` does not check them.
 
 - Panel removal collapses the layout tree instead of leaving placeholders.
+- Workspace commits normalize `sidebarSessionPanelOrder`, removing closed or
+  moved-out terminal panels without changing tab or pane layout order.
 - Closing the last panel in a workspace removes the workspace, and removing the last
   workspace in a window removes the window for valid reducer-managed state.
 - Reducer paths generally keep `selectedWindowID` pointing at a live window for valid
