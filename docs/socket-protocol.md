@@ -783,7 +783,7 @@ Behavior:
 Launches a configured agent profile into a resolved terminal panel. Toastty
 records the baseline session in-app before injecting the provider command and
 passes `TOASTTY_*` launch context with the command. For first-party Claude,
-Codex, OpenCode, MiMo Code, and Pi launches, Toastty also generates or uses
+Codex, Cursor, OpenCode, MiMo Code, and Pi launches, Toastty also generates or uses
 helpers that call `toastty session ingest-agent-event` so provider events become
 session updates automatically. If the agent does not emit `session.stop`,
 Toastty falls back to stopping the session when the panel returns to an
@@ -800,8 +800,9 @@ Launch context environment:
 - `TOASTTY_REPO_ROOT` when Toastty can infer a repository root from the resolved
   launch working directory
 - `TOASTTY_AGENT` with the managed provider ID
-- `TOASTTY_SKILLS_ROOT` for supported managed Codex and Claude Code launches,
-  pointing at the delivered Toastty plugin's `skills/` directory
+- `TOASTTY_SKILLS_ROOT` for supported managed Codex, Claude Code, Cursor,
+  OpenCode, MiMo Code, and Pi launches, pointing at the delivered Toastty
+  plugin's `skills/` directory; absent when the shipped skills were not injected
 - `TOASTTY_USER_SKILLS_ROOT` with the user skill-package source directory
   (`~/.toastty/skills`, or its runtime-isolated equivalent)
 

@@ -169,6 +169,20 @@ configure a script you trust. Toastty logs hook invocations, nonzero exits,
 timeouts, and launch failures to its structured local log. See
 [Agent Hooks](agent-hooks.md).
 
+## Agent reads of terminal output
+
+Agents can read terminal output through Toastty's automation socket in workspaces
+they can automate. Reads are allowed by default. To disable reads by other
+sessions, right-click the terminal header and turn off **Allow Agents to Read
+This Terminal**. The setting persists with the workspace layout; the terminal's
+own active managed session remains exempt.
+
+An eye indicator in the terminal header shows reads by other sessions. Hover
+over it to see the readers and recent read activity, or click it to change the
+read setting. A crossed-out eye marks a terminal with reads disabled. This
+setting controls Toastty's terminal-read API, not the permissions of processes
+running on your Mac.
+
 ## What Toastty reads locally for agent status
 
 - For managed Codex sessions, Toastty reads the per-launch TUI session record it
