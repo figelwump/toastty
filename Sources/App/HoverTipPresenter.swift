@@ -187,7 +187,7 @@ struct SessionRowHoverTipCard: View {
             if let bodyText = model.bodyText {
                 // The row truncates the summary to one line; the card is where
                 // the rest of it lives.
-                Text(bodyText)
+                Text(SidebarSessionPresentation.sessionSummaryAttributedText(bodyText))
                     .font(.system(size: 11, weight: .regular))
                     .lineSpacing(1.5)
                     .foregroundStyle(ToastyTheme.hoverTipBodyText)
@@ -545,10 +545,14 @@ final class HoverTipPresenter {
 }
 
 extension View {
+    /// `isHovering` supplies the hover state from outside. Pass it when an
+    /// AppKit overlay owns hit-testing for this view, because SwiftUI's own
+    /// `.onHover` never fires underneath one. Omit it otherwise.
     func hoverTip<TipContent: View>(
         id: AnyHashable,
         refreshID: AnyHashable? = nil,
         placement: HoverTipPlacement = .below,
+        isHovering: Bool? = nil,
         @ViewBuilder content: @escaping () -> TipContent
     ) -> some View {
         modifier(
@@ -556,6 +560,7 @@ extension View {
                 id: id,
                 refreshID: refreshID,
                 placement: placement,
+                externalHoverState: isHovering,
                 tipContent: content
             )
         )
@@ -568,6 +573,7 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
     let id: AnyHashable
     let refreshID: AnyHashable?
     let placement: HoverTipPlacement
+    let externalHoverState: Bool?
     let tipContent: () -> TipContent
 
     @State private var hoverTask: Task<Void, Never>?
@@ -583,9 +589,12 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
                 }
                 .allowsHitTesting(false)
             }
-            .onHover { hovering in
-                updateHoverState(hovering)
-            }
+            .modifier(
+                HoverTipStateSource(
+                    externalHoverState: externalHoverState,
+                    onHoverStateChanged: updateHoverState
+                )
+            )
             .onChange(of: anchorScreenRect) { _, _ in
                 refreshVisibleTip()
             }
@@ -663,6 +672,27 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
             return
         }
         showTip(anchorScreenRect: anchorScreenRect)
+    }
+}
+
+/// Hover either comes from SwiftUI or from the caller. Keeping the two in one
+/// modifier would leave a dead `.onHover` attached in the external case, and a
+/// dead `.onHover` still competes for hit-testing.
+private struct HoverTipStateSource: ViewModifier {
+    let externalHoverState: Bool?
+    let onHoverStateChanged: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        if let externalHoverState {
+            content
+                .onChange(of: externalHoverState, initial: true) { _, hovering in
+                    onHoverStateChanged(hovering)
+                }
+        } else {
+            content.onHover { hovering in
+                onHoverStateChanged(hovering)
+            }
+        }
     }
 }
 

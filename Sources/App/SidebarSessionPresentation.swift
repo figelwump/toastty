@@ -394,7 +394,7 @@ enum SidebarSessionPresentation {
             components.append(workspaceScopeHelpText)
         }
         if let detailText {
-            components.append(detailText)
+            components.append(sessionSummaryPlainText(detailText))
         }
         if let cwd {
             components.append(cwd)
@@ -550,6 +550,74 @@ enum SidebarSessionPresentation {
             components.append(elapsedText)
         }
         return components.joined(separator: ", ")
+    }
+
+    /// Provider summaries arrive as Markdown. SwiftUI parses Markdown only
+    /// from `LocalizedStringKey` literals, so a runtime `String` renders
+    /// `**bold**` and backticks verbatim.
+    ///
+    /// Only inline syntax is interpreted: a sidebar row is one truncated line,
+    /// so block structure cannot survive there anyway, and a leading bullet or
+    /// heading marker is stripped rather than shown. Links keep their text and
+    /// lose the link itself, because a row is not somewhere to click through.
+    static func sessionSummaryAttributedText(_ text: String) -> AttributedString {
+        let stripped = strippedLeadingBlockMarkers(text)
+        guard stripped.isEmpty == false else { return AttributedString(text) }
+        guard var attributed = try? AttributedString(
+            markdown: stripped,
+            options: AttributedString.MarkdownParsingOptions(
+                allowsExtendedAttributes: false,
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        ) else {
+            return AttributedString(stripped)
+        }
+        for run in attributed.runs where run.link != nil {
+            attributed[run.range].link = nil
+        }
+        return attributed
+    }
+
+    /// The same text with its Markdown resolved away, for accessibility labels
+    /// and anywhere else that needs characters rather than styling.
+    static func sessionSummaryPlainText(_ text: String) -> String {
+        String(sessionSummaryAttributedText(text).characters)
+    }
+
+    /// Agents open a summary with a bullet, a heading, or a quote often enough
+    /// that the marker is worth removing; nested markers are stripped too.
+    private static func strippedLeadingBlockMarkers(_ text: String) -> String {
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Bounded so a line of nothing but markers cannot spin here.
+        for _ in 0 ..< 4 {
+            guard let shortened = droppingLeadingBlockMarker(result) else { break }
+            result = shortened
+        }
+        return result
+    }
+
+    private static func droppingLeadingBlockMarker(_ text: String) -> String? {
+        for marker in ["- ", "* ", "+ ", "> "] where text.hasPrefix(marker) {
+            return String(text.dropFirst(marker.count))
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        let headingHashes = text.prefix { $0 == "#" }
+        if headingHashes.isEmpty == false,
+           text.dropFirst(headingHashes.count).hasPrefix(" ") {
+            return String(text.dropFirst(headingHashes.count))
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        let orderedDigits = text.prefix(while: \.isNumber)
+        if orderedDigits.isEmpty == false,
+           text.dropFirst(orderedDigits.count).hasPrefix(". ") {
+            return String(text.dropFirst(orderedDigits.count + 2))
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        return nil
     }
 
     static func normalizedSidebarHelperText(_ value: String?) -> String? {

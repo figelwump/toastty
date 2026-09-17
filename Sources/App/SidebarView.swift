@@ -1316,14 +1316,6 @@ struct SidebarView: View {
                             row
                         }
                         .buttonStyle(.plain)
-                        .onHover { isHovering in
-                            guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
-                            if isHovering {
-                                hoveredPanelID = workspaceSessionStatus.panelID
-                            } else if hoveredPanelID == workspaceSessionStatus.panelID {
-                                hoveredPanelID = nil
-                            }
-                        }
                     } else {
                         row
                     }
@@ -1334,7 +1326,8 @@ struct SidebarView: View {
                 .hoverTip(
                     id: sessionRowID,
                     refreshID: hoverTipModel,
-                    placement: .trailing(gap: Self.sessionHoverTipTrailingGap)
+                    placement: .trailing(gap: Self.sessionHoverTipTrailingGap),
+                    isHovering: isHovered
                 ) {
                     SessionRowHoverTipCard(model: hoverTipModel)
                 },
@@ -1897,8 +1890,23 @@ struct SidebarView: View {
                 if sessionPointerRowID == rowID {
                     cancelSessionInteraction()
                 }
+            },
+            onHoverChanged: { isHovering in
+                updateSessionRowHover(panelID: rowID.panelID, isHovering: isHovering)
             }
         )
+    }
+
+    /// This region overlays the whole row and claims hit-testing, so a
+    /// SwiftUI `.onHover` beneath it never fires. It is the row's only hover
+    /// signal: the hover background and the hover card both read from here.
+    private func updateSessionRowHover(panelID: UUID, isHovering: Bool) {
+        guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
+        if isHovering {
+            hoveredPanelID = panelID
+        } else if hoveredPanelID == panelID {
+            hoveredPanelID = nil
+        }
     }
 
     private func sessionDropTarget(
@@ -3094,7 +3102,7 @@ struct SidebarView: View {
         statusKind: SessionStatusKind,
         showsUnreadSessionAccent: Bool
     ) -> Text {
-        styledSessionText(
+        styledSessionSummaryText(
             text,
             font: ToastyTheme.workspaceSessionPrimaryFont(
                 weight: SidebarSessionPresentation.sessionAgentFontWeight(
@@ -3110,7 +3118,7 @@ struct SidebarView: View {
         statusKind: SessionStatusKind,
         showsUnreadSessionAccent: Bool
     ) -> Text {
-        styledSessionText(
+        styledSessionSummaryText(
             text,
             font: ToastyTheme.workspaceSessionDetailFont(
                 weight: SidebarSessionPresentation.sessionBodyFontWeight(
@@ -3127,6 +3135,16 @@ struct SidebarView: View {
         usesItalic: Bool
     ) -> Text {
         let base = Text(text).font(font)
+        return usesItalic ? base.italic() : base
+    }
+
+    /// Summaries carry provider Markdown; names and titles do not.
+    static func styledSessionSummaryText(
+        _ text: String,
+        font: Font,
+        usesItalic: Bool
+    ) -> Text {
+        let base = Text(SidebarSessionPresentation.sessionSummaryAttributedText(text)).font(font)
         return usesItalic ? base.italic() : base
     }
 

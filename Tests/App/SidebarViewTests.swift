@@ -108,6 +108,76 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(leftClampedOrigin, CGPoint(x: 0, y: 394))
     }
 
+    /// The pointer-interaction overlay claims hit-testing for the whole row,
+    /// so a SwiftUI `.onHover` beneath it never fires. Drive hover the way the
+    /// app receives it — through that overlay's tracking area.
+    func testHoveringASessionRowHighlightsItAndOpensItsHoverCard() throws {
+        let harness = try makeSidebarHarness(
+            sessionID: "hover-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle", detail: "Reviewing the change"),
+            displayTitleOverride: "Review the sidebar change"
+        )
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            harness.window.orderOut(nil)
+        }
+
+        let rowID = SidebarSessionPresentation.SidebarSessionRowID(
+            workspaceID: harness.workspaceID,
+            sessionID: "hover-row",
+            panelID: harness.panelID
+        )
+        XCTAssertFalse(HoverTipPresenter.shared.isVisible(id: rowID))
+
+        let region = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "hover-row")
+        let restingBitmap = try renderedBitmap(for: harness.hostingView)
+
+        let enterEvent = try XCTUnwrap(pointerMouseEvent(
+            type: .mouseMoved,
+            view: region,
+            at: NSPoint(x: region.bounds.midX, y: region.bounds.midY),
+            timestamp: 0,
+            eventNumber: 0
+        ))
+        region.mouseEntered(with: enterEvent)
+        pumpMainRunLoop()
+
+        let hoveredBitmap = try renderedBitmap(for: harness.hostingView)
+        XCTAssertGreaterThan(
+            try differingPixelCount(between: restingBitmap, and: hoveredBitmap),
+            0,
+            "Hovering a session row should give it the hover background"
+        )
+
+        // The card waits out its warm-up before presenting.
+        pumpMainRunLoop(duration: 0.8)
+        XCTAssertTrue(
+            HoverTipPresenter.shared.isVisible(id: rowID),
+            "Hovering a session row should open its hover card"
+        )
+
+        let exitEvent = try XCTUnwrap(pointerMouseEvent(
+            type: .mouseMoved,
+            view: region,
+            at: NSPoint(x: region.bounds.midX, y: region.bounds.midY),
+            timestamp: 1,
+            eventNumber: 1
+        ))
+        region.mouseExited(with: exitEvent)
+        pumpMainRunLoop()
+
+        XCTAssertFalse(
+            HoverTipPresenter.shared.isVisible(id: rowID),
+            "Leaving the row should hide its hover card"
+        )
+        let releasedBitmap = try renderedBitmap(for: harness.hostingView)
+        XCTAssertEqual(
+            try differingPixelCount(between: restingBitmap, and: releasedBitmap),
+            0,
+            "Leaving the row should drop the hover background"
+        )
+    }
+
     func testSessionRowBadgeRendersShortLabelWhileAccessibilityKeepsSpokenWording() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "approval-badge-row",

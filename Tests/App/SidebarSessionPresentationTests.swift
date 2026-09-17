@@ -624,6 +624,91 @@ final class SidebarSessionPresentationTests: XCTestCase {
         )
     }
 
+    func testSessionSummaryResolvesInlineMarkdownAndKeepsPlainCharacters() {
+        let bold = SidebarSessionPresentation.sessionSummaryAttributedText(
+            "**emptyos** — development repo for a personal computer"
+        )
+        XCTAssertEqual(
+            String(bold.characters),
+            "emptyos — development repo for a personal computer",
+            "Emphasis markers should resolve rather than render literally"
+        )
+        XCTAssertTrue(
+            bold.runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true },
+            "The emphasized span should carry a strong presentation intent"
+        )
+
+        let code = SidebarSessionPresentation.sessionSummaryAttributedText(
+            "The last commit is `77c2f8b` (`Prepare EmptyOS`)"
+        )
+        XCTAssertEqual(String(code.characters), "The last commit is 77c2f8b (Prepare EmptyOS)")
+        XCTAssertTrue(
+            code.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true },
+            "A backticked span should carry a code presentation intent"
+        )
+
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionSummaryPlainText("They are in `/Users/vishal/Giant`"),
+            "They are in /Users/vishal/Giant"
+        )
+    }
+
+    func testSessionSummaryStripsLeadingBlockMarkersAndLeavesOrdinaryTextAlone() {
+        for (input, expected) in [
+            ("- Fixed the missing profile", "Fixed the missing profile"),
+            ("* Fixed the missing profile", "Fixed the missing profile"),
+            ("+ Fixed the missing profile", "Fixed the missing profile"),
+            ("## Release notes drafted", "Release notes drafted"),
+            ("> Waiting on approval", "Waiting on approval"),
+            ("1. Ran the gate", "Ran the gate"),
+            ("> - Nested marker", "Nested marker"),
+            ("Plain summary with no markup", "Plain summary with no markup"),
+            // Intraword underscores are not emphasis in CommonMark, so an
+            // identifier or path must survive untouched.
+            ("Read session_index.jsonl for the thread name", "Read session_index.jsonl for the thread name"),
+            ("2026-09-17 15:04 - done", "2026-09-17 15:04 - done"),
+        ] {
+            XCTAssertEqual(
+                SidebarSessionPresentation.sessionSummaryPlainText(input),
+                expected,
+                "Unexpected summary text for \(input)"
+            )
+        }
+    }
+
+    func testSessionSummaryKeepsLinkTextWithoutTheLink() {
+        let linked = SidebarSessionPresentation.sessionSummaryAttributedText(
+            "Opened [PR #11](https://example.com/pull/11)"
+        )
+        XCTAssertEqual(String(linked.characters), "Opened PR #11")
+        XCTAssertTrue(
+            linked.runs.allSatisfy { $0.link == nil },
+            "A sidebar row is not somewhere to click through, so the link is dropped"
+        )
+    }
+
+    func testSessionSummaryPreservesAPlaceholderAndSurvivesBrokenMarkup() {
+        XCTAssertEqual(String(SidebarSessionPresentation.sessionSummaryAttributedText(" ").characters), " ")
+        XCTAssertEqual(String(SidebarSessionPresentation.sessionSummaryAttributedText("").characters), "")
+        // An unbalanced marker is left as characters rather than dropping the text.
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionSummaryPlainText("Working on **the thing"),
+            "Working on **the thing"
+        )
+    }
+
+    func testSessionAccessibilityLabelReadsTheSummaryNotItsMarkup() {
+        let label = SidebarSessionPresentation.sessionAccessibilityLabel(
+            agentName: "Repository summary",
+            chipKind: .ready,
+            detailText: "**emptyos** — development repo",
+            cwd: nil,
+            isLaterFlagged: false
+        )
+        XCTAssertTrue(label.contains("emptyos — development repo"), label)
+        XCTAssertFalse(label.contains("**"), label)
+    }
+
     func testSessionRowShapeLeadsWithNameAndFallsBackThroughSummaryToAgentName() {
         XCTAssertEqual(
             SidebarSessionPresentation.sessionRowShape(
