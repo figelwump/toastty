@@ -43,6 +43,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         if let existingActiveSessionID = activeSessionIDByPanelID[panelID],
            var existingRecord = sessionsByID[existingActiveSessionID],
            existingRecord.isActive {
+            Self.endTurnIfNeeded(for: &existingRecord, at: now)
             existingRecord.stoppedAt = now
             existingRecord.updatedAt = now
             sessionsByID[existingActiveSessionID] = existingRecord
@@ -101,8 +102,47 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         at now: Date
     ) {
         guard var record = sessionsByID[sessionID], record.isActive else { return }
+        Self.applyTurnTiming(to: &record, nextStatusKind: status.kind, at: now)
         record.status = status
         record.statusUpdatedAt = now
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+    }
+
+    /// A turn starts when the reported status becomes `.working` and ends when
+    /// it leaves. Repeated `.working` updates during one turn keep the original
+    /// start, so the sidebar's elapsed time counts the turn, not the last hook.
+    private static func applyTurnTiming(
+        to record: inout SessionRecord,
+        nextStatusKind: SessionStatusKind,
+        at now: Date
+    ) {
+        let wasWorking = record.status?.kind == .working
+        guard wasWorking != (nextStatusKind == .working) else { return }
+
+        if nextStatusKind == .working {
+            record.turnStartedAt = now
+        } else {
+            endTurnIfNeeded(for: &record, at: now)
+        }
+    }
+
+    private static func endTurnIfNeeded(for record: inout SessionRecord, at now: Date) {
+        guard let turnStartedAt = record.turnStartedAt else { return }
+        record.lastTurnDuration = max(0, now.timeIntervalSince(turnStartedAt))
+        record.turnStartedAt = nil
+    }
+
+    public mutating func updateProviderSessionName(
+        sessionID: String,
+        providerSessionName: String?,
+        at now: Date
+    ) {
+        guard var record = sessionsByID[sessionID] else { return }
+        let normalized = providerSessionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = normalized?.isEmpty == false ? normalized : nil
+        guard record.providerSessionName != resolved else { return }
+        record.providerSessionName = resolved
         record.updatedAt = now
         sessionsByID[sessionID] = record
     }
@@ -379,6 +419,10 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         guard var record = sessionsByID[sessionID] else { return }
         record.backgroundActivitiesByID.removeAll()
         record.pendingBackgroundTaskCount = 0
+        // A stopped session has no turn in flight, so its elapsed time must
+        // not keep counting up in the sidebar. The turn it was in still
+        // counts as the last turn.
+        Self.endTurnIfNeeded(for: &record, at: now)
         record.stoppedAt = now
         record.updatedAt = now
         sessionsByID[sessionID] = record
@@ -514,8 +558,11 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                 ? childRows(for: record, activeRecordsByID: activeRecordsByID, at: now)
                 : [],
             displayTitleOverride: record.displayTitleOverride,
+            providerSessionName: record.providerSessionName,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
+            turnStartedAt: projected.status.kind == .working ? record.turnStartedAt : nil,
+            lastTurnDuration: record.lastTurnDuration,
             isActive: record.isActive,
             scopedWorkspaceIDs: record.scopedWorkspaceIDs,
             effectiveScopedWorkspaceIDs: record.scopedWorkspaceIDs.map { $0.union([record.workspaceID]) }
@@ -551,7 +598,9 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             return SessionChildRow(
                 id: candidate.sessionID,
                 source: .session,
-                displayName: candidate.displayTitleOverride ?? candidate.agent.displayName,
+                displayName: candidate.displayTitleOverride
+                    ?? candidate.providerSessionName
+                    ?? candidate.agent.displayName,
                 context: candidate.status?.detail,
                 startedAt: candidate.startedAt,
                 statusKind: Self.projectedStatus(from: candidate, at: now)?.status.kind,

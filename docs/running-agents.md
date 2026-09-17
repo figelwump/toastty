@@ -650,6 +650,55 @@ Actionable lifecycle events — `needs_approval`, `ready`, and `error` — drive
 
 While a managed agent session is active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel so the session status path stays authoritative.
 
+### Sidebar session rows
+
+A session row reserves a fixed status gutter at its left edge, so states line up
+down the list: a spinner while working, an amber dot when the session needs
+approval, a green dot for an unread reply, a red dot on error, and nothing when
+idle. Ready, approval, and error badges sit at the trailing edge of the row's
+first line, ahead of the elapsed time, the later flag, a parent label, and the
+sub-agent disclosure pill. The spelled-out wording ("needs approval") stays in
+the row's accessibility label.
+
+A named session reads as three lines: the name, the latest summary, then the
+tab title in a neutral pill beside the provider name. A session the provider has
+not named yet leads with the summary instead and carries the tab pill, provider
+name, and badges on a second line.
+
+Working rows count up from the start of the current turn. A turn starts when the
+provider reports `working` and ends when it leaves that state; the duration of
+the previous turn stays available to the row's hover card. Turn timing is
+runtime-only, so a restored session does not resume a stale count.
+
+Rows no longer show the working directory or a workspace-scope chip. Hovering a
+row opens a card beside the sidebar, level with the row, carrying the full path,
+the scoped workspaces, status, when the session last changed, the current or
+previous turn duration, the sub-agent count, the tab title, the parent session,
+and the flag state, plus the untruncated summary. The card appears after a short
+delay; moving to another row swaps it immediately, and clicking, typing, or
+scrolling hides it. Everything the card shows also remains in the row's
+accessibility label.
+
+#### Generated session names
+
+Both Claude Code and Codex generate a short name for an interactive session, and
+Toastty shows it as the row's name.
+
+- Claude Code writes `ai-title` records into the session transcript. Toastty
+  reads the newest record for the bound native session.
+- Codex names interactive threads in `$CODEX_HOME/session_index.jsonl` (default
+  `~/.codex`). Toastty reads the newest record for the bound thread.
+
+Toastty reads these files in the app, not in the hook helper, and only when a
+session's reported status changes — the same `UserPromptSubmit` and `Stop` hooks
+that produce those transitions. Nothing polls. Neither file format is
+documented, so a missing file, an unparsable record, or a renamed key leaves the
+row unnamed rather than failing.
+
+Sub-agent threads, guardian-review threads, and `codex exec` runs are never
+named by their provider and use the unnamed row shape. A name supplied at launch
+or by automation still wins over the generated one.
+
 ### Sidebar session order
 
 Drag a top-level session row up or down within its workspace to change its

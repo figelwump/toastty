@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 
 struct SessionRegistryTests {
@@ -481,6 +482,461 @@ struct SessionRegistryTests {
 
         let previous = try #require(registry.sessionsByID["session-1"])
         #expect(previous.isActive == false)
+    }
+
+    @Test
+    func updateStatusStartsTurnOnWorkingAndKeepsStartAcrossRepeatedWorkingHooks() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let start = Date(timeIntervalSince1970: 3_000)
+
+        registry.startSession(
+            sessionID: "turn",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start
+        )
+        #expect(try #require(registry.activeSession(sessionID: "turn")).turnStartedAt == nil)
+
+        registry.updateStatus(
+            sessionID: "turn",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Reading"),
+            at: start.addingTimeInterval(10)
+        )
+        #expect(
+            try #require(registry.activeSession(sessionID: "turn")).turnStartedAt
+                == start.addingTimeInterval(10)
+        )
+
+        // Progress hooks arrive repeatedly during one turn; the elapsed time
+        // must keep counting the turn, not restart on the last hook.
+        registry.updateStatus(
+            sessionID: "turn",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Editing"),
+            at: start.addingTimeInterval(40)
+        )
+        let midTurn = try #require(registry.activeSession(sessionID: "turn"))
+        #expect(midTurn.turnStartedAt == start.addingTimeInterval(10))
+        #expect(midTurn.lastTurnDuration == nil)
+    }
+
+    @Test
+    func leavingWorkingClearsTurnStartAndRecordsLastTurnDuration() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let start = Date(timeIntervalSince1970: 3_100)
+
+        registry.startSession(
+            sessionID: "turn-end",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start
+        )
+        registry.updateStatus(
+            sessionID: "turn-end",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: start.addingTimeInterval(10)
+        )
+        registry.updateStatus(
+            sessionID: "turn-end",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Done"),
+            at: start.addingTimeInterval(262)
+        )
+
+        let atRest = try #require(registry.activeSession(sessionID: "turn-end"))
+        #expect(atRest.turnStartedAt == nil)
+        #expect(atRest.lastTurnDuration == 252)
+
+        // A second non-working update must not overwrite the recorded turn.
+        registry.updateStatus(
+            sessionID: "turn-end",
+            status: SessionStatus(kind: .idle, summary: "Idle"),
+            at: start.addingTimeInterval(900)
+        )
+        let stillAtRest = try #require(registry.activeSession(sessionID: "turn-end"))
+        #expect(stillAtRest.turnStartedAt == nil)
+        #expect(stillAtRest.lastTurnDuration == 252)
+    }
+
+    @Test
+    func stopSessionEndsAnInFlightTurn() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let start = Date(timeIntervalSince1970: 3_200)
+
+        registry.startSession(
+            sessionID: "stopped-mid-turn",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start
+        )
+        registry.updateStatus(
+            sessionID: "stopped-mid-turn",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: start.addingTimeInterval(10)
+        )
+        registry.stopSession(sessionID: "stopped-mid-turn", at: start.addingTimeInterval(55))
+
+        let stopped = try #require(registry.sessionsByID["stopped-mid-turn"])
+        #expect(stopped.turnStartedAt == nil)
+        #expect(stopped.lastTurnDuration == 45)
+    }
+
+    @Test
+    func replacingAPanelsSessionEndsTheOutgoingSessionsTurn() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let start = Date(timeIntervalSince1970: 3_300)
+
+        registry.startSession(
+            sessionID: "outgoing",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start
+        )
+        registry.updateStatus(
+            sessionID: "outgoing",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: start.addingTimeInterval(10)
+        )
+        registry.startSession(
+            sessionID: "incoming",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start.addingTimeInterval(40)
+        )
+
+        let outgoing = try #require(registry.sessionsByID["outgoing"])
+        #expect(outgoing.isActive == false)
+        #expect(outgoing.turnStartedAt == nil)
+        #expect(outgoing.lastTurnDuration == 30)
+    }
+
+    @Test
+    func sessionRecordDoesNotPersistRuntimeTurnTiming() throws {
+        let now = Date(timeIntervalSince1970: 3_400)
+        let record = SessionRecord(
+            sessionID: "mid-turn",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            status: SessionStatus(kind: .working, summary: "Working"),
+            turnStartedAt: now,
+            lastTurnDuration: 252,
+            startedAt: now.addingTimeInterval(-100),
+            updatedAt: now
+        )
+
+        let data = try JSONEncoder().encode(record)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let decoded = try JSONDecoder().decode(SessionRecord.self, from: data)
+
+        // A turn recorded by an old app run cannot be resumed as if it were
+        // still counting up, so turn timing stays runtime-only.
+        #expect(object["turnStartedAt"] == nil)
+        #expect(decoded.turnStartedAt == nil)
+        #expect(object["lastTurnDuration"] == nil)
+        #expect(decoded.lastTurnDuration == nil)
+    }
+
+    @Test
+    func projectedWorkingStatusCarriesNoTurnStart() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let start = Date(timeIntervalSince1970: 3_500)
+
+        registry.startSession(
+            sessionID: "waiting-parent",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start
+        )
+        registry.updateStatus(
+            sessionID: "waiting-parent",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: start.addingTimeInterval(10)
+        )
+        registry.updateStatus(
+            sessionID: "waiting-parent",
+            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Waiting"),
+            at: start.addingTimeInterval(55)
+        )
+        let activityStarted = registry.updateBackgroundActivity(
+            sessionID: "waiting-parent",
+            activity: SessionBackgroundActivity(
+                id: "child-1",
+                kind: .subagent,
+                displayName: "Explore",
+                startedAt: start.addingTimeInterval(56),
+                lastUpdatedAt: start.addingTimeInterval(56)
+            ),
+            at: start.addingTimeInterval(56)
+        )
+        #expect(activityStarted)
+
+        let status = try #require(
+            registry.workspaceStatuses(for: workspaceID, at: start.addingTimeInterval(60)).first
+        )
+        // The row renders as working because it waits on a sub-agent, but the
+        // session has no turn of its own to count.
+        #expect(status.status.kind == .working)
+        #expect(status.projection == .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0))
+        #expect(status.turnStartedAt == nil)
+        #expect(status.lastTurnDuration == 45)
+
+        // The resuming projection is the same story: a working-looking row
+        // whose reported turn already ended.
+        registry.finishBackgroundActivity(
+            sessionID: "waiting-parent",
+            activityID: "child-1",
+            at: start.addingTimeInterval(61)
+        )
+        let resuming = try #require(
+            registry.workspaceStatuses(for: workspaceID, at: start.addingTimeInterval(62)).first
+        )
+        #expect(resuming.status.kind == .working)
+        #expect(resuming.projection == .resuming)
+        #expect(resuming.turnStartedAt == nil)
+    }
+
+    @Test
+    func workspaceStatusesCarryTurnStartOnlyWhileTheReportedTurnRuns() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let start = Date(timeIntervalSince1970: 3_600)
+
+        registry.startSession(
+            sessionID: "turn-row",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start
+        )
+        registry.updateStatus(
+            sessionID: "turn-row",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: start.addingTimeInterval(10)
+        )
+        let working = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(working.turnStartedAt == start.addingTimeInterval(10))
+        #expect(working.lastTurnDuration == nil)
+
+        registry.updateStatus(
+            sessionID: "turn-row",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: start.addingTimeInterval(55)
+        )
+        let atRest = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(atRest.turnStartedAt == nil)
+        #expect(atRest.lastTurnDuration == 45)
+    }
+
+    @Test
+    func providerSessionNameFillsRowNameBelowAnExplicitOverride() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 3_700)
+
+        registry.startSession(
+            sessionID: "named",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "named",
+            status: SessionStatus(kind: .idle, summary: "Idle"),
+            at: now.addingTimeInterval(1)
+        )
+
+        // No generated name yet: the row falls back to the agent and has no
+        // name of its own.
+        let unnamed = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(unnamed.sessionName == nil)
+        #expect(unnamed.displayTitle == AgentKind.codex.displayName)
+
+        registry.updateProviderSessionName(
+            sessionID: "named",
+            providerSessionName: "  Sidebar row rebuild  ",
+            at: now.addingTimeInterval(2)
+        )
+        let named = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(named.providerSessionName == "Sidebar row rebuild")
+        #expect(named.sessionName == "Sidebar row rebuild")
+        #expect(named.displayTitle == "Sidebar row rebuild")
+
+        // An override still owns the row: automation and process-watch rows
+        // keep naming themselves.
+        registry.startSession(
+            sessionID: "watcher",
+            agent: .processWatch,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            displayTitleOverride: "bundle exec rspec",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now.addingTimeInterval(3)
+        )
+        registry.updateStatus(
+            sessionID: "watcher",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: now.addingTimeInterval(4)
+        )
+        registry.updateProviderSessionName(
+            sessionID: "watcher",
+            providerSessionName: "Provider chose this",
+            at: now.addingTimeInterval(5)
+        )
+        let overridden = try #require(
+            registry.workspaceStatuses(for: workspaceID).first(where: { $0.sessionID == "watcher" })
+        )
+        #expect(overridden.providerSessionName == "Provider chose this")
+        #expect(overridden.sessionName == "bundle exec rspec")
+        #expect(overridden.displayTitle == "bundle exec rspec")
+    }
+
+    @Test
+    func updateProviderSessionNameNormalizesBlankAndSkipsUnchangedNames() throws {
+        var registry = SessionRegistry()
+        let now = Date(timeIntervalSince1970: 3_800)
+
+        registry.startSession(
+            sessionID: "rename",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateProviderSessionName(
+            sessionID: "rename",
+            providerSessionName: "Reader tail fix",
+            at: now.addingTimeInterval(1)
+        )
+        let named = try #require(registry.activeSession(sessionID: "rename"))
+        #expect(named.providerSessionName == "Reader tail fix")
+        #expect(named.updatedAt == now.addingTimeInterval(1))
+
+        // An unchanged name must not bump `updatedAt`, which reorders nothing
+        // but does redraw every row that reads it.
+        registry.updateProviderSessionName(
+            sessionID: "rename",
+            providerSessionName: " Reader tail fix ",
+            at: now.addingTimeInterval(2)
+        )
+        #expect(try #require(registry.activeSession(sessionID: "rename")).updatedAt
+            == now.addingTimeInterval(1))
+
+        registry.updateProviderSessionName(
+            sessionID: "rename",
+            providerSessionName: "   ",
+            at: now.addingTimeInterval(3)
+        )
+        let cleared = try #require(registry.activeSession(sessionID: "rename"))
+        #expect(cleared.providerSessionName == nil)
+        #expect(cleared.updatedAt == now.addingTimeInterval(3))
+    }
+
+    @Test
+    func childRowsPreferOverrideThenProviderNameThenAgentName() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let parentPanelID = UUID()
+        let now = Date(timeIntervalSince1970: 3_900)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .codex,
+            panelID: parentPanelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: now.addingTimeInterval(1)
+        )
+
+        for (index, childID) in ["child-bare", "child-named", "child-overridden"].enumerated() {
+            registry.startSession(
+                sessionID: childID,
+                agent: .claude,
+                panelID: UUID(),
+                windowID: UUID(),
+                workspaceID: UUID(),
+                parentSessionID: "parent",
+                displayTitleOverride: childID == "child-overridden" ? "Caller chose this" : nil,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: now.addingTimeInterval(Double(index + 2))
+            )
+            registry.updateStatus(
+                sessionID: childID,
+                status: SessionStatus(kind: .working, summary: "Working"),
+                at: now.addingTimeInterval(Double(index + 2))
+            )
+        }
+        registry.updateProviderSessionName(
+            sessionID: "child-named",
+            providerSessionName: "Transcript tail audit",
+            at: now.addingTimeInterval(10)
+        )
+        registry.updateProviderSessionName(
+            sessionID: "child-overridden",
+            providerSessionName: "Provider chose this",
+            at: now.addingTimeInterval(10)
+        )
+        let parentStatus = try #require(
+            registry.workspaceStatuses(for: workspaceID).first(where: { $0.sessionID == "parent" })
+        )
+        #expect(
+            parentStatus.children.map(\.displayName) == [
+                AgentKind.claude.displayName,
+                "Transcript tail audit",
+                "Caller chose this",
+            ]
+        )
     }
 
     @Test

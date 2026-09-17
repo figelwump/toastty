@@ -597,12 +597,283 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertNil(SidebarSessionPresentation.sessionChildExecutionProfileText(nil))
     }
 
-    func testSessionIndicatorStateShowsSpinnerOnlyForWorking() {
-        XCTAssertEqual(SidebarSessionPresentation.sessionIndicatorState(for: .working), .spinner)
-        XCTAssertEqual(SidebarSessionPresentation.sessionIndicatorState(for: .idle), .hidden)
-        XCTAssertEqual(SidebarSessionPresentation.sessionIndicatorState(for: .needsApproval), .hidden)
-        XCTAssertEqual(SidebarSessionPresentation.sessionIndicatorState(for: .ready), .hidden)
-        XCTAssertEqual(SidebarSessionPresentation.sessionIndicatorState(for: .error), .hidden)
+    func testSessionRailStateMapsEachStatusAndSplitsReadyOnUnread() {
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRailState(for: .working, showsUnreadSessionAccent: false),
+            .spinner
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRailState(for: .needsApproval, showsUnreadSessionAccent: false),
+            .approvalDot
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRailState(for: .error, showsUnreadSessionAccent: false),
+            .errorDot
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRailState(for: .ready, showsUnreadSessionAccent: true),
+            .unreadDot
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRailState(for: .ready, showsUnreadSessionAccent: false),
+            .empty
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRailState(for: .idle, showsUnreadSessionAccent: true),
+            .empty
+        )
+    }
+
+    func testSessionRowShapeLeadsWithNameAndFallsBackThroughSummaryToAgentName() {
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowShape(
+                sessionName: "Sidebar row rebuild",
+                summary: "Reviewing changes",
+                agentFallbackName: "Codex"
+            ),
+            .named(name: "Sidebar row rebuild", summary: "Reviewing changes")
+        )
+        // A named session keeps its name on the first line even before the
+        // provider reports any summary.
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowShape(
+                sessionName: "Sidebar row rebuild",
+                summary: nil,
+                agentFallbackName: "Codex"
+            ),
+            .named(name: "Sidebar row rebuild", summary: nil)
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowShape(
+                sessionName: nil,
+                summary: "Reviewing changes",
+                agentFallbackName: "Codex"
+            ),
+            .summaryFirst(summary: "Reviewing changes")
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowShape(
+                sessionName: nil,
+                summary: nil,
+                agentFallbackName: "Codex"
+            ),
+            .summaryFirst(summary: "Codex")
+        )
+        // Whitespace-only provider values count as absent in both slots.
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowShape(
+                sessionName: "  \n ",
+                summary: "\t",
+                agentFallbackName: "Claude Code"
+            ),
+            .summaryFirst(summary: "Claude Code")
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowShape(
+                sessionName: " Sidebar row rebuild ",
+                summary: " Reviewing changes ",
+                agentFallbackName: "Codex"
+            ),
+            .named(name: "Sidebar row rebuild", summary: "Reviewing changes")
+        )
+    }
+
+    func testShowsSessionAgentLabelDropsOnlyWhenPrimaryLineIsAlreadyTheAgentName() {
+        XCTAssertTrue(
+            SidebarSessionPresentation.showsSessionAgentLabel(
+                shape: .named(name: "Sidebar row rebuild", summary: nil),
+                agentFallbackName: "Codex"
+            )
+        )
+        // Even a row named exactly after its agent keeps the label, because a
+        // named row's own name line is not the summary fallback.
+        XCTAssertTrue(
+            SidebarSessionPresentation.showsSessionAgentLabel(
+                shape: .named(name: "Codex", summary: nil),
+                agentFallbackName: "Codex"
+            )
+        )
+        XCTAssertTrue(
+            SidebarSessionPresentation.showsSessionAgentLabel(
+                shape: .summaryFirst(summary: "Reviewing changes"),
+                agentFallbackName: "Codex"
+            )
+        )
+        XCTAssertFalse(
+            SidebarSessionPresentation.showsSessionAgentLabel(
+                shape: .summaryFirst(summary: "Codex"),
+                agentFallbackName: "Codex"
+            )
+        )
+    }
+
+    func testSessionStatusBadgeLabelShortensApprovalWhileSpokenWordingKeepsIt() {
+        XCTAssertEqual(SidebarSessionPresentation.sessionStatusBadgeLabel(for: .needsApproval), "approval")
+        XCTAssertEqual(SidebarSessionPresentation.sessionStatusChipLabel(for: .needsApproval), "needs approval")
+        // Every other kind reads the same in the badge and in speech.
+        for kind in [SessionStatusKind.ready, .error, .idle, .working] {
+            XCTAssertEqual(
+                SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind),
+                SidebarSessionPresentation.sessionStatusChipLabel(for: kind),
+                "Only needs-approval should shorten for the row badge, not \(kind.rawValue)"
+            )
+        }
+    }
+
+    func testSessionAccessibilityLabelKeepsSpokenApprovalWordingNotTheShortBadge() {
+        let label = SidebarSessionPresentation.sessionAccessibilityLabel(
+            agentName: "Codex",
+            chipKind: .needsApproval,
+            detailText: "Review command",
+            cwd: nil,
+            isLaterFlagged: false
+        )
+
+        XCTAssertEqual(label, "Codex, needs approval, Review command")
+    }
+
+    func testDurationTextFormatsSecondsMinutesAndClampsUnusableInput() {
+        XCTAssertEqual(SidebarSessionPresentation.durationText(seconds: 45), "45s")
+        XCTAssertEqual(SidebarSessionPresentation.durationText(seconds: 252), "4m 12s")
+        XCTAssertEqual(SidebarSessionPresentation.durationText(seconds: 0), "0s")
+        XCTAssertEqual(SidebarSessionPresentation.durationText(seconds: 60), "1m 00s")
+        // A clock correction can hand the formatter a negative or unusable
+        // span; the row must not count backwards or print a placeholder.
+        XCTAssertEqual(SidebarSessionPresentation.durationText(seconds: -30), "0s")
+        XCTAssertEqual(SidebarSessionPresentation.durationText(seconds: .infinity), "0s")
+        XCTAssertEqual(SidebarSessionPresentation.durationText(seconds: .nan), "0s")
+    }
+
+    func testSessionElapsedTurnTextMeasuresTurnAndIsAbsentWithoutOne() {
+        let turnStart = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionElapsedTurnText(
+                turnStartedAt: turnStart,
+                now: turnStart.addingTimeInterval(252)
+            ),
+            "4m 12s"
+        )
+        XCTAssertNil(
+            SidebarSessionPresentation.sessionElapsedTurnText(turnStartedAt: nil, now: turnStart)
+        )
+    }
+
+    func testSessionLastTurnTextFormatsDurationAndRejectsAbsentOrNegative() {
+        XCTAssertEqual(SidebarSessionPresentation.sessionLastTurnText(45), "45s")
+        XCTAssertEqual(SidebarSessionPresentation.sessionLastTurnText(252), "4m 12s")
+        XCTAssertNil(SidebarSessionPresentation.sessionLastTurnText(nil))
+        // A row at rest with a nonsense duration shows nothing rather than "0s".
+        XCTAssertNil(SidebarSessionPresentation.sessionLastTurnText(-1))
+        XCTAssertNil(SidebarSessionPresentation.sessionLastTurnText(.infinity))
+    }
+
+    func testSessionRowHoverTipModelCarriesEverythingTheRowStoppedShowing() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var session = try makeSession(in: makeWorkspace(title: "Workspace"))
+        session.displayTitleOverride = "Sidebar row rebuild"
+        session.cwd = "\(NSHomeDirectory())/GiantThings/repos/toastty"
+        session.status = SessionStatus(
+            kind: .working,
+            summary: "Working",
+            detail: "Rebuilding the sidebar session rows so the summary no longer truncates"
+        )
+        session.updatedAt = now.addingTimeInterval(-90)
+        session.lastTurnDuration = 252
+
+        let model = SidebarSessionPresentation.sessionRowHoverTipModel(
+            session: session,
+            customTabTitle: "orchestrator",
+            parentSessionName: "Claude Code",
+            workspaceScopeNames: ["Workspace 1", "wt-sessions"],
+            isLaterFlagged: true,
+            now: now
+        )
+
+        XCTAssertEqual(model.name, "Sidebar row rebuild")
+        XCTAssertEqual(model.agentLabel, "codex")
+        XCTAssertEqual(model.statusDotColorKind, .working)
+        // The row truncates the summary to one line; the card keeps all of it.
+        XCTAssertEqual(
+            model.bodyText,
+            "Rebuilding the sidebar session rows so the summary no longer truncates"
+        )
+        XCTAssertNil(model.turnStartedAt)
+        XCTAssertEqual(
+            model.metaItems.map(\.label),
+            ["path", "scoped", "status", "updated", "last turn", "tab", "parent", "flagged"]
+        )
+        let valuesByLabel = Dictionary(
+            uniqueKeysWithValues: model.metaItems.map { ($0.label, $0.value) }
+        )
+        XCTAssertEqual(valuesByLabel["path"], "~/GiantThings/repos/toastty")
+        XCTAssertEqual(valuesByLabel["scoped"], "Workspace 1, wt-sessions")
+        XCTAssertEqual(valuesByLabel["status"], "working")
+        XCTAssertEqual(
+            valuesByLabel["updated"],
+            SidebarSessionPresentation.sessionUpdatedRelativeText(
+                updatedAt: session.updatedAt,
+                now: now
+            )
+        )
+        XCTAssertEqual(valuesByLabel["last turn"], "4m 12s")
+        XCTAssertEqual(valuesByLabel["tab"], "orchestrator")
+        XCTAssertEqual(valuesByLabel["parent"], "Claude Code")
+        XCTAssertEqual(valuesByLabel["flagged"], "for later")
+        // A long scope list is the one value allowed to wrap.
+        XCTAssertEqual(
+            model.metaItems.filter(\.wraps).map(\.label),
+            ["scoped"]
+        )
+    }
+
+    func testSessionRowHoverTipModelReportsWaitingProjectionAndHidesLastTurnMidTurn() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var session = try makeSession(in: makeWorkspace(title: "Workspace"))
+        session.cwd = nil
+        session.status = SessionStatus(kind: .working, summary: "Working", detail: nil)
+        session.projection = .waitingOnChildren(childCount: 2, pendingBackgroundTaskCount: 0)
+        session.children = [
+            SessionChildRow(id: "a", source: .activity, displayName: "Explore", startedAt: now),
+            SessionChildRow(id: "b", source: .activity, displayName: "Plan", startedAt: now),
+        ]
+        session.turnStartedAt = now.addingTimeInterval(-45)
+        session.lastTurnDuration = 252
+
+        let model = SidebarSessionPresentation.sessionRowHoverTipModel(
+            session: session,
+            customTabTitle: nil,
+            parentSessionName: nil,
+            workspaceScopeNames: [],
+            isLaterFlagged: false,
+            now: now
+        )
+
+        XCTAssertNil(model.bodyText)
+        XCTAssertEqual(model.turnStartedAt, session.turnStartedAt)
+        // `last turn` belongs to a row at rest; a turn in flight shows elapsed
+        // instead, and the card never shows both.
+        XCTAssertEqual(model.metaItems.map(\.label), ["status", "updated", "sub-agents"])
+        let valuesByLabel = Dictionary(
+            uniqueKeysWithValues: model.metaItems.map { ($0.label, $0.value) }
+        )
+        XCTAssertEqual(valuesByLabel["status"], "waiting on 2 sub-agents")
+        XCTAssertEqual(valuesByLabel["sub-agents"], "2 · 2 working")
+
+        session.projection = .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0)
+        session.children = [session.children[0]]
+        let singleChildModel = SidebarSessionPresentation.sessionRowHoverTipModel(
+            session: session,
+            customTabTitle: nil,
+            parentSessionName: nil,
+            workspaceScopeNames: [],
+            isLaterFlagged: false,
+            now: now
+        )
+        XCTAssertEqual(
+            singleChildModel.metaItems.first(where: { $0.label == "status" })?.value,
+            "waiting on 1 sub-agent"
+        )
+        XCTAssertEqual(singleChildModel.metaItems.map(\.label), ["status", "updated", "sub-agent"])
     }
 
     func testLaterFlagActionTitleUsesLaterCopy() {
