@@ -284,6 +284,8 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertFalse(agentLaunchLine.contains("env.TOASTTY_DEV_WORKTREE_ROOT="))
         XCTAssertFalse(agentLaunchLine.contains("env.TOASTTY_DERIVED_PATH="))
         XCTAssertTrue(agentLaunchLine.contains("initialPrompt=Read WORKTREE_HANDOFF.md in the repo"))
+        XCTAssertTrue(agentLaunchLine.contains("parent workspace 22222222-2222-2222-2222-222222222222"))
+        XCTAssertTrue(agentLaunchLine.contains("panelID=33333333-3333-3333-3333-333333333333, expectedSessionID=77777777-7777-7777-7777-777777777777"))
         XCTAssertFalse(agentLaunchLine.contains("profileID=cdx"))
         XCTAssertFalse(try hasSendTextInvocation(invocationLogURL: invocationLogURL))
 
@@ -293,12 +295,12 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             .map(String.init)
         XCTAssertTrue(invocationLines.contains("--json session scope show --session 77777777-7777-7777-7777-777777777777"))
         XCTAssertTrue(invocationLines.contains("--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
-        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444 --workspace 22222222-2222-2222-2222-222222222222"))
 
         let showIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope show --session 77777777-7777-7777-7777-777777777777"))
         let parentScopeIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
         let workspaceCreateIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke activate=false"))
-        let childScopeIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+        let childScopeIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444 --workspace 22222222-2222-2222-2222-222222222222"))
         XCTAssertLessThan(showIndex, parentScopeIndex)
         XCTAssertLessThan(parentScopeIndex, workspaceCreateIndex)
         XCTAssertLessThan(workspaceCreateIndex, childScopeIndex)
@@ -326,7 +328,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             XCTAssertTrue(result.stderr.contains("no child was launched"), failedOperation)
             XCTAssertTrue(result.invocations.contains(where: { $0.contains(failedOperation) }), failedOperation)
             XCTAssertFalse(result.invocations.contains(where: { $0.contains("agent.launch") }), failedOperation)
-            XCTAssertFalse(result.invocations.contains(where: { $0.contains("terminal.send-text") }), failedOperation)
+            XCTAssertFalse(result.invocations.contains(where: { $0.hasPrefix("--json action run terminal.send-text ") }), failedOperation)
             XCTAssertFalse(result.invocations.contains(where: { $0.contains("panel.create.local-document") }), failedOperation)
             XCTAssertTrue(result.invocations.contains("--json session scope clear --session 77777777-7777-7777-7777-777777777777"), failedOperation)
         }
@@ -342,7 +344,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=task-status text=Working",
                 "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=task-status text=Needs attention",
             ], failure)
-            XCTAssertFalse(result.invocations.contains(where: { $0.contains("terminal.send-text") }), failure)
+            XCTAssertFalse(result.invocations.contains(where: { $0.hasPrefix("--json action run terminal.send-text ") }), failure)
             XCTAssertTrue(result.invocations.contains("--json session scope clear --session 77777777-7777-7777-7777-777777777777"), failure)
         }
     }
@@ -425,7 +427,27 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             .map(String.init)
         XCTAssertTrue(invocationLines.contains("--json session scope show --session 77777777-7777-7777-7777-777777777777"))
         XCTAssertFalse(invocationLines.contains("--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
-        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444 --workspace 22222222-2222-2222-2222-222222222222"))
+    }
+
+    func testOpenSessionScriptStopsBeforeMutationWhenParentReplyWorkspaceIsUnavailable() throws {
+        for failure in ["FAKE_PARENT_STATE_FAILURE", "FAKE_PARENT_STATE_MISSING_WORKSPACE"] {
+            let result = try runAnnotationScenario(
+                environment: [failure: "1"],
+                arguments: ["--window-id", "11111111-1111-1111-1111-111111111111"]
+            )
+            XCTAssertNotEqual(result.exitCode, 0)
+            XCTAssertTrue(result.stderr.contains("parent"))
+            XCTAssertEqual(result.invocations, ["--json query run terminal.state --panel 33333333-3333-3333-3333-333333333333"])
+        }
+    }
+
+    func testOpenSessionScriptRejectsMissingParentWorkspaceInReturnedScope() throws {
+        let result = try runAnnotationScenario(environment: ["FAKE_SCOPE_MISMATCH": "1"])
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertTrue(result.stderr.contains("child scope did not match"))
+        XCTAssertTrue(result.stderr.contains("already exist"))
+        XCTAssertFalse(result.invocations.contains { $0.hasPrefix("--json action run terminal.send-text ") })
     }
 
     func testOpenSessionScriptCanSkipParentSessionScoping() throws {
@@ -459,6 +481,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertEqual(result.stderr, "")
+        XCTAssertFalse(try agentLaunchInvocationLine(invocationLogURL: invocationLogURL).contains("expectedSessionID="))
 
         let payload = try jsonObject(from: result.stdout)
         XCTAssertEqual(payload["parent_scope_status"] as? String, "disabled")
@@ -664,14 +687,14 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 1)
         XCTAssertEqual(result.stdout, "")
         XCTAssertTrue(result.stderr.contains("agent.launch response did not include sessionID"))
-        XCTAssertTrue(result.stderr.contains("without the intended workspace-only scope"))
+        XCTAssertTrue(result.stderr.contains("without the intended workspace scope"))
 
         let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
         let invocationLines = invocations
             .split(whereSeparator: \.isNewline)
             .map(String.init)
         XCTAssertTrue(invocationLines.contains("--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
-        XCTAssertFalse(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertFalse(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444 --workspace 22222222-2222-2222-2222-222222222222"))
         XCTAssertEqual(invocationLines.filter { $0.contains("key=task-status") }.count, 1)
         XCTAssertFalse(invocationLines.contains(where: { $0.contains("text=Needs attention") }))
     }
@@ -709,13 +732,13 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 1)
         XCTAssertEqual(result.stdout, "")
         XCTAssertTrue(result.stderr.contains("failed to scope session 66666666-6666-6666-6666-666666666666"))
-        XCTAssertTrue(result.stderr.contains("without the intended workspace-only scope"))
+        XCTAssertTrue(result.stderr.contains("without the intended workspace scope"))
 
         let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
         let invocationLines = invocations
             .split(whereSeparator: \.isNewline)
             .map(String.init)
-        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444 --workspace 22222222-2222-2222-2222-222222222222"))
         XCTAssertEqual(invocationLines.filter { $0.contains("key=task-status") }.count, 1)
         XCTAssertFalse(invocationLines.contains(where: { $0.contains("text=Needs attention") }))
     }
@@ -978,7 +1001,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         )
         XCTAssertNotEqual(result.exitCode, 0)
         XCTAssertTrue(result.invocations.contains { $0.contains("model=model with spaces") })
-        XCTAssertFalse(result.invocations.contains { $0.contains("terminal.send-text") })
+        XCTAssertFalse(result.invocations.contains { $0.hasPrefix("--json action run terminal.send-text ") })
     }
 
     func testOpenSessionScriptRejectsMissingBlankAndConflictingSelections() throws {
@@ -1110,6 +1133,13 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                   ;;
               esac
             fi
+            if [ "${FAKE_PARENT_STATE_FAILURE:-0}" = "1" ] && [ "${3:-}" = "terminal.state" ]; then
+              exit 1
+            fi
+            if [ "${FAKE_PARENT_STATE_MISSING_WORKSPACE:-0}" = "1" ] && [ "${3:-}" = "terminal.state" ]; then
+              printf '%s' '{"ok":true,"result":{}}'
+              exit 0
+            fi
             case \"${1:-} ${2:-} ${3:-}\" in
               "action list ")
                 if [ -n "${FAKE_ACTION_CATALOG:-}" ]; then
@@ -1198,9 +1228,14 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             EOF
                   exit 1
                 fi
-                cat <<'EOF'
-            {"result":{"sessionID":"66666666-6666-6666-6666-666666666666","isScoped":true,"workspaceIDs":["44444444-4444-4444-4444-444444444444"],"effectiveWorkspaceIDs":["44444444-4444-4444-4444-444444444444"]}}
-            EOF
+                python3 -c '
+            import json, os, sys
+            args = sys.argv[1:]
+            ids = [args[i+1] for i, value in enumerate(args) if value == "--workspace"]
+            if os.environ.get("FAKE_SCOPE_MISMATCH") == "1":
+                ids = ids[:1]
+            print(json.dumps({"ok": True, "result": {"isScoped": True, "workspaceIDs": ids, "effectiveWorkspaceIDs": ids}}))
+            ' "$@"
                 ;;
               \"action run terminal.send-text\")
                 cat <<'EOF'

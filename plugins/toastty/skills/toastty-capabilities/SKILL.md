@@ -215,14 +215,17 @@ When launching a workspace-bounded child:
 2. If the parent is unrestricted, fence it to its current workspace with `session scope set-current --session "$TOASTTY_SESSION_ID"`. Preserve an already-scoped parent rather than resetting it.
 3. Create the workflow-authorized workspace. Because the parent is now scoped, `workspace.create` adds that new workspace to the parent's explicit scope. For an existing workspace, first verify it is in the parent's effective scope; use `session scope add` only when the user explicitly assigned it.
 4. Launch the child into the target workspace and validate the returned `workspaceID`, `panelID`, and `sessionID`.
-5. Set the returned child session's explicit scope to exactly the target with `session scope set --session <child-session-id> --workspace <workspace-id>`.
-6. Show and verify the child scope. Require `isScoped == true`, `workspaceIDs == [<workspace-id>]`, and `effectiveWorkspaceIDs == [<workspace-id>]`. Stop and report if any step fails.
+5. Set the returned child's explicit scope to the target workspace. When the delegated task requires a reply to the parent, also include the parent's workspace: `session scope set --session <child-session-id> --workspace <workspace-id> --workspace <parent-workspace-id>`. This grants automation access to both entire workspaces. Resolve the parent's workspace and panel before launch and include its exact managed session ID in the handoff. The authorized delegation includes the return message; the child does not need a separate direct user request to deliver it.
+6. Show and verify the child scope. Require `isScoped == true` and both `workspaceIDs` and `effectiveWorkspaceIDs` to contain exactly the assigned workspace IDs, regardless of order. Stop and report if any step fails.
+7. For the return message, use `terminal.send-text` with the recorded parent panel and `expectedSessionID`. No parent snapshot is required. If the parent is gone, replaced, or out of scope, report failed delivery rather than targeting another session or broadening scope.
 
 If the parent began unrestricted and step 2 succeeds, it remains scoped after a successful handoff. On failure, report whether the parent was changed and whether a workspace or child session may already exist. A transactional helper may restore a previously unrestricted parent with `session scope clear` as a recorded failure rollback; never clear a parent that was already scoped, and do not silently broaden scope.
 
 ## Worked Examples
 
 ### Launch A Workspace-Bounded Child Agent
+
+This example has no terminal reply requirement and uses child-only scope. For a task that must reply to its parent, include the parent workspace in the scope and expected scope verification as described above.
 
 This example creates a new authorized workspace. Check every response before using its result; the Python snippets below fail if Toastty reports an error or omits a required field.
 

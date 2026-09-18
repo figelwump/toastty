@@ -23,6 +23,8 @@ When a scoped parent launches a child session, the child inherits a snapshot of 
 
 If a scoped session creates a workspace through `workspace.create`, Toastty binds the new workspace into that session's explicit scope before returning success. Agent launches into existing workspaces require access to the target workspace.
 
+A delegation that requires a terminal reply to the parent must retain the parent workspace in the child's assigned scope when narrowing after launch. The worktree-create helper does this for its default managed launch and supplies the parent panel and session IDs in the launch prompt. This grants automation access to the entire parent workspace; there is no reply-only permission. `expectedSessionID` prevents delivery to a replacement session but does not bypass workspace scope. Explicit `--no-scope-parent` launches retain child-only scope and do not establish this return route.
+
 ## CLI
 
 Use the bundled CLI from a managed session or pass `--session` explicitly:
