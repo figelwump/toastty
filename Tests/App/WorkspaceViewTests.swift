@@ -2174,6 +2174,38 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
+    func testRestoredInactiveWorkspaceBrowserRemainsUnloaded() throws {
+        let panelID = UUID()
+        let harness = try makeWorkspaceHarness { state, windowID, _ in
+            var workspace = WorkspaceState.bootstrap(title: "Restored background")
+            var tab = try XCTUnwrap(workspace.selectedTab)
+            tab.rightAuxPanel = RightAuxPanelState(
+                isVisible: true, activeTabID: panelID, tabIDs: [panelID],
+                tabsByID: [panelID: RightAuxPanelTabState(
+                    id: panelID, identity: .browserSession(panelID), panelID: panelID,
+                    panelState: .web(WebPanelState(
+                        definition: .browser, initialURL: "https://example.com/restored"
+                    ))
+                )]
+            )
+            workspace.tabsByID[tab.id] = tab
+            state.workspacesByID[workspace.id] = workspace
+            let windowIndex = try XCTUnwrap(state.windows.firstIndex(where: { $0.id == windowID }))
+            state.windows[windowIndex].workspaceIDs.append(workspace.id)
+        }
+        defer { harness.window.orderOut(nil) }
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        // Obtaining a runtime without applying the destination must still find
+        // an idle browser: restoring an inactive workspace has not loaded it.
+        let runtime = harness.webPanelRuntimeRegistry.browserRuntime(for: panelID)
+        XCTAssertEqual(runtime.automationState().navigationState, .idle)
+        XCTAssertNil(runtime.automationState().observedURL)
+        XCTAssertEqual(runtime.automationState().lifecycleState, .detached)
+    }
+
+    @MainActor
     func testInactiveWorkspaceRightPanelDoesNotCreateScratchpadRuntime() throws {
         let rightPanelID = UUID()
         let harness = try makeWorkspaceHarness { state, windowID, _ in

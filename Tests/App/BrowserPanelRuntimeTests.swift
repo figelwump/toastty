@@ -6,6 +6,126 @@ import XCTest
 
 @MainActor
 final class BrowserPanelRuntimeTests: XCTestCase {
+    func testPendingURLIsNotReportedAsObservedURLAndRepeatedApplyPreservesFailure() {
+        let runtime = makeRuntime()
+        let state = WebPanelState(definition: .browser, currentURL: "http://[invalid")
+        XCTAssertEqual(runtime.automationState().navigationState, .idle)
+        XCTAssertNil(runtime.automationState().observedURL)
+
+        runtime.apply(webState: state)
+        XCTAssertEqual(runtime.automationState().navigationState, .failed)
+        XCTAssertEqual(runtime.automationState().navigationError?.code, NSURLErrorBadURL)
+        XCTAssertNotEqual(runtime.automationState().observedURL, state.restorableURL)
+        runtime.apply(webState: state)
+        XCTAssertEqual(runtime.automationState().navigationState, .failed)
+        XCTAssertEqual(runtime.automationState().navigationError?.code, NSURLErrorBadURL)
+    }
+
+    func testSupersededCallbacksCannotReplaceNewNavigationResult() throws {
+        let runtime = makeRuntime()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        runtime.attachHost(to: container, attachment: .next())
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        let first = try XCTUnwrap(webView.loadHTMLString("first", baseURL: nil))
+        runtime.webView(webView, didStartProvisionalNavigation: first)
+        runtime.webView(webView, didFailProvisionalNavigation: first, withError: URLError(.cannotFindHost))
+        XCTAssertEqual(runtime.automationState().navigationState, .failed)
+        XCTAssertEqual(runtime.automationState().navigationError?.domain, NSURLErrorDomain)
+
+        let second = try XCTUnwrap(webView.loadHTMLString("second", baseURL: nil))
+        runtime.webView(webView, didStartProvisionalNavigation: second)
+        XCTAssertEqual(runtime.automationState().navigationState, .loading)
+        XCTAssertNil(runtime.automationState().navigationError)
+        runtime.webView(webView, didStartProvisionalNavigation: first)
+        runtime.webView(webView, didFail: first, withError: URLError(.cancelled))
+        runtime.webView(webView, didFinish: first)
+        XCTAssertEqual(runtime.automationState().navigationState, .loading)
+        runtime.webView(webView, didFinish: second)
+        runtime.webView(webView, didFail: first, withError: URLError(.cancelled))
+        XCTAssertEqual(runtime.automationState().navigationState, .finished)
+        XCTAssertNil(runtime.automationState().navigationError)
+    }
+
+    func testInvalidURLHelperPageDoesNotReportSuccessfulNavigation() async throws {
+        let runtime = makeRuntime()
+        runtime.apply(webState: WebPanelState(definition: .browser, currentURL: "http://[invalid"))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(runtime.automationState().navigationState, .failed)
+        XCTAssertEqual(runtime.automationState().navigationError?.code, NSURLErrorBadURL)
+        XCTAssertEqual(runtime.automationState().lifecycleState, .detached)
+        do {
+            _ = try await runtime.captureVisibleScreenshot()
+            XCTFail("Detached browser should reject screenshots")
+        } catch { }
+    }
+
+    func testProcessTerminationFailsPendingNavigationAndNextLoadClearsError() throws {
+        let runtime = makeRuntime()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        runtime.attachHost(to: container, attachment: .next())
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        let navigation = try XCTUnwrap(webView.loadHTMLString("page", baseURL: nil))
+        runtime.webView(webView, didStartProvisionalNavigation: navigation)
+        runtime.webViewWebContentProcessDidTerminate(webView)
+        XCTAssertEqual(runtime.automationState().navigationState, .failed)
+        XCTAssertEqual(runtime.automationState().navigationError?.code, WKError.webContentProcessTerminated.rawValue)
+        runtime.webView(webView, didFinish: navigation)
+        XCTAssertEqual(runtime.automationState().navigationState, .failed)
+        XCTAssertTrue(runtime.loadUserEnteredURL("https://example.com/new"))
+        XCTAssertEqual(runtime.automationState().navigationState, .loading)
+        XCTAssertNil(runtime.automationState().navigationError)
+    }
+
+    func testRealSupersededLoadThenLocalFileCompletes() async throws {
+        let runtime = makeRuntime()
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".html")
+        try "<title>Replacement</title>".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertTrue(runtime.loadUserEnteredURL("http://127.0.0.1:9/cancelled"))
+        XCTAssertTrue(runtime.loadUserEnteredURL(file.absoluteString))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().navigationState, .finished)
+        XCTAssertEqual(runtime.automationState().observedURL, file.absoluteString)
+        XCTAssertNil(runtime.automationState().navigationError)
+    }
+
+    func testSameDocumentHistoryDoesNotClaimUnobservedCompletion() async throws {
+        let runtime = makeRuntime()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        runtime.attachHost(to: container, attachment: .next())
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        XCTAssertTrue(runtime.loadUserEnteredURL("data:text/html,<title>Navigation</title>Page"))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().navigationState, .finished)
+        _ = try await webView.evaluateJavaScript("location.hash = 'part'")
+        for _ in 0..<100 {
+            if webView.canGoBack { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(runtime.goBack())
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().navigationState, .idle)
+        XCTAssertNil(runtime.automationState().navigationError)
+        XCTAssertTrue(runtime.goForward())
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().navigationState, .idle)
+    }
+
+    private func waitForNavigation(_ runtime: BrowserPanelRuntime) async throws {
+        for _ in 0..<100 {
+            if runtime.automationState().navigationState != .loading { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTFail("Navigation did not complete: \(runtime.automationState())")
+    }
+
+    private func makeRuntime() -> BrowserPanelRuntime {
+        BrowserPanelRuntime(
+            panelID: UUID(), metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+    }
+
     func testNetworkAllowedCapabilityProfileUsesPersistentWebsiteDataStore() {
         let configuration = BrowserPanelRuntime.makeWebViewConfiguration(for: .networkAllowed)
 
