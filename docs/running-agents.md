@@ -690,8 +690,9 @@ accessibility label.
 
 #### Generated session names
 
-Both Claude Code and Codex generate a short name for an interactive session, and
-Toastty shows it as the row's name.
+Claude Code, Codex, Cursor, OpenCode, and MiMo Code generate a short name for
+an interactive session, and Toastty shows it as the row's name. Remote Access
+clients, including the iOS app, title the conversation with the same name.
 
 - Claude Code writes `ai-title` records into the session transcript. Toastty
   reads the newest record for the bound native session. Clearing a conversation
@@ -699,12 +700,32 @@ Toastty shows it as the row's name.
   rather than carried over.
 - Codex names interactive threads in `$CODEX_HOME/session_index.jsonl` (default
   `~/.codex`). Toastty reads the newest record for the bound thread.
+- Cursor writes a `title` into `chats/<workspace>/<conversation>/meta.json`
+  under `$CURSOR_CONFIG_DIR`, `$XDG_CONFIG_HOME/cursor`, or `~/.cursor`, in
+  Cursor's own order of precedence. The title lands shortly after the first
+  prompt, so the row picks it up when that turn ends. When Cursor ends a
+  conversation and reports a new one with `sessionStart`, the previous name is
+  dropped. Cursor's `/clear` currently starts a new chat without those hooks, so
+  Toastty keeps tracking the first chat, and the row keeps its name and stops
+  updating its status. Cursor writes no title for print-mode (`-p`) runs.
+- OpenCode and MiMo Code keep a title on each session. Toastty's injected plugin
+  forwards it when the provider changes it and again once the provider reports
+  the session, so a resumed session shows its existing title from its first
+  prompt. Until then the plugin treats the resumed session ID only as a hint,
+  and the row stays unnamed. Both title a new session
+  `New session - <timestamp>` until the real title is generated, and Toastty
+  treats that placeholder as no name.
+- Pi does not generate names. A name set with `/name` is forwarded by Toastty's
+  extension at the next turn boundary, because `/name` itself fires no
+  extension event.
 
-Toastty reads these files in the app, not in the hook helper, and only when a
-session's reported status changes — the same `UserPromptSubmit` and `Stop` hooks
-that produce those transitions. Nothing polls. Neither file format is
-documented, so a missing file, an unparsable record, or a renamed key leaves the
-row unnamed rather than failing.
+Toastty reads the Claude, Codex, and Cursor files in the app, not in the hook
+helper, and only when a session's reported status changes — the same hooks that
+report a turn starting and stopping — or when a new Cursor conversation starts.
+Nothing polls. None of these formats is documented, so a missing file, an
+unparsable record, or a renamed key leaves the row unnamed rather than failing.
+Like `CODEX_HOME`, Cursor's directory overrides are read from Toastty's own
+environment, not the launched shell's.
 
 Sub-agent threads, guardian-review threads, and `codex exec` runs are never
 named by their provider and use the unnamed row shape. A name supplied at launch

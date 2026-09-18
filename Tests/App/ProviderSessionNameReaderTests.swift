@@ -6,6 +6,7 @@ import XCTest
 final class ProviderSessionNameReaderTests: XCTestCase {
     private static let claudeSessionID = "9f6c1b2e-4d55-4a71-9b0a-2f0c7d5e8a31"
     private static let codexThreadID = "019993ea-7c41-7b5a-9d2f-5b1c8e4a6d07"
+    private static let cursorConversationID = "bd10613e-ee4b-4ccb-906b-5a8f7c8aef2d"
 
     // MARK: - Claude transcript parsing
 
@@ -349,7 +350,7 @@ final class ProviderSessionNameReaderTests: XCTestCase {
     }
 
     func testSourceIsAbsentForUnsupportedAgentsAndBlankSessionIDs() {
-        for agent in [AgentKind.opencode, .cursor, .pi, .processWatch] {
+        for agent in [AgentKind.opencode, .mimocode, .pi, .processWatch] {
             XCTAssertNil(
                 ProviderSessionNameReader.source(
                     agent: agent,
@@ -358,10 +359,10 @@ final class ProviderSessionNameReaderTests: XCTestCase {
                     environment: [:],
                     homeDirectoryPath: "/Users/tester"
                 ),
-                "\(agent.rawValue) generates no session name"
+                "\(agent.rawValue) has no session name file to read"
             )
         }
-        for agent in [AgentKind.claude, .codex] {
+        for agent in [AgentKind.claude, .codex, .cursor] {
             XCTAssertNil(
                 ProviderSessionNameReader.source(
                     agent: agent,
@@ -371,6 +372,112 @@ final class ProviderSessionNameReaderTests: XCTestCase {
                     homeDirectoryPath: "/Users/tester"
                 )
             )
+        }
+    }
+
+    // MARK: - Cursor
+
+    func testSourceResolvesCursorChatsDirectoryWithCursorsOwnPrecedence() {
+        func source(_ environment: [String: String], conversationID: String = Self.cursorConversationID) -> ProviderSessionNameSource? {
+            ProviderSessionNameReader.source(
+                agent: .cursor,
+                nativeSessionID: conversationID,
+                sessionFilePath: "",
+                environment: environment,
+                homeDirectoryPath: "/Users/tester"
+            )
+        }
+        func expected(_ chatsDirectoryPath: String) -> ProviderSessionNameSource {
+            .cursorChatMetadata(chatsDirectoryPath: chatsDirectoryPath, conversationID: Self.cursorConversationID)
+        }
+
+        XCTAssertEqual(
+            source(["CURSOR_CONFIG_DIR": "/Volumes/work/cursor", "XDG_CONFIG_HOME": "/Users/tester/.config"]),
+            expected("/Volumes/work/cursor/chats")
+        )
+        XCTAssertEqual(
+            source(["CURSOR_CONFIG_DIR": "relative/cursor", "XDG_CONFIG_HOME": "/Users/tester/.config"]),
+            expected("/Users/tester/.config/cursor/chats"),
+            "A relative override cannot be resolved the way Cursor would, so it is skipped"
+        )
+        XCTAssertEqual(source([:]), expected("/Users/tester/.cursor/chats"))
+        // The conversation ID becomes a path component.
+        XCTAssertNil(source([:], conversationID: "../../etc"))
+        XCTAssertNil(source([:], conversationID: "not-a-uuid"))
+    }
+
+    func testReadNameFindsCursorChatTitleUnderAnyWorkspaceDirectory() async throws {
+        let chatsDirectory = try makeTemporaryDirectory()
+        func writeMetadata(_ contents: String, workspace: String, conversationID: String) throws {
+            let chatDirectory = chatsDirectory
+                .appendingPathComponent(workspace, isDirectory: true)
+                .appendingPathComponent(conversationID, isDirectory: true)
+            try FileManager.default.createDirectory(at: chatDirectory, withIntermediateDirectories: true)
+            _ = try write(contents, named: "meta.json", in: chatDirectory)
+        }
+        let untitledConversationID = "0b6d5f1e-8c3a-4e2b-9f71-3a5c2d8e6b40"
+        try FileManager.default.createDirectory(
+            at: chatsDirectory.appendingPathComponent("0123456789abcdef0123456789abcdef", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try writeMetadata(
+            #"{"schemaVersion":1,"hasConversation":true,"title":"Blue Sky Explanation","cwd":"/repo"}"#,
+            workspace: "fedcba9876543210fedcba9876543210",
+            conversationID: Self.cursorConversationID
+        )
+        // Cursor writes meta.json before the title exists.
+        try writeMetadata(
+            #"{"schemaVersion":1,"hasConversation":true,"cwd":"/repo"}"#,
+            workspace: "fedcba9876543210fedcba9876543210",
+            conversationID: untitledConversationID
+        )
+
+        let reader = ProviderSessionNameReader()
+        func readName(_ conversationID: String) async -> String? {
+            await reader.readName(from: .cursorChatMetadata(
+                chatsDirectoryPath: chatsDirectory.path,
+                conversationID: conversationID
+            ))
+        }
+        let name = await readName(Self.cursorConversationID)
+        XCTAssertEqual(name, "Blue Sky Explanation")
+        let untitled = await readName(untitledConversationID)
+        XCTAssertNil(untitled)
+        let unknown = await readName("5d1c3e7a-2b4f-4a8e-9c60-7e2f1b3d5a98")
+        XCTAssertNil(unknown)
+        let missingChats = await reader.readName(from: .cursorChatMetadata(
+            chatsDirectoryPath: chatsDirectory.appendingPathComponent("absent").path,
+            conversationID: Self.cursorConversationID
+        ))
+        XCTAssertNil(missingChats)
+    }
+
+    // MARK: - Reported names
+
+    func testReportedSessionNameTreatsOpenCodeFamilyPlaceholderAsUnnamed() {
+        let placeholders = [
+            "New session - 2026-09-18T05:08:03.123Z",
+            "Child session - 2026-09-18T05:08:03.123Z",
+        ]
+        for agent in [AgentKind.opencode, .mimocode] {
+            for placeholder in placeholders {
+                XCTAssertNil(ProviderSessionNameParser.reportedSessionName(placeholder, agent: agent))
+            }
+            XCTAssertEqual(
+                ProviderSessionNameParser.reportedSessionName("  Build system explanation ", agent: agent),
+                "Build system explanation"
+            )
+            // Only the exact placeholder shape is excluded.
+            XCTAssertEqual(
+                ProviderSessionNameParser.reportedSessionName("New session - notes on the rollout", agent: agent),
+                "New session - notes on the rollout"
+            )
+        }
+        // Pi's names are the user's own, whatever they look like.
+        XCTAssertEqual(ProviderSessionNameParser.reportedSessionName(placeholders[0], agent: .pi), placeholders[0])
+        // Reported names follow the same rules as names read from disk.
+        for invalid in ["first line\nsecond line", String(repeating: "a", count: 201), "   "] {
+            XCTAssertNil(ProviderSessionNameParser.reportedSessionName(invalid, agent: .opencode))
         }
     }
 

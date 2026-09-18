@@ -663,6 +663,26 @@ struct RemoteAccessServiceSafetyTests {
         }
     }
 
+    /// Remote clients title a conversation the way the sidebar names its row,
+    /// so a provider's generated name replaces the panel label.
+    @MainActor
+    @Test func providerSessionNameTitlesTheRemoteConversation() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .opencode)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let panelLabelTitle = fixture.summary.title
+
+        #expect(fixture.sessionRuntimeStore.applyReportedProviderSessionName(
+            sessionID: fixture.sessionID,
+            agent: .opencode,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            name: "Build system explanation"
+        ))
+
+        #expect(panelLabelTitle != "Build system explanation")
+        #expect(fixture.summary.title == "Build system explanation")
+    }
+
     @MainActor
     @Test func bootstrappedPromptClosesWhenDesktopStartsWorking() async throws {
         let fixture = try RemoteBootstrapFixture()

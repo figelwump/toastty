@@ -90,6 +90,9 @@ final class SessionRuntimeStore: ObservableObject {
     private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
     private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
     private let providerSessionNameReader = ProviderSessionNameReader()
+    /// Where provider name sources resolve `CODEX_HOME` and Cursor's config
+    /// directory. Injected so tests can point them at a temporary directory.
+    private let providerSessionNameEnvironment: [String: String]
     private var providerSessionNameRefreshTaskBySessionID: [String: Task<Void, Never>] = [:]
     private var providerSessionNameRefreshPendingSessionIDs: Set<String> = []
     /// Bumped per read so a stale continuation cannot clear or overwrite the
@@ -195,7 +198,8 @@ final class SessionRuntimeStore: ObservableObject {
         agentHookDispatcher: AgentHookDispatcher? = nil,
         codexHookApprovalDeferralNanoseconds: UInt64 = 1_000_000_000,
         backgroundActivityReapIntervalNanoseconds: UInt64 = 10_000_000_000,
-        maximumBackgroundActivityAge: TimeInterval = 8 * 60 * 60
+        maximumBackgroundActivityAge: TimeInterval = 8 * 60 * 60,
+        providerSessionNameEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
         self.isApplicationActive = isApplicationActive
@@ -203,6 +207,7 @@ final class SessionRuntimeStore: ObservableObject {
         self.codexHookApprovalDeferralNanoseconds = codexHookApprovalDeferralNanoseconds
         self.backgroundActivityReapIntervalNanoseconds = backgroundActivityReapIntervalNanoseconds
         self.maximumBackgroundActivityAge = maximumBackgroundActivityAge
+        self.providerSessionNameEnvironment = providerSessionNameEnvironment
     }
 
     func bind(store: AppStore) {
@@ -745,16 +750,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// name in place: the provider writes the name a turn or two in, and a
     /// transient read failure should not blank a row that already has one.
     private func refreshProviderSessionNameIfNeeded(sessionID: String) {
-        guard let record = sessionRegistry.activeSession(sessionID: sessionID),
-              let confirmation = nativeSessionBindingConfirmation(for: sessionID),
-              confirmation.agent == record.agent,
-              let source = ProviderSessionNameReader.source(
-                  agent: record.agent,
-                  nativeSessionID: confirmation.nativeSessionID,
-                  sessionFilePath: confirmation.sessionFilePath
-              ) else {
-            return
-        }
+        guard let source = providerSessionNameSource(sessionID: sessionID) else { return }
 
         // One read in flight per session. A turn boundary arriving mid-read
         // is remembered rather than dropped, because that boundary is exactly
@@ -782,7 +778,7 @@ final class SessionRuntimeStore: ObservableObject {
                     self.applyProviderSessionName(
                         sessionID: sessionID,
                         providerSessionName: name,
-                        readFrom: confirmation
+                        readFrom: source
                     )
                 }
                 if Task.isCancelled == false, hasPendingRead {
@@ -801,23 +797,75 @@ final class SessionRuntimeStore: ObservableObject {
             (providerSessionNameRefreshGenerationBySessionID[sessionID] ?? 0) + 1
     }
 
+    /// Where the session's current provider conversation keeps its name.
+    /// Managed providers identify the conversation through the confirmed
+    /// native binding. Cursor is not a managed provider, so its hooks' root
+    /// `conversation_id` identifies it instead.
+    private func providerSessionNameSource(sessionID: String) -> ProviderSessionNameSource? {
+        guard let record = sessionRegistry.activeSession(sessionID: sessionID) else { return nil }
+        if record.agent == .cursor {
+            guard let conversationID = cursorHookCorrelationBySessionID[sessionID]?.conversationID else {
+                return nil
+            }
+            return ProviderSessionNameReader.source(
+                agent: .cursor,
+                nativeSessionID: conversationID,
+                sessionFilePath: "",
+                environment: providerSessionNameEnvironment
+            )
+        }
+        guard let confirmation = nativeSessionBindingConfirmation(for: sessionID),
+              confirmation.agent == record.agent else {
+            return nil
+        }
+        return ProviderSessionNameReader.source(
+            agent: record.agent,
+            nativeSessionID: confirmation.nativeSessionID,
+            sessionFilePath: confirmation.sessionFilePath,
+            environment: providerSessionNameEnvironment
+        )
+    }
+
     private func applyProviderSessionName(
         sessionID: String,
         providerSessionName: String,
-        readFrom confirmation: ManagedNativeSessionBindingConfirmation
+        readFrom source: ProviderSessionNameSource
     ) {
         // The session may have been rebound to a different provider
         // conversation while the read was in flight. `bindingID` does not move
-        // on that rebind, so the conversation's own identity is what decides
-        // whether this name still belongs here.
-        guard let current = nativeSessionBindingConfirmation(for: sessionID),
-              current.nativeSessionID == confirmation.nativeSessionID,
-              current.sessionFilePath == confirmation.sessionFilePath,
+        // on that rebind, so the conversation's own identity, which the source
+        // carries, is what decides whether this name still belongs here.
+        guard providerSessionNameSource(sessionID: sessionID) == source,
               let record = sessionRegistry.activeSession(sessionID: sessionID),
               record.providerSessionName != providerSessionName else {
             return
         }
         setProviderSessionName(sessionID: sessionID, providerSessionName: providerSessionName)
+    }
+
+    /// Stores a name the provider reported through Toastty's plugin (opencode,
+    /// MiMo Code) or extension (pi) rather than one Toastty reads from disk.
+    /// The name must belong to the conversation this session is bound to now;
+    /// the plugin forwards the binding first, so a mismatch means the name is
+    /// stale or belongs to a conversation another panel owns.
+    @discardableResult
+    func applyReportedProviderSessionName(
+        sessionID: String,
+        agent: AgentKind,
+        nativeSessionID: String,
+        name: String
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == agent,
+              let confirmation = nativeSessionBindingConfirmation(for: sessionID),
+              confirmation.agent == agent,
+              confirmation.nativeSessionID == nativeSessionID,
+              let resolved = ProviderSessionNameParser.reportedSessionName(name, agent: agent),
+              record.providerSessionName != resolved else {
+            return false
+        }
+        setProviderSessionName(sessionID: sessionID, providerSessionName: resolved)
+        return true
     }
 
     private func clearProviderSessionName(sessionID: String) {
@@ -1921,6 +1969,12 @@ final class SessionRuntimeStore: ObservableObject {
                 generationID: nil,
                 cloudHandoff: false
             )
+            // A later root conversation under the same managed session follows
+            // a `sessionEnd`, so any name already shown belongs to the previous
+            // chat. A resumed chat already has its title, so read it now.
+            cancelProviderSessionNameRefresh(sessionID: sessionID)
+            clearProviderSessionName(sessionID: sessionID)
+            refreshProviderSessionNameIfNeeded(sessionID: sessionID)
             if let pendingPrompt = pendingCursorPromptBySessionID.removeValue(forKey: sessionID),
                normalizedNonEmpty(pendingPrompt.conversationID) == conversationID {
                 // Interactive Cursor can submit its initial prompt before

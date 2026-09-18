@@ -1618,7 +1618,11 @@ final class RemoteAccessService: ObservableObject {
                 candidates.append(ConversationCandidate(
                     conversationID: conversationID,
                     provider: provider,
-                    title: activeRecord?.displayTitleOverride ?? terminalState.displayPanelLabel,
+                    // Same precedence as the sidebar row, so a provider's
+                    // generated name reaches remote clients too.
+                    title: activeRecord?.displayTitleOverride
+                        ?? activeRecord?.providerSessionName
+                        ?? terminalState.displayPanelLabel,
                     workspaceID: workspace.id,
                     workspaceTitle: workspace.title,
                     panelID: panelID,
