@@ -161,9 +161,15 @@ different file. Permission errors and inconclusive checks do not hide panels.
 
 File previews require a native paired device with read access. A conversation
 link is resolved using the conversation's recorded working directory on the
-Mac. Access is limited to its containing Git repository, or that recorded
-directory when it is not in a repository, plus files already open in panels
-of the same workspace. A missing working directory does not fall back to the
+Mac. Access covers three kinds of files: files inside the conversation's
+containing Git repository, or the recorded directory when it is not in a
+repository; files already open in panels of the same workspace; and files the
+agent itself linked in that conversation, wherever they are, such as a sibling
+worktree or a `/tmp` scratch file. The Mac decides that last kind from its own
+copy of the conversation, so the phone can only open links the agent wrote.
+Links in your own messages do not grant access. An agent-linked absolute path
+still opens when the conversation has no recorded working directory.
+A missing working directory does not fall back to the
 Mac's current directory or home directory, and the filesystem root and home
 directory cannot become broad preview roots.
 Recorded working directories and open-panel paths must refer directly to
@@ -171,11 +177,21 @@ their files or directories. Custom symlink paths do not grant remote preview
 access; open the resolved path on the Mac instead. Standard macOS path aliases
 such as `/tmp` remain supported.
 
+The source viewer also opens `.patch` and `.diff` files and extensionless
+text files such as a `Makefile` as plain text. Dotfiles, `.env` files reached
+only through an agent link, and binary files stay unavailable.
+
 An open HTML file also permits supported web assets within its containing
 directory. This includes local stylesheets, scripts, images, fonts, and media;
 it does not grant access to arbitrary neighboring documents or hidden files.
 Paths that escape the allowed directory, including through symlinks, are
-rejected. Local HTML runs separately from the gateway credentials, with
+rejected. An HTML file reached only through an agent link does not serve
+assets when it sits directly in the home directory or the filesystem root.
+
+When a preview fails, the Mac log records why: the failure stage, the reason,
+whether the reference was absolute or relative, its extension, whether a
+working directory was recorded, and which access rule applied or was tried.
+File paths and contents are never logged. Local HTML runs separately from the gateway credentials, with
 network connections, forms, and embedded frames blocked. This can prevent a
 local page that depends on external services from working completely.
 
