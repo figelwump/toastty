@@ -652,18 +652,24 @@ While a managed agent session is active, Toastty suppresses overlapping terminal
 
 ### Sidebar session rows
 
-A session row reserves a fixed status gutter at its left edge, so states line up
-down the list: a spinner while working, an amber dot when the session needs
-approval, a green dot for an unread reply, a red dot on error, and nothing when
-idle. Ready, approval, and error badges sit at the trailing edge of the row's
-first line, ahead of the elapsed time, the later flag, a parent label, and the
-sub-agent disclosure pill. The spelled-out wording ("needs approval") stays in
-the row's accessibility label.
+A session row reserves a fixed gutter at its left edge, which carries what is
+true about the session in two slots. The top slot is current status, so states
+line up down the list: a spinner while working, an amber dot when the session
+needs approval, a green dot for an unread reply, a red dot on error, and nothing
+when idle. The slot underneath carries a standing mark — a violet flag when the
+session is flagged for later, or a bell when the row is a watched process. The
+two marks are mutually exclusive, because a watched process cannot be flagged.
 
-A named session reads as three lines: the name, the latest summary, then the
-tab title in a neutral pill beside the provider name. A session the provider has
-not named yet leads with the summary instead and carries the tab pill, provider
-name, and badges on a second line.
+A named session reads as three lines: the name, the latest summary, then the tab
+title in a neutral pill beside the provider name. A session the provider has not
+named yet leads with the summary instead, then the same tab line.
+
+That tab line also carries everything trailing: the ready, approval or error
+badge, a waiting chip, the elapsed time, a parent label, and the sub-agent
+disclosure pill. Keeping them there rather than on the first line means status
+sits in one place whether or not a name has arrived, and a long name gets the
+row's full width. The badge labels are short; the spelled-out wording ("needs
+approval") stays in the row's accessibility label.
 
 Working rows count up from the start of the current turn. A turn starts when the
 provider reports `working` and ends when it leaves that state; the duration of

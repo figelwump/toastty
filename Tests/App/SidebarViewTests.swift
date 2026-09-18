@@ -108,6 +108,38 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(leftClampedOrigin, CGPoint(x: 0, y: 394))
     }
 
+    /// The badge belongs on the tab line in both row shapes, so a row with a
+    /// name and a row without one put status in the same place.
+    func testStatusBadgeSharesTheTabLineWhetherOrNotTheRowHasAName() throws {
+        for name in ["Decommission the staging host", nil] as [String?] {
+            let hostingView = try makeSidebarHostingView(
+                sessionID: "badge-line-row",
+                sessionStatus: SessionStatus(
+                    kind: .needsApproval,
+                    summary: "Needs approval",
+                    detail: "Approve the DNS record removal"
+                ),
+                displayTitleOverride: name,
+                customTabTitle: "operator"
+            )
+
+            let shape = name == nil ? "an unnamed row" : "a named row"
+            let badge = try semanticTextFrame(in: hostingView, text: "approval", shape: shape)
+            let tabPill = try semanticTextFrame(in: hostingView, text: "operator", shape: shape)
+            XCTAssertEqual(
+                badge.midY,
+                tabPill.midY,
+                accuracy: 1.5,
+                "The badge should sit on the tab line in \(shape)"
+            )
+            XCTAssertGreaterThan(
+                badge.minX,
+                tabPill.maxX,
+                "The badge should be right-aligned after the tab pill in \(shape)"
+            )
+        }
+    }
+
     /// The pointer-interaction overlay claims hit-testing for the whole row,
     /// so a SwiftUI `.onHover` beneath it never fires. Drive hover the way the
     /// app receives it — through that overlay's tracking area.
@@ -2508,6 +2540,32 @@ final class SidebarViewTests: XCTestCase {
                 return pointerView
             }
             currentView = view.superview
+        }
+        return nil
+    }
+
+    /// Row text is carried by zero-size `SidebarSemanticTextBridge` labels, so
+    /// their frames are how a test can tell which line an element landed on.
+    private func semanticTextFrame(
+        in rootView: NSView,
+        text: String,
+        shape: String
+    ) throws -> CGRect {
+        let field = try XCTUnwrap(
+            semanticTextField(in: rootView, text: text),
+            "No rendered text \"\(text)\" in \(shape): \(renderedTextValues(in: rootView))"
+        )
+        return field.convert(field.bounds, to: rootView)
+    }
+
+    private func semanticTextField(in rootView: NSView, text: String) -> NSTextField? {
+        if let field = rootView as? NSTextField, field.stringValue == text {
+            return field
+        }
+        for subview in rootView.subviews {
+            if let match = semanticTextField(in: subview, text: text) {
+                return match
+            }
         }
         return nil
     }

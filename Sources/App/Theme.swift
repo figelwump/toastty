@@ -32,6 +32,10 @@ enum ToastyTheme {
     static let sidebarSessionUnreadBackground = Color(hex: 0x5BA08A, alpha: 0.35)
     static let sidebarSessionUnreadBorder = Color(hex: 0x5BA08A, alpha: 0.6)
     static let sidebarSessionWatchIcon = Color(hex: 0xD9604C)
+    /// Violet because the flag is a mark the user set, not a status: amber is
+    /// already the working spinner and the approval dot, green is ready, red
+    /// is error, and the watch bell owns the rust tone.
+    static let sidebarSessionLaterFlag = Color(hex: 0xB98CE0)
     static let sidebarChildRail = Color(hex: 0x3B3733)
     static let sidebarChildContextText = Color(hex: 0x8F877D)
     static let sidebarChildMetaText = Color(hex: 0x7E766C)

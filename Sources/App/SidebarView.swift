@@ -419,6 +419,15 @@ struct SidebarView: View {
     private static let sessionStatusRailWidth: CGFloat = 12
     private static let sessionStatusRailGap: CGFloat = 6
     private static let sessionStatusRailDotSize: CGFloat = 7
+    /// The rail's second slot, under the status one, for a standing mark on the
+    /// session: the later flag or the watch bell. Short enough that a two-line
+    /// row is still taller than the rail, so the rail never sets row height.
+    private static let sessionStatusRailMarkerSlotHeight: CGFloat = 13
+    private static let sessionStatusRailSlotSpacing: CGFloat = 2
+    private static let sessionRailFlagFontSize: CGFloat = 9
+    /// `bell.fill` carries less ink than `flag.fill`, so it needs a larger
+    /// point size to read at the same weight.
+    private static let sessionRailWatchFontSize: CGFloat = 10.5
     /// Reserving a line height keeps the rail, name, and accessories on one
     /// baseline whether or not a row has a badge or disclosure pill.
     private static let sessionRowLineMinHeight: CGFloat = 17
@@ -1468,6 +1477,13 @@ struct SidebarView: View {
             agentFallbackName: workspaceSessionStatus.agent.displayName
         ) ? SidebarSessionPresentation.sessionAgentLabel(for: workspaceSessionStatus.agent) : nil
 
+        let railMarker: SessionRailMarker? = if isLaterFlagged {
+            .laterFlag
+        } else if workspaceSessionStatus.agent == .processWatch {
+            .processWatch
+        } else {
+            nil
+        }
         let accessories = SessionRowAccessoryModel(
             chipKind: SidebarSessionPresentation.sessionStatusChipKind(
                 for: status,
@@ -1475,9 +1491,6 @@ struct SidebarView: View {
             ),
             waitingChipLabel: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: projection),
             turnStartedAt: workspaceSessionStatus.turnStartedAt,
-            isLaterFlagged: isLaterFlagged,
-            showsWatchIcon: workspaceSessionStatus.agent == .processWatch,
-            showsUnreadSessionAccent: showsUnreadSessionAccent,
             parentTagLabel: parentSessionName.map(
                 SidebarSessionPresentation.parentSessionTagLabel(parentName:)
             ),
@@ -1489,33 +1502,16 @@ struct SidebarView: View {
         let hasParentTag = parentSessionName != nil
         let hasWaitingChip = accessories.waitingChipLabel != nil
 
-        // Drop the parent tag, then the waiting chip, when the line carrying
-        // the accessories does not fit at its ideal width. Truncating them
-        // instead leaves stubs like "↖ Cl…" while the session name still loses
-        // width, because the stack reserves every chip's minimum width before
-        // layout priority applies.
-        let titleLine = { (name: String, showsParentTag: Bool, showsWaitingChip: Bool) in
-            sessionRowTitleLine(
-                name: name,
-                statusKind: status.kind,
-                showsUnreadSessionAccent: showsUnreadSessionAccent,
-                accessories: accessories,
-                showsParentTag: showsParentTag,
-                showsWaitingChip: showsWaitingChip,
-                onToggleChildRows: onToggleChildRows
-            )
-        }
-        let tabLine = {
-            (
-                carriesAccessories: Bool,
-                showsParentTag: Bool,
-                showsWaitingChip: Bool,
-                showsTabPill: Bool
-            ) in
+        // Drop the parent tag, then the waiting chip, then the tab pill, when
+        // the tab line does not fit at its ideal width. Truncating them
+        // instead leaves stubs like "↖ Cl…" and an empty pill, because the
+        // stack reserves every chip's minimum width before layout priority
+        // applies. The hover card still carries all three.
+        let tabLine = { (showsParentTag: Bool, showsWaitingChip: Bool, showsTabPill: Bool) in
             sessionRowTabLine(
                 customTabTitle: showsTabPill ? customTabTitle : nil,
                 agentLabel: agentLabel,
-                accessories: carriesAccessories ? accessories : nil,
+                accessories: accessories,
                 showsParentTag: showsParentTag,
                 showsWaitingChip: showsWaitingChip,
                 onToggleChildRows: onToggleChildRows
@@ -1523,20 +1519,16 @@ struct SidebarView: View {
         }
 
         return HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
-            sessionStatusRail(railState)
+            sessionStatusRail(railState, marker: railMarker)
 
             VStack(alignment: .leading, spacing: 2) {
                 switch rowShape {
                 case .named(let name, let summary):
-                    ViewThatFits(in: .horizontal) {
-                        if hasParentTag {
-                            titleLine(name, true, hasWaitingChip)
-                        }
-                        if hasWaitingChip {
-                            titleLine(name, false, true)
-                        }
-                        titleLine(name, false, false)
-                    }
+                    sessionRowTitleLine(
+                        name: name,
+                        statusKind: status.kind,
+                        showsUnreadSessionAccent: showsUnreadSessionAccent
+                    )
 
                     // Reserved even without a summary yet, so named rows keep
                     // one height and the list does not reflow as summaries
@@ -1548,8 +1540,6 @@ struct SidebarView: View {
                         isResuming: projection == .resuming
                     )
 
-                    tabLine(false, false, false, true)
-
                 case .summaryFirst(let summary):
                     sessionRowPrimaryLabel(
                         summary,
@@ -1557,21 +1547,17 @@ struct SidebarView: View {
                         showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isResuming: projection == .resuming
                     )
+                }
 
-                    ViewThatFits(in: .horizontal) {
-                        if hasParentTag {
-                            tabLine(true, true, hasWaitingChip, true)
-                        }
-                        if hasWaitingChip {
-                            tabLine(true, false, true, true)
-                        }
-                        tabLine(true, false, false, true)
-                        // Accessories share this line in the summary-first
-                        // shape, so the tab pill can be squeezed past
-                        // legibility. Drop it rather than draw an empty pill;
-                        // the hover card still names the tab.
-                        tabLine(true, false, false, false)
+                ViewThatFits(in: .horizontal) {
+                    if hasParentTag {
+                        tabLine(true, hasWaitingChip, true)
                     }
+                    if hasWaitingChip {
+                        tabLine(false, true, true)
+                    }
+                    tabLine(false, false, true)
+                    tabLine(false, false, false)
                 }
             }
         }
@@ -1618,9 +1604,6 @@ struct SidebarView: View {
         let chipKind: SessionStatusKind?
         let waitingChipLabel: String?
         let turnStartedAt: Date?
-        let isLaterFlagged: Bool
-        let showsWatchIcon: Bool
-        let showsUnreadSessionAccent: Bool
         let parentTagLabel: String?
         let parentSessionName: String?
         let childCount: Int
@@ -1628,10 +1611,34 @@ struct SidebarView: View {
         let collapsedChildNeedsAttention: Bool
     }
 
-    /// Reserved left gutter. It keeps its width when empty so row text lines
-    /// up down the list instead of shifting with each session's status.
-    @ViewBuilder
+    /// A standing mark on the session, as opposed to its current status. The
+    /// two are mutually exclusive: a watched process cannot be flagged (see
+    /// `SessionRegistry.setLaterFlag`).
+    private enum SessionRailMarker: Equatable {
+        case laterFlag
+        case processWatch
+    }
+
+    /// Reserved left gutter, and the column for what is true about a session:
+    /// current status in the top slot, a standing mark under it. Both slots
+    /// keep their size when empty so row text lines up down the list.
     private func sessionStatusRail(
+        _ state: SidebarSessionPresentation.SessionRailState,
+        marker: SessionRailMarker?
+    ) -> some View {
+        VStack(spacing: Self.sessionStatusRailSlotSpacing) {
+            sessionStatusRailStatusSlot(state)
+
+            if let marker {
+                sessionStatusRailMarkerSlot(marker)
+            }
+        }
+        .frame(width: Self.sessionStatusRailWidth)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func sessionStatusRailStatusSlot(
         _ state: SidebarSessionPresentation.SessionRailState
     ) -> some View {
         Group {
@@ -1659,7 +1666,22 @@ struct SidebarView: View {
             }
         }
         .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
-        .accessibilityHidden(true)
+    }
+
+    private func sessionStatusRailMarkerSlot(_ marker: SessionRailMarker) -> some View {
+        Group {
+            switch marker {
+            case .laterFlag:
+                Image(systemName: "flag.fill")
+                    .font(.system(size: Self.sessionRailFlagFontSize, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.sidebarSessionLaterFlag)
+            case .processWatch:
+                Image(systemName: "bell.fill")
+                    .font(.system(size: Self.sessionRailWatchFontSize, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.sidebarSessionWatchIcon)
+            }
+        }
+        .frame(width: Self.sessionStatusRailWidth, height: Self.sessionStatusRailMarkerSlotHeight)
     }
 
     @ViewBuilder
@@ -1700,24 +1722,6 @@ struct SidebarView: View {
             .accessibilityHidden(true)
         }
 
-        if model.isLaterFlagged {
-            Image(systemName: "flag.fill")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(
-                    ToastyTheme.accent.opacity(model.showsUnreadSessionAccent ? 0.98 : 0.88)
-                )
-                .accessibilityHidden(true)
-        } else if model.showsWatchIcon {
-            // Watched processes cannot be flagged (see SessionRegistry.setLaterFlag),
-            // so this slot is mutually exclusive with the flag icon above.
-            Image(systemName: "bell.fill")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(
-                    ToastyTheme.sidebarSessionWatchIcon.opacity(model.showsUnreadSessionAccent ? 0.98 : 0.88)
-                )
-                .accessibilityHidden(true)
-        }
-
         if let parentTagLabel = model.parentTagLabel, showsParentTag {
             sessionParentTag(label: parentTagLabel)
         }
@@ -1734,14 +1738,13 @@ struct SidebarView: View {
         }
     }
 
+    /// Identity only. Status, times and controls all live on the tab line, so
+    /// the name gets the row's full width and both row shapes put the badge in
+    /// the same place.
     private func sessionRowTitleLine(
         name: String,
         statusKind: SessionStatusKind,
-        showsUnreadSessionAccent: Bool,
-        accessories: SessionRowAccessoryModel,
-        showsParentTag: Bool,
-        showsWaitingChip: Bool,
-        onToggleChildRows: @escaping () -> Void
+        showsUnreadSessionAccent: Bool
     ) -> some View {
         HStack(spacing: 6) {
             Self.styledSessionNameText(
@@ -1752,34 +1755,19 @@ struct SidebarView: View {
                 .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .layoutPriority(2)
 
             Spacer(minLength: 0)
-
-            sessionRowAccessories(
-                accessories,
-                showsParentTag: showsParentTag,
-                showsWaitingChip: showsWaitingChip,
-                onToggleChildRows: onToggleChildRows
-            )
         }
         .frame(minHeight: Self.sessionRowLineMinHeight)
-        .preference(
-            key: SidebarSessionRowCompactHelpTextPreferenceKey.self,
-            value: Self.sessionRowCompactHelpText(
-                accessories,
-                showsParentTag: showsParentTag,
-                showsWaitingChip: showsWaitingChip
-            )
-        )
     }
 
-    /// The tab pill and agent label. It also carries the trailing accessories
-    /// for rows whose first line is the summary rather than a session name.
+    /// The tab pill, the agent label, and every trailing accessory: the status
+    /// badge, the waiting chip, elapsed time, a parent tag and the sub-agent
+    /// disclosure pill. Both row shapes end on this line.
     private func sessionRowTabLine(
         customTabTitle: String?,
         agentLabel: String?,
-        accessories: SessionRowAccessoryModel?,
+        accessories: SessionRowAccessoryModel,
         showsParentTag: Bool,
         showsWaitingChip: Bool,
         onToggleChildRows: @escaping () -> Void
@@ -1799,25 +1787,21 @@ struct SidebarView: View {
 
             Spacer(minLength: 0)
 
-            if let accessories {
-                sessionRowAccessories(
-                    accessories,
-                    showsParentTag: showsParentTag,
-                    showsWaitingChip: showsWaitingChip,
-                    onToggleChildRows: onToggleChildRows
-                )
-            }
+            sessionRowAccessories(
+                accessories,
+                showsParentTag: showsParentTag,
+                showsWaitingChip: showsWaitingChip,
+                onToggleChildRows: onToggleChildRows
+            )
         }
         .frame(minHeight: Self.sessionRowSecondaryLineMinHeight)
         .preference(
             key: SidebarSessionRowCompactHelpTextPreferenceKey.self,
-            value: accessories.flatMap {
-                Self.sessionRowCompactHelpText(
-                    $0,
-                    showsParentTag: showsParentTag,
-                    showsWaitingChip: showsWaitingChip
-                )
-            }
+            value: Self.sessionRowCompactHelpText(
+                accessories,
+                showsParentTag: showsParentTag,
+                showsWaitingChip: showsWaitingChip
+            )
         )
     }
 
