@@ -1109,6 +1109,8 @@ struct SidebarView: View {
 
                 if let shortcutLabel {
                     shortcutBadge(shortcutLabel, highlighted: optionKeyPressed)
+                        .opacity(optionKeyPressed ? 1 : 0)
+                        .accessibilityHidden(!optionKeyPressed)
                 }
             }
 
