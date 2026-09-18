@@ -89,6 +89,12 @@ final class SessionRuntimeStore: ObservableObject {
     private static let maximumProviderConversationObservationCount = 20_000
     private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
     private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
+    private let providerSessionNameReader = ProviderSessionNameReader()
+    private var providerSessionNameRefreshTaskBySessionID: [String: Task<Void, Never>] = [:]
+    private var providerSessionNameRefreshPendingSessionIDs: Set<String> = []
+    /// Bumped per read so a stale continuation cannot clear or overwrite the
+    /// state of a newer one after a teardown and restart under the same ID.
+    private var providerSessionNameRefreshGenerationBySessionID: [String: Int] = [:]
     private var pendingPanelParentSessionIDs: [UUID: PendingPanelParentSessionID] = [:]
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
@@ -245,6 +251,12 @@ final class SessionRuntimeStore: ObservableObject {
         backgroundActivityFinishTombstonesBySessionID = [:]
         codexSubagentReconcilerBySessionID = [:]
         pendingPanelParentSessionIDs = [:]
+        for task in providerSessionNameRefreshTaskBySessionID.values {
+            task.cancel()
+        }
+        providerSessionNameRefreshTaskBySessionID = [:]
+        providerSessionNameRefreshPendingSessionIDs = []
+        providerSessionNameRefreshGenerationBySessionID = [:]
         removeAllPendingCodexHookApprovals()
         backgroundActivityReaperTask?.cancel()
         backgroundActivityReaperTask = nil
@@ -304,7 +316,21 @@ final class SessionRuntimeStore: ObservableObject {
             return true
         }
         invalidateClaudeQuestionBinding(sessionID: managedSessionID)
+        // `/clear` rebinds the same managed session to a new provider
+        // conversation, keeping `bindingID`. The name we already read belongs
+        // to the old conversation, so drop it rather than letting it sit on
+        // the new one until the provider names that one.
+        let boundToADifferentConversation = nativeBindingConfirmationBySessionID[managedSessionID]
+            .map { $0.nativeSessionID != candidate.nativeSessionID
+                || $0.sessionFilePath != candidate.sessionFilePath } ?? false
         nativeBindingConfirmationBySessionID[managedSessionID] = candidate
+        if boundToADifferentConversation {
+            cancelProviderSessionNameRefresh(sessionID: managedSessionID)
+            clearProviderSessionName(sessionID: managedSessionID)
+        }
+        // A binding can be confirmed after the session's first turns, so read
+        // the name here too rather than waiting for the next status change.
+        refreshProviderSessionNameIfNeeded(sessionID: managedSessionID)
         return true
     }
 
@@ -681,6 +707,13 @@ final class SessionRuntimeStore: ObservableObject {
             )
         }
         publish(nextRegistry, reason: "update_status", at: now)
+        // Both providers rewrite their generated name as a session progresses,
+        // and both report a status change on the same hooks that produce it
+        // (`UserPromptSubmit`, `Stop`), so a turn boundary is the refresh
+        // trigger. Nothing polls.
+        if previousRecord?.status?.kind != storedStatus.kind {
+            refreshProviderSessionNameIfNeeded(sessionID: sessionID)
+        }
         if shouldSuppressProjectedWaitingSideEffects(
             sessionID: sessionID,
             status: storedStatus,
@@ -705,6 +738,102 @@ final class SessionRuntimeStore: ObservableObject {
                 status: storedStatus
             )
         }
+    }
+
+    /// Reads the provider's generated session name off the main actor and
+    /// stores it if it changed. A read that finds nothing leaves the existing
+    /// name in place: the provider writes the name a turn or two in, and a
+    /// transient read failure should not blank a row that already has one.
+    private func refreshProviderSessionNameIfNeeded(sessionID: String) {
+        guard let record = sessionRegistry.activeSession(sessionID: sessionID),
+              let confirmation = nativeSessionBindingConfirmation(for: sessionID),
+              confirmation.agent == record.agent,
+              let source = ProviderSessionNameReader.source(
+                  agent: record.agent,
+                  nativeSessionID: confirmation.nativeSessionID,
+                  sessionFilePath: confirmation.sessionFilePath
+              ) else {
+            return
+        }
+
+        // One read in flight per session. A turn boundary arriving mid-read
+        // is remembered rather than dropped, because that boundary is exactly
+        // when the provider rewrites the name.
+        guard providerSessionNameRefreshTaskBySessionID[sessionID] == nil else {
+            providerSessionNameRefreshPendingSessionIDs.insert(sessionID)
+            return
+        }
+        let generation = (providerSessionNameRefreshGenerationBySessionID[sessionID] ?? 0) + 1
+        providerSessionNameRefreshGenerationBySessionID[sessionID] = generation
+        providerSessionNameRefreshTaskBySessionID[sessionID] = Task { [weak self] in
+            guard let reader = self?.providerSessionNameReader else { return }
+            let name = await reader.readName(from: source)
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.providerSessionNameRefreshGenerationBySessionID[sessionID] == generation else {
+                    // A teardown, a rebind, or a newer read has superseded this
+                    // one; its result and its bookkeeping are both stale.
+                    return
+                }
+                self.providerSessionNameRefreshTaskBySessionID.removeValue(forKey: sessionID)
+                let hasPendingRead = self.providerSessionNameRefreshPendingSessionIDs
+                    .remove(sessionID) != nil
+                if Task.isCancelled == false, let name {
+                    self.applyProviderSessionName(
+                        sessionID: sessionID,
+                        providerSessionName: name,
+                        readFrom: confirmation
+                    )
+                }
+                if Task.isCancelled == false, hasPendingRead {
+                    self.refreshProviderSessionNameIfNeeded(sessionID: sessionID)
+                }
+            }
+        }
+    }
+
+    private func cancelProviderSessionNameRefresh(sessionID: String) {
+        providerSessionNameRefreshPendingSessionIDs.remove(sessionID)
+        providerSessionNameRefreshTaskBySessionID.removeValue(forKey: sessionID)?.cancel()
+        // Retiring the generation makes any continuation already scheduled on
+        // the main actor a no-op, including its bookkeeping.
+        providerSessionNameRefreshGenerationBySessionID[sessionID] =
+            (providerSessionNameRefreshGenerationBySessionID[sessionID] ?? 0) + 1
+    }
+
+    private func applyProviderSessionName(
+        sessionID: String,
+        providerSessionName: String,
+        readFrom confirmation: ManagedNativeSessionBindingConfirmation
+    ) {
+        // The session may have been rebound to a different provider
+        // conversation while the read was in flight. `bindingID` does not move
+        // on that rebind, so the conversation's own identity is what decides
+        // whether this name still belongs here.
+        guard let current = nativeSessionBindingConfirmation(for: sessionID),
+              current.nativeSessionID == confirmation.nativeSessionID,
+              current.sessionFilePath == confirmation.sessionFilePath,
+              let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.providerSessionName != providerSessionName else {
+            return
+        }
+        setProviderSessionName(sessionID: sessionID, providerSessionName: providerSessionName)
+    }
+
+    private func clearProviderSessionName(sessionID: String) {
+        guard sessionRegistry.sessionsByID[sessionID]?.providerSessionName != nil else { return }
+        setProviderSessionName(sessionID: sessionID, providerSessionName: nil)
+    }
+
+    private func setProviderSessionName(sessionID: String, providerSessionName: String?) {
+        let now = Date()
+        var nextRegistry = sessionRegistry
+        nextRegistry.updateProviderSessionName(
+            sessionID: sessionID,
+            providerSessionName: providerSessionName,
+            at: now
+        )
+        publish(nextRegistry, reason: "provider_session_name", at: now)
     }
 
     private func logCodexStatusInfoEvent(
@@ -2226,6 +2355,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
+        cancelProviderSessionNameRefresh(sessionID: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
     }
 

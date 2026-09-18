@@ -108,6 +108,191 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(leftClampedOrigin, CGPoint(x: 0, y: 394))
     }
 
+    /// The badge belongs on the tab line in both row shapes, so a row with a
+    /// name and a row without one put status in the same place.
+    func testStatusBadgeSharesTheTabLineWhetherOrNotTheRowHasAName() throws {
+        for name in ["Decommission the staging host", nil] as [String?] {
+            let hostingView = try makeSidebarHostingView(
+                sessionID: "badge-line-row",
+                sessionStatus: SessionStatus(
+                    kind: .needsApproval,
+                    summary: "Needs approval",
+                    detail: "Approve the DNS record removal"
+                ),
+                displayTitleOverride: name,
+                customTabTitle: "operator"
+            )
+
+            let shape = name == nil ? "an unnamed row" : "a named row"
+            let badge = try semanticTextFrame(in: hostingView, text: "approval", shape: shape)
+            let tabPill = try semanticTextFrame(in: hostingView, text: "operator", shape: shape)
+            XCTAssertEqual(
+                badge.midY,
+                tabPill.midY,
+                accuracy: 1.5,
+                "The badge should sit on the tab line in \(shape)"
+            )
+            XCTAssertGreaterThan(
+                badge.minX,
+                tabPill.maxX,
+                "The badge should be right-aligned after the tab pill in \(shape)"
+            )
+        }
+    }
+
+    /// The pointer-interaction overlay claims hit-testing for the whole row,
+    /// so a SwiftUI `.onHover` beneath it never fires. Drive hover the way the
+    /// app receives it — through that overlay's tracking area.
+    func testHoveringASessionRowHighlightsItAndOpensItsHoverCard() throws {
+        let harness = try makeSidebarHarness(
+            sessionID: "hover-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Idle", detail: "Reviewing the change"),
+            displayTitleOverride: "Review the sidebar change"
+        )
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            harness.window.orderOut(nil)
+        }
+
+        let rowID = SidebarSessionPresentation.SidebarSessionRowID(
+            workspaceID: harness.workspaceID,
+            sessionID: "hover-row",
+            panelID: harness.panelID
+        )
+        XCTAssertFalse(HoverTipPresenter.shared.isVisible(id: rowID))
+
+        let region = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "hover-row")
+        let restingBitmap = try renderedBitmap(for: harness.hostingView)
+
+        let enterEvent = try XCTUnwrap(pointerMouseEvent(
+            type: .mouseMoved,
+            view: region,
+            at: NSPoint(x: region.bounds.midX, y: region.bounds.midY),
+            timestamp: 0,
+            eventNumber: 0
+        ))
+        region.mouseEntered(with: enterEvent)
+        pumpMainRunLoop()
+
+        let hoveredBitmap = try renderedBitmap(for: harness.hostingView)
+        XCTAssertGreaterThan(
+            try differingPixelCount(between: restingBitmap, and: hoveredBitmap),
+            0,
+            "Hovering a session row should give it the hover background"
+        )
+
+        // The card waits out its warm-up before presenting.
+        pumpMainRunLoop(duration: 0.8)
+        XCTAssertTrue(
+            HoverTipPresenter.shared.isVisible(id: rowID),
+            "Hovering a session row should open its hover card"
+        )
+
+        let exitEvent = try XCTUnwrap(pointerMouseEvent(
+            type: .mouseMoved,
+            view: region,
+            at: NSPoint(x: region.bounds.midX, y: region.bounds.midY),
+            timestamp: 1,
+            eventNumber: 1
+        ))
+        region.mouseExited(with: exitEvent)
+        pumpMainRunLoop()
+
+        XCTAssertFalse(
+            HoverTipPresenter.shared.isVisible(id: rowID),
+            "Leaving the row should hide its hover card"
+        )
+        let releasedBitmap = try renderedBitmap(for: harness.hostingView)
+        XCTAssertEqual(
+            try differingPixelCount(between: restingBitmap, and: releasedBitmap),
+            0,
+            "Leaving the row should drop the hover background"
+        )
+    }
+
+    func testSessionRowBadgeRendersShortLabelWhileAccessibilityKeepsSpokenWording() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "approval-badge-row",
+            sessionStatus: SessionStatus(
+                kind: .needsApproval,
+                summary: "Needs approval",
+                detail: "Approve the DNS record removal"
+            ),
+            displayTitleOverride: "Decommission the staging host"
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(
+            textValues.contains("approval"),
+            "The row badge should render the shortened label: \(textValues)"
+        )
+        XCTAssertTrue(
+            textValues.contains(where: { $0.contains("needs approval") }),
+            "The accessibility label should keep the spoken wording: \(textValues)"
+        )
+    }
+
+    func testHoverTipOriginOpensBesideAnchorForTrailingPlacement() {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 800)
+        let anchor = CGRect(x: 8, y: 500, width: 240, height: 48)
+        let tipSize = CGSize(width: 320, height: 100)
+
+        let origin = HoverTipPresenter.tipOrigin(
+            anchor: anchor,
+            tipSize: tipSize,
+            visibleFrame: visibleFrame,
+            placement: .trailing(gap: 16)
+        )
+
+        // Left edge one gap past the anchor, top edge level with the anchor's.
+        XCTAssertEqual(origin.x, anchor.maxX + 16)
+        XCTAssertEqual(origin.y + tipSize.height, anchor.maxY)
+    }
+
+    func testHoverTipOriginClampsTrailingCardInsideVisibleFrame() {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 800)
+        let tipSize = CGSize(width: 320, height: 100)
+
+        let topClampedOrigin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: 8, y: 770, width: 240, height: 48),
+            tipSize: tipSize,
+            visibleFrame: visibleFrame,
+            placement: .trailing(gap: 16)
+        )
+        let bottomClampedOrigin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: 8, y: -20, width: 240, height: 48),
+            tipSize: tipSize,
+            visibleFrame: visibleFrame,
+            placement: .trailing(gap: 16)
+        )
+
+        XCTAssertEqual(topClampedOrigin, CGPoint(x: 264, y: 700))
+        XCTAssertEqual(bottomClampedOrigin, CGPoint(x: 264, y: 0))
+    }
+
+    func testHoverTipOriginFallsBackBelowAnchorWhenTrailingCardDoesNotFit() {
+        // A sidebar plus a 320pt card does not fit across a narrow screen.
+        let visibleFrame = CGRect(x: 0, y: 0, width: 560, height: 800)
+        let anchor = CGRect(x: 8, y: 500, width: 240, height: 48)
+        let tipSize = CGSize(width: 320, height: 100)
+
+        let trailingOrigin = HoverTipPresenter.tipOrigin(
+            anchor: anchor,
+            tipSize: tipSize,
+            visibleFrame: visibleFrame,
+            placement: .trailing(gap: 16)
+        )
+        let belowOrigin = HoverTipPresenter.tipOrigin(
+            anchor: anchor,
+            tipSize: tipSize,
+            visibleFrame: visibleFrame,
+            placement: .below
+        )
+
+        XCTAssertEqual(trailingOrigin, belowOrigin)
+        XCTAssertEqual(trailingOrigin, CGPoint(x: 8, y: 394))
+    }
+
     func testChildActivityDotPhaseOffsetIsStableAndBounded() {
         let first = SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-1")
         let second = SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-1")
@@ -139,16 +324,16 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertGreaterThan(try differingPixelCount(between: normalBitmap, and: workingBitmap), 0)
     }
 
-    func testWorkingSessionAgentTextRendersDistinctItalicGlyphs() throws {
+    func testWorkingSessionNameTextRendersDistinctItalicGlyphs() throws {
         let normalBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionAgentText(
+            for: SidebarView.styledSessionNameText(
                 "Codex",
                 statusKind: .idle,
                 showsUnreadSessionAccent: false
             )
         )
         let workingBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionAgentText(
+            for: SidebarView.styledSessionNameText(
                 "Codex",
                 statusKind: .working,
                 showsUnreadSessionAccent: false
@@ -158,16 +343,16 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertGreaterThan(try differingPixelCount(between: normalBitmap, and: workingBitmap), 0)
     }
 
-    func testSessionAgentTextUsesConfiguredSidebarFontSize() throws {
+    func testSessionNameTextUsesConfiguredSidebarFontSize() throws {
         let styledBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionAgentText(
+            for: SidebarView.styledSessionNameText(
                 "Codex",
                 statusKind: .idle,
                 showsUnreadSessionAccent: false
             )
         )
         let expectedBitmap = try renderedBitmap(
-            for: Text("Codex").font(Font.system(size: 11, weight: .medium, design: .monospaced))
+            for: Text("Codex").font(Font.system(size: 11, weight: .medium, design: .default))
         )
 
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
@@ -574,7 +759,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("Process Watch"))
     }
 
-    func testWorkspaceScopedSessionRendersScopeCountTag() throws {
+    func testWorkspaceScopedSessionKeepsScopeDescriptionInAccessibilityLabel() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "scoped-row",
             sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
@@ -582,9 +767,9 @@ final class SidebarViewTests: XCTestCase {
         )
 
         let textValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(
+        XCTAssertFalse(
             textValues.contains("1 scope"),
-            "Sidebar text values should include single-scope tag text: \(textValues)"
+            "Session rows should no longer render a scope count tag: \(textValues)"
         )
         XCTAssertTrue(
             textValues.contains(where: { $0.localizedCaseInsensitiveContains("Scoped to: Workspace 1") }),
@@ -592,7 +777,7 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testFullSessionRowShowsCustomTabNameAlongsideScopeAndDirectory() throws {
+    func testFullSessionRowKeepsCustomTabNameAndDirectoryInAccessibilityLabel() throws {
         for placement in [SessionPanelPlacement.focused, .backgroundUnread] {
             let hostingView = try makeSidebarHostingView(
                 sessionID: "custom-tab-row",
@@ -602,132 +787,33 @@ final class SidebarViewTests: XCTestCase {
                 customTabTitle: "orchestrator"
             )
             let textValues = renderedTextValues(in: hostingView)
-            XCTAssertTrue(textValues.contains("1 scope"))
-            XCTAssertTrue(textValues.contains(where: { $0.contains("Tab: orchestrator") && $0.contains(".../sidebar") }))
-            XCTAssertTrue(renderedTooltipValues(in: hostingView).contains("Tab: orchestrator"))
+            XCTAssertTrue(
+                textValues.contains(where: { $0.contains("Tab: orchestrator") && $0.contains(".../sidebar") }),
+                "Accessibility label should keep the tab name and working directory: \(textValues)"
+            )
         }
     }
 
-    func testFullSessionRowWithNoDirectoryStillShowsCustomTabBadge() throws {
-        let hostingView = try makeSidebarHostingView(
-            sessionID: "custom-tab-no-cwd",
-            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
-            customTabTitle: "orchestrator",
-            cwd: nil
-        )
-        XCTAssertTrue(renderedTextValues(in: hostingView).contains(where: { $0.contains("Tab: orchestrator") }))
-        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: "orchestrator"))
-        XCTAssertGreaterThan(badge.bounds.width, 0)
-        XCTAssertGreaterThan(badge.bounds.height, 0)
-    }
-
-    func testFullSessionRowDoesNotExposeAutomaticTabNameAsBadge() throws {
-        let hostingView = try makeSidebarHostingView(
+    func testFullSessionRowDoesNotExposeAutomaticTabNameAsPill() throws {
+        let harness = try makeSidebarHarness(
             sessionID: "automatic-tab-row",
             sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
             cwd: nil
         )
-        XCTAssertFalse(renderedTextValues(in: hostingView).contains(where: { $0.contains("Tab:") }))
-    }
-
-    func testLongCustomTabBadgeFitsNarrowRowAndPreservesFullNameInTooltipAndAccessibility() throws {
-        let title = "orchestrator reviewing the complete implementation and tests"
-        let hostingView = try makeSidebarHostingView(
-            sessionID: "custom-tab-long-name",
-            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
-            sidebarWidth: CGFloat(WindowState.minSidebarWidth),
-            customTabTitle: title
-        )
-        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: title))
-        let frame = badge.convert(badge.bounds, to: hostingView)
-        XCTAssertGreaterThan(frame.width, 0)
-        XCTAssertLessThanOrEqual(frame.width, 120.5)
-        XCTAssertGreaterThanOrEqual(frame.minX, 0)
-        XCTAssertLessThanOrEqual(frame.maxX, hostingView.bounds.width + 0.5)
-        XCTAssertTrue(renderedTextValues(in: hostingView).contains(where: {
-            $0.contains("Tab: \(title)") && $0.contains(".../sidebar")
-        }))
-    }
-
-    func testShortTabBadgeFitsItsTextInsteadOfExpandingWithTheRow() throws {
-        for cwd in [".../emptyos", nil] as [String?] {
-            let narrow = try measuredMetadataBadgeFrame(cwd: cwd, title: "hey1", width: 180)
-            let wide = try measuredMetadataBadgeFrame(cwd: cwd, title: "hey1", width: 320)
-            let shorter = try measuredMetadataBadgeFrame(cwd: cwd, title: "x", width: 320)
-            XCTAssertEqual(narrow.width, wide.width, accuracy: 0.5)
-            XCTAssertLessThan(wide.width, 60)
-            XCTAssertGreaterThan(wide.width, shorter.width)
-            XCTAssertEqual(wide.maxX, 320, accuracy: 0.5)
-        }
-    }
-
-    func testLongTabBadgeUsesAtMostFortyPercentOfMetadataRow() throws {
-        let title = String(repeating: "hey", count: 30)
-        for width in [CGFloat(140), 180, 260, 400] {
-            for cwd in [".../emptyos-with-a-long-directory-label", nil] as [String?] {
-                let badge = try measuredMetadataBadgeFrame(cwd: cwd, title: title, width: width)
-                XCTAssertLessThanOrEqual(badge.width, width * 0.4 + 0.5)
-                XCTAssertGreaterThan(badge.width, width * 0.3)
-                XCTAssertEqual(badge.maxX, width, accuracy: 0.5)
-            }
-        }
-    }
-
-    func testSessionMetadataLineKeepsOneLineUnderWidthPressure() {
-        for width in [CGFloat(180), 260] {
-            let short = measuredSessionMetadataSize(cwd: ".../sidebar", title: "review", width: width)
-            let long = measuredSessionMetadataSize(
-                cwd: ".../a-directory-with-a-long-name",
-                title: "orchestrator reviewing the complete implementation and tests",
-                width: width
-            )
-            XCTAssertEqual(long.width, width, accuracy: 0.5)
-            XCTAssertEqual(long.height, short.height, accuracy: 0.5)
-            XCTAssertGreaterThan(long.height, 0)
-        }
-    }
-
-    func testSessionMetadataLineIsEmptyWithoutDirectoryOrCustomName() {
-        let empty = measuredSessionMetadataSize(cwd: nil, title: nil, width: 200)
-        let badgeOnly = measuredSessionMetadataSize(cwd: nil, title: "orchestrator", width: 200)
-        XCTAssertEqual(empty.height, 0)
-        XCTAssertGreaterThan(badgeOnly.height, empty.height)
-    }
-
-    func testCustomTabBadgeTooltipDoesNotSwallowSessionRowClick() throws {
-        let harness = try makeSidebarHarness(
-            sessionID: "custom-tab-click",
-            sessionStatus: SessionStatus(kind: .idle, summary: "Idle"),
-            sessionPanelPlacement: .backgroundUnread,
-            customTabTitle: "orchestrator"
-        )
         defer { harness.window.orderOut(nil) }
-        XCTAssertNotEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
-        let badge = try XCTUnwrap(tooltipView(in: harness.hostingView, containing: "orchestrator"))
-        let clickLocation = badge.convert(NSPoint(x: badge.bounds.midX, y: badge.bounds.midY), to: nil)
-        try click(window: harness.window, at: clickLocation)
-        pumpMainRunLoop()
-        XCTAssertEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
-    }
+        let workspace = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
+        let tabID = try XCTUnwrap(workspace.tabID(containingPanelID: harness.panelID))
+        let automaticTabTitle = try XCTUnwrap(workspace.tab(id: tabID)?.displayTitle)
+        XCTAssertFalse(automaticTabTitle.isEmpty)
 
-    func testCrowdedNarrowSessionRowDropsScopeTagAndMovesScopeHelpToRowTooltip() throws {
-        let hostingView = try makeSidebarHostingView(
-            sessionID: "scoped-row-narrow",
-            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
-            displayTitleOverride: "Codex sidebar compact row review",
-            scopedWorkspaceIDs: [],
-            sidebarWidth: CGFloat(WindowState.minSidebarWidth)
-        )
-
-        let textValues = renderedTextValues(in: hostingView)
+        let textValues = renderedTextValues(in: harness.hostingView)
         XCTAssertFalse(
-            textValues.contains("1 scope"),
-            "A header that does not fit should drop the scope tag: \(textValues)"
+            textValues.contains(automaticTabTitle),
+            "An automatic tab title should never reach the session row: \(textValues)"
         )
-        let tooltipValues = renderedTooltipValues(in: hostingView)
-        XCTAssertTrue(
-            tooltipValues.contains(where: { $0.contains("Scoped to: Workspace 1") }),
-            "Row tooltip should carry the dropped scope tag's help text: \(tooltipValues)"
+        XCTAssertFalse(
+            textValues.contains(where: { $0.contains("Tab:") }),
+            "Only a custom tab title belongs in the session row: \(textValues)"
         )
     }
 
@@ -808,7 +894,7 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testWorkspaceScopedSessionTooltipListsEffectiveWorkspaceNames() throws {
+    func testWorkspaceScopedSessionAccessibilityLabelListsEffectiveWorkspaceNames() throws {
         let additionalWorkspaceID = UUID()
         let additionalWorkspace = makeSinglePanelWorkspace(
             id: additionalWorkspaceID,
@@ -823,9 +909,9 @@ final class SidebarViewTests: XCTestCase {
         )
 
         let textValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(
+        XCTAssertFalse(
             textValues.contains("2 scopes"),
-            "Sidebar text values should include multi-scope tag text: \(textValues)"
+            "Session rows should no longer render a scope count tag: \(textValues)"
         )
         XCTAssertTrue(
             textValues.contains(where: {
@@ -833,44 +919,6 @@ final class SidebarViewTests: XCTestCase {
             }),
             "Sidebar accessibility text should list effective workspace scope names: \(textValues)"
         )
-
-        let tooltipValues = renderedTooltipValues(in: hostingView)
-        XCTAssertTrue(
-            tooltipValues.contains(where: {
-                $0.contains("Scoped to: Workspace 1 and workspace-scope-diagnostic")
-            }),
-            "Sidebar scoped tag should expose a native tooltip with effective workspace names: \(tooltipValues)"
-        )
-    }
-
-    func testWorkspaceScopedSessionTooltipBridgeDoesNotSwallowRowClick() throws {
-        let harness = try makeSidebarHarness(
-            sessionID: "scoped-click-row",
-            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
-            scopedWorkspaceIDs: [],
-            sessionPanelPlacement: .backgroundUnread
-        )
-        XCTAssertNotEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
-
-        let tooltipView = try XCTUnwrap(
-            tooltipView(
-                in: harness.hostingView,
-                containing: "Scoped to: Workspace 1"
-            )
-        )
-        let clickLocation = tooltipView.convert(
-            NSPoint(x: tooltipView.bounds.midX, y: tooltipView.bounds.midY),
-            to: nil
-        )
-        try click(window: harness.window, at: clickLocation)
-        pumpMainRunLoop()
-
-        XCTAssertEqual(
-            harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID,
-            harness.panelID
-        )
-
-        harness.window.orderOut(nil)
     }
 
     func testSidebarUnreadBackgroundUsesReadyGreenTint() throws {
@@ -2078,29 +2126,6 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    private func measuredMetadataBadgeFrame(cwd: String?, title: String, width: CGFloat) throws -> CGRect {
-        let hostingView = NSHostingView(rootView:
-            SidebarSessionMetadataLine(cwd: cwd, customTabTitle: title, showsUnreadSessionAccent: false)
-                .frame(width: width)
-        )
-        hostingView.setFrameSize(hostingView.fittingSize)
-        hostingView.layoutSubtreeIfNeeded()
-        let badge = try XCTUnwrap(tooltipView(in: hostingView, containing: title))
-        return badge.convert(badge.bounds, to: hostingView)
-    }
-
-    private func measuredSessionMetadataSize(cwd: String?, title: String?, width: CGFloat) -> CGSize {
-        let recorder = SidebarLayoutWidthRecorder()
-        let hostingView = NSHostingView(
-            rootView: SidebarProposedWidthRecordingLayout(proposedWidth: width, recorder: recorder) {
-                SidebarSessionMetadataLine(cwd: cwd, customTabTitle: title, showsUnreadSessionAccent: false)
-            }
-        )
-        _ = hostingView.fittingSize
-        hostingView.layoutSubtreeIfNeeded()
-        return CGSize(width: recorder.width, height: recorder.height)
-    }
-
     private func measuredAnnotationChipWidth(
         text: String,
         isLink: Bool,
@@ -2519,6 +2544,32 @@ final class SidebarViewTests: XCTestCase {
         return nil
     }
 
+    /// Row text is carried by zero-size `SidebarSemanticTextBridge` labels, so
+    /// their frames are how a test can tell which line an element landed on.
+    private func semanticTextFrame(
+        in rootView: NSView,
+        text: String,
+        shape: String
+    ) throws -> CGRect {
+        let field = try XCTUnwrap(
+            semanticTextField(in: rootView, text: text),
+            "No rendered text \"\(text)\" in \(shape): \(renderedTextValues(in: rootView))"
+        )
+        return field.convert(field.bounds, to: rootView)
+    }
+
+    private func semanticTextField(in rootView: NSView, text: String) -> NSTextField? {
+        if let field = rootView as? NSTextField, field.stringValue == text {
+            return field
+        }
+        for subview in rootView.subviews {
+            if let match = semanticTextField(in: subview, text: text) {
+                return match
+            }
+        }
+        return nil
+    }
+
     private func renderedTextValues(in rootView: NSView) -> [String] {
         let subviewValues = recursiveSubviewTextValues(in: rootView)
         let accessibilityRoot = (NSAccessibility.unignoredDescendant(of: rootView) as? AnyObject) ?? rootView
@@ -2561,21 +2612,6 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return values
-    }
-
-    private func tooltipView(in rootView: NSView, containing text: String) -> NSView? {
-        if let tooltip = rootView.toolTip,
-           tooltip.contains(text) {
-            return rootView
-        }
-
-        for subview in rootView.subviews {
-            if let matchingView = tooltipView(in: subview, containing: text) {
-                return matchingView
-            }
-        }
-
-        return nil
     }
 
     private func recursiveAccessibilityTextValues(

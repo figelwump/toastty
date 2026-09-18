@@ -32,6 +32,10 @@ enum ToastyTheme {
     static let sidebarSessionUnreadBackground = Color(hex: 0x5BA08A, alpha: 0.35)
     static let sidebarSessionUnreadBorder = Color(hex: 0x5BA08A, alpha: 0.6)
     static let sidebarSessionWatchIcon = Color(hex: 0xD9604C)
+    /// Violet because the flag is a mark the user set, not a status: amber is
+    /// already the working spinner and the approval dot, green is ready, red
+    /// is error, and the watch bell owns the rust tone.
+    static let sidebarSessionLaterFlag = Color(hex: 0xB98CE0)
     static let sidebarChildRail = Color(hex: 0x3B3733)
     static let sidebarChildContextText = Color(hex: 0x8F877D)
     static let sidebarChildMetaText = Color(hex: 0x7E766C)
@@ -39,6 +43,11 @@ enum ToastyTheme {
     static let sidebarDisclosureBorder = Color(hex: 0x4E4841)
     static let sidebarDisclosureText = Color(hex: 0xE0D9D0)
     static let sidebarWorkspaceTagBackground = Color(hex: 0xB7AEA5, alpha: 0.12)
+    /// Neutral by design: workspace annotation chips already own color in the
+    /// sidebar, and an amber tab pill would collide with the approval badge.
+    static let sidebarSessionTabPillBackground = Color(hex: 0xB7AEA5, alpha: 0.12)
+    static let sidebarSessionTabPillBorder = Color(hex: 0xB7AEA5, alpha: 0.18)
+    static let sidebarSessionRailApprovalHalo = Color(hex: 0xE8A635, alpha: 0.22)
     static let hoverTipBackground = Color(hex: 0x26231F)
     static let hoverTipBorder = Color(hex: 0x4E4841)
     static let hoverTipText = Color(hex: 0xE9E2D9)
@@ -154,7 +163,8 @@ enum ToastyTheme {
     static let fontWorkspaceSessionAgent = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontWorkspaceSessionChip = Font.system(size: 10, weight: .medium, design: .default)
     static let fontWorkspaceSessionDetail = Font.system(size: 11, weight: .regular, design: .default)
-    static let fontWorkspaceSessionPath = Font.system(size: 10, weight: .regular, design: .monospaced)
+    static let fontWorkspaceSessionAgentLabel = Font.system(size: 9.5, weight: .regular, design: .monospaced)
+    static let fontWorkspaceSessionElapsed = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontWorkspaceSessionChildName = Font.system(size: 11, weight: .medium, design: .default)
     static let fontWorkspaceSessionChildContext = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontWorkspaceSessionChildMeta = Font.system(size: 10, weight: .medium, design: .monospaced)
@@ -163,8 +173,15 @@ enum ToastyTheme {
     static let fontTerminalProfileBadge = Font.system(size: 10, weight: .semibold, design: .monospaced)
     static let fontWorkspaceNewBadge = Font.system(size: 10, weight: .medium, design: .default)
 
-    static func workspaceSessionAgentFont(weight: Font.Weight) -> Font {
-        Font.system(size: 11, weight: weight, design: .monospaced)
+    /// Provider-generated session names are prose, so the row title reads in
+    /// the body face rather than the monospaced agent face it replaced.
+    static func workspaceSessionNameFont(weight: Font.Weight) -> Font {
+        Font.system(size: 11, weight: weight, design: .default)
+    }
+
+    /// The summary promoted to the first line of an unnamed row.
+    static func workspaceSessionPrimaryFont(weight: Font.Weight) -> Font {
+        Font.system(size: 11.5, weight: weight, design: .default)
     }
 
     static func sidebarWorkspaceNameNSFont(isSelected: Bool) -> NSFont {

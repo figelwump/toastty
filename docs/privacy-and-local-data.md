@@ -204,6 +204,15 @@ timeouts, and launch failures to its structured local log. See
   interaction transitions, and Toastty reads the local Claude transcript file
   associated with the exact provider-native session to project normalized
   conversation history for Remote Access. Toastty does not modify that file.
+- For managed Claude and Codex sessions, Toastty reads the short session name
+  the provider CLI generated, so the sidebar can label a row with it. For
+  Claude that is the newest `ai-title` record in the bound session's transcript;
+  for Codex it is the newest matching record in
+  `$CODEX_HOME/session_index.jsonl` (default `~/.codex`). Toastty reads a
+  bounded amount from the end of each file, only when the session's reported
+  status changes, and never modifies either file. The resolved name is stored
+  in the local session registry snapshot and can appear in Toastty's structured
+  local logs; no other content from those files is retained.
 - For managed OpenCode, MiMo Code, and Pi sessions, Toastty's injected local
   plugin or extension reads the provider's current message snapshot and live
   lifecycle events to publish normalized conversation observations. Toastty

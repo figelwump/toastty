@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 import SwiftUI
 
 @MainActor
@@ -221,6 +222,8 @@ enum SidebarSessionPresentation {
         }
     }
 
+    /// Spelled-out status wording. Accessibility labels and hover cards use
+    /// this; the row badge uses the shortened `sessionStatusBadgeLabel`.
     static func sessionStatusChipLabel(for kind: SessionStatusKind) -> String {
         switch kind {
         case .needsApproval:
@@ -231,6 +234,99 @@ enum SidebarSessionPresentation {
             return "error"
         case .idle, .working:
             return ""
+        }
+    }
+
+    /// Row badges sit at the trailing edge of a narrow row, so "needs
+    /// approval" shortens to "approval" there.
+    static func sessionStatusBadgeLabel(for kind: SessionStatusKind) -> String {
+        switch kind {
+        case .needsApproval:
+            return "approval"
+        case .ready, .error, .idle, .working:
+            return sessionStatusChipLabel(for: kind)
+        }
+    }
+
+    /// The left gutter every session row reserves, so states line up down the
+    /// list instead of shifting with the row's text.
+    enum SessionRailState: Equatable {
+        case empty
+        case spinner
+        case approvalDot
+        case unreadDot
+        case errorDot
+    }
+
+    nonisolated static func sessionRailState(
+        for kind: SessionStatusKind,
+        showsUnreadSessionAccent: Bool
+    ) -> SessionRailState {
+        switch kind {
+        case .working:
+            return .spinner
+        case .needsApproval:
+            return .approvalDot
+        case .error:
+            return .errorDot
+        case .ready:
+            return showsUnreadSessionAccent ? .unreadDot : .empty
+        case .idle:
+            return .empty
+        }
+    }
+
+    nonisolated static func sessionRailLogValue(_ state: SessionRailState) -> String {
+        switch state {
+        case .empty:
+            return "empty"
+        case .spinner:
+            return "spinner"
+        case .approvalDot:
+            return "approval_dot"
+        case .unreadDot:
+            return "unread_dot"
+        case .errorDot:
+            return "error_dot"
+        }
+    }
+
+    /// Named sessions lead with their own name and push the summary to a second
+    /// line; sessions the provider has not named yet lead with the summary.
+    enum SessionRowShape: Equatable {
+        case named(name: String, summary: String?)
+        case summaryFirst(summary: String)
+    }
+
+    static func sessionRowShape(
+        sessionName: String?,
+        summary: String?,
+        agentFallbackName: String
+    ) -> SessionRowShape {
+        let normalizedSummary = normalizedSidebarHelperText(summary)
+        if let name = normalizedSidebarHelperText(sessionName) {
+            return .named(name: name, summary: normalizedSummary)
+        }
+        return .summaryFirst(summary: normalizedSummary ?? agentFallbackName)
+    }
+
+    /// Lowercase provider identity, as the row's third line shows it.
+    static func sessionAgentLabel(for agent: AgentKind) -> String {
+        agent.rawValue
+    }
+
+    /// The summary-first shape falls back to the agent's display name when
+    /// there is no summary yet; repeating the agent on the next line adds
+    /// nothing, so the label drops out in that case.
+    static func showsSessionAgentLabel(
+        shape: SessionRowShape,
+        agentFallbackName: String
+    ) -> Bool {
+        switch shape {
+        case .named:
+            return true
+        case .summaryFirst(let summary):
+            return summary != agentFallbackName
         }
     }
 
@@ -280,7 +376,8 @@ enum SidebarSessionPresentation {
         cwd: String?,
         isLaterFlagged: Bool,
         workspaceScopeHelpText: String? = nil,
-        customTabTitle: String? = nil
+        customTabTitle: String? = nil,
+        agentLabel: String? = nil
     ) -> String {
         var components = [agentName]
         if let chipKind {
@@ -297,13 +394,16 @@ enum SidebarSessionPresentation {
             components.append(workspaceScopeHelpText)
         }
         if let detailText {
-            components.append(detailText)
+            components.append(sessionSummaryPlainText(detailText))
         }
         if let cwd {
             components.append(cwd)
         }
         if let customTabTitle {
             components.append("Tab: \(customTabTitle)")
+        }
+        if let agentLabel = normalizedSidebarHelperText(agentLabel) {
+            components.append(agentLabel)
         }
         if isLaterFlagged {
             components.append("flagged for later")
@@ -389,11 +489,37 @@ enum SidebarSessionPresentation {
     }
 
     static func elapsedChildActivityText(startedAt: Date, now: Date) -> String {
-        let elapsedSeconds = Int(max(0, now.timeIntervalSince(startedAt)))
-        let minutes = elapsedSeconds / 60
-        let seconds = elapsedSeconds % 60
-        guard minutes > 0 else { return "\(seconds)s" }
-        return String(format: "%dm %02ds", minutes, seconds)
+        durationText(seconds: now.timeIntervalSince(startedAt))
+    }
+
+    static func durationText(seconds: TimeInterval) -> String {
+        let clampedSeconds = Int(seconds.isFinite ? max(0, seconds) : 0)
+        let minutes = clampedSeconds / 60
+        let remainingSeconds = clampedSeconds % 60
+        guard minutes > 0 else { return "\(remainingSeconds)s" }
+        return String(format: "%dm %02ds", minutes, remainingSeconds)
+    }
+
+    /// Elapsed time for the turn a working row is in the middle of. Shares the
+    /// sub-agent formatter so both read the same (`45s`, `4m 12s`).
+    static func sessionElapsedTurnText(turnStartedAt: Date?, now: Date) -> String? {
+        guard let turnStartedAt else { return nil }
+        return elapsedChildActivityText(startedAt: turnStartedAt, now: now)
+    }
+
+    static func sessionLastTurnText(_ duration: TimeInterval?) -> String? {
+        guard let duration, duration.isFinite, duration >= 0 else { return nil }
+        return durationText(seconds: duration)
+    }
+
+    private static let relativeUpdatedFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    static func sessionUpdatedRelativeText(updatedAt: Date, now: Date) -> String {
+        relativeUpdatedFormatter.localizedString(for: min(updatedAt, now), relativeTo: now)
     }
 
     static func sessionChildAccessibilityLabel(
@@ -426,6 +552,74 @@ enum SidebarSessionPresentation {
         return components.joined(separator: ", ")
     }
 
+    /// Provider summaries arrive as Markdown. SwiftUI parses Markdown only
+    /// from `LocalizedStringKey` literals, so a runtime `String` renders
+    /// `**bold**` and backticks verbatim.
+    ///
+    /// Only inline syntax is interpreted: a sidebar row is one truncated line,
+    /// so block structure cannot survive there anyway, and a leading bullet or
+    /// heading marker is stripped rather than shown. Links keep their text and
+    /// lose the link itself, because a row is not somewhere to click through.
+    static func sessionSummaryAttributedText(_ text: String) -> AttributedString {
+        let stripped = strippedLeadingBlockMarkers(text)
+        guard stripped.isEmpty == false else { return AttributedString(text) }
+        guard var attributed = try? AttributedString(
+            markdown: stripped,
+            options: AttributedString.MarkdownParsingOptions(
+                allowsExtendedAttributes: false,
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        ) else {
+            return AttributedString(stripped)
+        }
+        for run in attributed.runs where run.link != nil {
+            attributed[run.range].link = nil
+        }
+        return attributed
+    }
+
+    /// The same text with its Markdown resolved away, for accessibility labels
+    /// and anywhere else that needs characters rather than styling.
+    static func sessionSummaryPlainText(_ text: String) -> String {
+        String(sessionSummaryAttributedText(text).characters)
+    }
+
+    /// Agents open a summary with a bullet, a heading, or a quote often enough
+    /// that the marker is worth removing; nested markers are stripped too.
+    private static func strippedLeadingBlockMarkers(_ text: String) -> String {
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Bounded so a line of nothing but markers cannot spin here.
+        for _ in 0 ..< 4 {
+            guard let shortened = droppingLeadingBlockMarker(result) else { break }
+            result = shortened
+        }
+        return result
+    }
+
+    private static func droppingLeadingBlockMarker(_ text: String) -> String? {
+        for marker in ["- ", "* ", "+ ", "> "] where text.hasPrefix(marker) {
+            return String(text.dropFirst(marker.count))
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        let headingHashes = text.prefix { $0 == "#" }
+        if headingHashes.isEmpty == false,
+           text.dropFirst(headingHashes.count).hasPrefix(" ") {
+            return String(text.dropFirst(headingHashes.count))
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        let orderedDigits = text.prefix(while: \.isNumber)
+        if orderedDigits.isEmpty == false,
+           text.dropFirst(orderedDigits.count).hasPrefix(". ") {
+            return String(text.dropFirst(orderedDigits.count + 2))
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        return nil
+    }
+
     static func normalizedSidebarHelperText(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               trimmed.isEmpty == false else {
@@ -448,26 +642,6 @@ enum SidebarSessionPresentation {
 
     static func canFocusSessionPanel(_ panelID: UUID, in workspace: WorkspaceState) -> Bool {
         workspace.panelState(for: panelID) != nil && workspace.slotID(containingPanelID: panelID) != nil
-    }
-
-    static func sessionIndicatorState(for kind: SessionStatusKind) -> SessionStatusIndicatorState {
-        switch kind {
-        case .working:
-            return .spinner
-        case .needsApproval, .ready, .error, .idle:
-            return .hidden
-        }
-    }
-
-    static func sessionIndicatorLogValue(_ state: SessionStatusIndicatorState) -> String {
-        switch state {
-        case .hidden:
-            return "hidden"
-        case .spinner:
-            return "spinner"
-        case .dot:
-            return "dot"
-        }
     }
 
     static func sessionAgentFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
@@ -560,6 +734,99 @@ enum SidebarSessionPresentation {
             executionProfileText: sessionChildExecutionProfileText(child.executionProfile),
             metaItems: metaItems
         )
+    }
+
+    /// Everything the row stopped showing — the full path, the workspace
+    /// scopes, the tab title, times — plus the untruncated summary.
+    static func sessionRowHoverTipModel(
+        session: WorkspaceSessionStatus,
+        customTabTitle: String?,
+        parentSessionName: String?,
+        workspaceScopeNames: [String],
+        isLaterFlagged: Bool,
+        now: Date
+    ) -> SessionRowHoverTipModel {
+        let statusKind = session.status.kind
+        var metaItems: [SessionRowHoverTipModel.MetaItem] = []
+
+        if let path = normalizedSidebarHelperText(session.cwd) {
+            metaItems.append(.init(label: "path", value: abbreviatedHomePathLabel(path), wraps: false))
+        }
+
+        if workspaceScopeNames.isEmpty == false {
+            metaItems.append(.init(
+                label: "scoped",
+                value: workspaceScopeNames.joined(separator: ", "),
+                wraps: true
+            ))
+        }
+        metaItems.append(.init(
+            label: "status",
+            value: sessionHoverTipStatusValue(kind: statusKind, projection: session.projection),
+            wraps: false
+        ))
+        metaItems.append(.init(
+            label: "updated",
+            value: sessionUpdatedRelativeText(updatedAt: session.updatedAt, now: now),
+            wraps: false
+        ))
+        if session.turnStartedAt == nil,
+           let lastTurn = sessionLastTurnText(session.lastTurnDuration) {
+            metaItems.append(.init(label: "last turn", value: lastTurn, wraps: false))
+        }
+        if session.children.isEmpty == false {
+            metaItems.append(.init(
+                label: session.children.count == 1 ? "sub-agent" : "sub-agents",
+                value: sessionChildSummaryValue(session.children),
+                wraps: false
+            ))
+        }
+        if let customTabTitle = normalizedSidebarHelperText(customTabTitle) {
+            metaItems.append(.init(label: "tab", value: customTabTitle, wraps: false))
+        }
+        if let parentSessionName = normalizedSidebarHelperText(parentSessionName) {
+            metaItems.append(.init(label: "parent", value: parentSessionName, wraps: false))
+        }
+        if isLaterFlagged {
+            metaItems.append(.init(label: "flagged", value: "for later", wraps: false))
+        }
+
+        return SessionRowHoverTipModel(
+            name: session.displayTitle,
+            agentLabel: sessionAgentLabel(for: session.agent),
+            statusDotColorKind: SessionChildHoverTipModel.StatusDotColorKind(statusKind: statusKind),
+            bodyText: normalizedSidebarHelperText(session.status.detail),
+            turnStartedAt: session.turnStartedAt,
+            metaItems: metaItems
+        )
+    }
+
+    static func sessionHoverTipStatusValue(
+        kind: SessionStatusKind,
+        projection: SessionStatusProjection
+    ) -> String {
+        if case .waitingOnChildren(let childCount, _) = projection {
+            return childCount == 1
+                ? "waiting on 1 sub-agent"
+                : "waiting on \(childCount) sub-agents"
+        }
+        if case .resuming = projection {
+            return "resuming"
+        }
+        return sessionChildHoverTipStatusLabel(for: kind)
+    }
+
+    private static func sessionChildSummaryValue(_ children: [SessionChildRow]) -> String {
+        let workingCount = children.filter { $0.statusKind == .working || $0.source == .activity }.count
+        guard workingCount > 0 else { return "\(children.count)" }
+        return "\(children.count) · \(workingCount) working"
+    }
+
+    /// The card has room for the whole path, so it keeps every component and
+    /// only shortens the home directory to `~`, rather than collapsing to the
+    /// last component the way a row does.
+    static func abbreviatedHomePathLabel(_ path: String) -> String {
+        ((path as NSString).standardizingPath as NSString).abbreviatingWithTildeInPath
     }
 
     static func sessionChildExecutionProfileText(

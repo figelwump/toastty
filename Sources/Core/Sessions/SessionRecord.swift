@@ -31,7 +31,19 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var backgroundActivitiesByID: [String: SessionBackgroundActivity]
     public var pendingBackgroundTaskCount: Int
     public var lastActivityFinishedAt: Date?
+    /// When the session's reported status last became `.working`, i.e. the
+    /// start of the current turn. `startedAt` covers the whole session and
+    /// `updatedAt` is rewritten on every status change, so neither answers
+    /// "how long has this turn been running".
+    public var turnStartedAt: Date?
+    /// How long the previous turn took, for rows that are now at rest.
+    public var lastTurnDuration: TimeInterval?
     public var displayTitleOverride: String?
+    /// The short name the provider CLI generated for this session (Claude's
+    /// `ai-title`, Codex's `thread_name`). Kept separate from
+    /// `displayTitleOverride` so a caller-supplied or user-chosen title still
+    /// wins, and so process-watch rows and automation keep owning that field.
+    public var providerSessionName: String?
     public var repoRoot: String?
     public var cwd: String?
     public var touchedFiles: [String]
@@ -55,7 +67,10 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         backgroundActivitiesByID: [String: SessionBackgroundActivity] = [:],
         pendingBackgroundTaskCount: Int = 0,
         lastActivityFinishedAt: Date? = nil,
+        turnStartedAt: Date? = nil,
+        lastTurnDuration: TimeInterval? = nil,
         displayTitleOverride: String? = nil,
+        providerSessionName: String? = nil,
         repoRoot: String? = nil,
         cwd: String? = nil,
         touchedFiles: [String] = [],
@@ -78,7 +93,10 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.backgroundActivitiesByID = backgroundActivitiesByID
         self.pendingBackgroundTaskCount = max(0, pendingBackgroundTaskCount)
         self.lastActivityFinishedAt = lastActivityFinishedAt
+        self.turnStartedAt = turnStartedAt
+        self.lastTurnDuration = lastTurnDuration
         self.displayTitleOverride = Self.normalizedOptionalText(displayTitleOverride)
+        self.providerSessionName = Self.normalizedOptionalText(providerSessionName)
         self.repoRoot = repoRoot
         self.cwd = cwd
         self.touchedFiles = touchedFiles
@@ -116,8 +134,16 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         backgroundActivitiesByID = [:]
         pendingBackgroundTaskCount = 0
         lastActivityFinishedAt = nil
+        // Turn timing is runtime-only for the same reason as background
+        // activity: a turn recorded by an old app run cannot be resumed as if
+        // it were still counting up.
+        turnStartedAt = nil
+        lastTurnDuration = nil
         displayTitleOverride = Self.normalizedOptionalText(
             try container.decodeIfPresent(String.self, forKey: .displayTitleOverride)
+        )
+        providerSessionName = Self.normalizedOptionalText(
+            try container.decodeIfPresent(String.self, forKey: .providerSessionName)
         )
         repoRoot = try container.decodeIfPresent(String.self, forKey: .repoRoot)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
@@ -141,6 +167,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         try container.encode(usesSessionStatusNotifications, forKey: .usesSessionStatusNotifications)
         try container.encodeIfPresent(status, forKey: .status)
         try container.encodeIfPresent(displayTitleOverride, forKey: .displayTitleOverride)
+        try container.encodeIfPresent(providerSessionName, forKey: .providerSessionName)
         try container.encodeIfPresent(repoRoot, forKey: .repoRoot)
         try container.encodeIfPresent(cwd, forKey: .cwd)
         try container.encode(touchedFiles, forKey: .touchedFiles)
@@ -164,6 +191,7 @@ private extension SessionRecord {
         case usesSessionStatusNotifications
         case status
         case displayTitleOverride
+        case providerSessionName
         case repoRoot
         case cwd
         case touchedFiles

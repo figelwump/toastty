@@ -133,15 +133,151 @@ struct SessionChildHoverTipCard: View {
     }
 }
 
+/// Row metadata the sidebar row itself stopped showing.
+struct SessionRowHoverTipModel: Hashable {
+    struct MetaItem: Hashable {
+        let label: String
+        let value: String
+        /// Long values such as a scope list wrap instead of truncating.
+        let wraps: Bool
+    }
+
+    var name: String
+    var agentLabel: String
+    var statusDotColorKind: SessionChildHoverTipModel.StatusDotColorKind
+    var bodyText: String?
+    var turnStartedAt: Date?
+    var metaItems: [MetaItem]
+}
+
+struct SessionRowHoverTipCard: View {
+    let model: SessionRowHoverTipModel
+
+    private static let labelColumnWidth: CGFloat = 56
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(model.statusDotColorKind.color.opacity(0.85))
+                    .frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+
+                Text(model.name)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.hoverTipText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: 8)
+
+                Text(model.agentLabel)
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                    .lineLimit(1)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(ToastyTheme.hoverTipTagBackground)
+                    )
+            }
+            .padding(.bottom, 4)
+
+            if let bodyText = model.bodyText {
+                // The row truncates the summary to one line; the card is where
+                // the rest of it lives.
+                Text(SidebarSessionPresentation.sessionSummaryAttributedText(bodyText))
+                    .font(.system(size: 11, weight: .regular))
+                    .lineSpacing(1.5)
+                    .foregroundStyle(ToastyTheme.hoverTipBodyText)
+                    .lineLimit(6)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 6)
+            }
+
+            if model.metaItems.isEmpty == false || model.turnStartedAt != nil {
+                Rectangle()
+                    .fill(ToastyTheme.hoverTipDivider)
+                    .frame(height: 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    if let turnStartedAt = model.turnStartedAt {
+                        TimelineView(.periodic(from: turnStartedAt, by: 1)) { timeline in
+                            metaRow(
+                                label: "elapsed",
+                                value: SidebarSessionPresentation.elapsedChildActivityText(
+                                    startedAt: turnStartedAt,
+                                    now: timeline.date
+                                ),
+                                wraps: false
+                            )
+                        }
+                    }
+
+                    ForEach(Array(model.metaItems.enumerated()), id: \.offset) { _, item in
+                        metaRow(label: item.label, value: item.value, wraps: item.wraps)
+                    }
+                }
+                .padding(.top, 6)
+            }
+        }
+        .padding(.top, 8)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 7)
+        .frame(width: 320, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(ToastyTheme.hoverTipBackground)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(ToastyTheme.hoverTipBorder, lineWidth: 1)
+        }
+    }
+
+    private func metaRow(label: String, value: String, wraps: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .foregroundStyle(ToastyTheme.sidebarChildMetaText)
+                .frame(width: Self.labelColumnWidth, alignment: .leading)
+
+            Text(value)
+                .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                .lineLimit(wraps ? 3 : 1)
+                .truncationMode(wraps ? .tail : .middle)
+                .fixedSize(horizontal: false, vertical: wraps)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+    }
+}
+
+/// Where a tip opens relative to its anchor.
+enum HoverTipPlacement: Equatable {
+    /// Below the anchor, flipping above when there is no room. Correct for a
+    /// tip anchored to something the surrounding content does not need.
+    case below
+    /// Beside the anchor's trailing edge, level with it. A sidebar card opens
+    /// over the terminal this way instead of covering the rows being scanned.
+    /// Falls back to `below` when the card does not fit beside the anchor.
+    case trailing(gap: CGFloat)
+}
+
 @MainActor
 final class HoverTipPresenter {
     static let shared = HoverTipPresenter()
 
     private nonisolated static let anchorGap: CGFloat = 6
+    /// After a card closes, a card on another row opens immediately instead of
+    /// waiting out the warm-up again, so scanning down a list does not stutter.
+    private nonisolated static let warmWindow: TimeInterval = 0.35
 
     private var panel: NSPanel?
     private var hostingView: NSHostingView<AnyView>?
     private var currentID: AnyHashable?
+    private var lastHiddenAt: Date?
     private var eventMonitor: Any?
     private var deactivationObserver: NSObjectProtocol?
 
@@ -150,7 +286,8 @@ final class HoverTipPresenter {
     func show<Content: View>(
         id: AnyHashable,
         content: Content,
-        anchorScreenRect: CGRect
+        anchorScreenRect: CGRect,
+        placement: HoverTipPlacement = .below
     ) {
         let rootView = AnyView(content.fixedSize(horizontal: false, vertical: true))
         let hostingView = resolvedHostingView(rootView: rootView)
@@ -171,7 +308,8 @@ final class HoverTipPresenter {
         panel.setFrameOrigin(Self.tipOrigin(
             anchor: anchorScreenRect,
             tipSize: tipSize,
-            visibleFrame: Self.visibleFrame(for: anchorScreenRect)
+            visibleFrame: Self.visibleFrame(for: anchorScreenRect),
+            placement: placement
         ))
 
         let shouldAnimate = panel.isVisible == false
@@ -199,7 +337,20 @@ final class HoverTipPresenter {
         hideAll()
     }
 
+    /// True while a card is open or just closed. A hover that lands inside
+    /// this window presents without the warm-up delay.
+    var isWarm: Bool {
+        if panel?.isVisible == true, currentID != nil {
+            return true
+        }
+        guard let lastHiddenAt else { return false }
+        return Date().timeIntervalSince(lastHiddenAt) < Self.warmWindow
+    }
+
     func hideAll() {
+        if panel?.isVisible == true {
+            lastHiddenAt = Date()
+        }
         currentID = nil
         panel?.alphaValue = 1
         panel?.orderOut(nil)
@@ -214,8 +365,19 @@ final class HoverTipPresenter {
     nonisolated static func tipOrigin(
         anchor: CGRect,
         tipSize: CGSize,
-        visibleFrame: CGRect
+        visibleFrame: CGRect,
+        placement: HoverTipPlacement = .below
     ) -> CGPoint {
+        if case .trailing(let gap) = placement,
+           let besideOrigin = trailingTipOrigin(
+               anchor: anchor,
+               tipSize: tipSize,
+               visibleFrame: visibleFrame,
+               gap: gap
+           ) {
+            return besideOrigin
+        }
+
         let maximumX = visibleFrame.maxX - tipSize.width
         let x = clamped(
             anchor.minX,
@@ -232,6 +394,28 @@ final class HoverTipPresenter {
             }
         }
 
+        return CGPoint(x: x.rounded(), y: y.rounded())
+    }
+
+    /// Level with the anchor's top edge, clamped into the screen. Returns
+    /// `nil` when the card does not fit beside the anchor, so the caller can
+    /// fall back to the below-anchor placement.
+    private nonisolated static func trailingTipOrigin(
+        anchor: CGRect,
+        tipSize: CGSize,
+        visibleFrame: CGRect,
+        gap: CGFloat
+    ) -> CGPoint? {
+        let x = anchor.maxX + gap
+        guard x >= visibleFrame.minX,
+              x + tipSize.width <= visibleFrame.maxX else {
+            return nil
+        }
+        let y = clamped(
+            anchor.maxY - tipSize.height,
+            minimum: visibleFrame.minY,
+            maximum: visibleFrame.maxY - tipSize.height
+        )
         return CGPoint(x: x.rounded(), y: y.rounded())
     }
 
@@ -361,18 +545,35 @@ final class HoverTipPresenter {
 }
 
 extension View {
+    /// `isHovering` supplies the hover state from outside. Pass it when an
+    /// AppKit overlay owns hit-testing for this view, because SwiftUI's own
+    /// `.onHover` never fires underneath one. Omit it otherwise.
     func hoverTip<TipContent: View>(
         id: AnyHashable,
         refreshID: AnyHashable? = nil,
+        placement: HoverTipPlacement = .below,
+        isHovering: Bool? = nil,
         @ViewBuilder content: @escaping () -> TipContent
     ) -> some View {
-        modifier(HoverTipModifier(id: id, refreshID: refreshID, tipContent: content))
+        modifier(
+            HoverTipModifier(
+                id: id,
+                refreshID: refreshID,
+                placement: placement,
+                externalHoverState: isHovering,
+                tipContent: content
+            )
+        )
     }
 }
 
 private struct HoverTipModifier<TipContent: View>: ViewModifier {
+    static var warmUpDelayNanoseconds: UInt64 { 350_000_000 }
+
     let id: AnyHashable
     let refreshID: AnyHashable?
+    let placement: HoverTipPlacement
+    let externalHoverState: Bool?
     let tipContent: () -> TipContent
 
     @State private var hoverTask: Task<Void, Never>?
@@ -388,9 +589,12 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
                 }
                 .allowsHitTesting(false)
             }
-            .onHover { hovering in
-                updateHoverState(hovering)
-            }
+            .modifier(
+                HoverTipStateSource(
+                    externalHoverState: externalHoverState,
+                    onHoverStateChanged: updateHoverState
+                )
+            )
             .onChange(of: anchorScreenRect) { _, _ in
                 refreshVisibleTip()
             }
@@ -415,9 +619,15 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
 
     private func scheduleShow() {
         cancelPendingShow()
+        // A card already open (or just closed) means the pointer is scanning
+        // the list, so swap immediately rather than re-running the warm-up.
+        if HoverTipPresenter.shared.isWarm, let anchorScreenRect {
+            showTip(anchorScreenRect: anchorScreenRect)
+            return
+        }
         hoverTask = Task { @MainActor in
             do {
-                try await Task.sleep(nanoseconds: 300_000_000)
+                try await Task.sleep(nanoseconds: Self.warmUpDelayNanoseconds)
             } catch {
                 return
             }
@@ -440,7 +650,8 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
         HoverTipPresenter.shared.show(
             id: id,
             content: tipContent(),
-            anchorScreenRect: anchorScreenRect
+            anchorScreenRect: anchorScreenRect,
+            placement: placement
         )
         isPresented = true
     }
@@ -461,6 +672,27 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
             return
         }
         showTip(anchorScreenRect: anchorScreenRect)
+    }
+}
+
+/// Hover either comes from SwiftUI or from the caller. Keeping the two in one
+/// modifier would leave a dead `.onHover` attached in the external case, and a
+/// dead `.onHover` still competes for hit-testing.
+private struct HoverTipStateSource: ViewModifier {
+    let externalHoverState: Bool?
+    let onHoverStateChanged: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        if let externalHoverState {
+            content
+                .onChange(of: externalHoverState, initial: true) { _, hovering in
+                    onHoverStateChanged(hovering)
+                }
+        } else {
+            content.onHover { hovering in
+                onHoverStateChanged(hovering)
+            }
+        }
     }
 }
 

@@ -79,8 +79,14 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
     public var projection: SessionStatusProjection
     public var children: [SessionChildRow]
     public var displayTitleOverride: String?
+    public var providerSessionName: String?
     public var cwd: String?
     public var updatedAt: Date
+    /// Start of the current turn, present only while the session's reported
+    /// status is `.working`. A projected working state (waiting on children,
+    /// resuming) has no turn of its own and leaves this `nil`.
+    public var turnStartedAt: Date?
+    public var lastTurnDuration: TimeInterval?
     public var isActive: Bool
     public var scopedWorkspaceIDs: Set<UUID>?
     public var effectiveScopedWorkspaceIDs: Set<UUID>?
@@ -99,8 +105,11 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         projection: SessionStatusProjection = .none,
         children: [SessionChildRow] = [],
         displayTitleOverride: String? = nil,
+        providerSessionName: String? = nil,
         cwd: String?,
         updatedAt: Date,
+        turnStartedAt: Date? = nil,
+        lastTurnDuration: TimeInterval? = nil,
         isActive: Bool,
         scopedWorkspaceIDs: Set<UUID>? = nil,
         effectiveScopedWorkspaceIDs: Set<UUID>? = nil
@@ -114,15 +123,26 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         self.projection = projection
         self.children = children
         self.displayTitleOverride = displayTitleOverride
+        self.providerSessionName = Self.normalizedOptionalText(providerSessionName)
         self.cwd = cwd
         self.updatedAt = updatedAt
+        self.turnStartedAt = turnStartedAt
+        self.lastTurnDuration = lastTurnDuration
         self.isActive = isActive
         self.scopedWorkspaceIDs = scopedWorkspaceIDs
         self.effectiveScopedWorkspaceIDs = effectiveScopedWorkspaceIDs
     }
 
+    /// A caller-supplied title wins over the provider's generated name, which
+    /// in turn wins over the bare agent name.
     public var displayTitle: String {
-        displayTitleOverride ?? agent.displayName
+        displayTitleOverride ?? providerSessionName ?? agent.displayName
+    }
+
+    /// The row's own name, absent for sub-agent threads, `codex exec` runs and
+    /// sessions the provider has not named yet.
+    public var sessionName: String? {
+        displayTitleOverride ?? providerSessionName
     }
 }
 
