@@ -1107,10 +1107,8 @@ struct SidebarView: View {
                     workspaceAgentCountBadge(agentSummary)
                 }
 
-                if let shortcutLabel {
-                    shortcutBadge(shortcutLabel, highlighted: optionKeyPressed)
-                        .opacity(optionKeyPressed ? 1 : 0)
-                        .accessibilityHidden(!optionKeyPressed)
+                if optionKeyPressed, let shortcutLabel {
+                    shortcutBadge(shortcutLabel, highlighted: true)
                 }
             }
 
