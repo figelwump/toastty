@@ -78,10 +78,24 @@ public final class RemoteGatewayRequestHandler {
 
     @MainActor
     public func resolvePreview(_ operation: RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse {
-        guard previewIsAuthorized(operation), let previewHandler else { return operation.errorResponse(.denied) }
+        guard previewIsAuthorized(operation), let previewHandler else {
+            return Self.authorizationDenied(operation)
+        }
         let response = await previewHandler(operation)
-        guard !Task.isCancelled, previewIsAuthorized(operation) else { return operation.errorResponse(.denied) }
+        guard !Task.isCancelled else { return operation.errorResponse(.denied) }
+        guard previewIsAuthorized(operation) else { return Self.authorizationDenied(operation) }
         return response
+    }
+
+    /// The phone shows this as a file-policy refusal, so the log has to say
+    /// it was the device's read authorization instead.
+    private static func authorizationDenied(
+        _ operation: RemoteGatewayPreviewOperation
+    ) -> RemoteGatewayHTTPResponse {
+        ToasttyLog.warning(
+            "Remote preview failed", category: .automation,
+            metadata: ["stage": "authorization", "reason": RemotePreviewError.denied.rawValue])
+        return operation.errorResponse(.denied)
     }
 
     private func previewIsAuthorized(_ operation: RemoteGatewayPreviewOperation) -> Bool {

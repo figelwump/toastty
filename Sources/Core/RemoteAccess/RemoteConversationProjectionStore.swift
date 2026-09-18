@@ -37,17 +37,21 @@ public final class RemoteConversationProjectionStore {
     private var descriptorsByID: [RemoteConversationID: ConversationDescriptor] = [:]
     private var conversationOrder: [RemoteConversationID] = []
     private var nextGenerationByConversationID: [RemoteConversationID: UInt64] = [:]
+    private var linkedFileReferencesByID: [RemoteConversationID: LinkedFileReferences] = [:]
     private let eventRetentionLimit: Int
     private let fingerprintRetentionLimit: Int
+    private let linkedFileReferenceRetentionLimit: Int
 
     public init(
         runID: RemoteProjectionRunID = RemoteProjectionRunID(),
         eventRetentionLimit: Int = 10_000,
-        fingerprintRetentionLimit: Int = 20_000
+        fingerprintRetentionLimit: Int = 20_000,
+        linkedFileReferenceRetentionLimit: Int = 20_000
     ) {
         self.runID = runID
         self.eventRetentionLimit = max(1, eventRetentionLimit)
         self.fingerprintRetentionLimit = max(1, fingerprintRetentionLimit)
+        self.linkedFileReferenceRetentionLimit = max(1, linkedFileReferenceRetentionLimit)
     }
 
     public var registeredConversationIDs: Set<RemoteConversationID> {
@@ -109,6 +113,60 @@ public final class RemoteConversationProjectionStore {
         }
         projectorsByID[conversationID] = projector
         return emitted
+    }
+
+    // MARK: - Linked file references
+
+    /// The local file references linked from assistant messages in
+    /// `observations`, as the phone's transcript view would derive them.
+    /// Pure and Markdown-parsing, so callers with large batches run it off
+    /// the main actor and pass the result to `noteLinkedFileReferences`.
+    public static func linkedFileReferences(
+        in observations: some Sequence<ProviderTranscriptObservation>
+    ) -> [String] {
+        observations.flatMap { observation -> [String] in
+            guard case .transcript(.assistantMessage(let message)) = observation.payload else {
+                return []
+            }
+            return RemotePreviewLinkReference.localFileReferences(inMarkdown: message.text)
+        }
+    }
+
+    /// Records references the agent linked in this conversation. They outlive
+    /// event trimming, because a phone can still show a link whose event the
+    /// Mac has dropped; only a new generation or removal discards them.
+    public func noteLinkedFileReferences(
+        _ references: [String], for conversationID: RemoteConversationID
+    ) {
+        guard projectorsByID[conversationID] != nil, references.isEmpty == false else { return }
+        linkedFileReferencesByID[conversationID, default: .init()].insert(
+            references, retentionLimit: linkedFileReferenceRetentionLimit)
+    }
+
+    /// Whether the Mac's own transcript data for this conversation links
+    /// `reference`. A requesting device's claim never reaches this set.
+    public func isFileReferenceLinked(
+        _ reference: String, in conversationID: RemoteConversationID
+    ) -> Bool {
+        linkedFileReferencesByID[conversationID]?.references.contains(reference) ?? false
+    }
+
+    private struct LinkedFileReferences {
+        private(set) var references: Set<String> = []
+        private var insertionOrder: [String] = []
+
+        mutating func insert(_ newReferences: [String], retentionLimit: Int) {
+            for reference in newReferences where references.insert(reference).inserted {
+                insertionOrder.append(reference)
+            }
+            // Batched like fingerprint trimming, so eviction stays amortized.
+            guard insertionOrder.count > retentionLimit + max(1, retentionLimit / 10) else { return }
+            let removalCount = insertionOrder.count - retentionLimit
+            for reference in insertionOrder.prefix(removalCount) {
+                references.remove(reference)
+            }
+            insertionOrder.removeFirst(removalCount)
+        }
     }
 
     @discardableResult
@@ -235,6 +293,9 @@ public final class RemoteConversationProjectionStore {
         )
         replacement.noteBinding(reason: .projectionRebuilt, bindingID: bindingID, at: date)
         projectorsByID[conversationID] = replacement
+        // The caller re-ingests the provider file, which rebuilds the grants
+        // from the transcript the new generation actually contains.
+        linkedFileReferencesByID.removeValue(forKey: conversationID)
     }
 
     public func removeConversation(_ conversationID: RemoteConversationID) {
@@ -242,6 +303,7 @@ public final class RemoteConversationProjectionStore {
             nextGenerationByConversationID[conversationID] = projector.generation + 1
         }
         descriptorsByID.removeValue(forKey: conversationID)
+        linkedFileReferencesByID.removeValue(forKey: conversationID)
         conversationOrder.removeAll { $0 == conversationID }
     }
 

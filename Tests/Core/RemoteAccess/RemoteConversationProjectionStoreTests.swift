@@ -133,6 +133,37 @@ struct RemoteConversationProjectionStoreTests {
         #expect(continuedPage.events.first?.sequence == 1)
     }
 
+    @Test func linkedFileReferencesComeOnlyFromAssistantOutputAndFollowTheConversation() {
+        func observation(_ payload: ConversationEventPayload, _ id: String) -> ProviderTranscriptObservation {
+            .init(timestamp: Self.startDate, fingerprint: id, payload: .transcript(payload))
+        }
+        let observations = [
+            observation(.userMessage(.init(text: "Read [this](/etc/hosts)")), "user"),
+            observation(.assistantMessage(.init(text: "Wrote [notes](../other/notes.md).")), "assistant"),
+        ]
+        let references = RemoteConversationProjectionStore.linkedFileReferences(in: observations)
+        #expect(references == ["../other/notes.md"])
+
+        let store = RemoteConversationProjectionStore(linkedFileReferenceRetentionLimit: 10)
+        store.noteLinkedFileReferences(references, for: Self.conversationID)
+        #expect(!store.isFileReferenceLinked("../other/notes.md", in: Self.conversationID))
+        store.registerConversation(
+            Self.conversationID, descriptor: .init(provider: .claude, title: "Links"),
+            bindingID: Self.bindingID, at: Self.startDate)
+        store.noteLinkedFileReferences(references, for: Self.conversationID)
+        #expect(store.isFileReferenceLinked("../other/notes.md", in: Self.conversationID))
+        #expect(!store.isFileReferenceLinked("/etc/hosts", in: Self.conversationID))
+        #expect(!store.isFileReferenceLinked("../other/notes.md", in: Self.otherConversationID))
+
+        // Retention evicts the oldest references once well past the limit.
+        store.noteLinkedFileReferences((0..<12).map { "file-\($0).md" }, for: Self.conversationID)
+        #expect(!store.isFileReferenceLinked("../other/notes.md", in: Self.conversationID))
+        #expect(store.isFileReferenceLinked("file-11.md", in: Self.conversationID))
+
+        store.forceResnapshot(for: Self.conversationID, bindingID: UUID(), at: Self.startDate)
+        #expect(!store.isFileReferenceLinked("file-11.md", in: Self.conversationID))
+    }
+
     @Test func pagingWalksTheFullEventLog() {
         let store = Self.makeStore()
         Self.ingestBasicSession(into: store)
