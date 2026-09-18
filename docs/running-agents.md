@@ -709,8 +709,10 @@ clients, including the iOS app, title the conversation with the same name.
   Toastty keeps tracking the first chat, and the row keeps its name and stops
   updating its status. Cursor writes no title for print-mode (`-p`) runs.
 - OpenCode and MiMo Code keep a title on each session. Toastty's injected plugin
-  forwards it when the provider changes it and again once the session is bound,
-  so a resumed session shows its existing title. Both title a new session
+  forwards it when the provider changes it and again once the provider reports
+  the session, so a resumed session shows its existing title from its first
+  prompt. Until then the plugin treats the resumed session ID only as a hint,
+  and the row stays unnamed. Both title a new session
   `New session - <timestamp>` until the real title is generated, and Toastty
   treats that placeholder as no name.
 - Pi does not generate names. A name set with `/name` is forwarded by Toastty's
