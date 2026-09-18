@@ -291,6 +291,25 @@ private final class SidebarScrollViewportHeightReporterView: NSView {
     }
 }
 
+/// What the hover card would show, in raw form. Cheap to build for every row
+/// on every publish, which is what makes deferring the card's own model safe:
+/// a change here still re-presents a visible card.
+private struct SessionRowHoverTipRefreshKey: Hashable {
+    let statusKind: SessionStatusKind
+    let statusDetail: String?
+    let projection: String
+    let cwd: String?
+    let updatedAt: Date
+    let turnStartedAt: Date?
+    let lastTurnDuration: TimeInterval?
+    let childCount: Int
+    let customTabTitle: String?
+    let parentSessionName: String?
+    let isLaterFlagged: Bool
+    let effectiveScopedWorkspaceIDs: Set<UUID>?
+    let sessionName: String?
+}
+
 private struct SidebarSessionRowDiagnosticState: Equatable {
     var windowID: UUID
     var workspaceID: UUID
@@ -428,6 +447,16 @@ struct SidebarView: View {
     /// `bell.fill` carries less ink than `flag.fill`, so it needs a larger
     /// point size to read at the same weight.
     private static let sessionRailWatchFontSize: CGFloat = 10.5
+    /// Elapsed time sits among the accessories `ViewThatFits` measures, and its
+    /// text changes every second. A floor wide enough for `00m 00s` keeps each
+    /// candidate line's measured width constant, so a tick cannot re-measure
+    /// the row or flip a chip in and out at a width boundary.
+    private static let sessionElapsedMinimumWidth: CGFloat = {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        return ceil((Self.sessionElapsedWidestTemplate as NSString)
+            .size(withAttributes: [.font: font]).width)
+    }()
+    static let sessionElapsedWidestTemplate = "00m 00s"
     /// Reserving a line height keeps the rail, name, and accessories on one
     /// baseline whether or not a row has a badge or disclosure pill.
     private static let sessionRowLineMinHeight: CGFloat = 17
@@ -1227,18 +1256,26 @@ struct SidebarView: View {
             for: workspaceSessionStatus,
             in: store.state.workspacesByID[workspaceSessionStatus.workspaceID]
         )
-        let hoverTipModel = SidebarSessionPresentation.sessionRowHoverTipModel(
-            session: workspaceSessionStatus,
+        // Only the card's inputs are gathered here. Building the model itself
+        // standardizes a filesystem path and formats a relative date, which is
+        // main-thread work this row does not need until the card is shown —
+        // see docs/agents/menu-performance.md.
+        let hoverTipRefreshKey = SessionRowHoverTipRefreshKey(
+            statusKind: status.kind,
+            statusDetail: status.detail,
+            projection: SidebarSessionPresentation.sessionStatusProjectionLogValue(
+                workspaceSessionStatus.projection
+            ),
+            cwd: workspaceSessionStatus.cwd,
+            updatedAt: workspaceSessionStatus.updatedAt,
+            turnStartedAt: workspaceSessionStatus.turnStartedAt,
+            lastTurnDuration: workspaceSessionStatus.lastTurnDuration,
+            childCount: workspaceSessionStatus.children.count,
             customTabTitle: customTabTitle,
             parentSessionName: parentSessionName,
-            workspaceScopeNames: workspaceSessionStatus.isWorkspaceScoped
-                ? workspaceScopeWorkspaceNames(
-                    for: workspaceSessionStatus.effectiveScopedWorkspaceIDs ?? [],
-                    fallbackWorkspace: workspace
-                )
-                : [],
             isLaterFlagged: isLaterFlagged,
-            now: Date()
+            effectiveScopedWorkspaceIDs: workspaceSessionStatus.effectiveScopedWorkspaceIDs,
+            sessionName: workspaceSessionStatus.sessionName
         )
         let rowShape = SidebarSessionPresentation.sessionRowShape(
             sessionName: workspaceSessionStatus.sessionName,
@@ -1334,11 +1371,19 @@ struct SidebarView: View {
                 .accessibilityIdentifier("sidebar.workspace.session.\(workspaceSessionStatus.sessionID)")
                 .hoverTip(
                     id: sessionRowID,
-                    refreshID: hoverTipModel,
+                    refreshID: hoverTipRefreshKey,
                     placement: .trailing(gap: Self.sessionHoverTipTrailingGap),
                     isHovering: isHovered
                 ) {
-                    SessionRowHoverTipCard(model: hoverTipModel)
+                    SessionRowHoverTipCard(
+                        model: sessionRowHoverTipModel(
+                            workspaceSessionStatus,
+                            workspace: workspace,
+                            customTabTitle: customTabTitle,
+                            parentSessionName: parentSessionName,
+                            isLaterFlagged: isLaterFlagged
+                        )
+                    )
                 },
                 childCount: workspaceSessionStatus.children.count,
                 childRowsExpanded: childRowsExpanded,
@@ -1718,6 +1763,7 @@ struct SidebarView: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .fixedSize()
+                    .frame(minWidth: Self.sessionElapsedMinimumWidth, alignment: .trailing)
             }
             .accessibilityHidden(true)
         }
@@ -1814,6 +1860,31 @@ struct SidebarView: View {
             parentSessionName: showsParentTag ? nil : accessories.parentSessionName,
             workspaceScopeHelpText: nil,
             droppedWaitingChipLabel: showsWaitingChip ? nil : accessories.waitingChipLabel
+        )
+    }
+
+    /// Built only when a card is about to be shown. Everything expensive about
+    /// the card — path standardizing, relative-date formatting, resolving the
+    /// scoped workspace names — happens here rather than per row per publish.
+    private func sessionRowHoverTipModel(
+        _ workspaceSessionStatus: WorkspaceSessionStatus,
+        workspace: WorkspaceState,
+        customTabTitle: String?,
+        parentSessionName: String?,
+        isLaterFlagged: Bool
+    ) -> SessionRowHoverTipModel {
+        SidebarSessionPresentation.sessionRowHoverTipModel(
+            session: workspaceSessionStatus,
+            customTabTitle: customTabTitle,
+            parentSessionName: parentSessionName,
+            workspaceScopeNames: workspaceSessionStatus.isWorkspaceScoped
+                ? workspaceScopeWorkspaceNames(
+                    for: workspaceSessionStatus.effectiveScopedWorkspaceIDs ?? [],
+                    fallbackWorkspace: workspace
+                )
+                : [],
+            isLaterFlagged: isLaterFlagged,
+            now: Date()
         )
     }
 

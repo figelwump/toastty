@@ -6,6 +6,150 @@ import Testing
 
 @MainActor
 struct SessionRuntimeStoreTests {
+    /// `/clear` rebinds a live panel to a new provider conversation while
+    /// keeping the same managed session and the same `bindingID`, so the name
+    /// read from the old transcript must not survive onto the new one.
+    @Test
+    func rebindingToANewConversationDropsTheNameReadFromTheOldOne() async throws {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let sessionID = "sess-claude-rebind"
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("provider-name-rebind-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func writeTranscript(nativeSessionID: String, title: String) throws -> String {
+            let url = directory.appendingPathComponent("\(nativeSessionID).jsonl", isDirectory: false)
+            let line = #"{"type":"ai-title","aiTitle":"\#(title)","sessionId":"\#(nativeSessionID)"}"#
+            try (line + "\n").write(to: url, atomically: true, encoding: .utf8)
+            return url.path
+        }
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: date
+        )
+
+        let firstPath = try writeTranscript(nativeSessionID: "native-first", title: "First conversation")
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: ManagedAgentResumeRecord(
+                agent: .claude,
+                nativeSessionID: "native-first",
+                sessionFilePath: firstPath,
+                cwd: "/repo",
+                capturedAt: date
+            )
+        ))
+        try await waitForProviderSessionName(
+            "First conversation",
+            sessionID: sessionID,
+            store: store
+        )
+
+        // The rebind carries a different native session and transcript under
+        // the same bindingID, which is exactly what the stale guard must catch.
+        let secondPath = try writeTranscript(nativeSessionID: "native-second", title: "Second conversation")
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: ManagedAgentResumeRecord(
+                agent: .claude,
+                nativeSessionID: "native-second",
+                sessionFilePath: secondPath,
+                cwd: "/repo",
+                capturedAt: date.addingTimeInterval(1)
+            )
+        ))
+        try await waitForProviderSessionName(
+            "Second conversation",
+            sessionID: sessionID,
+            store: store
+        )
+    }
+
+    /// A rebind to a conversation the provider has not named yet must leave the
+    /// row unnamed rather than keeping the previous conversation's name, even
+    /// though a failed read deliberately preserves an existing name.
+    @Test
+    func rebindingToAnUnnamedConversationLeavesTheRowUnnamed() async throws {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let sessionID = "sess-claude-rebind-unnamed"
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("provider-name-unnamed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let namedPath = directory.appendingPathComponent("named.jsonl", isDirectory: false)
+        try (#"{"type":"ai-title","aiTitle":"Named conversation","sessionId":"native-named"}"# + "\n")
+            .write(to: namedPath, atomically: true, encoding: .utf8)
+        let unnamedPath = directory.appendingPathComponent("unnamed.jsonl", isDirectory: false)
+        try #"{"type":"user","message":"hello"}"#
+            .appending("\n")
+            .write(to: unnamedPath, atomically: true, encoding: .utf8)
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: date
+        )
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: ManagedAgentResumeRecord(
+                agent: .claude,
+                nativeSessionID: "native-named",
+                sessionFilePath: namedPath.path,
+                cwd: "/repo",
+                capturedAt: date
+            )
+        ))
+        try await waitForProviderSessionName("Named conversation", sessionID: sessionID, store: store)
+
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: ManagedAgentResumeRecord(
+                agent: .claude,
+                nativeSessionID: "native-unnamed",
+                sessionFilePath: unnamedPath.path,
+                cwd: "/repo",
+                capturedAt: date.addingTimeInterval(1)
+            )
+        ))
+        try await waitForProviderSessionName(nil, sessionID: sessionID, store: store)
+    }
+
+    private func waitForProviderSessionName(
+        _ expected: String?,
+        sessionID: String,
+        store: SessionRuntimeStore
+    ) async throws {
+        for _ in 0 ..< 100 {
+            let current = store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName
+            if current == expected { return }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let current = store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName
+        Issue.record("providerSessionName settled on \(current ?? "nil"), expected \(expected ?? "nil")")
+    }
+
     @Test
     func managedProviderConversationFeedRequiresConfirmedBindingAndDeduplicates() throws {
         let store = SessionRuntimeStore()

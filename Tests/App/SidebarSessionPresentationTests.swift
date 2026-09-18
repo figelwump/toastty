@@ -709,6 +709,27 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertFalse(label.contains("**"), label)
     }
 
+    /// The elapsed label reserves a width sized for this template so a tick
+    /// cannot change what `ViewThatFits` measures on the tab line. Every
+    /// realistic turn duration has to fit inside it.
+    func testDurationTextStaysWithinTheReservedElapsedTemplate() {
+        let template = SidebarView.sessionElapsedWidestTemplate
+        for seconds in [0, 9, 10, 59, 60, 61, 599, 600, 3_599, 5_999] as [TimeInterval] {
+            let text = SidebarSessionPresentation.durationText(seconds: seconds)
+            XCTAssertLessThanOrEqual(
+                text.count,
+                template.count,
+                "\(text) is wider than the reserved elapsed slot"
+            )
+        }
+        // Past 100 minutes the label does outgrow the slot; the slot is a floor
+        // rather than a clamp, so it grows once instead of every second.
+        XCTAssertGreaterThan(
+            SidebarSessionPresentation.durationText(seconds: 6_000).count,
+            template.count
+        )
+    }
+
     func testSessionRowShapeLeadsWithNameAndFallsBackThroughSummaryToAgentName() {
         XCTAssertEqual(
             SidebarSessionPresentation.sessionRowShape(

@@ -672,9 +672,12 @@ row's full width. The badge labels are short; the spelled-out wording ("needs
 approval") stays in the row's accessibility label.
 
 Working rows count up from the start of the current turn. A turn starts when the
-provider reports `working` and ends when it leaves that state; the duration of
-the previous turn stays available to the row's hover card. Turn timing is
-runtime-only, so a restored session does not resume a stale count.
+provider reports `working` and runs until the session comes to rest — idle,
+ready, or an error. An approval pause stays inside the turn, because the agent
+is waiting on the user mid-task; elapsed time is hidden while the row waits for
+approval, then resumes from the real start, and the recorded duration of the
+previous turn covers the pause too. Turn timing is runtime-only, so a restored
+session does not resume a stale count.
 
 Rows no longer show the working directory or a workspace-scope chip. Hovering a
 row opens a card beside the sidebar, level with the row, carrying the full path,
@@ -691,7 +694,9 @@ Both Claude Code and Codex generate a short name for an interactive session, and
 Toastty shows it as the row's name.
 
 - Claude Code writes `ai-title` records into the session transcript. Toastty
-  reads the newest record for the bound native session.
+  reads the newest record for the bound native session. Clearing a conversation
+  binds the panel to a new one, and the previous conversation's name is dropped
+  rather than carried over.
 - Codex names interactive threads in `$CODEX_HOME/session_index.jsonl` (default
   `~/.codex`). Toastty reads the newest record for the bound thread.
 

@@ -524,6 +524,104 @@ struct SessionRegistryTests {
         #expect(midTurn.lastTurnDuration == nil)
     }
 
+    /// An approval prompt is the agent waiting on the user mid-task, so the
+    /// turn keeps running across it. Resetting there would report only the
+    /// fragment after the approval and lose the time actually spent.
+    @Test
+    func turnSpansAnApprovalPauseAndEndsOnlyAtRest() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let start = Date(timeIntervalSince1970: 4_000)
+
+        registry.startSession(
+            sessionID: "turn-approval",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start
+        )
+        registry.updateStatus(
+            sessionID: "turn-approval",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: start.addingTimeInterval(10)
+        )
+        registry.updateStatus(
+            sessionID: "turn-approval",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval"),
+            at: start.addingTimeInterval(40)
+        )
+
+        let waiting = try #require(registry.activeSession(sessionID: "turn-approval"))
+        #expect(waiting.turnStartedAt == start.addingTimeInterval(10))
+        #expect(waiting.lastTurnDuration == nil)
+
+        // Elapsed is hidden while the row waits, because the projected status
+        // is not working, but the turn underneath is still the same one.
+        let waitingRow = try #require(
+            registry.panelStatus(for: panelID, at: start.addingTimeInterval(50))
+        )
+        #expect(waitingRow.status.kind == .needsApproval)
+        #expect(waitingRow.turnStartedAt == nil)
+
+        registry.updateStatus(
+            sessionID: "turn-approval",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: start.addingTimeInterval(70)
+        )
+        let resumed = try #require(registry.activeSession(sessionID: "turn-approval"))
+        #expect(
+            resumed.turnStartedAt == start.addingTimeInterval(10),
+            "Approving must not restart the turn"
+        )
+
+        registry.updateStatus(
+            sessionID: "turn-approval",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Done"),
+            at: start.addingTimeInterval(130)
+        )
+        let atRest = try #require(registry.activeSession(sessionID: "turn-approval"))
+        #expect(atRest.turnStartedAt == nil)
+        #expect(
+            atRest.lastTurnDuration == 120,
+            "The recorded turn covers the approval pause, not just the work after it"
+        )
+    }
+
+    /// An error ends the turn; it is a resting state, not a pause.
+    @Test
+    func errorEndsTheTurn() throws {
+        var registry = SessionRegistry()
+        let start = Date(timeIntervalSince1970: 5_000)
+
+        registry.startSession(
+            sessionID: "turn-error",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: start
+        )
+        registry.updateStatus(
+            sessionID: "turn-error",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: start.addingTimeInterval(5)
+        )
+        registry.updateStatus(
+            sessionID: "turn-error",
+            status: SessionStatus(kind: .error, summary: "Error", detail: "failed"),
+            at: start.addingTimeInterval(35)
+        )
+
+        let errored = try #require(registry.activeSession(sessionID: "turn-error"))
+        #expect(errored.turnStartedAt == nil)
+        #expect(errored.lastTurnDuration == 30)
+    }
+
     @Test
     func leavingWorkingClearsTurnStartAndRecordsLastTurnDuration() throws {
         var registry = SessionRegistry()

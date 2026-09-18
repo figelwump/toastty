@@ -109,21 +109,34 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         sessionsByID[sessionID] = record
     }
 
-    /// A turn starts when the reported status becomes `.working` and ends when
-    /// it leaves. Repeated `.working` updates during one turn keep the original
-    /// start, so the sidebar's elapsed time counts the turn, not the last hook.
+    /// A turn starts when the reported status becomes `.working` and runs until
+    /// the session comes to rest. Repeated `.working` updates keep the original
+    /// start, so elapsed time counts the turn rather than the last hook.
+    ///
+    /// An approval pause stays inside the turn: the agent is waiting on the
+    /// user mid-task, so resetting the count on approval would report only the
+    /// fragment after it and lose the time actually spent. Elapsed is not shown
+    /// while the row is waiting for approval, because the projected status is
+    /// not `.working`, but it resumes from the real start once work continues.
     private static func applyTurnTiming(
         to record: inout SessionRecord,
         nextStatusKind: SessionStatusKind,
         at now: Date
     ) {
-        let wasWorking = record.status?.kind == .working
-        guard wasWorking != (nextStatusKind == .working) else { return }
-
         if nextStatusKind == .working {
+            guard record.turnStartedAt == nil else { return }
             record.turnStartedAt = now
-        } else {
+        } else if Self.statusKindEndsTurn(nextStatusKind) {
             endTurnIfNeeded(for: &record, at: now)
+        }
+    }
+
+    private static func statusKindEndsTurn(_ kind: SessionStatusKind) -> Bool {
+        switch kind {
+        case .idle, .ready, .error:
+            return true
+        case .working, .needsApproval:
+            return false
         }
     }
 
@@ -138,7 +151,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         providerSessionName: String?,
         at now: Date
     ) {
-        guard var record = sessionsByID[sessionID] else { return }
+        guard var record = sessionsByID[sessionID], record.isActive else { return }
         let normalized = providerSessionName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolved = normalized?.isEmpty == false ? normalized : nil
         guard record.providerSessionName != resolved else { return }

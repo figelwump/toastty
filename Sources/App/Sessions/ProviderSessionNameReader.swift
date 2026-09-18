@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import RemoteProtocol
 
@@ -143,8 +144,7 @@ actor ProviderSessionNameReader {
         case .claudeTranscript(let path, let nativeSessionID):
             guard let tail = readTail(
                 atPath: path,
-                maximumBytes: ProviderSessionNameParser.maximumClaudeTranscriptTailBytes,
-                dropsLeadingPartialLine: true
+                maximumBytes: ProviderSessionNameParser.maximumClaudeTranscriptTailBytes
             ) else { return nil }
             return ProviderSessionNameParser.claudeSessionName(
                 inTranscriptTail: tail,
@@ -153,8 +153,7 @@ actor ProviderSessionNameReader {
         case .codexThreadIndex(let path, let threadID):
             guard let contents = readTail(
                 atPath: path,
-                maximumBytes: ProviderSessionNameParser.maximumCodexThreadIndexBytes,
-                dropsLeadingPartialLine: false
+                maximumBytes: ProviderSessionNameParser.maximumCodexThreadIndexBytes
             ) else { return nil }
             return ProviderSessionNameParser.codexThreadName(
                 inIndex: contents,
@@ -163,23 +162,24 @@ actor ProviderSessionNameReader {
         }
     }
 
-    /// Reads at most `maximumBytes` from the end of a file. A tail read can
-    /// start mid-line, so the caller says whether to discard that fragment;
-    /// for a whole-file read there is no fragment to discard.
-    private func readTail(
-        atPath path: String,
-        maximumBytes: Int,
-        dropsLeadingPartialLine: Bool
-    ) -> String? {
-        // A provider records a regular file here. Opening whatever else the
-        // path resolves to — a FIFO above all — would block this read, and
-        // with it every later refresh for the session.
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-              attributes[.type] as? FileAttributeType == .typeRegular else {
-            return nil
-        }
+    /// Reads at most `maximumBytes` from the end of a file, discarding a
+    /// leading partial line whenever the read did not reach the start of the
+    /// file. Both providers store one JSON object per line, so a fragment is
+    /// never parsable and always belongs to a record outside the window.
+    private func readTail(atPath path: String, maximumBytes: Int) -> String? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
+
+        // A provider records a regular file here. Reading whatever else the
+        // path resolves to — a FIFO above all — would block this read, and
+        // with it every later refresh for the session. The check is on the
+        // open descriptor, so it follows symlinks and leaves no window
+        // between the check and the read.
+        var status = stat()
+        guard fstat(handle.fileDescriptor, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG else {
+            return nil
+        }
 
         do {
             let size = try handle.seekToEnd()
@@ -194,9 +194,7 @@ actor ProviderSessionNameReader {
             // tail read can also slice a multi-byte scalar. Decode lossily so
             // one bad byte cannot hide every name record after it.
             var text = String(decoding: data, as: UTF8.self)
-            if dropsLeadingPartialLine,
-               readLength < size,
-               let firstNewline = text.firstIndex(of: "\n") {
+            if readLength < size, let firstNewline = text.firstIndex(of: "\n") {
                 text = String(text[text.index(after: firstNewline)...])
             }
             return text
