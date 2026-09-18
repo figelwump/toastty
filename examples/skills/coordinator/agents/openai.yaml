@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coordinator"
+  short_description: "Coordinate accepted worktree tasks and cleanup"
+  default_prompt: "Use $coordinator to watch this repository's accepted tasks and integrate eligible work."

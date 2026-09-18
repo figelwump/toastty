@@ -1,9 +1,112 @@
 import CoreState
+import Foundation
 import RemoteProtocol
 import Testing
 @testable import ToasttyApp
 
 struct AgentLaunchArgumentOverrideAdapterTests {
+    @Test
+    func conversationForksUseExactNativeIdentityAndProviderWorkingDirectory() throws {
+        let nativeID = UUID().uuidString
+        for agent in [AgentKind.codex, .claude] {
+            let record = ManagedAgentResumeRecord(agent: agent, nativeSessionID: nativeID, sessionFilePath: "/source/project/\(nativeID).jsonl", cwd: "/source/project", capturedAt: Date())
+            let argv = try AgentLaunchArgumentOverrideAdapter.applyingConversationOptions(
+                forkRecord: record, cwd: "/worktree", additionalDirectories: ["/queue"],
+                to: [agent.rawValue, "--model", "requested-model"], agent: agent, profileID: agent.rawValue
+            )
+            if agent == .codex {
+                #expect(argv == ["codex", "fork", nativeID, "-C", "/worktree", "--add-dir", "/queue", "--model", "requested-model"])
+            } else {
+                #expect(argv == ["claude", "--resume", record.sessionFilePath, "--fork-session", "--system-prompt-snapshot", "off", "--add-dir", "/queue", "--model", "requested-model"])
+            }
+            #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: agent, argv: argv) == nil)
+        }
+    }
+
+    @Test
+    func codexForkPreservesConfiguredAutomaticApprovalAndStrictConfig() throws {
+        let nativeID = UUID().uuidString
+        let record = ManagedAgentResumeRecord(agent: .codex, nativeSessionID: nativeID, sessionFilePath: "/source/\(nativeID).jsonl", cwd: "/source", capturedAt: Date())
+        let argv = try AgentLaunchArgumentOverrideAdapter.applyingConversationOptions(
+            forkRecord: record, cwd: "/worktree", additionalDirectories: [],
+            to: ["codex", "--approve-for-me", "--strict-config"], agent: .codex, profileID: "codex"
+        )
+        #expect(argv == ["codex", "fork", nativeID, "-C", "/worktree", "--approve-for-me", "--strict-config"])
+    }
+
+    @Test
+    func conversationOptionsRejectAmbiguousProfiles() {
+        let invalid: [(AgentKind, [String])] = [
+            (.codex, ["codex", "resume", "--last"]),
+            (.codex, ["codex", "fork", "--last"]),
+            (.codex, ["codex", "exec", "prompt"]),
+            (.codex, ["codex", "--cd", "/elsewhere"]),
+            (.codex, ["codex", "-C/elsewhere"]),
+            (.codex, ["codex", "--cd=/elsewhere"]),
+            (.codex, ["codex", "--model"]),
+            (.codex, ["codex", "--model", ""]),
+            (.codex, ["codex", "--model="]),
+            (.codex, ["codex", "--model", "--search"]),
+            (.codex, ["codex", "--", "prompt"]),
+            (.codex, ["agent-safehouse", "codex"]),
+            (.claude, ["run-sandboxed.sh", "--cwd", "/elsewhere", "claude"]),
+            (.claude, ["claude", "--resume", "session"]),
+            (.claude, ["claude", "--resume=session"]),
+            (.claude, ["claude", "--fork-session"]),
+            (.claude, ["claude", "--continue"]),
+            (.claude, ["claude", "-c"]),
+            (.claude, ["claude", "--session-id", UUID().uuidString]),
+            (.claude, ["claude", "--session-id=existing"]),
+            (.claude, ["claude", "--worktree"]),
+            (.claude, ["claude", "--print"]),
+            (.claude, ["claude", "existing prompt"]),
+            (.pi, ["pi"]),
+        ]
+        for (agent, argv) in invalid {
+            #expect(throws: (any Error).self) {
+                _ = try AgentLaunchArgumentOverrideAdapter.applyingConversationOptions(
+                    forkRecord: nil, cwd: "/worktree", additionalDirectories: ["/queue"],
+                    to: argv, agent: agent, profileID: agent.rawValue
+                )
+            }
+        }
+    }
+
+    @Test
+    func conversationOptionsPreserveSupportedEqualsValues() throws {
+        for agent in [AgentKind.codex, .claude] {
+            let argv = try AgentLaunchArgumentOverrideAdapter.applyingConversationOptions(
+                forkRecord: nil, cwd: nil, additionalDirectories: ["/queue"],
+                to: [agent.rawValue, "--model=requested-model"], agent: agent, profileID: agent.rawValue
+            )
+            #expect(argv == [agent.rawValue, "--add-dir", "/queue", "--model=requested-model"])
+        }
+    }
+
+    @Test
+    func conversationOptionsExplainUnsupportedFlagsAndMissingValues() {
+        for (argument, detail) in [
+            ("--verbose", "--verbose is not supported with structured conversation options"),
+            ("--model=", "--model requires a non-empty value"),
+        ] {
+            #expect(throws: AgentLaunchError.unsafeLaunchOverrideArgv(profileID: "claude", message: detail)) {
+                _ = try AgentLaunchArgumentOverrideAdapter.applyingConversationOptions(
+                    forkRecord: nil, cwd: nil, additionalDirectories: ["/queue"],
+                    to: ["claude", argument], agent: .claude, profileID: "claude"
+                )
+            }
+        }
+    }
+
+    @Test
+    func additionalDirectoriesDoNotCreateAForkOrReplaceProfileDefaults() throws {
+        let argv = try AgentLaunchArgumentOverrideAdapter.applyingConversationOptions(
+            forkRecord: nil, cwd: nil, additionalDirectories: ["/queue", "/notes"],
+            to: ["codex", "--config", "model_reasoning_effort=\"high\""], agent: .codex, profileID: "codex"
+        )
+        #expect(argv == ["codex", "--add-dir", "/queue", "--add-dir", "/notes", "--config", "model_reasoning_effort=\"high\""])
+    }
+
     @Test
     func omittedOverridesPreserveConfiguredArgvExactly() throws {
         let configured = [

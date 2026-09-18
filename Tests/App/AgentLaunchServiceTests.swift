@@ -1,10 +1,87 @@
 import CoreState
+import RemoteProtocol
 import Foundation
 import Testing
 @testable import ToasttyApp
 
 @MainActor
 struct AgentLaunchServiceTests {
+    @Test
+    func forksLaunchDistinctManagedChildrenAndLeaveSourceHistoryUntouched() throws {
+        for agent in [AgentKind.codex, .claude] {
+            let fixture = try makeLaunchUITestFixture()
+            let root = try makeProjectRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let transcript = root.appendingPathComponent("source.jsonl")
+            let history = Data("source conversation history\n".utf8)
+            try history.write(to: transcript)
+            let record = ManagedAgentResumeRecord(agent: agent, nativeSessionID: UUID().uuidString, sessionFilePath: transcript.path, cwd: root.path, capturedAt: Date())
+            fixture.sessionRuntimeStore.startSession(
+                sessionID: "source-managed", agent: agent, panelID: fixture.panelID,
+                windowID: fixture.windowID, workspaceID: fixture.workspaceID,
+                cwd: root.path, repoRoot: root.path, at: record.capturedAt
+            )
+            #expect(fixture.sessionRuntimeStore.confirmNativeSessionBinding(managedSessionID: "source-managed", panelID: fixture.panelID, record: record))
+            #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: record)))
+            #expect(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Child", activate: true)))
+            let childWorkspace = try #require(fixture.store.selectedWorkspace)
+            let result = try fixture.service.launch(
+                profileID: agent.rawValue, workspaceID: childWorkspace.id,
+                cwd: root.appendingPathComponent("Packages/toastty").path,
+                model: "requested-model", reasoningEffort: "high", initialPrompt: "Continue with the task",
+                forkFromSessionID: "source-managed", additionalDirectories: [root.path]
+            )
+            #expect(result.sessionID != "source-managed")
+            #expect(result.commandLine.contains("--model requested-model"))
+            #expect(result.commandLine.contains("--add-dir"))
+            #expect(result.commandLine.contains("TOASTTY_SESSION_ID="))
+            if agent == .codex {
+                #expect(result.commandLine.contains("fork \(record.nativeSessionID) -C"))
+                #expect(result.commandLine.contains("model_reasoning_effort=\"high\""))
+            } else {
+                #expect(result.commandLine.contains("--resume \(transcript.path) --fork-session --system-prompt-snapshot off"))
+                #expect(result.commandLine.contains("--effort high"))
+            }
+            #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: result.sessionID)?.parentSessionID == "source-managed")
+            #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: "source-managed")?.panelID == fixture.panelID)
+            #expect(fixture.terminalRouter.sentTextByPanelID[fixture.panelID] == nil)
+            #expect(try Data(contentsOf: transcript) == history)
+        }
+    }
+
+    @Test
+    func forksFailClosedForUnconfirmedStaleMissingAndMismatchedSources() throws {
+        for failure in ["inactive", "unconfirmed", "stale", "missing-file", "provider", "same-panel", "missing-cwd", "initial-commands"] {
+            let fixture = try makeLaunchUITestFixture()
+            let root = try makeProjectRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let transcript = root.appendingPathComponent("source.jsonl")
+            if failure != "missing-file" { try Data("history".utf8).write(to: transcript) }
+            let start = Date()
+            let record = ManagedAgentResumeRecord(agent: .codex, nativeSessionID: UUID().uuidString, sessionFilePath: transcript.path, cwd: root.path, capturedAt: failure == "stale" ? start.addingTimeInterval(-10) : start)
+            if failure != "inactive" {
+                fixture.sessionRuntimeStore.startSession(sessionID: "source", agent: .codex, panelID: fixture.panelID, windowID: fixture.windowID, workspaceID: fixture.workspaceID, cwd: root.path, repoRoot: root.path, at: start)
+                #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: record)))
+                if failure != "unconfirmed" {
+                    #expect(fixture.sessionRuntimeStore.confirmNativeSessionBinding(managedSessionID: "source", panelID: fixture.panelID, record: record))
+                }
+            }
+            if failure != "same-panel" {
+                #expect(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Child", activate: true)))
+            }
+            #expect(throws: (any Error).self) {
+                _ = try fixture.service.launch(
+                    profileID: failure == "provider" ? "claude" : "codex",
+                    cwd: failure == "missing-cwd" ? nil : root.path,
+                    initialCommands: failure == "initial-commands" ? ["cd /tmp"] : [],
+                    forkFromSessionID: "source"
+                )
+            }
+            #expect(fixture.terminalRouter.sentTextByPanelID.isEmpty)
+            #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.count == (failure == "inactive" ? 0 : 1))
+        }
+    }
+
     @Test
     func defaultCLIExecutablePathPrefersBundledHelperCLIOverOtherFallbacks() throws {
         let fixture = try makeCLIResolutionFixture()

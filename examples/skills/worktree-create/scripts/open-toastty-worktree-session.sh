@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--model <model>] [--reasoning-effort <effort>] [--initial-command <command>]... [--startup-command <command>] [--no-scope-parent] [--json]
+usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--mode plan|implement] [--fork-from-session <uuid>] [--additional-directory <path>]... [--window-id <uuid>] [--agent-command <name>] [--model <model>] [--reasoning-effort <effort>] [--initial-command <command>]... [--startup-command <command>] [--no-scope-parent] [--json]
 
 Creates a new Toastty workspace for a worktree and starts a new terminal command in it.
 By default the helper calls agent.launch with structured cwd, environment, and
@@ -16,8 +16,15 @@ and cannot be combined with --agent-command, --initial-command, --model, or
 --reasoning-effort. Model and reasoning overrides require live agent.launch
 capability metadata for the selected profile and never use a terminal fallback.
 Structured launches scope the current parent session before creating the child
-workspace unless --no-scope-parent is passed. They initialize git-branch
-(when Git metadata is available) and task-status workspace annotations.
+workspace unless --no-scope-parent is passed. They initialize task-status.
+--mode plan|implement defaults to plan (investigation and design only).
+--fork-from-session <managed-session-id> preserves provider conversation history.
+Repeat --additional-directory <path> to grant access to explicit shared artifacts.
+These options require structured launch; fork and directory support are checked
+against live capability metadata before creating a workspace.
+Forks cannot be combined with --initial-command. Before creating the worktree,
+follow the skill's provider preflight for the actual configured executable;
+the live descriptor does not establish the installed provider CLI's features.
 Explicit --startup-command launches do not manage task annotations.
 EOF
 }
@@ -71,9 +78,38 @@ startup_command=""
 initial_commands=()
 scope_parent="true"
 json_output=0
+mode="plan"
+mode_overridden=0
+fork_from_session=""
+additional_directories=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --mode)
+      mode="${2:-}"
+      mode_overridden=1
+      if [[ "$mode" != "plan" && "$mode" != "implement" ]]; then
+        echo "error: --mode must be plan or implement" >&2
+        exit 64
+      fi
+      shift 2
+      ;;
+    --fork-from-session|--additional-directory)
+      if [[ -z "${2:-}" || "${2//[[:space:]]/}" == "" ]]; then
+        echo "error: $1 requires a non-blank value" >&2
+        exit 64
+      fi
+      if [[ "$1" == "--fork-from-session" ]]; then
+        fork_from_session="$2"
+        if ! python3 -c 'import sys, uuid; uuid.UUID(sys.argv[1])' "$fork_from_session" 2>/dev/null; then
+          echo "error: --fork-from-session requires a managed session UUID" >&2
+          exit 64
+        fi
+      else
+        additional_directories+=("$(python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$2")")
+      fi
+      shift 2
+      ;;
     --workspace-name)
       workspace_name="${2:-}"
       shift 2
@@ -169,6 +205,10 @@ if [[ "$startup_command_overridden" == "1" && ( -n "$model" || -n "$reasoning_ef
   echo "error: --model and --reasoning-effort cannot be combined with --startup-command" >&2
   exit 64
 fi
+if [[ "$startup_command_overridden" == "1" && ( "$mode_overridden" == "1" || -n "$fork_from_session" || "${#additional_directories[@]}" -gt 0 || "$scope_parent" == "false" ) ]]; then
+  echo "error: --mode, --fork-from-session, --additional-directory, and --no-scope-parent cannot be combined with --startup-command" >&2
+  exit 64
+fi
 if [[ "$agent_command_overridden" == "1" && -n "$startup_command" ]]; then
   echo "error: --agent-command cannot be combined with --startup-command" >&2
   usage
@@ -177,6 +217,10 @@ fi
 if [[ "${#initial_commands[@]}" -gt 0 && -n "$startup_command" ]]; then
   echo "error: --initial-command cannot be combined with --startup-command" >&2
   usage
+  exit 64
+fi
+if [[ "${#initial_commands[@]}" -gt 0 && -n "$fork_from_session" ]]; then
+  echo "error: --initial-command cannot be combined with --fork-from-session; run setup separately before launch" >&2
   exit 64
 fi
 if [[ -z "$agent_command" || "$agent_command" =~ [[:space:]] ]]; then
@@ -200,18 +244,6 @@ if [[ ! -s "$handoff_file" ]]; then
   exit 1
 fi
 
-branch_label=""
-if [[ -z "$startup_command" ]]; then
-  if ! branch_label="$(git -C "$worktree_path" symbolic-ref --quiet --short HEAD 2>/dev/null)"; then
-    if revision="$(git -C "$worktree_path" rev-parse --short HEAD 2>/dev/null)"; then
-      branch_label="Detached at $revision"
-    else
-      echo "warning: Git metadata unavailable at $worktree_path; only task status will be annotated" >&2
-    fi
-  fi
-  branch_label="$(PYTHONUTF8=1 python3 -c 'import sys; s=sys.argv[1]; print(s if len(s)<=80 else s[:77]+"...")' "$branch_label")"
-fi
-
 shell_quote() {
   python3 - "$1" <<'PY'
 import shlex
@@ -220,18 +252,17 @@ print(shlex.quote(sys.argv[1]))
 PY
 }
 
-relative_handoff_path() {
-  if [[ "$handoff_file" == "$worktree_path/"* ]]; then
-    printf '%s\n' "${handoff_file#"$worktree_path"/}"
-  else
-    printf '%s\n' "$handoff_file"
-  fi
-}
-
 build_initial_prompt() {
-  local relative_handoff
-  relative_handoff="$(relative_handoff_path)"
-  printf 'Read %s in the repo, use it as the source of truth for this handoff, and continue the task in this worktree.' "$relative_handoff"
+  printf 'Your effective working directory is %s; it is authoritative for this task. Read the exact handoff artifact %s and the task ownership and artifact paths recorded there. ' "$worktree_path" "$handoff_file"
+  if [[ -n "$fork_from_session" ]]; then
+    printf 'Preserve and use the inherited conversation history; this handoff supplies relocation and task ownership details, not a replacement for that history. '
+    printf 'Continue this task in the given working directory. Do not rerun worktree-create or replay the parent launch operation inherited in the conversation; relocation is already complete. '
+  fi
+  if [[ "$mode" == "plan" ]]; then
+    printf 'Mode: plan. Perform investigation and design only. Do not implement changes until the user explicitly authorizes implementation.'
+  else
+    printf 'Mode: implement. Continue the authorized implementation within the task scope, including validation and reporting.'
+  fi
 }
 
 build_default_startup_command() {
@@ -251,7 +282,7 @@ run_cli_json() {
 }
 
 # Verify overrides before changing parent scope or creating a workspace.
-if [[ -n "$model" || -n "$reasoning_effort" ]]; then
+if [[ -n "$model" || -n "$reasoning_effort" || -n "$fork_from_session" || "${#additional_directories[@]}" -gt 0 ]]; then
   if ! capabilities="$(run_cli_json action list)"; then
     echo "error: could not inspect agent.launch capabilities; no child was launched" >&2
     exit 1
@@ -264,7 +295,9 @@ try:
         raise ValueError("action list returned an error")
     commands = data["result"]["commands"]
     launch = next(c for c in commands if c.get("id") == "agent.launch")
-    for name, value in (("model", sys.argv[2]), ("reasoningEffort", sys.argv[3])):
+    if sys.argv[4] and sys.argv[1] not in ("codex", "claude"):
+        raise ValueError("forking requires the codex or claude profile")
+    for name, value in (("model", sys.argv[2]), ("reasoningEffort", sys.argv[3]), ("forkFromSessionID", sys.argv[4]), ("additionalDirectories", sys.argv[5] != "0")):
         if not value:
             continue
         parameter = next((p for p in launch["parameters"] if p.get("name") == name), None)
@@ -274,7 +307,7 @@ try:
 except (ValueError, TypeError, KeyError, AttributeError, StopIteration) as error:
     print(f"error: cannot apply requested launch selections: {error}", file=sys.stderr)
     raise SystemExit(1)
-' "$agent_command" "$model" "$reasoning_effort" <<<"$capabilities"; then
+' "$agent_command" "$model" "$reasoning_effort" "$fork_from_session" "${#additional_directories[@]}" <<<"$capabilities"; then
     exit 1
   fi
 fi
@@ -498,11 +531,9 @@ if [[ -z "$startup_command" ]]; then
     echo "error: could not inspect annotations for created workspace $workspace_id; no child was launched" >&2
     exit 1
   fi
-  if [[ -n "$branch_label" ]] && ! run_annotation_cli action run workspace.set-annotation --workspace "$workspace_id" key=git-branch "text=$branch_label"; then
-    echo "error: could not initialize annotations for created workspace $workspace_id; no child was launched" >&2
-    exit 1
-  fi
-  if ! run_annotation_cli action run workspace.set-annotation --workspace "$workspace_id" key=task-status text=Working; then
+  task_status="Planning"
+  if [[ "$mode" == "implement" ]]; then task_status="Working"; fi
+  if ! run_annotation_cli action run workspace.set-annotation --workspace "$workspace_id" key=task-status "text=$task_status"; then
     echo "error: could not initialize annotations for created workspace $workspace_id; no child was launched" >&2
     exit 1
   fi
@@ -548,6 +579,14 @@ if [[ -z "$startup_command" ]]; then
   fi
   if [[ -n "$reasoning_effort" ]]; then
     launch_args+=("reasoningEffort=$reasoning_effort")
+  fi
+  if [[ -n "$fork_from_session" ]]; then
+    launch_args+=("forkFromSessionID=$fork_from_session")
+  fi
+  if [[ "${#additional_directories[@]}" -gt 0 ]]; then
+    for additional_directory in "${additional_directories[@]}"; do
+      launch_args+=("additionalDirectories=$additional_directory")
+    done
   fi
   launch_args+=("initialPrompt=$initial_prompt")
 
@@ -605,7 +644,7 @@ raise SystemExit(0 if valid else 1)
       exit 1
     fi
     scope_set="true"
-  elif [[ "$agent_command" == "codex" || "$agent_command" == "claude" || -n "$model" || -n "$reasoning_effort" ]]; then
+  elif [[ "$agent_command" == "codex" || "$agent_command" == "claude" || -n "$model" || -n "$reasoning_effort" || -n "$fork_from_session" || "${#additional_directories[@]}" -gt 0 ]]; then
     echo "error: failed to launch managed agent with agent.launch: $launch_output" >&2
     exit 1
   else
@@ -651,11 +690,11 @@ if [[ "$terminal_available" != "true" ]]; then
 fi
 
 if [[ "$json_output" == "1" ]]; then
-  python3 - "$workspace_name" "$worktree_path" "$handoff_file" "$window_id" "$workspace_id" "$panel_id" "$session_id" "$scope_set" "$startup_command" "$terminal_available" "$parent_scope_status" "$parent_scope_set" "$model" "$reasoning_effort" <<'PY'
+  python3 - "$workspace_name" "$worktree_path" "$handoff_file" "$window_id" "$workspace_id" "$panel_id" "$session_id" "$scope_set" "$startup_command" "$terminal_available" "$parent_scope_status" "$parent_scope_set" "$model" "$reasoning_effort" "$mode" "$fork_from_session" <<'PY'
 import json
 import sys
 
-workspace_name, worktree_path, handoff_file, window_id, workspace_id, panel_id, session_id, scope_set, startup_command, terminal_available, parent_scope_status, parent_scope_set, model, reasoning_effort = sys.argv[1:]
+workspace_name, worktree_path, handoff_file, window_id, workspace_id, panel_id, session_id, scope_set, startup_command, terminal_available, parent_scope_status, parent_scope_set, model, reasoning_effort, mode, fork_from_session = sys.argv[1:]
 payload = {
     "workspace_name": workspace_name,
     "worktree_path": worktree_path,
@@ -667,6 +706,8 @@ payload = {
     "scope_set": scope_set == "true",
     "model": model or None,
     "reasoning_effort": reasoning_effort or None,
+    "mode": mode,
+    "fork_from_session": fork_from_session or None,
     "terminal_available": terminal_available == "true",
     "parent_scope_status": parent_scope_status,
     "parent_scope_set": parent_scope_set == "true",
@@ -690,5 +731,7 @@ parent_scope_set=$parent_scope_set
 terminal_available=$terminal_available
 model=$model
 reasoning_effort=$reasoning_effort
+mode=$mode
+fork_from_session=$fork_from_session
 EOF
 fi

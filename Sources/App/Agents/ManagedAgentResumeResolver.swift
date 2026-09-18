@@ -62,6 +62,9 @@ enum ManagedAgentResumeResolver {
         case .codex:
             resumeToken = "resume"
         case .claude:
+            // A fork reads the source transcript but creates a different
+            // native conversation. Never bind the child to the source ID.
+            guard !argv.contains("--fork-session") else { return nil }
             resumeToken = "--resume"
         default:
             return nil

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Worktree Done"
+  short_description: "Accept this worktree for integration and cleanup"
+  default_prompt: "Use $worktree-done: I have finished reviewing this version and want it merged and cleaned up when ready."

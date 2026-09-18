@@ -391,6 +391,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .reasoningEffort(required: false),
                     .initialCommands(required: false),
                     .initialPrompt(required: false),
+                    .forkFromSessionID(required: false),
+                    .additionalDirectories(required: false),
                 ]
             )
         case .configReload:
@@ -623,6 +625,14 @@ private extension AppControlParameterDescriptor {
             required: required,
             supportedProfileIDs: AgentLaunchArgumentOverrideAdapter.modelSupportedAgents.map(\.rawValue)
         )
+    }
+
+    static func forkFromSessionID(required: Bool) -> Self {
+        .init(name: "forkFromSessionID", summary: "Fork the confirmed native conversation of an active Toastty managed session. Requires an explicit cwd and access to the source workspace. Claude requires CLI 2.1.257 or later.", valueType: .string, required: required, supportedProfileIDs: ["codex", "claude"])
+    }
+
+    static func additionalDirectories(required: Bool) -> Self {
+        .init(name: "additionalDirectories", summary: "Existing absolute directory to grant the provider access to. Repeat for multiple directories.", valueType: .string, required: required, repeatable: true, supportedProfileIDs: ["codex", "claude"])
     }
 
     static func reasoningEffort(required: Bool) -> Self {

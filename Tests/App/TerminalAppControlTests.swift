@@ -5,6 +5,47 @@ import XCTest
 
 @MainActor
 final class TerminalAppControlTests: XCTestCase {
+    func testAgentForkChecksSourceWorkspaceScopeInSyncAndAsyncActions() async throws {
+        let fixture = try TerminalAppControlFixture()
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "scoped-caller", agent: .codex, panelID: fixture.panelID,
+            windowID: fixture.windowID, workspaceID: fixture.workspaceID,
+            cwd: "/tmp", repoRoot: nil, scopedWorkspaceIDs: [fixture.workspaceID], at: Date()
+        )
+        XCTAssertTrue(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Outside scope", activate: true)))
+        let sourceWorkspace = try XCTUnwrap(fixture.store.selectedWorkspace)
+        let sourcePanel = try XCTUnwrap(sourceWorkspace.focusedPanelID)
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "outside-source", agent: .codex, panelID: sourcePanel,
+            windowID: fixture.windowID, workspaceID: sourceWorkspace.id,
+            cwd: "/tmp", repoRoot: nil, at: Date()
+        )
+        let args: [String: AutomationJSONValue] = [
+            "profileID": .string("codex"),
+            "panelID": .string(fixture.panelID.uuidString),
+            "forkFromSessionID": .string("outside-source"),
+            "cwd": .string("/tmp"),
+        ]
+        let context = AutomationRequestContext(callerSessionID: "scoped-caller", commandName: "app_control.run_action")
+        for asynchronous in [false, true] {
+            do {
+                if asynchronous {
+                    _ = try await fixture.executor.runActionAsync(id: "agent.launch", args: args, context: context)
+                } else {
+                    _ = try fixture.executor.runAction(id: "agent.launch", args: args, context: context)
+                }
+                XCTFail("Expected source workspace access denial")
+            } catch let error as AutomationSocketError {
+                guard case .scopeDenied(let workspaceID) = error else {
+                    XCTFail("Expected scope denial, got \(error)")
+                    continue
+                }
+                XCTAssertEqual(workspaceID, sourceWorkspace.id)
+            }
+        }
+        XCTAssertEqual(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.count, 2)
+    }
+
     func testTerminalSendTextActionPreservesFirstResponder() throws {
         let fixture = try TerminalAppControlFixture()
         var capturedText: String?

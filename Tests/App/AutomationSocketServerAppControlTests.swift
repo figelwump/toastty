@@ -125,6 +125,11 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
         }
         let modelParameter = agentLaunchParameters.first { $0.string("name") == "model" }
         let reasoningParameter = agentLaunchParameters.first { $0.string("name") == "reasoningEffort" }
+        let forkParameter = agentLaunchParameters.first { $0.string("name") == "forkFromSessionID" }
+        let directoriesParameter = agentLaunchParameters.first { $0.string("name") == "additionalDirectories" }
+        #expect(forkParameter?.stringArray("supportedProfileIDs") == ["codex", "claude"])
+        #expect(directoriesParameter?.stringArray("supportedProfileIDs") == ["codex", "claude"])
+        #expect(directoriesParameter?["repeatable"] == .bool(true))
         #expect(modelParameter?.stringArray("supportedProfileIDs") == [
             "codex", "claude", "cursor", "opencode", "mimocode", "pi",
         ])

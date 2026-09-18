@@ -402,50 +402,39 @@ managed launch API and rejects unsupported overrides before creating a workspace
 it does not silently fall back to defaults. Existing personal copies need the
 updated skill and helper to adopt this behavior.
 
-For PR-based implementation tasks, the child prepares one draft PR per worktree.
-The PR carries intent, decisions, review/check evidence, human testing steps,
-dependencies, deployment implications, and an explicit coordinator handoff with
-the validated commit. Once required agent review and automated checks cover the
-committed tip, the child marks the PR ready for review; rework returns it to draft.
-PR existence does not imply readiness, and a new head invalidates prior evidence.
-Local-only tasks use a durable task note. Child Scratchpads are optional visual
-aids; the handoff must stand on its own.
+The personal task workflow uses three skills: `worktree-create`,
+`worktree-done`, and `coordinator`. Create a task workspace and worktree at the
+start of planning, then keep design, implementation and user testing in the same
+conversation. When planning already happened elsewhere, the launcher can fork a
+verified Codex/Claude conversation into the worktree through `agent.launch`.
+It sets an explicit cwd and creates a distinct session; later parent messages
+do not transfer. Requested forks never silently fall back to a fresh summary.
 
-Use the personal `project-orchestrator` skill in one project session to watch PRs
-and assigned local work while you work. It maintains a Scratchpad dashboard of
-working, validating, ready, merged but awaiting deployment, and completed tasks.
-Cards show blockers, human checks, partial deployments, and source synchronization
-separately, with last-checked time and stale evidence visible. It reviews design,
-codebase consistency, scope, contracts, and interactions across relevant tasks.
-Task agents keep ownership of fixes.
+The child prepares one draft PR, completes required review and automated checks,
+records `ValidatedCommit`, and marks it ready for the user's testing. Its task
+record captures the exact validated SHA. A ready PR does not authorize merging.
+The workspace shows task status and PR chips, without a Git branch chip.
 
-The coordinator also accounts for local commits missing from the remote and
-remote changes missing locally, including squash/rebase correspondence, and
-tracks merged work until its required deployments are verified. Within authorized
-scope it follows repository integration rules, pushes eligible work, and uses the
-repository's release workflow to reconcile shared deployment needs into a concrete
-plan. No new deployment engine is provided. A watch/review request alone does not
-authorize messages, publication, integration, cleanup, or deployment.
+The user's `worktree-done` request accepts an exact version and authorizes its
+integration and cleanup once the repository's gates and dependencies are
+satisfied. The helper persists acceptance before any optional notification.
+Changed source commits require renewed acceptance.
 
-After required review and automated verification, an authorized coordinator or
-another session can use `finisher` to integrate the named task, validate the
-landed result, and clean up its assigned local resources. Without a named target,
-it discovers open PRs and local worktrees with open Toastty workspaces in the
-current repository. Discovery does not authorize integration or cleanup. Human
-testing follows deployment unless the user explicitly requested a pre-merge
-manual check. The finishing session matches the PR and local task identity,
-preserves the handoff and any optional Scratchpad, and follows the repository's
-rules. With cleanup authorized it stops task-owned processes, closes the task
-workspace, and safely removes the worktree and merged local branch. A merge-only
-request leaves cleanup pending; new edits, failed verification, or unrelated work
-prevent cleanup. Remote-only PRs do not require a local task workspace.
+Run `coordinator` in an outside project workspace. It assesses accepted tasks
+against the destination and related pending changes, lands eligible tasks in
+dependency order, verifies the actual result and cleans each task immediately.
+It preserves user data, unsaved documents and unrelated resources. Its supporting
+integration reference replaces the separate finisher skill; releases and
+deployments are outside this workflow.
 
-The original parent need not remain active. A private local coordination record
-preserves task/workspace identities and pending decisions outside worktrees that
-will be removed. The coordinator refreshes PR, Git, and release evidence when
-resumed. These are agent workflows, not a separately installed supervisor;
-monitoring ends when the session stops. They use the target project's instructions,
-without assuming a `main` branch or Toastty's own build/release commands.
+Local queue state lives under `~/.toastty/task-state/<repository-id>/`, keyed by
+the canonical shared Git directory. All worktrees in a clone share that directory.
+Managed launches can grant narrow access through `additionalDirectories`.
+Use an explicit isolated state root for tests. The queue helper provides atomic
+records, cooperative coordinator ownership, safe state transitions and a bounded
+foreground `wait` command that detects record and relevant PR/check changes.
+It is not a daemon: processing stops when the coordinator exits. Resuming
+reconciles saved requests and partially completed integration/cleanup.
 
 ## User-created skills
 
@@ -456,7 +445,7 @@ See [examples/skills/](../examples/skills/README.md) for complete worktree and p
 packages, installation instructions, and guidance on customizing
 their workflow. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
 it is no longer included in the shipped plugin. Existing custom copies are yours
-to keep and edit. `finisher` and `project-orchestrator` are also personal examples.
+to keep and edit. `worktree-done` and `coordinator` are also personal examples.
 
 - **Authoring**: create `~/.toastty/skills/<name>/SKILL.md` with YAML
   frontmatter containing `name` and a non-empty `description`. The directory

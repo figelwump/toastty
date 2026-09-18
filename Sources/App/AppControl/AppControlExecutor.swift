@@ -541,6 +541,8 @@ final class AppControlExecutor {
                 reasoningEffort: args.stringValue("reasoningEffort"),
                 initialPrompt: args.stringValue("initialPrompt"),
                 initialCommands: try agentLaunchInitialCommands(args: args),
+                forkFromSessionID: try agentLaunchForkSource(args: args),
+                additionalDirectories: try agentLaunchStringArray("additionalDirectories", args: args),
                 inheritedScopedWorkspaceIDs: inheritedWorkspaceScopeForChildLaunch(),
                 parentSessionID: parentSessionIDForChildLaunch(),
                 focusPolicy: .preserveFirstResponder
@@ -694,6 +696,8 @@ final class AppControlExecutor {
                 reasoningEffort: args.stringValue("reasoningEffort"),
                 initialPrompt: args.stringValue("initialPrompt"),
                 initialCommands: try agentLaunchInitialCommands(args: args),
+                forkFromSessionID: try agentLaunchForkSource(args: args),
+                additionalDirectories: try agentLaunchStringArray("additionalDirectories", args: args),
                 inheritedScopedWorkspaceIDs: inheritedWorkspaceScopeForChildLaunch(),
                 parentSessionID: parentSessionIDForChildLaunch()
             )
@@ -709,6 +713,8 @@ final class AppControlExecutor {
             reasoningEffort: preparation.reasoningEffort,
             initialPrompt: preparation.initialPrompt,
             initialCommands: preparation.initialCommands,
+            forkFromSessionID: preparation.forkFromSessionID,
+            additionalDirectories: preparation.additionalDirectories,
             inheritedScopedWorkspaceIDs: preparation.inheritedScopedWorkspaceIDs,
             parentSessionID: preparation.parentSessionID,
             focusPolicy: .preserveFirstResponder
@@ -831,6 +837,8 @@ private extension AppControlExecutor {
         let reasoningEffort: String?
         let initialPrompt: String?
         let initialCommands: [String]
+        let forkFromSessionID: String?
+        let additionalDirectories: [String]
         let inheritedScopedWorkspaceIDs: Set<UUID>?
         let parentSessionID: String?
     }
@@ -1376,7 +1384,23 @@ private extension AppControlExecutor {
     }
 
     func agentLaunchInitialCommands(args: [String: AutomationJSONValue]) throws -> [String] {
-        guard let value = args["initialCommands"] else {
+        try agentLaunchStringArray("initialCommands", args: args)
+    }
+
+    func agentLaunchForkSource(args: [String: AutomationJSONValue]) throws -> String? {
+        guard let value = args["forkFromSessionID"] else { return nil }
+        guard case .string(let sourceID) = value, !sourceID.isEmpty else {
+            throw AutomationSocketError.invalidPayload("forkFromSessionID must be a non-empty managed session ID")
+        }
+        guard let source = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sourceID) else {
+            throw AutomationSocketError.invalidPayload("forkFromSessionID must identify an active managed session")
+        }
+        try enforceWorkspaceAutomationAccess(source.workspaceID)
+        return sourceID
+    }
+
+    func agentLaunchStringArray(_ parameter: String, args: [String: AutomationJSONValue]) throws -> [String] {
+        guard let value = args[parameter] else {
             return []
         }
         switch value {
@@ -1386,13 +1410,13 @@ private extension AppControlExecutor {
             return try values.enumerated().map { index, value in
                 guard case .string(let command) = value else {
                     throw AutomationSocketError.invalidPayload(
-                        "initialCommands[\(index)] must be a string"
+                        "\(parameter)[\(index)] must be a string"
                     )
                 }
                 return command
             }
         default:
-            throw AutomationSocketError.invalidPayload("initialCommands must be a string or string array")
+            throw AutomationSocketError.invalidPayload("\(parameter) must be a string or string array")
         }
     }
 

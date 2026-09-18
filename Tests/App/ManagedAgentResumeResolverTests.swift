@@ -411,6 +411,13 @@ struct ManagedAgentResumeResolverTests {
     }
 
     @Test
+    func forksNeverClaimTheSourceNativeSession() {
+        let sourceID = UUID().uuidString
+        #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: .claude, argv: ["claude", "--resume", sourceID, "--fork-session"]) == nil)
+        #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: .codex, argv: ["codex", "fork", sourceID]) == nil)
+    }
+
+    @Test
     func expectedNativeSessionIDRejectsNonResumeOrMalformedArgv() {
         #expect(
             ManagedAgentResumeResolver.expectedNativeSessionID(agent: .codex, argv: ["codex"]) == nil

@@ -1,4 +1,4 @@
 interface:
   display_name: "Toastty Worktree Create"
-  short_description: "Move work into an isolated Toastty worktree."
-  default_prompt: "Use $worktree-create to continue this task in a new Toastty worktree."
+  short_description: "Start or fork a task into its Toastty worktree"
+  default_prompt: "Use $worktree-create to start this task in a named Toastty workspace and worktree, beginning with planning unless implementation is already authorized."

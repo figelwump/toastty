@@ -114,6 +114,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private static let asyncPromptReadinessPollInterval: Duration = .milliseconds(25)
 
     private weak var store: AppStore?
+    private weak var sessionRuntimeStore: SessionRuntimeStore?
     private weak var terminalCommandRouter: (any TerminalCommandRouting)?
     private let agentCatalogProvider: any AgentCatalogProviding
     private let fileManager: FileManager
@@ -152,6 +153,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         managedAgentLaunchArtifactStore: ManagedAgentLaunchArtifactStore? = nil
     ) {
         self.store = store
+        self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalCommandRouter = terminalCommandRouter
         self.agentCatalogProvider = agentCatalogProvider
         self.fileManager = fileManager
@@ -224,6 +226,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         reasoningEffort: String? = nil,
         initialPrompt: String? = nil,
         initialCommands: [String] = [],
+        forkFromSessionID: String? = nil,
+        additionalDirectories: [String] = [],
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
         parentSessionID: String? = nil,
         focusPolicy: TerminalInputFocusPolicy = .focusTarget
@@ -238,6 +242,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             reasoningEffort: reasoningEffort,
             initialPrompt: initialPrompt,
             initialCommands: initialCommands,
+            forkFromSessionID: forkFromSessionID,
+            additionalDirectories: additionalDirectories,
             parentSessionID: parentSessionID,
             focusPolicy: focusPolicy
         )
@@ -258,6 +264,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         reasoningEffort: String? = nil,
         initialPrompt: String? = nil,
         initialCommands: [String] = [],
+        forkFromSessionID: String? = nil,
+        additionalDirectories: [String] = [],
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
         parentSessionID: String? = nil,
         focusPolicy: TerminalInputFocusPolicy = .focusTarget
@@ -272,6 +280,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             reasoningEffort: reasoningEffort,
             initialPrompt: initialPrompt,
             initialCommands: initialCommands,
+            forkFromSessionID: forkFromSessionID,
+            additionalDirectories: additionalDirectories,
             parentSessionID: parentSessionID,
             focusPolicy: focusPolicy,
             validatePromptState: false
@@ -300,6 +310,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         reasoningEffort: String?,
         initialPrompt: String?,
         initialCommands: [String],
+        forkFromSessionID: String?,
+        additionalDirectories: [String],
         parentSessionID: String?,
         focusPolicy: TerminalInputFocusPolicy,
         validatePromptState: Bool = true
@@ -322,17 +334,37 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 availableProfileIDs: availableProfileIDs()
             )
         }
+        if forkFromSessionID != nil, agent != .codex && agent != .claude {
+            throw AgentLaunchError.launchOverrideUnsupported(parameter: "forkFromSessionID", profileID: launchProfile.id)
+        }
+        let explicitCWD = try normalizedExplicitWorkingDirectory(cwd)
+        let forkRecord = try forkFromSessionID.map { try resolveForkRecord(sessionID: $0, agent: agent) }
+        let directories = try additionalDirectories.map { path -> String in
+            guard let normalized = try normalizedExplicitWorkingDirectory(path) else {
+                throw AgentLaunchError.invalidWorkingDirectory(path: path)
+            }
+            return normalized
+        }
+        if forkRecord != nil, !initialCommands.isEmpty {
+            throw AgentLaunchError.invalidLaunchOverride(parameter: "forkFromSessionID", message: "initialCommands cannot change the explicit fork working directory")
+        }
         let launchArgv = try argv(
             for: launchProfile,
             agent: agent,
             applyingModel: model,
             applyingReasoningEffort: reasoningEffort,
-            applyingInitialPrompt: initialPrompt
+            applyingInitialPrompt: initialPrompt,
+            forkRecord: forkRecord,
+            cwd: explicitCWD,
+            additionalDirectories: directories
         )
-        let explicitCWD = try normalizedExplicitWorkingDirectory(cwd)
         let validatedEnvironment = try validatedLaunchEnvironment(environment)
         let validatedCommands = try validatedInitialCommands(initialCommands)
         let target = try resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)
+        if let forkFromSessionID,
+           sessionRuntimeStore?.sessionRegistry.activeSession(sessionID: forkFromSessionID)?.panelID == target.panelID {
+            throw AgentLaunchError.invalidLaunchOverride(parameter: "forkFromSessionID", message: "the fork must use a different terminal panel from its source")
+        }
         if validatePromptState {
             try ensurePanelAppearsInteractive(
                 panelID: target.panelID,
@@ -346,13 +378,15 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             explicitCWD: explicitCWD,
             initialCommands: validatedCommands,
             focusPolicy: focusPolicy,
+            forkFromSessionID: forkFromSessionID,
+            forkRecord: forkRecord,
             request: ManagedAgentLaunchRequest(
                 agent: agent,
                 panelID: target.panelID,
                 argv: launchArgv,
                 cwd: explicitCWD ?? target.cwd,
                 environment: validatedEnvironment,
-                parentSessionID: parentSessionID
+                parentSessionID: parentSessionID ?? forkFromSessionID
             )
         )
     }
@@ -366,6 +400,13 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             throw AgentLaunchError.serviceUnavailable
         }
         do {
+            if let sourceID = preparation.forkFromSessionID {
+                let current = try resolveForkRecord(sessionID: sourceID, agent: preparation.agent)
+                guard current.nativeSessionID == preparation.forkRecord?.nativeSessionID,
+                      current.sessionFilePath == preparation.forkRecord?.sessionFilePath else {
+                    throw AgentLaunchError.invalidLaunchOverride(parameter: "forkFromSessionID", message: "the source conversation changed during launch; retry")
+                }
+            }
             try ensurePanelAppearsInteractive(
                 panelID: preparation.target.panelID,
                 terminalCommandRouter: terminalCommandRouter
@@ -509,6 +550,37 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         return normalized
     }
 
+    private func resolveForkRecord(sessionID: String, agent: AgentKind) throws -> ManagedAgentResumeRecord {
+        func unavailable(_ message: String) -> AgentLaunchError {
+            .invalidLaunchOverride(parameter: "forkFromSessionID", message: message)
+        }
+        guard let sessionRuntimeStore,
+              let source = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            throw unavailable("the source managed session is not active")
+        }
+        guard source.agent == agent else { throw unavailable("the source and target must use the same provider") }
+        guard let store,
+              case .terminal(let terminal)? = store.state.workspaceSelection(containingPanelID: source.panelID)?.workspace.panelState(for: source.panelID),
+              let record = terminal.resumeRecord,
+              let confirmation = sessionRuntimeStore.nativeSessionBindingConfirmation(for: sessionID),
+              record.agent == source.agent,
+              confirmation.agent == source.agent,
+              confirmation.panelID == source.panelID,
+              confirmation.nativeSessionID == record.nativeSessionID,
+              confirmation.sessionFilePath == record.sessionFilePath,
+              record.capturedAt >= source.startedAt,
+              UUID(uuidString: record.nativeSessionID) != nil else {
+            throw unavailable("the source has no current confirmed native conversation; wait for session discovery and retry")
+        }
+        var isDirectory: ObjCBool = false
+        guard (record.sessionFilePath as NSString).isAbsolutePath,
+              fileManager.fileExists(atPath: record.sessionFilePath, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            throw unavailable("the source native transcript is missing")
+        }
+        return record
+    }
+
     private func validatedLaunchEnvironment(_ environment: [String: String]) throws -> [String: String] {
         for (key, value) in environment {
             guard Self.isValidEnvironmentKey(key) else {
@@ -597,20 +669,32 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         agent: AgentKind,
         applyingModel model: String?,
         applyingReasoningEffort reasoningEffort: String?,
-        applyingInitialPrompt initialPrompt: String?
+        applyingInitialPrompt initialPrompt: String?,
+        forkRecord: ManagedAgentResumeRecord? = nil,
+        cwd: String? = nil,
+        additionalDirectories: [String] = []
     ) throws -> [String] {
-        let overrideArgv = try AgentLaunchArgumentOverrideAdapter.applying(
+        let selectedArgv = try AgentLaunchArgumentOverrideAdapter.applying(
             model: model,
             reasoningEffort: reasoningEffort,
             to: profile.argv,
             agent: agent,
             profileID: profile.id
         )
+        let overrideArgv = try AgentLaunchArgumentOverrideAdapter.applyingConversationOptions(
+            forkRecord: forkRecord, cwd: cwd, additionalDirectories: additionalDirectories,
+            to: selectedArgv, agent: agent, profileID: profile.id
+        )
         guard let prompt = try normalizedInitialPrompt(initialPrompt) else {
             return overrideArgv
         }
         guard initialPromptPlacement(for: profile, agent: agent) == .trailing else {
             throw AgentLaunchError.initialPromptUnsupported(profileID: profile.id)
+        }
+        // Claude's --add-dir consumes multiple values. Delimit the prompt so
+        // it cannot become another directory (or a provider option).
+        if forkRecord != nil || !additionalDirectories.isEmpty {
+            return overrideArgv + ["--", prompt]
         }
         if agent == .cursor,
            Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent),
@@ -840,5 +924,7 @@ private struct AgentLaunchPreparation {
     let explicitCWD: String?
     let initialCommands: [String]
     let focusPolicy: TerminalInputFocusPolicy
+    let forkFromSessionID: String?
+    let forkRecord: ManagedAgentResumeRecord?
     let request: ManagedAgentLaunchRequest
 }

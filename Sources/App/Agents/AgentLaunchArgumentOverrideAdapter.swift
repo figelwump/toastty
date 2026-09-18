@@ -5,6 +5,42 @@ import RemoteProtocol
 /// Applies action-local provider selections to a configured launch argv while
 /// leaving profile defaults untouched when no selection was requested.
 enum AgentLaunchArgumentOverrideAdapter {
+    /// Structured forks deliberately accept only the small interactive flag
+    /// surface below. Unknown commands and positional prompts can change the
+    /// meaning of a provider fork, so callers must supply those separately.
+    static func applyingConversationOptions(
+        forkRecord: ManagedAgentResumeRecord?,
+        cwd: String?,
+        additionalDirectories: [String],
+        to argv: [String],
+        agent: AgentKind,
+        profileID: String
+    ) throws -> [String] {
+        guard forkRecord != nil || !additionalDirectories.isEmpty else { return argv }
+        guard agent == .codex || agent == .claude else {
+            throw AgentLaunchError.launchOverrideUnsupported(
+                parameter: forkRecord == nil ? "additionalDirectories" : "forkFromSessionID",
+                profileID: profileID
+            )
+        }
+        let editor = try ProviderArgvEditor(argv: argv, agent: agent, profileID: profileID)
+        try editor.validateConversationOptions()
+        var arguments = additionalDirectories.flatMap { ["--add-dir", $0] }
+        if let forkRecord {
+            guard let cwd else {
+                throw AgentLaunchError.invalidLaunchOverride(parameter: "forkFromSessionID", message: "an explicit cwd is required")
+            }
+            if agent == .codex {
+                arguments = ["fork", forkRecord.nativeSessionID, "-C", cwd] + arguments
+            } else {
+                // Claude accepts an absolute transcript path, avoiding its
+                // current-project session lookup when the child changes cwd.
+                arguments = ["--resume", forkRecord.sessionFilePath, "--fork-session", "--system-prompt-snapshot", "off"] + arguments
+            }
+        }
+        return editor.inserting(arguments)
+    }
+
     static let modelSupportedAgents: [AgentKind] = [
         .codex,
         .claude,
@@ -298,6 +334,50 @@ private struct ProviderArgvEditor {
             index += 1
         }
         remove(removalRanges)
+    }
+
+    func validateConversationOptions() throws {
+        func unsafe(_ message: String) -> AgentLaunchError {
+            .unsafeLaunchOverrideArgv(profileID: profileID, message: message)
+        }
+        // A wrapper may change cwd or inject provider arguments internally.
+        guard executableIndex == 0 else {
+            throw unsafe("wrapper '\(Self.basename(argv[0]))' is not supported with structured conversation options")
+        }
+        guard providerArgumentsEndIndex == argv.endIndex else {
+            throw unsafe("an existing '--' argument boundary is not supported with structured conversation options; supply the prompt through initialPrompt")
+        }
+        let valueFlags: Set<String> = agent == .codex
+            ? ["--model", "-m", "--config", "-c", "--sandbox", "-s", "--ask-for-approval", "-a", "--profile", "-p", "--add-dir", "--enable", "--disable"]
+            : ["--model", "--effort", "--permission-mode", "--add-dir", "--settings", "--setting-sources", "--allowedTools", "--disallowedTools", "--append-system-prompt", "--system-prompt"]
+        let switches: Set<String> = agent == .codex
+            ? ["--full-auto", "--approve-for-me", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "--no-alt-screen", "--search"]
+            : ["--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"]
+        var index = executableIndex + 1
+        while index < argv.endIndex {
+            let argument = argv[index]
+            if switches.contains(argument) { index += 1; continue }
+            if valueFlags.contains(argument) {
+                guard index + 1 < argv.endIndex, !argv[index + 1].isEmpty,
+                      !argv[index + 1].hasPrefix("-") else {
+                    throw unsafe("\(argument) requires a non-empty value that does not start with '-'")
+                }
+                index += 2
+                continue
+            }
+            let flagName = String(argument.prefix(while: { $0 != "=" }))
+            if let equals = argument.firstIndex(of: "="), valueFlags.contains(flagName) {
+                if !argument[argument.index(after: equals)...].isEmpty {
+                    index += 1
+                    continue
+                }
+                throw unsafe("\(flagName) requires a non-empty value")
+            }
+            if argument.hasPrefix("-") {
+                throw unsafe("\(flagName) is not supported with structured conversation options")
+            }
+            throw unsafe("positional argument at argv index \(index) is not supported with structured conversation options; supply the prompt through initialPrompt")
+        }
     }
 
     mutating func removeCodexConfigAssignments(

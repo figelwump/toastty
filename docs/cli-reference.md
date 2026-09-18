@@ -441,7 +441,8 @@ Scratchpad actions are intended for agent and automation integrations:
 - `agent.launch` starts a managed agent profile in a resolved terminal panel. It
   requires `profileID` and accepts optional `cwd`, repeatable
   `initialCommands=<command>`, repeatable `env.NAME=value`, `model`,
-  `reasoningEffort`, and `initialPrompt` arguments. `cwd` must be absolute or
+  `reasoningEffort`, `initialPrompt`, `forkFromSessionID`, and repeatable
+  `additionalDirectories` arguments. `cwd` must be absolute or
   `~`-expanded and becomes both the launch
   directory and the session working directory; `initialCommands` are raw
   single-line shell snippets rendered after `cd <cwd>` and before the final
@@ -472,6 +473,27 @@ Scratchpad actions are intended for agent and automation integrations:
   The result's `command` is the composed invocation evidence, including managed
   instrumentation and environment assignments; inspect it without printing or
   logging unrelated environment values.
+
+  For Codex and Claude, `forkFromSessionID` names an active **Toastty managed
+  session**, not a provider-native ID. Toastty checks access to its workspace,
+  resolves its current confirmed native conversation, and requires the same
+  provider, a different target panel and an explicit existing `cwd`. Missing,
+  stale or unsupported source metadata fails without launching a fresh session.
+  The child inherits the saved conversation and gets a distinct identity; later
+  parent messages do not transfer. `initialCommands` cannot be combined with a
+  fork. Use direct first-party interactive profiles; ambiguous wrappers, existing
+  resume/fork/cwd options and positional prompts are rejected.
+
+  Codex uses its native `fork` command with an explicit working-directory option.
+  Claude uses the confirmed transcript path with `--resume`, `--fork-session`,
+  and `--system-prompt-snapshot off` to refresh directory context (requires Claude
+  Code 2.1.257 or later). Successful command delivery is not proof the provider
+  accepted those options; check the resulting native identity and cwd.
+
+  `additionalDirectories` grants Codex/Claude access to explicitly named existing
+  directories using `--add-dir`. It does not change the primary cwd or Toastty
+  workspace scope. Pass only needed directories, such as a repository's private
+  coordinator queue directory. These options preserve selected model and effort.
 
 ```bash
 "$TOASTTY_CLI_PATH" action run agent.launch \
