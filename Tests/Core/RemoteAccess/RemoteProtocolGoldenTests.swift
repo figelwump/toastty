@@ -315,7 +315,25 @@ private extension RemoteProtocolGoldenTests {
         return RemoteSessionListSnapshot(
             projectionRunID: projectionRunID,
             conversations: conversations,
-            generatedAt: timestamp.addingTimeInterval(60)
+            generatedAt: timestamp.addingTimeInterval(60),
+            workspaces: [
+                RemoteWorkspaceSummary(
+                    id: workspaceID,
+                    title: "Mobile Remote Access",
+                    panels: [],
+                    annotations: [
+                        RemoteWorkspaceAnnotation(
+                            key: "github-pr",
+                            text: "PR #12",
+                            url: URL(string: "https://github.com/example/toastty/pull/12"),
+                            color: "#5BA08A"
+                        ),
+                        RemoteWorkspaceAnnotation(key: "task-status", text: "Working", color: "#A78BFA"),
+                    ]
+                ),
+                // Omits the annotations key entirely, as older hosts do.
+                RemoteWorkspaceSummary(id: numberedUUID(100), title: "No annotations", panels: []),
+            ]
         )
     }
 

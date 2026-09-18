@@ -115,7 +115,23 @@ public struct GatewayCompatibilityDecoder: Sendable {
         return RemoteWorkspaceSummary(id: id, title: (try? object.optionalString("title")) ?? "Workspace",
             panels: ((try? object.requiredArray("panels")) ?? []).compactMap {
                 try? decode(RemoteWorkspacePanel.self, from: $0)
-            })
+            },
+            annotations: ((try? object.requiredArray("annotations")) ?? []).compactMap(decodeWorkspaceAnnotation))
+    }
+
+    /// Annotations are display-only, so a malformed chip is dropped rather
+    /// than failing its workspace, and an unreadable color falls back to the
+    /// neutral chip.
+    private func decodeWorkspaceAnnotation(_ object: JSONObject) -> RemoteWorkspaceAnnotation? {
+        guard let key = object.lossyString("key"), let text = object.lossyString("text") else { return nil }
+        let baseHex = object.lossyString("color").flatMap(WorkspaceAnnotationChipPalette.baseHex(fromColor:))
+            ?? WorkspaceAnnotationChipPalette.fallbackBaseHex
+        return RemoteWorkspaceAnnotation(
+            key: key,
+            text: text,
+            url: object.lossyString("url").flatMap(URL.init(string:)),
+            color: WorkspaceAnnotationChipPalette.hexString(baseHex)
+        )
     }
 
     private func decodeSummary(_ object: JSONObject) throws -> CompatibleConversationSummary {

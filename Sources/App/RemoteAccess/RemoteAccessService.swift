@@ -303,6 +303,7 @@ final class RemoteAccessService: ObservableObject {
     private var panelMetadataPollTask: Task<Void, Never>?
     private let previewScratchpadDirectory: URL
     private let store: AppStore
+    private let annotationStyleStore: AnnotationStyleStore
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let deviceStore: RemoteDeviceStore
@@ -397,6 +398,7 @@ final class RemoteAccessService: ObservableObject {
 
     init(
         store: AppStore,
+        annotationStyleStore: AnnotationStyleStore,
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
@@ -410,6 +412,7 @@ final class RemoteAccessService: ObservableObject {
     ) {
         self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
+        self.annotationStyleStore = annotationStyleStore
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.port = port
@@ -589,6 +592,20 @@ final class RemoteAccessService: ObservableObject {
                       self.isEnabled,
                       self.conversationTrackingGeneration == generation else { return }
                 self.syncConversations()
+            }
+            .store(in: &conversationTrackingCancellables)
+
+        // Chip colors live outside AppState, so the inventory diff below never
+        // sees a color-only change. The broadcast is deferred, so it reads the
+        // store after this willSet publication lands.
+        annotationStyleStore.$colorTokensByKey
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation else { return }
+                self.scheduleSessionListBroadcast()
             }
             .store(in: &conversationTrackingCancellables)
 
@@ -806,13 +823,17 @@ final class RemoteAccessService: ObservableObject {
             conversations: conversations,
             generatedAt: date,
             workspaces: Self.workspaceInventory(
-                state: store.state, metadata: panelMetadataCache.metadata, associations: associations)
+                state: store.state, metadata: panelMetadataCache.metadata, associations: associations,
+                annotationColorTokens: annotationStyleStore.colorTokensByKey)
         )
     }
 
+    /// Keys missing from `annotationColorTokens` resolve to the style store's
+    /// deterministic fallback, as the sidebar does.
     static func workspaceInventory(
         state: AppState, metadata: [UUID: RemotePanelMetadataCache.Metadata] = [:],
-        associations: [UUID: RemoteConversationID] = [:]
+        associations: [UUID: RemoteConversationID] = [:],
+        annotationColorTokens: [String: AnnotationColorToken] = [:]
     ) -> [RemoteWorkspaceSummary] {
         var ids: [UUID] = []
         var seen: Set<UUID> = []
@@ -846,7 +867,24 @@ final class RemoteAccessService: ObservableObject {
                     )
                 }
             }
-            return RemoteWorkspaceSummary(id: id, title: workspace.title, panels: panels)
+            let annotations = workspace.annotations
+                .sorted { $0.key < $1.key }
+                .map { key, annotation in
+                    let token = annotationColorTokens[key]
+                        ?? AnnotationStyleStore.fallbackColorToken(forKey: key)
+                    return RemoteWorkspaceAnnotation(
+                        key: key,
+                        text: annotation.text,
+                        // Persisted layouts are user-editable; send only a link the
+                        // sidebar itself would open.
+                        url: annotation.url
+                            .flatMap(WorkspaceAnnotation.validatedURLString)
+                            .flatMap(URL.init(string:)),
+                        color: WorkspaceAnnotationChipPalette.hexString(token.baseHexValue)
+                    )
+                }
+            return RemoteWorkspaceSummary(
+                id: id, title: workspace.title, panels: panels, annotations: annotations)
         }
     }
 

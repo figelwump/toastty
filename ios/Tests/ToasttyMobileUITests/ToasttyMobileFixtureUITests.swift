@@ -334,6 +334,47 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
+    func testWorkspaceAnnotationsFoldIntoHomeHeaderAndOpenLinksInBrowserSheet() {
+        let app = launchFixtureApp()
+        let header = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(header.waitForExistence(timeout: 10))
+        XCTAssertEqual(
+            header.label,
+            "toastty, build: build 0.8.3-35, git-branch: feat/ios-workspace-annotations-and-chip-colors, "
+                + "github-pr: PR #12, review: review: 2 open, task-status: Working, 4 sessions"
+        )
+        attachScreenshot(named: "fixture-home-annotations", of: app)
+
+        // The chip block sits above the open panels.
+        header.tap()
+        let block = app.descendants(matching: .any)["toastty-workspace-annotations"]
+        XCTAssertTrue(block.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            app.descendants(matching: .any)["toastty-workspace-annotation-review"].label,
+            "review: review: 2 open"
+        )
+        XCTAssertEqual(app.buttons["toastty-workspace-annotation-github-pr"].label, "github-pr: PR #12, link")
+        attachScreenshot(named: "fixture-workspace-annotations-with-panels", of: app)
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+
+        // A workspace without annotations keeps its original header.
+        let research = app.buttons["toastty-mobile-workspace-\(researchWorkspaceID)"]
+        XCTAssertTrue(scrollHomeTo(research, in: app))
+        XCTAssertEqual(research.label, "herdr research, 2 sessions")
+        attachScreenshot(named: "fixture-home-unannotated-workspace", of: app)
+
+        openWorkspace(releaseWorkspaceID, in: app)
+        XCTAssertTrue(block.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-workspace-annotations", of: app)
+
+        // An address only the Mac can reach shows the browser fallback.
+        app.buttons["toastty-workspace-annotation-preview"].tap()
+        XCTAssertTrue(app.staticTexts["Browser unavailable"].waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-annotation-link-fallback", of: app)
+        app.buttons["toastty-preview-close"].tap()
+        XCTAssertTrue(block.waitForExistence(timeout: 5))
+    }
+
     func testWorkspaceFilterDefaultsToAllAndIsSharedWithWorkspaceDetail() throws {
         let app = launchFixtureApp()
 

@@ -1176,6 +1176,7 @@ struct ToasttyApp: App {
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
             store: store,
+            annotationStyleStore: annotationStyleStore,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths
