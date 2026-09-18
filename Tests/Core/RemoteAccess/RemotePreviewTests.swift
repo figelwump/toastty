@@ -14,7 +14,14 @@ struct RemotePreviewProtocolTests {
         #expect(
             try JSONDecoder().decode(RemoteSessionListSnapshot.self, from: data).workspaces.isEmpty)
         var withWorkspace = old
-        withWorkspace.workspaces = [.init(id: UUID(), title: "No conversations", panels: [])]
+        withWorkspace.workspaces = [
+            .init(id: UUID(), title: "No conversations", panels: []),
+            .init(id: UUID(), title: "Annotated", panels: [], annotations: [
+                .init(key: "github-pr", text: "PR #12", url: URL(string: "https://example.com/pull/12"),
+                      color: "#5BA08A"),
+                .init(key: "task-status", text: "Working", color: "#A78BFA"),
+            ]),
+        ]
         #expect(
             try JSONDecoder().decode(
                 RemoteSessionListSnapshot.self, from: encoder.encode(withWorkspace))

@@ -57,6 +57,10 @@ struct ToasttyWorkspaceView: View {
         let visiblePanels = showsAllPanels ? sortedPanels : Array(sortedPanels.prefix(4))
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
+                if !workspace.annotations.isEmpty {
+                    ToasttyWorkspaceAnnotationBlock(annotations: workspace.annotations)
+                        .padding(.bottom, 4)
+                }
                 if !workspace.panels.isEmpty {
                     Text("Open panels").font(.headline).padding(.horizontal, 6)
                     ForEach(visiblePanels) { panel in

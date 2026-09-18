@@ -143,12 +143,22 @@ private struct ToasttyPreviewContentView: View {
         case .html(let html):
             ToasttyHTMLPreviewWebView(document: html, target: target, resource: service.resource)
         case .webURL(let url):
-            if ToasttyPreviewURLPolicy.isReachableWebURL(url) {
-                ToasttyBrowserPreview(url: url)
-            } else {
-                ContentUnavailableView("Browser unavailable", systemImage: "network.slash",
-                    description: Text("This address belongs to your Mac or uses an unsupported scheme. Open it on your Mac."))
-            }
+            ToasttyWebURLPreview(url: url)
+        }
+    }
+}
+
+/// Loads a web address in the in-app browser, or explains why an address that
+/// only resolves on the Mac cannot load on the phone.
+struct ToasttyWebURLPreview: View {
+    let url: URL
+
+    var body: some View {
+        if ToasttyPreviewURLPolicy.isReachableWebURL(url) {
+            ToasttyBrowserPreview(url: url)
+        } else {
+            ContentUnavailableView("Browser unavailable", systemImage: "network.slash",
+                description: Text("This address belongs to your Mac or uses an unsupported scheme. Open it on your Mac."))
         }
     }
 }
