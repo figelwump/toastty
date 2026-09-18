@@ -42,6 +42,12 @@ best-effort revoke itself through the gateway. `401` means it must pair again;
 `403` means the credential remains valid but a scope or action is denied, so it
 must retain the credential.
 
+If Toastty Mobile cannot access its saved device record, unlock the iPhone and
+choose **Try again**. For an unreadable record, **Forget pairing and start again**
+removes the saved pairing from the iPhone so you can pair again. It does not
+revoke or remove the Mac's device entry; remove that entry separately in
+**Remote Access** on the Mac.
+
 The current Remote Access window issues pairing offers only for Toastty Mobile.
 Browser profiles paired by earlier Toastty builds may continue to connect and
 appear in the paired-device list, but the current UI does not issue new browser

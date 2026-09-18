@@ -249,7 +249,9 @@ Notable action-specific behavior:
   - The action result includes `workspaceID` and `windowID`.
 - `workspace.select`
   - requires `args.workspaceID` or `args.index` (1-based).
-  - By default, only changes the selected workspace and preserves that
+  - Changes the user's visible workspace. Use only for user-authorized
+    navigation, not discovery, inspection, status reporting, or verification.
+  - By default, changes the selected workspace and preserves that
     workspace's selected tab and focused panel.
   - `args.focusUnreadSessionPanel=true` opts into foreground navigation that
     focuses the newest unread managed-session panel visible in the selected
@@ -427,6 +429,11 @@ Result:
 - query-specific object
 
 Selectors are passed inside `args` using the same keys as `app_control.run_action`.
+
+Use explicit workspace/panel IDs for discovery, inspection, status reporting,
+and verification without selecting a workspace/tab or moving keyboard focus.
+Queries preserve selection and focus, but can initialize runtime state:
+`panel.browser.state` can create a browser runtime and start its background load.
 
 Common query IDs include:
 
@@ -783,7 +790,7 @@ Behavior:
 Launches a configured agent profile into a resolved terminal panel. Toastty
 records the baseline session in-app before injecting the provider command and
 passes `TOASTTY_*` launch context with the command. For first-party Claude,
-Codex, OpenCode, MiMo Code, and Pi launches, Toastty also generates or uses
+Codex, Cursor, OpenCode, MiMo Code, and Pi launches, Toastty also generates or uses
 helpers that call `toastty session ingest-agent-event` so provider events become
 session updates automatically. If the agent does not emit `session.stop`,
 Toastty falls back to stopping the session when the panel returns to an
@@ -800,8 +807,9 @@ Launch context environment:
 - `TOASTTY_REPO_ROOT` when Toastty can infer a repository root from the resolved
   launch working directory
 - `TOASTTY_AGENT` with the managed provider ID
-- `TOASTTY_SKILLS_ROOT` for supported managed Codex and Claude Code launches,
-  pointing at the delivered Toastty plugin's `skills/` directory
+- `TOASTTY_SKILLS_ROOT` for supported managed Codex, Claude Code, Cursor,
+  OpenCode, MiMo Code, and Pi launches, pointing at the delivered Toastty
+  plugin's `skills/` directory; absent when the shipped skills were not injected
 - `TOASTTY_USER_SKILLS_ROOT` with the user skill-package source directory
   (`~/.toastty/skills`, or its runtime-isolated equivalent)
 
@@ -944,11 +952,47 @@ Result:
 - `hostLifecycleState: String`
 - `hostAttachmentID: UUID string | null`
 - `runtimePageZoom: Double`
+- `navigationState: "idle" | "loading" | "finished" | "failed"`
+- `observedURL: String | null`
+- `title: String | null`
+- `isLoading: Bool`
+- `navigationError: { domain: String, code: Int, message: String } | null`
 
 Behavior:
 
 - Compatibility shim over `app_control.run_query` with `id: "panel.browser.state"`.
 - `panelID` is optional; when omitted, Toastty resolves the browser panel from `workspaceID` or `windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order.
+- The query obtains the panel's runtime and applies its configured state. This
+  can start loading a hidden panel without selecting a workspace/tab or moving
+  focus. Repeated queries for an unchanged destination do not restart loading.
+  Panel creation and restoration do not eagerly instantiate every hidden browser.
+  Background browsers still consume memory and can perform ongoing page work.
+- `stateRestorableURL` is the configured/persisted destination, not evidence of
+  success. `observedURL` is WebKit's actual URL with no requested-URL fallback;
+  it can still describe the previous document while a new load is pending or
+  has failed. `title` is the current WebKit title, normalized to null when empty.
+- `navigationState` records the current navigation result. `idle` means no
+  observed document-navigation result, including the internal start page and
+  same-document history requests that produce no navigation callbacks. A pending
+  request that has never received `didStartProvisionalNavigation` reports `idle`
+  once WebKit is no longer loading. A later start, completion, or failure
+  callback still updates that request's result.
+- `finished` requires WebKit's `didFinish` callback for the current navigation;
+  it does not establish HTTP success, application/SPA readiness, visual
+  correctness, or video playback. Invalid destinations report `failed` even if
+  an internal helper page loads.
+- `isLoading` reports raw WebKit loading activity; false alone does not establish
+  success. `navigationError` describes the current failure and is cleared when
+  a new navigation starts. Superseded callbacks do not overwrite a newer result.
+- `hostLifecycleState` describes UI attachment independently: `detached`,
+  `attached`, or `ready`. `ready` means attached to a window. A detached host can
+  finish navigation; screenshot requests remain unsupported while detached.
+- For background verification, poll an explicit panel ID with a bounded deadline
+  (for example once per second for up to 30 seconds). Stop on a query error,
+  `finished`, or `failed`; compare `observedURL` with the expected destination
+  and any known redirect. At the deadline, or when an older app omits these
+  fields, report incomplete verification and the last state. Do not select or
+  focus a panel to force readiness or claim visual verification from load state.
 
 ### `automation.scratchpad_panel_state`
 

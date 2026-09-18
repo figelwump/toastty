@@ -7,6 +7,28 @@ import WebKit
 struct BrowserPanelRuntimeAutomationState: Equatable, Sendable {
     let lifecycleState: PanelHostLifecycleState
     let pageZoom: Double
+    let observedURL: String?
+    let title: String?
+    let isLoading: Bool
+    let navigationState: BrowserNavigationResult
+    let navigationError: BrowserNavigationError?
+}
+
+enum BrowserNavigationResult: String, Sendable {
+    case idle, loading, finished, failed
+}
+
+struct BrowserNavigationError: Equatable, Sendable {
+    let domain: String
+    let code: Int
+    let message: String
+
+    init(_ error: Error) {
+        let error = error as NSError
+        domain = error.domain
+        code = error.code
+        message = error.localizedDescription
+    }
 }
 
 struct BrowserPanelNavigationState: Equatable {
@@ -142,6 +164,12 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private var activeAttachment: PanelHostAttachmentToken?
     private var pendingDetachAttachment: PanelHostAttachmentToken?
     private var pendingDetachTask: Task<Void, Never>?
+    // Query-only status must not add registry-wide observation traffic.
+    private var currentNavigation: WKNavigation?
+    private var pendingRequestedNavigation: WKNavigation?
+    private let knownNavigations = NSHashTable<WKNavigation>.weakObjects()
+    private var navigationResult: BrowserNavigationResult = .idle
+    private var navigationError: BrowserNavigationError?
     private var lastRequestedURLString: String?
     private var lastObservedURLStringForPageChange: String?
     private var isShowingStartPage = false
@@ -416,7 +444,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         guard webView.canGoBack else {
             return false
         }
-        webView.goBack()
+        trackNavigation(webView.goBack())
         return true
     }
 
@@ -425,13 +453,14 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         guard webView.canGoForward else {
             return false
         }
-        webView.goForward()
+        trackNavigation(webView.goForward())
         return true
     }
 
     @discardableResult
     func reloadOrStop() -> Bool {
         if webView.isLoading {
+            finishNavigation(currentNavigation, error: URLError(.cancelled))
             webView.stopLoading()
             publishNavigationState()
             return true
@@ -514,9 +543,21 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     }
 
     func automationState() -> BrowserPanelRuntimeAutomationState {
-        BrowserPanelRuntimeAutomationState(
+        // Same-document history can return a WKNavigation without any public
+        // document-navigation callbacks. Lack of loading is not success: report
+        // no observed result until a start/finish/failure callback establishes one.
+        if navigationResult == .loading, currentNavigation != nil,
+           currentNavigation === pendingRequestedNavigation, !webView.isLoading {
+            navigationResult = .idle
+        }
+        return BrowserPanelRuntimeAutomationState(
             lifecycleState: lifecycleState,
-            pageZoom: webView.pageZoom
+            pageZoom: webView.pageZoom,
+            observedURL: WebPanelState.normalizedCurrentURL(webView.url?.absoluteString),
+            title: normalizedObservedTitle(),
+            isLoading: webView.isLoading,
+            navigationState: navigationResult,
+            navigationError: navigationError
         )
     }
 
@@ -544,27 +585,64 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         isShowingStartPage = true
         clearFavicon()
         publishNavigationState()
-        webView.loadHTMLString(Self.defaultStartPageHTML, baseURL: nil)
+        resetNavigationResult(.idle)
+        ignoreNavigation(webView.loadHTMLString(Self.defaultStartPageHTML, baseURL: nil))
     }
 
     private func load(urlString: String) {
         clearAnnotationsForPageChange()
+        resetNavigationResult(.loading)
         guard let url = URL(string: urlString) else {
             isShowingStartPage = false
             clearFavicon()
             publishNavigationState()
-            webView.loadHTMLString(Self.invalidURLHTML(for: urlString), baseURL: nil)
+            navigationResult = .failed
+            navigationError = BrowserNavigationError(URLError(.badURL))
+            ignoreNavigation(webView.loadHTMLString(Self.invalidURLHTML(for: urlString), baseURL: nil))
             return
         }
         clearFavicon()
         if let fileLoad = Self.fileLoad(for: url) {
-            webView.loadFileURL(
+            trackNavigation(webView.loadFileURL(
                 fileLoad.fileURL,
                 allowingReadAccessTo: fileLoad.readAccessURL
-            )
+            ))
             return
         }
-        webView.load(URLRequest(url: url))
+        trackNavigation(webView.load(URLRequest(url: url)))
+    }
+
+    private func resetNavigationResult(_ result: BrowserNavigationResult) {
+        currentNavigation = nil
+        pendingRequestedNavigation = nil
+        navigationResult = result
+        navigationError = nil
+    }
+
+    private func ignoreNavigation(_ navigation: WKNavigation?) {
+        if let navigation { knownNavigations.add(navigation) }
+    }
+
+    private func trackNavigation(_ navigation: WKNavigation?, awaitingStart: Bool = true) {
+        currentNavigation = nil
+        navigationResult = .loading
+        navigationError = nil
+        if awaitingStart { pendingRequestedNavigation = navigation }
+        guard let navigation else {
+            navigationResult = .failed
+            navigationError = BrowserNavigationError(URLError(.unknown))
+            return
+        }
+        currentNavigation = navigation
+        knownNavigations.add(navigation)
+    }
+
+    private func finishNavigation(_ navigation: WKNavigation?, error: Error? = nil) {
+        guard let navigation, navigation === currentNavigation,
+              navigationResult == .loading || navigationResult == .idle else { return }
+        if navigation === pendingRequestedNavigation { pendingRequestedNavigation = nil }
+        navigationResult = error == nil ? .finished : .failed
+        navigationError = error.map(BrowserNavigationError.init)
     }
 
     static func fileLoad(for url: URL) -> BrowserPanelFileLoad? {
@@ -1277,6 +1355,26 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
 }
 
 extension BrowserPanelRuntime: WKNavigationDelegate {
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        finishNavigation(currentNavigation, error: WKError(.webContentProcessTerminated))
+        publishNavigationState()
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard webView === self.webView, let navigation else { return }
+        // Loads initiated here are registered immediately; link/history/script loads
+        // arrive here first. Never resurrect a superseded or internal HTML load.
+        if navigation === pendingRequestedNavigation {
+            // An older page-initiated start can arrive after load() returned.
+            // The requested navigation's own start reestablishes its identity.
+            pendingRequestedNavigation = nil
+        } else if knownNavigations.contains(navigation) {
+            return
+        }
+        trackNavigation(navigation, awaitingStart: false)
+    }
+
     func webView(
         _ webView: WKWebView,
         didCommit _: WKNavigation!
@@ -1294,10 +1392,10 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
         _ webView: WKWebView,
         didFinish navigation: WKNavigation!
     ) {
-        _ = navigation
         guard webView === self.webView else {
             return
         }
+        finishNavigation(navigation)
         if let observedURL = WebPanelState.normalizedCurrentURL(webView.url?.absoluteString),
            observedURL.caseInsensitiveCompare("about:blank") != .orderedSame {
             isShowingStartPage = false
@@ -1314,11 +1412,8 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
         didFail navigation: WKNavigation!,
         withError error: Error
     ) {
-        _ = navigation
-        _ = error
-        guard webView === self.webView else {
-            return
-        }
+        guard webView === self.webView else { return }
+        finishNavigation(navigation, error: error)
         clearFavicon()
         publishObservedMetadata()
         publishNavigationState()
@@ -1329,11 +1424,8 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
-        _ = navigation
-        _ = error
-        guard webView === self.webView else {
-            return
-        }
+        guard webView === self.webView else { return }
+        finishNavigation(navigation, error: error)
         clearFavicon()
         publishObservedMetadata()
         publishNavigationState()

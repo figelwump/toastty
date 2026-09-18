@@ -303,6 +303,7 @@ raise SystemExit(0 if valid else 1)
 workspace_id=""
 task_status_initialized="false"
 child_launched="false"
+parent_workspace_id=""
 parent_session_id=""
 parent_scope_set="false"
 parent_scope_rollback_on_error="false"
@@ -423,6 +424,16 @@ if [[ -z "$startup_command" ]]; then
       echo "error: TOASTTY_PANEL_ID is required to scope the parent session; pass --no-scope-parent to leave the parent unrestricted" >&2
       exit 1
     fi
+
+    if ! parent_state="$(run_cli_json query run terminal.state --panel "$TOASTTY_PANEL_ID")"; then
+      echo "error: failed to resolve parent workspace for reply" >&2
+      exit 1
+    fi
+    if ! parent_workspace_id="$(extract_json_result_field "workspaceID" <<<"$parent_state")"; then
+      echo "error: parent terminal.state response is missing workspaceID" >&2
+      exit 1
+    fi
+    initial_prompt+=" Your scope includes the task workspace and parent workspace $parent_workspace_id for reporting back. When done or blocked, send the parent a concise task status, validated commit, checks, and blockers using terminal.send-text with panelID=$TOASTTY_PANEL_ID, expectedSessionID=$parent_session_id, and submit=true. This workflow authorizes that reply; no additional user confirmation is needed. If the expected session no longer matches or delivery fails, report the failure without sending to another session or expanding scope."
 
     parent_scope_output=""
     parent_scope_stderr_file="$(mktemp "${TMPDIR:-/tmp}/toastty-parent-scope-show.XXXXXX")"
@@ -555,7 +566,7 @@ if [[ -z "$startup_command" ]]; then
     panel_id="$(extract_json_result_field "panelID" <<<"$launch_output")"
     if ! session_id="$(extract_json_result_field "sessionID" <<<"$launch_output" 2>/dev/null)"; then
       echo "error: agent.launch response did not include sessionID; cannot scope workspace handoff" >&2
-      echo "warning: workspace $workspace_id and panel $panel_id were already created; the child may be running without the intended workspace-only scope" >&2
+      echo "warning: workspace $workspace_id and panel $panel_id were already created; the child may be running without the intended workspace scope" >&2
       printf '%s\n' "$launch_output" >&2
       exit 1
     fi
@@ -563,15 +574,34 @@ if [[ -z "$startup_command" ]]; then
     startup_command="$launch_command"
     terminal_available="true"
 
+    child_scope_args=(session scope set --session "$session_id" --workspace "$workspace_id")
+    if [[ -n "$parent_workspace_id" ]]; then
+      child_scope_args+=(--workspace "$parent_workspace_id")
+    fi
     scope_output=""
     if ! scope_output="$(
-      run_cli_json session scope set \
-        --session "$session_id" \
-        --workspace "$workspace_id" 2>&1
+      run_cli_json "${child_scope_args[@]}" 2>&1
     )"; then
-      echo "error: failed to scope session $session_id to workspace $workspace_id" >&2
-      echo "warning: workspace $workspace_id and session $session_id were already created; the child may be running without the intended workspace-only scope" >&2
+      echo "error: failed to scope session $session_id to requested workspaces $workspace_id ${parent_workspace_id:-}" >&2
+      echo "warning: workspace $workspace_id and session $session_id were already created; the child may be running without the intended workspace scope" >&2
       printf '%s\n' "$scope_output" >&2
+      exit 1
+    fi
+    if ! python3 -c '
+import json, sys
+from uuid import UUID
+try:
+    response = json.load(sys.stdin)
+    result = response["result"]
+    expected = {UUID(value) for value in sys.argv[1:] if value}
+    valid = response.get("ok") is True and result["isScoped"] is True
+    valid = valid and all({UUID(value) for value in result[key]} == expected
+                          for key in ("workspaceIDs", "effectiveWorkspaceIDs"))
+except (KeyError, TypeError, ValueError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+' "$workspace_id" "$parent_workspace_id" <<<"$scope_output"; then
+      echo "error: child scope did not match the requested workspaces; workspace $workspace_id and session $session_id already exist" >&2
       exit 1
     fi
     scope_set="true"
