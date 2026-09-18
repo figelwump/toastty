@@ -4,10 +4,14 @@ import RemoteProtocol
 
 /// Where a provider CLI records the short name it generated for a session.
 ///
-/// Neither format is documented, so both cases are read defensively: a missing
-/// file, a truncated line, a renamed key, or a record for another session all
-/// resolve to "no name" rather than an error. A row must never fail to draw
-/// because a provider changed its bookkeeping.
+/// None of these formats is documented, so every case is read defensively: a
+/// missing file, a truncated line, a renamed key, or a record for another
+/// session all resolve to "no name" rather than an error. A row must never fail
+/// to draw because a provider changed its bookkeeping.
+///
+/// opencode, MiMo Code and pi have no case here: they report their name
+/// through Toastty's injected plugin or extension instead, and it arrives via
+/// `ProviderSessionNameParser.reportedSessionName`.
 enum ProviderSessionNameSource: Equatable, Sendable {
     /// Claude Code appends `{"type":"ai-title","aiTitle":…,"sessionId":…}`
     /// records to the session transcript, refreshed several times per session.
@@ -17,6 +21,11 @@ enum ProviderSessionNameSource: Equatable, Sendable {
     /// index shared by every thread under `$CODEX_HOME`. The rollout file the
     /// hook reports does not carry the name.
     case codexThreadIndex(path: String, threadID: String)
+    /// Cursor writes `{"title":…,"cwd":…,…}` to
+    /// `chats/<workspace>/<conversation>/meta.json`. Hooks report the
+    /// conversation but not the workspace directory, whose name is a hash of
+    /// Cursor's canonical cwd, so the reader scans the workspaces for the chat.
+    case cursorChatMetadata(chatsDirectoryPath: String, conversationID: String)
 }
 
 /// Parsing, separated from file access so the tolerated-malformation rules are
@@ -31,6 +40,9 @@ enum ProviderSessionNameParser {
     /// records fall outside the read and those threads read as unnamed —
     /// preferable to an unbounded read of a file Toastty does not own.
     static let maximumCodexThreadIndexBytes = 8 * 1024 * 1024
+    /// Cursor's `meta.json` is a single object of a few hundred bytes. A file
+    /// past this is not one Cursor wrote, and reads as unnamed.
+    static let maximumCursorChatMetadataBytes = 64 * 1024
     /// Provider names are short. The cap counts scalars, not grapheme
     /// clusters, so a combining-mark payload cannot slip past it.
     static let maximumNameScalarCount = 200
@@ -74,6 +86,30 @@ enum ProviderSessionNameParser {
         return resolved
     }
 
+    static func cursorChatTitle(inMetadata metadata: String) -> String? {
+        guard let object = jsonObject(metadata) else { return nil }
+        return normalized(object["title"] as? String)
+    }
+
+    /// Validates a name a provider reported through Toastty's plugin (opencode,
+    /// MiMo Code) or extension (pi), with the same rules as a name read from
+    /// disk.
+    ///
+    /// opencode and MiMo title every session `New session - <timestamp>` (or
+    /// `Child session - …`) until they generate the real title after the first
+    /// prompt, so for them that placeholder reads as "no name". Pi's names are
+    /// always the user's own and are taken as given.
+    static func reportedSessionName(_ value: String?, agent: AgentKind) -> String? {
+        guard let name = normalized(value) else { return nil }
+        if agent == .opencode || agent == .mimocode,
+           name.wholeMatch(
+               of: #/(?:New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/#
+           ) != nil {
+            return nil
+        }
+        return name
+    }
+
     private static func jsonObject(_ line: String) -> [String: Any]? {
         guard let data = line.data(using: .utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -95,7 +131,9 @@ enum ProviderSessionNameParser {
 
 actor ProviderSessionNameReader {
     /// Resolves where to look for a bound session's generated name. Returns
-    /// `nil` for providers that do not generate one.
+    /// `nil` for providers that do not generate one, or that report it through
+    /// an event instead. For Cursor, `nativeSessionID` is the hook's
+    /// `conversation_id` and `sessionFilePath` is unused.
     static func source(
         agent: AgentKind,
         nativeSessionID: String,
@@ -119,9 +157,47 @@ actor ProviderSessionNameReader {
                 ).path,
                 threadID: trimmedSessionID
             )
+        case .cursor:
+            // The ID becomes a path component, so accept only the UUID shape
+            // Cursor uses for its chat directories.
+            guard UUID(uuidString: trimmedSessionID) != nil else { return nil }
+            return .cursorChatMetadata(
+                chatsDirectoryPath: cursorChatsDirectoryURL(
+                    environment: environment,
+                    homeDirectoryPath: homeDirectoryPath
+                ).path,
+                conversationID: trimmedSessionID
+            )
         default:
             return nil
         }
+    }
+
+    /// Mirrors Cursor's own resolution: `$CURSOR_CONFIG_DIR`, then
+    /// `$XDG_CONFIG_HOME/cursor`, then `~/.cursor`. Like `CODEX_HOME`, this
+    /// reads Toastty's environment, not the launched shell's, and ignores a
+    /// relative override it cannot resolve the way Cursor would.
+    static func cursorChatsDirectoryURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectoryPath: String = NSHomeDirectory()
+    ) -> URL {
+        func absoluteValue(_ key: String) -> String? {
+            guard let value = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  value.hasPrefix("/") else {
+                return nil
+            }
+            return value
+        }
+        let configDirectory = if let configured = absoluteValue("CURSOR_CONFIG_DIR") {
+            URL(fileURLWithPath: configured, isDirectory: true)
+        } else if let xdgConfigHome = absoluteValue("XDG_CONFIG_HOME") {
+            URL(fileURLWithPath: xdgConfigHome, isDirectory: true)
+                .appendingPathComponent("cursor", isDirectory: true)
+        } else {
+            URL(fileURLWithPath: homeDirectoryPath, isDirectory: true)
+                .appendingPathComponent(".cursor", isDirectory: true)
+        }
+        return configDirectory.appendingPathComponent("chats", isDirectory: true)
     }
 
     static func codexThreadIndexURL(
@@ -159,12 +235,47 @@ actor ProviderSessionNameReader {
                 inIndex: contents,
                 threadID: threadID
             )
+        case .cursorChatMetadata(let chatsDirectoryPath, let conversationID):
+            // An oversized file yields a tail with its only line discarded,
+            // which parses as nothing, so it reads as unnamed.
+            guard let metadataPath = cursorChatMetadataPath(
+                chatsDirectoryPath: chatsDirectoryPath,
+                conversationID: conversationID
+            ), let metadata = readTail(
+                atPath: metadataPath,
+                maximumBytes: ProviderSessionNameParser.maximumCursorChatMetadataBytes
+            ) else { return nil }
+            return ProviderSessionNameParser.cursorChatTitle(inMetadata: metadata)
         }
+    }
+
+    /// There is one workspace directory per cwd Cursor has run in, so this is
+    /// a short listing plus one existence check each.
+    private func cursorChatMetadataPath(
+        chatsDirectoryPath: String,
+        conversationID: String
+    ) -> String? {
+        let fileManager = FileManager.default
+        guard let workspaceDirectories = try? fileManager.contentsOfDirectory(
+            atPath: chatsDirectoryPath
+        ) else { return nil }
+        let chatsDirectory = URL(fileURLWithPath: chatsDirectoryPath, isDirectory: true)
+        for workspaceDirectory in workspaceDirectories where workspaceDirectory.hasPrefix(".") == false {
+            let metadataPath = chatsDirectory
+                .appendingPathComponent(workspaceDirectory, isDirectory: true)
+                .appendingPathComponent(conversationID, isDirectory: true)
+                .appendingPathComponent("meta.json", isDirectory: false)
+                .path
+            if fileManager.fileExists(atPath: metadataPath) {
+                return metadataPath
+            }
+        }
+        return nil
     }
 
     /// Reads at most `maximumBytes` from the end of a file, discarding a
     /// leading partial line whenever the read did not reach the start of the
-    /// file. Both providers store one JSON object per line, so a fragment is
+    /// file. Every source stores one JSON object per line, so a fragment is
     /// never parsable and always belongs to a record outside the window.
     private func readTail(atPath path: String, maximumBytes: Int) -> String? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }

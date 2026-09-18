@@ -204,6 +204,7 @@ module.exports = function toasttyPiExtension(pi) {
   let currentPrompt;
   let lastAssistantSummary;
   let nativeSessionID;
+  let lastSessionNameKey;
   let conversationSnapshotID;
   let currentTurnID;
   let conversationEventCounter = 0;
@@ -366,6 +367,26 @@ module.exports = function toasttyPiExtension(pi) {
     });
   }
 
+  // Pi never generates a session name; one exists only when the user runs
+  // `/name`, renames the session, or an extension sets it. `/name` fires no
+  // extension event, so the name is checked at session and turn boundaries.
+  // Toastty validates it and rejects anything this long, so a longer name is
+  // not sent rather than cut short.
+  function emitSessionName() {
+    if (!nativeSessionID || typeof pi.getSessionName !== "function") return;
+    let name;
+    try {
+      name = pi.getSessionName();
+    } catch (_) {
+      return;
+    }
+    if (typeof name !== "string" || !name.trim() || name.length > 1000) return;
+    const key = `${nativeSessionID}\0${name}`;
+    if (key === lastSessionNameKey) return;
+    lastSessionNameKey = key;
+    emit("session_name", { nativeSessionID, name });
+  }
+
   function emitNativeSession(event, context) {
     const sessionManager = context && context.sessionManager;
     if (!sessionManager) return;
@@ -504,6 +525,10 @@ module.exports = function toasttyPiExtension(pi) {
 
   pi.on("session_start", (event, context) => {
     emitNativeSession(event, context);
+    // A session switch rebinds the panel and Toastty drops the stored name, so
+    // returning to an earlier session must send its name again.
+    lastSessionNameKey = undefined;
+    emitSessionName();
     emit("session_start", { reason: cleanString(event && event.reason) });
     emitConversationSnapshot(context);
     emitConversationBatch([{
@@ -530,6 +555,7 @@ module.exports = function toasttyPiExtension(pi) {
     currentTurnID = nextConversationEventID("turn", undefined);
     lastAssistantSummary = undefined;
     emit("before_agent_start", { prompt: currentPrompt });
+    emitSessionName();
     const records = [{
       kind: "turn_started",
       eventID: nextConversationEventID("turn-start", currentTurnID),
@@ -634,6 +660,7 @@ module.exports = function toasttyPiExtension(pi) {
     finishAllSubagents();
     const summary = latestAssistantSummary(event && event.messages) || lastAssistantSummary;
     emit("agent_end", { summary });
+    emitSessionName();
     const messages = Array.isArray(event && event.messages) ? event.messages : [];
     const latestAssistant = [...messages].reverse().find((message) => message && message.role === "assistant");
     const stopReason = cleanString(latestAssistant && latestAssistant.stopReason, 80);

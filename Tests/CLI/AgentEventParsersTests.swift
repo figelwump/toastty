@@ -1180,6 +1180,72 @@ struct AgentEventParsersTests {
         ])
     }
 
+    /// The app validates reported names with the same rules as names it reads
+    /// from disk, so the CLI must not collapse or truncate them on the way.
+    @Test
+    func openCodeFamilySessionNameIsForwardedUnaltered() throws {
+        let panelID = UUID()
+        let name = "Build  system explanation " + String(repeating: "x", count: 300)
+        for (source, agent) in [(AgentEventSource.opencodePlugin, AgentKind.opencode), (.mimocodePlugin, .mimocode)] {
+            let payload = try JSONSerialization.data(withJSONObject: [
+                "type": "toastty.session_name",
+                "properties": ["nativeSessionID": "ses_root", "name": name],
+            ])
+            let commands = try AgentEventIngestor.commands(
+                for: source,
+                sessionID: "sess-123",
+                panelID: panelID,
+                payload: payload
+            )
+            #expect(commands == [
+                .sessionProviderSessionName(
+                    sessionID: "sess-123",
+                    panelID: panelID,
+                    agent: agent,
+                    nativeSessionID: "ses_root",
+                    name: name
+                ),
+            ])
+            let envelope = try #require(commands.first).makeEventEnvelope(requestID: "name-request")
+            #expect(envelope.eventType == "session.provider_session_name")
+            #expect(envelope.payload == [
+                "agent": .string(agent.rawValue),
+                "nativeSessionID": .string("ses_root"),
+                "name": .string(name),
+            ])
+        }
+
+        let blank = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(#"{"type":"toastty.session_name","properties":{"nativeSessionID":"ses_root","name":"  "}}"#.utf8)
+        )
+        #expect(blank.isEmpty)
+    }
+
+    @Test
+    func piSessionNameEventMapsToProviderSessionName() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"session_name","nativeSessionID":"019e31af-e0ed-718b-a695-37afddc7e494","name":"Refactor the parser"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionProviderSessionName(
+                sessionID: "sess-123",
+                panelID: nil,
+                agent: .pi,
+                nativeSessionID: "019e31af-e0ed-718b-a695-37afddc7e494",
+                name: "Refactor the parser"
+            ),
+        ])
+    }
+
     @Test
     func openCodeConversationBatchMapsHistoricalAndLiveObservations() throws {
         let panelID = UUID()

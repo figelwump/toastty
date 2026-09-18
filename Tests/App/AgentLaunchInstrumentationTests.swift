@@ -1100,6 +1100,56 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         }
     }
 
+    func testOpenCodeFamilyPluginForwardsRootSessionTitleAfterBinding() throws {
+        for scenario in [
+            (agent: AgentKind.opencode, commandName: "opencode", environmentKey: "OPENCODE_CONFIG_CONTENT"),
+            (agent: AgentKind.mimocode, commandName: "mimo", environmentKey: "MIMOCODE_CONFIG_CONTENT"),
+        ] {
+            // A resumed session already has its title and may never update it,
+            // so the plugin reads it once the binding is forwarded.
+            let result = try runOpenCodeFamilyPluginScenarioResult(
+                agent: scenario.agent,
+                commandName: scenario.commandName,
+                configContentEnvironmentKey: scenario.environmentKey,
+                providerSessionTitle: "Existing title",
+                runnerBody: """
+                // Let the binding and the post-binding title reach Toastty first.
+                await new Promise((resolve) => setTimeout(resolve, 300));
+                hooks.event?.({ type: "session.updated", properties: { info: { id: "root-session", title: "Existing title" } } });
+                hooks.event?.({
+                  type: "session.updated",
+                  properties: { info: { id: "child-session", parentID: "root-session", title: "Child work" } },
+                });
+                // A rename and a rename back, queued before either is sent.
+                hooks.event?.({ type: "session.updated", properties: { info: { id: "root-session", title: "Renamed title" } } });
+                hooks.event?.({ type: "session.updated", properties: { info: { id: "root-session", title: "Existing title" } } });
+                hooks.event?.({
+                  type: "session.updated",
+                  properties: { info: { id: "root-session", title: "Existing title" + " ".repeat(995) + "\\ninvalid" } },
+                });
+                """
+            )
+
+            let types = result.events.compactMap { $0["type"] as? String }
+            let nativeIndex = try XCTUnwrap(types.firstIndex(of: "toastty.native_session"), scenario.commandName)
+            let nameEvents = result.events.filter { $0["type"] as? String == "toastty.session_name" }
+            XCTAssertEqual(
+                nameEvents.compactMap { ($0["properties"] as? [String: Any])?["name"] as? String },
+                ["Existing title", "Renamed title", "Existing title"],
+                scenario.commandName
+            )
+            XCTAssertTrue(
+                nameEvents.allSatisfy { ($0["properties"] as? [String: Any])?["nativeSessionID"] as? String == "root-session" },
+                scenario.commandName
+            )
+            XCTAssertGreaterThan(
+                try XCTUnwrap(types.firstIndex(of: "toastty.session_name"), scenario.commandName),
+                nativeIndex,
+                "The binding must reach Toastty before the name: \(scenario.commandName)"
+            )
+        }
+    }
+
     func testOpenCodeFamilyPluginPublishesSnapshotMessagesAndLivePromptLifecycle() throws {
         let result = try runOpenCodeFamilyPluginScenarioResult(
             agent: .opencode,
@@ -1866,6 +1916,81 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertFalse(events.contains { $0["activityID"] as? String == "pi-subagent:chain-call:1" })
     }
 
+    func testPiExtensionForwardsUserSetSessionNamePerSession() throws {
+        let fileManager = FileManager.default
+        guard let nodeURL = nodeExecutableURLForTests(fileManager: fileManager) else {
+            throw XCTSkip("node is unavailable")
+        }
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-pi-session-name-test-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directoryURL) }
+
+        let extensionURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/App/Resources/AgentExtensions/toastty-pi-extension.js")
+        let extensionLiteral = String(decoding: try JSONEncoder().encode(extensionURL.path), as: UTF8.self)
+        let runnerURL = directoryURL.appendingPathComponent("runner.cjs")
+        let telemetryURL = directoryURL.appendingPathComponent("telemetry.ndjson")
+        let runner = """
+        const handlers = new Map();
+        let sessionName;
+        const extension = require(\(extensionLiteral));
+        extension({
+          on(name, handler) { handlers.set(name, handler); },
+          getSessionName: () => sessionName,
+        });
+        const context = (id) => ({ sessionManager: {
+          getSessionId: () => id,
+          getSessionFile: () => `/tmp/${id}.jsonl`,
+          getCwd: () => "/tmp/repo",
+          getLeafId: () => undefined,
+          getBranch: () => [],
+        } });
+
+        handlers.get("session_start")?.({ reason: "startup" }, context("pi-first"));
+        // The user runs `/name` at the prompt, which fires no extension event.
+        sessionName = "Refactor the parser";
+        handlers.get("before_agent_start")?.({ prompt: "continue" });
+        handlers.get("agent_end")?.({ messages: [] });
+        // `/resume` switches sessions; the same name must be sent for the new one.
+        handlers.get("session_start")?.({ reason: "resume" }, context("pi-second"));
+        // Via an unnamed session and back: Toastty dropped the name on each
+        // rebind, so it must arrive again.
+        sessionName = undefined;
+        handlers.get("session_start")?.({ reason: "resume" }, context("pi-third"));
+        sessionName = "Refactor the parser";
+        handlers.get("session_start")?.({ reason: "resume" }, context("pi-second"));
+        """
+        try Data(runner.utf8).write(to: runnerURL)
+
+        let result = try runScript(
+            at: nodeURL,
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-pi",
+                "TOASTTY_CLI_PATH": "/usr/bin/true",
+                "TOASTTY_PI_TELEMETRY_LOG_PATH": telemetryURL.path,
+            ],
+            arguments: [runnerURL.path]
+        )
+        XCTAssertEqual(result.exitCode, 0, result.stderr)
+
+        let events = try String(contentsOf: telemetryURL, encoding: .utf8)
+            .split(separator: "\n")
+            .compactMap { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        let nameEvents = events.filter { $0["event"] as? String == "session_name" }
+        XCTAssertEqual(
+            nameEvents.compactMap { $0["nativeSessionID"] as? String },
+            ["pi-first", "pi-second", "pi-second"]
+        )
+        XCTAssertTrue(nameEvents.allSatisfy { $0["name"] as? String == "Refactor the parser" })
+        let eventNames = events.compactMap { $0["event"] as? String }
+        let secondBinding = try XCTUnwrap(eventNames.lastIndex(of: "native_session"))
+        XCTAssertGreaterThan(try XCTUnwrap(eventNames.lastIndex(of: "session_name")), secondBinding)
+    }
+
     func testPiExtensionChunksLargeSnapshotsAndKeepsConversationContentOutOfTelemetry() throws {
         let fileManager = FileManager.default
         guard let nodeURL = nodeExecutableURLForTests(fileManager: fileManager) else {
@@ -2494,6 +2619,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         claimRootSession: Bool = true,
         enrichProviderEventsWithRootSessionID: Bool = true,
         snapshotMessages: [[String: Any]] = [],
+        providerSessionTitle: String? = nil,
         runnerBody: String
     ) throws -> OpenCodeFamilyPluginScenarioResult {
         let fileManager = FileManager.default
@@ -2553,6 +2679,10 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let pluginSpec = try XCTUnwrap(plugins.first)
         let snapshotMessagesData = try JSONSerialization.data(withJSONObject: snapshotMessages)
         let snapshotMessagesLiteral = String(decoding: snapshotMessagesData, as: UTF8.self)
+        let sessionGetScript = try providerSessionTitle.map { title in
+            let titleLiteral = String(decoding: try JSONEncoder().encode(title), as: UTF8.self)
+            return #"get: async ({ path }) => ({ data: { id: path.id, title: \#(titleLiteral) } }),"#
+        } ?? ""
         let rootClaimScript = claimRootSession
             ? #"await hooks["chat.message"]?.({ sessionID: "\#(rootSessionID)" }, {});"#
             : ""
@@ -2582,7 +2712,10 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         process.env.TOASTTY_SOCKET_PATH = "/tmp/toastty-test.sock";
 
         const hooks = await ToasttyOpenCodeFamilyStatusPlugin({
-          client: { session: { messages: async () => ({ data: \(snapshotMessagesLiteral) }) } },
+          client: { session: {
+            messages: async () => ({ data: \(snapshotMessagesLiteral) }),
+            \(sessionGetScript)
+          } },
         });
         \(rootClaimScript)
         \(providerEventWrapperScript)
