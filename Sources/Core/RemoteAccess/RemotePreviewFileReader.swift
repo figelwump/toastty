@@ -74,9 +74,27 @@ public enum RemotePreviewFileReader {
         return root
     }
 
+    /// Which rule authorized a file. Ordered from the narrowest existing
+    /// rule to the transcript-linked grant, so a file the older rules already
+    /// allow keeps its original authority.
+    public enum FileGrant: String, Equatable, Sendable {
+        case openPanel = "open-panel"
+        case projectRoot = "project-root"
+        case transcriptLink = "transcript-link"
+    }
+
+    public struct ResolvedFile: Equatable, Sendable {
+        public var path: String
+        public var grant: FileGrant
+    }
+
+    /// `isTranscriptLinked` must come from the Mac's own transcript data for
+    /// this conversation, never from the requesting device. It authorizes the
+    /// reference's current canonical target; `read` still pins that target.
     public static func resolveFile(
-        reference: String, recordedCWD: String?, explicitlyOpenPaths: [String]
-    ) throws -> String {
+        reference: String, recordedCWD: String?, explicitlyOpenPaths: [String],
+        isTranscriptLinked: Bool = false
+    ) throws -> ResolvedFile {
         guard !reference.isEmpty, reference.utf8.count <= 4096, !reference.utf8.contains(0) else {
             throw RemotePreviewError.denied
         }
@@ -92,12 +110,29 @@ public enum RemotePreviewFileReader {
                 ).path)
         }
         if explicitlyOpenPaths.contains(where: { (try? authorityPath($0)) == path }) {
-            return path
+            return ResolvedFile(path: path, grant: .openPanel)
         }
-        guard let recordedCWD else { throw RemotePreviewError.denied }
-        let root = try projectRoot(recordedCWD: recordedCWD)
-        guard isWithin(path, root: root) else { throw RemotePreviewError.denied }
-        return path
+        do {
+            guard let recordedCWD else { throw RemotePreviewError.denied }
+            let root = try projectRoot(recordedCWD: recordedCWD)
+            guard isWithin(path, root: root) else { throw RemotePreviewError.denied }
+            return ResolvedFile(path: path, grant: .projectRoot)
+        } catch {
+            // An absolute linked reference stays readable when the session
+            // has no usable cwd (offline or restored sessions).
+            guard isTranscriptLinked else { throw error }
+            return ResolvedFile(path: path, grant: .transcriptLink)
+        }
+    }
+
+    /// HTML subresources are confined to the entry file's directory. For an
+    /// entry authorized only by a transcript link that directory is not
+    /// bounded by a project root, so apply the same floor `projectRoot` does.
+    public static func allowsSubresources(of entry: ResolvedFile) throws -> Bool {
+        guard entry.grant == .transcriptLink else { return true }
+        let directory = URL(fileURLWithPath: entry.path).deletingLastPathComponent().path
+        let home = try canonicalPath(NSHomeDirectory())
+        return directory != "/" && directory != home
     }
 
     public static func resourcePath(relativePath: String, entryPath: String) throws -> (

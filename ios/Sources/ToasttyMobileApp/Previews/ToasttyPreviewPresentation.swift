@@ -162,21 +162,8 @@ enum ToasttyPreviewURLPolicy {
             && host != "0.0.0.0"
     }
 
-    /// Only actual link destinations are routed here. Plain transcript prose is never scanned.
+    /// Shared with the Mac so a tappable link and a grantable link cannot drift.
     static func localFileReference(_ url: URL) -> String? {
-        let scheme = url.scheme?.lowercased()
-        if scheme != nil && scheme != "file" {
-            // URL parses a bare filename followed by :line as a scheme. This
-            // narrow exception applies only to an existing Markdown link.
-            let raw = url.absoluteString
-            guard raw.range(of: #"^[^\s/:]+\.[A-Za-z0-9]+:[1-9][0-9]*(?::[1-9][0-9]*)?(?:#L[1-9][0-9]*)?$"#,
-                            options: .regularExpression) != nil else { return nil }
-            return raw
-        }
-        guard url.host == nil || url.host == "" || url.host == "localhost" else { return nil }
-        let reference = scheme == "file" ? url.path : url.relativeString.components(separatedBy: "#")[0]
-        guard !reference.isEmpty, !reference.hasPrefix("#") else { return nil }
-        let decoded = scheme == "file" ? reference : (reference.removingPercentEncoding ?? reference)
-        return decoded + (url.fragment.map { "#" + $0 } ?? "")
+        RemotePreviewLinkReference.localFileReference(url)
     }
 }

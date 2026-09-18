@@ -700,6 +700,71 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func conversationFilePreviewServesOnlyReferencesTheAgentLinked() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .pi)
+        defer { fixture.removeRuntimeFiles() }
+        // Outside the session's project root, like a sibling worktree or /tmp.
+        let directory = URL(fileURLWithPath: "/tmp/toastty-linked-preview-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let linked = directory.appendingPathComponent("plan.md")
+        let unlinked = directory.appendingPathComponent("secret.md")
+        try Data("# Linked plan".utf8).write(to: linked)
+        try Data("# Secret".utf8).write(to: unlinked)
+
+        #expect(fixture.confirmCurrentLaunchBinding())
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID,
+            provider: .pi,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "pi-snapshot-1",
+            at: fixture.confirmedAt
+        ))
+        func ingest(_ payload: ConversationEventPayload, _ fingerprint: String) -> Bool {
+            fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID,
+                provider: .pi,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "pi-snapshot-1",
+                observation: ProviderTranscriptObservation(
+                    timestamp: fixture.confirmedAt.addingTimeInterval(1),
+                    fingerprint: fingerprint,
+                    payload: .transcript(payload),
+                    mayAuthorizeCurrentRuntime: false
+                )
+            )
+        }
+        // A link the user typed must not become a grant; only agent output does.
+        #expect(ingest(.userMessage(.init(text: "Read [it](\(unlinked.path))")), "managed:pi:user-1"))
+        #expect(ingest(
+            .assistantMessage(.init(text: "Wrote [the plan](\(linked.path):1).")),
+            "managed:pi:assistant-1"
+        ))
+        _ = fixture.summary
+
+        let previewHandler = try #require(fixture.gatewayHandler.previewHandler)
+        func preview(_ reference: String) async throws -> RemotePreviewResponse {
+            let response = await previewHandler(.init(
+                deviceID: UUID(),
+                request: .preview(.init(target: .conversationFile(
+                    conversationID: fixture.conversationID, fileReference: reference)))
+            ))
+            return try JSONDecoder().decode(RemotePreviewResponse.self, from: response.body)
+        }
+
+        guard case .document(let document) = try await preview("\(linked.path):1").content else {
+            Issue.record("Expected the linked file to preview")
+            return
+        }
+        #expect(document.content == "# Linked plan")
+        #expect(document.line == 1)
+        // A neighbouring file, even one the user's own message linked, is not granted.
+        let refused = try await preview(unlinked.path)
+        #expect(refused.content == nil)
+        #expect(refused.error != nil)
+    }
+
+    @MainActor
     @Test func providerFeedProjectsPiConversationContentWithoutGrantingHistoricalAuthority() throws {
         let fixture = try RemoteBootstrapFixture(agent: .pi)
         defer { fixture.removeRuntimeFiles() }

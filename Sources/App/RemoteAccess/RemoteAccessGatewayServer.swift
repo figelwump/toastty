@@ -350,6 +350,9 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
 
             case .deferredPreview(let operation):
                 guard activePreviewCount < 8 else {
+                    RemotePreviewProvider.logFailure(
+                        RemotePreviewError.busy, stage: .admission, request: operation.request,
+                        context: nil)
                     sendPreviewResponse(operation.errorResponse(.busy), connectionID: connectionID)
                     return
                 }

@@ -57,7 +57,7 @@ struct RemotePreviewProviderTests {
             title: "Plan",
             source: .file(
                 reference: file.path + "#L12", recordedCWD: nil, openPaths: [file.path],
-                format: .markdown))
+                format: .markdown, isTranscriptLinked: false))
         let response = try RemotePreviewProvider.response(operation: operation, context: context)
         guard
             case .document(let document) = try JSONDecoder().decode(
@@ -111,7 +111,7 @@ struct RemotePreviewProviderTests {
             title: "HTML",
             source: .file(
                 reference: entry.path, recordedCWD: nil,
-                openPaths: [entry.path], format: nil))
+                openPaths: [entry.path], format: nil, isTranscriptLinked: false))
         let preview = RemoteGatewayPreviewOperation(
             deviceID: UUID(), request: .preview(.init(target: target)))
         _ = try RemotePreviewProvider.response(operation: preview, context: context)
@@ -133,6 +133,126 @@ struct RemotePreviewProviderTests {
         }
     }
 
+    @Test func transcriptLinkedFilesPreviewOutsideTheProjectAndPlainTextTypesFallBack() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "preview-linked-\(UUID().uuidString)")
+        let site = directory.appendingPathComponent("site")
+        try FileManager.default.createDirectory(at: site, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let conversationID = RemoteConversationID()
+
+        func content(_ name: String, linked: Bool = true) throws -> RemotePreviewContent? {
+            let reference = directory.appendingPathComponent(name).path
+            let operation = RemoteGatewayPreviewOperation(
+                deviceID: UUID(),
+                request: .preview(
+                    .init(
+                        target: .conversationFile(
+                            conversationID: conversationID, fileReference: reference))))
+            let context = RemotePreviewContext(
+                title: name,
+                source: .file(
+                    reference: reference, recordedCWD: nil, openPaths: [], format: nil,
+                    isTranscriptLinked: linked))
+            let response = try RemotePreviewProvider.response(
+                operation: operation, context: context)
+            return try JSONDecoder().decode(RemotePreviewResponse.self, from: response.body).content
+        }
+
+        for name in ["change.patch", "change.diff", "Makefile"] {
+            try Data("all:\n\ttrue\n".utf8).write(to: directory.appendingPathComponent(name))
+            guard case .document(let document) = try content(name) else {
+                Issue.record("Expected plain-text document for \(name)")
+                continue
+            }
+            #expect(document.highlightState == "plainText")
+            #expect(document.highlight == false)
+            #expect(throws: RemotePreviewError.denied) { try content(name, linked: false) }
+        }
+        // Unknown extensions, dotfiles, and binary content stay unsupported, and a
+        // transcript link alone does not open dotenv files the desktop supports.
+        for name in ["secrets.env", ".netrc", ".env", ".env.local"] {
+            try Data("TOKEN=1".utf8).write(to: directory.appendingPathComponent(name))
+            #expect(throws: RemotePreviewError.unsupported) { try content(name) }
+        }
+        try Data([0x7f, 0x45, 0x4c, 0x46, 0, 0, 0xff]).write(
+            to: directory.appendingPathComponent("binary"))
+        #expect(throws: RemotePreviewError.unsupported) { try content("binary") }
+
+        // A linked HTML entry serves assets from its own directory only.
+        try Data("<link rel=stylesheet href=style.css>".utf8).write(
+            to: site.appendingPathComponent("index.html"))
+        try Data("body {}".utf8).write(to: site.appendingPathComponent("style.css"))
+        guard case .html(let html) = try content("site/index.html") else {
+            Issue.record("Expected HTML entry")
+            return
+        }
+        let reference = site.appendingPathComponent("index.html").path
+        let context = RemotePreviewContext(
+            title: "index.html",
+            source: .file(
+                reference: reference, recordedCWD: nil, openPaths: [], format: nil,
+                isTranscriptLinked: true))
+        func resource(_ relativePath: String) throws -> RemoteGatewayHTTPResponse {
+            try RemotePreviewProvider.response(
+                operation: .init(
+                    deviceID: UUID(),
+                    request: .resource(
+                        .init(
+                            target: .conversationFile(
+                                conversationID: conversationID, fileReference: reference),
+                            expectedSourcePath: html.sourcePath, relativePath: relativePath))),
+                context: context)
+        }
+        #expect(
+            try JSONDecoder().decode(
+                RemoteHTMLResourceResponse.self, from: resource("style.css").body
+            ).data == Data("body {}".utf8))
+        #expect(throws: RemotePreviewError.denied) { try resource("../change.css") }
+    }
+
+    @Test func failureLogMetadataNamesTheGrantPathButNoPathsOrFileNames() {
+        let secretName = "acme-merger"
+        let reference = "/Users/someone/\(secretName)/notes.final.md:12"
+        let request = RemoteGatewayPreviewOperation.Request.preview(
+            .init(target: .conversationFile(conversationID: .init(), fileReference: reference)))
+        let context = RemotePreviewContext(
+            title: reference,
+            source: .file(
+                reference: reference, recordedCWD: "/Users/someone/\(secretName)",
+                openPaths: [], format: nil, isTranscriptLinked: false))
+        let denied = RemotePreviewProvider.failureLogMetadata(
+            RemotePreviewError.denied, stage: .read, request: request, context: context, grant: nil)
+        #expect(
+            denied == [
+                "stage": "read", "reason": "denied", "request": "preview", "target": "conversation-file",
+                "source": "file", "reference": "absolute", "extension": "md", "cwd": "present",
+                "transcript_linked": "false", "grant": "none", "grants_attempted": "project-root",
+            ])
+        let unexpected = RemotePreviewProvider.failureLogMetadata(
+            PreviewTestUnexpectedError(), stage: .read, request: request, context: context,
+            grant: .transcriptLink)
+        #expect(unexpected["reason"] == "missing")
+        #expect(unexpected["underlying_error"]?.hasSuffix("PreviewTestUnexpectedError") == true)
+        #expect(unexpected["grant"] == "transcript-link")
+        for metadata in [denied, unexpected] {
+            #expect(!metadata.values.contains { $0.contains(secretName) || $0.contains("notes") })
+        }
+        // No context means the failure happened before any file was resolved.
+        let relative = RemoteGatewayPreviewOperation.Request.preview(
+            .init(target: .conversationFile(conversationID: .init(), fileReference: "Makefile")))
+        let stale = RemotePreviewProvider.failureLogMetadata(
+            RemotePreviewError.stale, stage: .context, request: relative, context: nil, grant: nil)
+        #expect(stale["reference"] == "relative")
+        #expect(stale["extension"] == "none")
+        // Only the read stage decides a grant, so only it reports one.
+        #expect(stale["grant"] == nil)
+        let recheck = RemotePreviewProvider.failureLogMetadata(
+            RemotePreviewError.stale, stage: .recheck, request: request, context: context, grant: nil)
+        #expect(recheck["stage"] == "recheck")
+        #expect(recheck["grant"] == nil && recheck["grants_attempted"] == nil)
+    }
+
     private func panel(title: String, path: String) -> RightAuxPanelTabState {
         let id = UUID()
         return .init(
@@ -140,3 +260,5 @@ struct RemotePreviewProviderTests {
             panelState: .web(.init(definition: .localDocument, title: title, filePath: path)))
     }
 }
+
+struct PreviewTestUnexpectedError: Error {}
