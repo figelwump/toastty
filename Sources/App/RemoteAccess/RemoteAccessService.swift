@@ -616,7 +616,11 @@ final class RemoteAccessService: ObservableObject {
             guard let self,
                   self.isEnabled,
                   self.conversationTrackingGeneration == generation else { return }
-            if Self.workspaceInventory(state: previousState) != Self.workspaceInventory(state: nextState) {
+            // Passing the claimed colors skips deriving a fallback for every
+            // key on every action; color changes have their own trigger.
+            let colors = self.annotationStyleStore.colorTokensByKey
+            if Self.workspaceInventory(state: previousState, annotationColorTokens: colors)
+                != Self.workspaceInventory(state: nextState, annotationColorTokens: colors) {
                 self.scheduleSessionListBroadcast()
             }
             switch action {

@@ -79,8 +79,9 @@ struct RemoteAccessServiceSafetyTests {
             environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
         )
         let annotationStyleStore = AnnotationStyleStore(runtimePaths: runtimePaths)
-        // No sessions exist, so conversation syncs never publish a list and
-        // every broadcast below comes from an annotation change.
+        // No sessions exist, so nothing else keeps publishing session lists
+        // after setup; without the style-store subscription the color step
+        // times out.
         let service = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,

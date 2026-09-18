@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The desktop sidebar's chip colors, derived from the host's resolved base
 /// color with the shared palette rule.
-struct ToasttyAnnotationChipColors: Equatable {
+struct ToasttyAnnotationChipColors {
     let foreground: Color
     let background: Color
     let border: Color
@@ -154,6 +154,7 @@ struct ToasttyWorkspaceHeaderAnnotations: View {
 struct ToasttyWorkspaceAnnotationBlock: View {
     let annotations: [RemoteWorkspaceAnnotation]
     @State private var openedLink: OpenedLink?
+    private static let lineSpacing: CGFloat = 6
 
     private struct OpenedLink: Identifiable {
         let id = UUID()
@@ -162,7 +163,7 @@ struct ToasttyWorkspaceAnnotationBlock: View {
     }
 
     var body: some View {
-        ToasttyChipFlowLayout(spacing: 6, lineSpacing: 6, maximumItemWidth: nil) {
+        ToasttyChipFlowLayout(spacing: 6, lineSpacing: Self.lineSpacing, maximumItemWidth: nil) {
             ForEach(annotations) { annotation in
                 chip(annotation)
             }
@@ -191,11 +192,12 @@ struct ToasttyWorkspaceAnnotationBlock: View {
                 openedLink = OpenedLink(title: annotation.text, url: url)
             } label: {
                 ToasttyAnnotationChip(annotation: annotation, size: .regular)
-                    // Extends the tap target vertically toward 44pt without
-                    // changing the chip's layout size.
-                    .padding(.vertical, 10)
+                    // Extends the tap target into half the gap on each side
+                    // without changing the chip's layout size, so adjacent
+                    // rows never claim each other's taps.
+                    .padding(.vertical, Self.lineSpacing / 2)
                     .contentShape(Rectangle())
-                    .padding(.vertical, -10)
+                    .padding(.vertical, -Self.lineSpacing / 2)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(ToasttyWorkspaceAnnotationAccessibility.label(for: annotation)), link")
