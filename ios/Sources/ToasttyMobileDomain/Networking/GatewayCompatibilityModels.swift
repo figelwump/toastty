@@ -205,7 +205,8 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                     if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
                     return $0.id.uuidString < $1.id.uuidString
                 },
-                panels: metadata[id]?.panels ?? []
+                panels: metadata[id]?.panels ?? [],
+                annotations: metadata[id]?.annotations ?? []
             )
         }.sorted {
             let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)

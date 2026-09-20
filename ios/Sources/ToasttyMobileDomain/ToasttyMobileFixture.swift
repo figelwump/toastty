@@ -72,7 +72,21 @@ public enum ToasttyMobileFixture {
                     age: "1h", last: "Release note generation failed: missing metadata"
                 ),
             ],
-            panels: previewPanels
+            panels: previewPanels,
+            // Enough chips to wrap the home header, including one past the
+            // 160pt chip cap.
+            annotations: [
+                RemoteWorkspaceAnnotation(key: "build", text: "build 0.8.3-35", color: "#B7AEA5"),
+                RemoteWorkspaceAnnotation(
+                    key: "git-branch", text: "feat/ios-workspace-annotations-and-chip-colors", color: "#7AA2F7"
+                ),
+                RemoteWorkspaceAnnotation(
+                    key: "github-pr", text: "PR #12",
+                    url: URL(string: "https://github.com/example/toastty/pull/12"), color: "#5BA08A"
+                ),
+                RemoteWorkspaceAnnotation(key: "review", text: "review: 2 open", color: "#E8A635"),
+                RemoteWorkspaceAnnotation(key: "task-status", text: "Working", color: "#A78BFA"),
+            ]
         )
 
         let research = MobileWorkspace(
@@ -116,6 +130,18 @@ public enum ToasttyMobileFixture {
                     title: "Smoke test triage", status: .ready,
                     availability: .localDraft,
                     age: "3h", last: "A desktop draft is in progress"
+                ),
+            ],
+            annotations: [
+                RemoteWorkspaceAnnotation(
+                    key: "ci", text: "CI failing",
+                    url: URL(string: "https://github.com/example/toastty/actions"), color: "#E55C5C"
+                ),
+                RemoteWorkspaceAnnotation(key: "deploy", text: "canary 20%", color: "#E8A635"),
+                // A dark custom color, and a link only the Mac can reach.
+                RemoteWorkspaceAnnotation(
+                    key: "preview", text: "localhost:8080",
+                    url: URL(string: "http://localhost:8080"), color: "#3B2A6E"
                 ),
             ]
         )

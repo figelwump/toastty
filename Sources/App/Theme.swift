@@ -1,5 +1,6 @@
 import AppKit
 import CoreState
+import RemoteProtocol
 import SwiftUI
 
 enum ToastyTheme {
@@ -296,31 +297,13 @@ enum ToastyTheme {
     static func annotationChipColors(for token: AnnotationColorToken) -> AnnotationChipColors {
         let baseHex = token.baseHexValue
 
-        let foregroundHex = readableAnnotationForegroundHex(baseHex)
+        // The iOS app renders the same chips from the shared derivation.
+        let foregroundHex = WorkspaceAnnotationChipPalette.readableForegroundHex(forBase: baseHex)
         return AnnotationChipColors(
             foreground: Color(hex: foregroundHex),
-            background: Color(hex: baseHex, alpha: 0.14),
-            border: Color(hex: foregroundHex, alpha: 0.42)
+            background: Color(hex: baseHex, alpha: WorkspaceAnnotationChipPalette.backgroundAlpha),
+            border: Color(hex: foregroundHex, alpha: WorkspaceAnnotationChipPalette.borderAlpha)
         )
-    }
-
-    /// Blends dark hues toward white until chip text stays readable on the
-    /// dark sidebar background.
-    private static func readableAnnotationForegroundHex(_ hex: UInt32) -> UInt32 {
-        let red = Double((hex >> 16) & 0xFF) / 255
-        let green = Double((hex >> 8) & 0xFF) / 255
-        let blue = Double(hex & 0xFF) / 255
-        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        let minimumLuminance = 0.45
-        guard luminance < minimumLuminance else { return hex }
-
-        // Blend factor grows as the color gets darker; a pure-black chip text
-        // becomes a mid gray rather than staying invisible.
-        let blend = min(0.85, (minimumLuminance - luminance) / minimumLuminance + 0.25)
-        func lightened(_ component: Double) -> UInt32 {
-            UInt32((component + (1 - component) * blend) * 255)
-        }
-        return (lightened(red) << 16) | (lightened(green) << 8) | lightened(blue)
     }
 
     static func panelHeaderBackgroundColor(
