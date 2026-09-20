@@ -562,6 +562,69 @@ struct AutomationSocketServerResumeRecordTests: AutomationSocketServerTestSuppor
         #expect(response.error?.message == "agent does not match active session")
     }
 
+    /// The name event follows the binding the plugin forwards first, and names
+    /// the session's row only once that binding is confirmed.
+    @Test
+    func providerSessionNameEventNamesTheBoundSession() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-provider-session-name"
+        func send(_ eventType: String, _ payload: [String: AutomationJSONValue]) throws -> AutomationResponseEnvelope {
+            try sendEvent(
+                AutomationEventEnvelope(
+                    eventType: eventType,
+                    sessionID: sessionID,
+                    panelID: server.panelID.uuidString,
+                    requestID: UUID().uuidString,
+                    payload: payload
+                ),
+                socketPath: socketPath
+            )
+        }
+        #expect(try send("session.start", ["agent": .string(AgentKind.opencode.rawValue), "cwd": .string("/tmp/repo")]).ok)
+        #expect(try send("session.update_resume_record", [
+            "agent": .string(AgentKind.opencode.rawValue),
+            "nativeSessionID": .string("ses_root"),
+            "sessionFilePath": .string("/tmp/managed-agent-resume/opencode-plugin-marker.json"),
+            "cwd": .string("/tmp/repo"),
+        ]).ok)
+
+        let accepted = try send("session.provider_session_name", [
+            "agent": .string(AgentKind.opencode.rawValue),
+            "nativeSessionID": .string("ses_root"),
+            "name": .string("Build system explanation"),
+        ])
+        #expect(accepted.result?.string("status") == "accepted")
+        let name = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.providerSessionName
+        }
+        #expect(name == "Build system explanation")
+
+        let placeholder = try send("session.provider_session_name", [
+            "agent": .string(AgentKind.opencode.rawValue),
+            "nativeSessionID": .string("ses_root"),
+            "name": .string("New session - 2026-09-18T05:08:03.123Z"),
+        ])
+        #expect(placeholder.ok)
+        #expect(placeholder.result?.string("status") == "ignored")
+
+        let mismatched = try send("session.provider_session_name", [
+            "agent": .string(AgentKind.pi.rawValue),
+            "nativeSessionID": .string("ses_root"),
+            "name": .string("Other"),
+        ])
+        #expect(mismatched.ok == false)
+        #expect(mismatched.error?.code == "INVALID_PAYLOAD")
+    }
+
     @Test
     func sessionUpdateResumeRecordRequiresPanelID() async throws {
         let socketPath = temporarySocketPath()

@@ -1,6 +1,7 @@
 import Combine
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 @testable import ToasttyApp
 
@@ -134,6 +135,142 @@ struct SessionRuntimeStoreTests {
             )
         ))
         try await waitForProviderSessionName(nil, sessionID: sessionID, store: store)
+    }
+
+    /// Cursor writes the title shortly after the first prompt, so the row
+    /// picks it up at the turn's end. When Cursor ends that chat and starts
+    /// another under the same managed session, the new chat must not inherit
+    /// the first one's name.
+    @Test
+    func cursorRowReadsTheChatTitleAndDropsItWhenClearStartsANewChat() async throws {
+        let configDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("provider-name-cursor-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: configDirectory) }
+        let store = SessionRuntimeStore(
+            providerSessionNameEnvironment: ["CURSOR_CONFIG_DIR": configDirectory.path]
+        )
+        let sessionID = "sess-cursor-name"
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+        let firstChatID = "3e07b331-74ec-4fdf-87c5-d2d099cb6df8"
+        let secondChatID = "8d755ac8-c0bf-4508-8732-1adcc086ed70"
+
+        func writeMetadata(conversationID: String, title: String?) throws {
+            let chatDirectory = configDirectory
+                .appendingPathComponent("chats/a6e29e34d16798e9b79c77d2f8197ecb", isDirectory: true)
+                .appendingPathComponent(conversationID, isDirectory: true)
+            try FileManager.default.createDirectory(at: chatDirectory, withIntermediateDirectories: true)
+            let titleField = title.map { #","title":"\#($0)""# } ?? ""
+            try #"{"schemaVersion":1,"hasConversation":true\#(titleField)}"#
+                .write(
+                    to: chatDirectory.appendingPathComponent("meta.json", isDirectory: false),
+                    atomically: true,
+                    encoding: .utf8
+                )
+        }
+        func send(_ hookEventName: String, conversationID: String, generationID: String? = nil, status: SessionStatus?) {
+            _ = store.handleCursorHookEvent(
+                sessionID: sessionID,
+                event: CursorHookEvent(
+                    hookEventName: hookEventName,
+                    conversationID: conversationID,
+                    generationID: generationID,
+                    status: status
+                ),
+                at: date
+            )
+        }
+        func runTurn(conversationID: String, generationID: String, title: String) throws {
+            send("beforeSubmitPrompt", conversationID: conversationID, generationID: generationID,
+                 status: SessionStatus(kind: .working, summary: "Working"))
+            try writeMetadata(conversationID: conversationID, title: title)
+            send("stop", conversationID: conversationID, generationID: generationID,
+                 status: SessionStatus(kind: .ready, summary: "Ready"))
+        }
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .cursor,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: date
+        )
+        try writeMetadata(conversationID: firstChatID, title: nil)
+        send("sessionStart", conversationID: firstChatID, status: SessionStatus(kind: .idle, summary: "Waiting"))
+        try runTurn(conversationID: firstChatID, generationID: "generation-1", title: "Blue Sky Explanation")
+        try await waitForProviderSessionName("Blue Sky Explanation", sessionID: sessionID, store: store)
+
+        send("sessionEnd", conversationID: firstChatID, status: nil)
+        try writeMetadata(conversationID: secondChatID, title: nil)
+        send("sessionStart", conversationID: secondChatID, status: SessionStatus(kind: .idle, summary: "Waiting"))
+        try await waitForProviderSessionName(nil, sessionID: sessionID, store: store)
+
+        try runTurn(conversationID: secondChatID, generationID: "generation-2", title: "Docs Start Page")
+        try await waitForProviderSessionName("Docs Start Page", sessionID: sessionID, store: store)
+    }
+
+    /// opencode, MiMo Code and pi report their name through Toastty's plugin
+    /// or extension. The name must belong to the conversation the session is
+    /// bound to, and the untitled placeholder must not replace a real name.
+    @Test
+    func reportedProviderSessionNameAppliesOnlyToTheBoundConversation() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let sessionID = "sess-opencode-name"
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+        func bind(_ nativeSessionID: String) -> Bool {
+            store.confirmNativeSessionBinding(
+                managedSessionID: sessionID,
+                panelID: panelID,
+                record: ManagedAgentResumeRecord(
+                    agent: .opencode,
+                    nativeSessionID: nativeSessionID,
+                    sessionFilePath: "/runtime/managed-agent-resume/\(nativeSessionID).json",
+                    cwd: "/repo",
+                    capturedAt: date
+                )
+            )
+        }
+        func report(_ name: String, nativeSessionID: String = "ses_first", agent: AgentKind = .opencode) -> Bool {
+            store.applyReportedProviderSessionName(
+                sessionID: sessionID,
+                agent: agent,
+                nativeSessionID: nativeSessionID,
+                name: name
+            )
+        }
+        var providerSessionName: String? {
+            store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName
+        }
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .opencode,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: date
+        )
+        #expect(report("Early name") == false, "No conversation is bound yet")
+
+        #expect(bind("ses_first"))
+        #expect(report("New session - 2026-09-18T05:08:03.123Z") == false)
+        #expect(report("Other conversation", nativeSessionID: "ses_other") == false)
+        #expect(report("Wrong agent", agent: .mimocode) == false)
+        #expect(providerSessionName == nil)
+
+        #expect(report("Build system explanation"))
+        #expect(providerSessionName == "Build system explanation")
+        #expect(report("New session - 2026-09-18T05:08:03.123Z") == false)
+        #expect(providerSessionName == "Build system explanation")
+
+        #expect(bind("ses_second"))
+        #expect(providerSessionName == nil, "A rebind drops the previous conversation's name")
+        #expect(report("Build system explanation") == false)
     }
 
     private func waitForProviderSessionName(

@@ -51,6 +51,23 @@ enum PiExtensionEventParser {
                 )
             )
 
+        case "session_name":
+            // Forwarded unaltered; the app validates the name.
+            guard let nativeSessionID = normalizedString(object["nativeSessionID"], limit: 160),
+                  let name = object["name"] as? String,
+                  name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                return []
+            }
+            commands.append(
+                .sessionProviderSessionName(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    agent: .pi,
+                    nativeSessionID: nativeSessionID,
+                    name: name
+                )
+            )
+
         case "session_start":
             commands.append(
                 .sessionStatus(

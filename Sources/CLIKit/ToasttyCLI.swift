@@ -83,6 +83,9 @@ enum CLICommand: Equatable {
     case sessionCursorHookEvent(sessionID: String, panelID: UUID?, event: CursorHookEvent)
     case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
     case sessionUpdateResumeRecord(sessionID: String, panelID: UUID?, agent: AgentKind, nativeSessionID: String, sessionFilePath: String, cwd: String?)
+    /// A session name the provider reported through Toastty's plugin or
+    /// extension. The app validates `name`; the CLI forwards it unaltered.
+    case sessionProviderSessionName(sessionID: String, panelID: UUID?, agent: AgentKind, nativeSessionID: String, name: String)
     case sessionProviderConversationReset(
         sessionID: String,
         panelID: UUID?,
@@ -112,7 +115,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionCursorHookEvent, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionCursorHookEvent, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderSessionName, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -460,6 +463,19 @@ enum CLICommand: Equatable {
                 payload: payload
             )
 
+        case .sessionProviderSessionName(let sessionID, let panelID, let agent, let nativeSessionID, let name):
+            return AutomationEventEnvelope(
+                eventType: "session.provider_session_name",
+                sessionID: sessionID,
+                panelID: panelID?.uuidString,
+                requestID: requestID,
+                payload: [
+                    "agent": .string(agent.rawValue),
+                    "nativeSessionID": .string(nativeSessionID),
+                    "name": .string(name),
+                ]
+            )
+
         case .sessionProviderConversationReset(
             let sessionID,
             let panelID,
@@ -568,6 +584,8 @@ enum CLICommand: Equatable {
             return "queued \(queuedFiles) files for \(sessionID)"
         case .sessionUpdateResumeRecord(let sessionID, _, _, _, _, _):
             return "updated resume record for \(sessionID)"
+        case .sessionProviderSessionName(let sessionID, _, _, _, _):
+            return "processed provider session name for \(sessionID)"
         case .sessionProviderConversationReset(let sessionID, _, _, _, _, _):
             return "reset provider conversation for \(sessionID)"
         case .sessionProviderConversationObservation(let sessionID, _, _, _, _, _):
