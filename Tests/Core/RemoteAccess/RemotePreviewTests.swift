@@ -14,7 +14,14 @@ struct RemotePreviewProtocolTests {
         #expect(
             try JSONDecoder().decode(RemoteSessionListSnapshot.self, from: data).workspaces.isEmpty)
         var withWorkspace = old
-        withWorkspace.workspaces = [.init(id: UUID(), title: "No conversations", panels: [])]
+        withWorkspace.workspaces = [
+            .init(id: UUID(), title: "No conversations", panels: []),
+            .init(id: UUID(), title: "Annotated", panels: [], annotations: [
+                .init(key: "github-pr", text: "PR #12", url: URL(string: "https://example.com/pull/12"),
+                      color: "#5BA08A"),
+                .init(key: "task-status", text: "Working", color: "#A78BFA"),
+            ]),
+        ]
         #expect(
             try JSONDecoder().decode(
                 RemoteSessionListSnapshot.self, from: encoder.encode(withWorkspace))
@@ -93,14 +100,14 @@ struct RemotePreviewFileReaderTests {
         try Data().write(to: URL(fileURLWithPath: inside))
         #expect(
             try RemotePreviewFileReader.resolveFile(
-                reference: "../README.md", recordedCWD: source.path, explicitlyOpenPaths: [])
+                reference: "../README.md", recordedCWD: source.path, explicitlyOpenPaths: []).path
                 == inside)
         let outside = root.appendingPathComponent("outside.md").path
         try Data().write(to: URL(fileURLWithPath: outside))
         try Data().write(to: root.appendingPathComponent("neighbor.md"))
         #expect(
             try RemotePreviewFileReader.resolveFile(
-                reference: outside, recordedCWD: source.path, explicitlyOpenPaths: [outside])
+                reference: outside, recordedCWD: source.path, explicitlyOpenPaths: [outside]).path
                 == outside)
         #expect(throws: RemotePreviewError.denied) {
             try RemotePreviewFileReader.resolveFile(
@@ -181,7 +188,7 @@ struct RemotePreviewFileReaderTests {
         #expect(
             try RemotePreviewFileReader.resolveFile(
                 reference: original.path, recordedCWD: nil,
-                explicitlyOpenPaths: [original.path]) == original.path)
+                explicitlyOpenPaths: [original.path]).path == original.path)
         try FileManager.default.removeItem(at: original)
         try FileManager.default.createSymbolicLink(at: original, withDestinationURL: outside)
         #expect(throws: RemotePreviewError.denied) {
@@ -226,7 +233,7 @@ struct RemotePreviewFileReaderTests {
         #expect(
             try RemotePreviewFileReader.resolveFile(
                 reference: varAlias, recordedCWD: nil,
-                explicitlyOpenPaths: [varAlias]) == file.path)
+                explicitlyOpenPaths: [varAlias]).path == file.path)
         let tmpDirectory = URL(fileURLWithPath: "/tmp/preview-authority-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmpDirectory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmpDirectory) }
@@ -235,7 +242,7 @@ struct RemotePreviewFileReaderTests {
         #expect(
             try RemotePreviewFileReader.resolveFile(
                 reference: tmpFile.path, recordedCWD: nil,
-                explicitlyOpenPaths: [tmpFile.path])
+                explicitlyOpenPaths: [tmpFile.path]).path
                 == RemotePreviewFileReader.canonicalPath(tmpFile.path))
         let nested = root.appendingPathComponent("outside/nested")
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
@@ -246,6 +253,105 @@ struct RemotePreviewFileReaderTests {
         #expect(throws: RemotePreviewError.denied) {
             try RemotePreviewFileReader.authorityPath(expression)
         }
+    }
+
+    @Test func transcriptLinkGrantsOnlyLinkedReferencesAndKeepsReadPinning() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(
+            at: project.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let inside = project.appendingPathComponent("README.md")
+        try Data().write(to: inside)
+        let sibling = root.appendingPathComponent("sibling-worktree")
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        let linked = sibling.appendingPathComponent("plan.md")
+        try Data("plan".utf8).write(to: linked)
+
+        // A linked sibling-worktree file loads; the same file unlinked does not.
+        let resolved = try RemotePreviewFileReader.resolveFile(
+            reference: "../sibling-worktree/plan.md", recordedCWD: project.path,
+            explicitlyOpenPaths: [], isTranscriptLinked: true)
+        #expect(resolved == .init(path: linked.path, grant: .transcriptLink))
+        #expect(throws: RemotePreviewError.denied) {
+            try RemotePreviewFileReader.resolveFile(
+                reference: "../sibling-worktree/plan.md", recordedCWD: project.path,
+                explicitlyOpenPaths: [])
+        }
+        // A file the project root already allows keeps that authority.
+        #expect(
+            try RemotePreviewFileReader.resolveFile(
+                reference: "README.md", recordedCWD: project.path, explicitlyOpenPaths: [],
+                isTranscriptLinked: true).grant == .projectRoot)
+
+        // An absolute linked /tmp file loads without a session cwd; a
+        // relative reference still has nothing to resolve against.
+        let tmpDirectory = URL(fileURLWithPath: "/tmp/preview-linked-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDirectory) }
+        let scratch = tmpDirectory.appendingPathComponent("out.patch")
+        try Data("diff".utf8).write(to: scratch)
+        #expect(
+            try RemotePreviewFileReader.resolveFile(
+                reference: scratch.path, recordedCWD: nil, explicitlyOpenPaths: [],
+                isTranscriptLinked: true)
+                == .init(
+                    path: try RemotePreviewFileReader.canonicalPath(scratch.path),
+                    grant: .transcriptLink))
+        #expect(throws: RemotePreviewError.denied) {
+            try RemotePreviewFileReader.resolveFile(
+                reference: "out.patch", recordedCWD: nil, explicitlyOpenPaths: [],
+                isTranscriptLinked: true)
+        }
+
+        // Swapping the granted file for a symlink after resolution is caught
+        // by the read, and re-resolving no longer matches the granted file.
+        let secret = root.appendingPathComponent("secret.md")
+        try Data("private".utf8).write(to: secret)
+        try FileManager.default.removeItem(at: linked)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: secret)
+        #expect(throws: RemotePreviewError.stale) {
+            try RemotePreviewFileReader.read(path: resolved.path, maximumBytes: 1024)
+        }
+        #expect(
+            try RemotePreviewFileReader.resolveFile(
+                reference: "../sibling-worktree/plan.md", recordedCWD: project.path,
+                explicitlyOpenPaths: [], isTranscriptLinked: true) != resolved)
+    }
+
+    @Test func transcriptLinkedHTMLEntryDoesNotExposeHomeOrRootAsAssetDirectory() throws {
+        let home = try RemotePreviewFileReader.canonicalPath(NSHomeDirectory())
+        #expect(
+            try !RemotePreviewFileReader.allowsSubresources(
+                of: .init(path: home + "/report.html", grant: .transcriptLink)))
+        #expect(
+            try !RemotePreviewFileReader.allowsSubresources(
+                of: .init(path: "/report.html", grant: .transcriptLink)))
+        #expect(
+            try RemotePreviewFileReader.allowsSubresources(
+                of: .init(path: home + "/reports/report.html", grant: .transcriptLink)))
+        // Existing grants are unchanged.
+        #expect(
+            try RemotePreviewFileReader.allowsSubresources(
+                of: .init(path: home + "/report.html", grant: .openPanel)))
+    }
+
+    @Test func linkReferencesMatchWhatTheTranscriptRendererMakesTappable() {
+        let markdown = """
+            See [the plan](../toastty-foo/docs/plan.md#L12), [scratch](/tmp/out.patch),
+            [spaced](docs/a%20b.md), [line](Sources/App/Foo.swift:42), <file:///tmp/a.md>,
+            and [the site](https://example.com/a.md). Not a link: `[code](/etc/hosts)`.
+
+            ```
+            [fenced](/etc/passwd)
+            ```
+            """
+        #expect(
+            RemotePreviewLinkReference.localFileReferences(inMarkdown: markdown) == [
+                "../toastty-foo/docs/plan.md#L12", "/tmp/out.patch", "docs/a b.md",
+                "Sources/App/Foo.swift:42", "/tmp/a.md",
+            ])
+        #expect(RemotePreviewLinkReference.localFileReferences(inMarkdown: "/etc/hosts").isEmpty)
     }
 
     @Test func cancelledReadDoesNotOpenFile() async throws {

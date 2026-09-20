@@ -37,6 +37,32 @@ For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` 
 
 When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
 
+### Detached Browser Status
+
+Run the focused background-browser check through a disposable remote app:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote \
+  --validation-command 'python3 scripts/automation/browser-background-status-check.py'
+```
+
+This targets the wrapper's isolated remote Toastty instance, not the installed
+production app. The check verifies `instance.json`, creates a background
+workspace and browser panels only in that instance, and serves temporary HTTP
+fixtures on the remote loopback interface. It never selects a workspace/tab or
+moves focus, and compares the visible workspace, tab, focused panel, and right
+panel before and after its checks. The wrapper owns app shutdown and disposable
+runtime cleanup.
+
+The check covers detached loading, redirects, failures, invalid URLs, local PNG
+navigation, repeated polling without reload, and loading only after a state
+query. It writes `browser-background-status.json` and
+`background-browser-fixture.png` under the run's artifacts directory. These are
+semantic navigation evidence and an input fixture, not screenshots or proof of
+visual correctness, HTTP success, SPA readiness, or video playback. Persisted
+restoration, superseded navigation callbacks, and detached screenshot rejection
+require the separate runtime tests.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.

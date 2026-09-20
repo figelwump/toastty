@@ -46,6 +46,44 @@ final class AutomationSocketServerBrowserPanelTargetingTests: AutomationSocketSe
             XCTAssertEqual(response.result["statePageZoomOverride"] as? Double, 1.25)
             XCTAssertEqual(response.result["runtimePageZoom"] as? Double, 1.25)
             XCTAssertEqual(response.result["hostLifecycleState"] as? String, "detached")
+            XCTAssertEqual(response.result["navigationState"] as? String, "loading")
+            XCTAssertNotNil(response.result["isLoading"] as? Bool)
+            XCTAssertTrue(response.result["navigationError"] is NSNull)
+            XCTAssertNotNil(response.result["observedURL"])
+            XCTAssertNotNil(response.result["title"])
+        }
+    }
+
+    func testBrowserPanelStateSerializesInvalidURLErrorWithoutSelectingWorkspace() async throws {
+        let fixture = makeTwoWindowFixture()
+        var state = fixture.state
+        let reducer = AppReducer()
+        XCTAssertTrue(reducer.send(
+            .createWebPanel(
+                workspaceID: fixture.secondWorkspaceID,
+                panel: WebPanelState(definition: .browser, initialURL: "http://[invalid"),
+                placement: .rightPanel
+            ), state: &state
+        ))
+        let browserPanelID = try XCTUnwrap(state.workspacesByID[fixture.secondWorkspaceID]?.selectedTab?.rightAuxPanel.activePanelID)
+        let expectedWindows = state.windows
+        try await withAutomationHarness(state: state) { harness in
+            for _ in 0..<2 {
+                let response = try sendRequest(
+                    command: "automation.browser_panel_state",
+                    payload: ["panelID": browserPanelID.uuidString],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                XCTAssertEqual(response.result["navigationState"] as? String, "failed")
+                let error = try XCTUnwrap(response.result["navigationError"] as? [String: Any])
+                XCTAssertEqual(error["domain"] as? String, NSURLErrorDomain)
+                XCTAssertEqual(error["code"] as? Int, NSURLErrorBadURL)
+                XCTAssertFalse(try XCTUnwrap(error["message"] as? String).isEmpty)
+                XCTAssertEqual(response.result["hostLifecycleState"] as? String, "detached")
+            }
+            let windows = await MainActor.run { harness.store.state.windows }
+            XCTAssertEqual(windows, expectedWindows)
         }
     }
 

@@ -908,6 +908,12 @@ private extension AgentLaunchInstrumentation {
           let pendingOpenCodeFinalTimer;
           const openCodeFinalQuietMs = 250;
           const nativeSessionIDLimit = 240;
+          // Toastty validates the name, including the provider's untitled
+          // placeholder, and rejects anything this long, so a longer title is
+          // not sent. Cutting it short instead could turn an invalid title into
+          // a valid one.
+          const sessionNameLimit = 1000;
+          let lastForwardedSessionName = "";
           const pendingStatusKeys = new Set();
           const pendingFinalTexts = new Set();
           const pendingNativeSessionKeys = new Set();
@@ -1352,6 +1358,54 @@ private extension AgentLaunchInstrumentation {
                 cwd: normalizedCWD,
               },
             };
+          }
+
+          function sessionNameEvent(title) {
+            if (!rootNativeSessionID || typeof title !== "string" || !title.trim()) return;
+            if (title.length > sessionNameLimit) return;
+            return {
+              type: "toastty.session_name",
+              properties: { nativeSessionID: rootNativeSessionID, name: title },
+            };
+          }
+
+          // Deduplicated when the queued send runs, not when it is queued: a
+          // rename and a rename back can both be queued before either is sent.
+          async function forwardSessionNameEvent(event, options = {}) {
+            if (!options.force && event.properties.name === lastForwardedSessionName) return;
+            lastForwardedSessionName = event.properties.name;
+            if (!(await forward(event))) lastForwardedSessionName = "";
+          }
+
+          function forwardSessionName(title) {
+            const event = sessionNameEvent(title);
+            if (!event) return queue;
+            queue = queue
+              .then(() => forwardSessionNameEvent(event))
+              .catch((error) => appendFailure("session_name_forward_exception", event.type, errorText(error)));
+            return queue;
+          }
+
+          // Toastty accepts a name only for the conversation it has bound, so
+          // a name sent before the binding was dropped, and a resumed session
+          // may never update its title again. Send the current one after each
+          // binding.
+          async function forwardCurrentSessionName() {
+            if (!providerClient || !providerClient.session || typeof providerClient.session.get !== "function") return;
+            let title;
+            try {
+              const response = await providerClient.session.get({
+                path: { id: rootNativeSessionID },
+                query: launchWorkingDirectory ? { directory: launchWorkingDirectory } : {},
+              });
+              const responseObject = objectValue(response);
+              title = objectValue(responseObject.data || responseObject).title;
+            } catch (error) {
+              await appendFailure("session_name_lookup_exception", "toastty.session_name", errorText(error));
+              return;
+            }
+            const event = sessionNameEvent(title);
+            if (event) await forwardSessionNameEvent(event, { force: true });
           }
 
           function toasttyStatus(kind, summary, detail) {
@@ -1910,6 +1964,7 @@ private extension AgentLaunchInstrumentation {
                 const forwarded = await forward(markerEvent);
                 if (forwarded) {
                   forwardedNativeSessionKeys.add(key);
+                  await forwardCurrentSessionName();
                   await forwardConversationSnapshot(key);
                 }
               })
@@ -1986,6 +2041,10 @@ private extension AgentLaunchInstrumentation {
                 if (!rootNativeSessionID || (eventSessionID && eventSessionID !== rootNativeSessionID)) return;
                 if (!eventSessionID && !terminalEvent) return;
                 recordNativeSession(input);
+                if (providerEvent.type === "session.created" || providerEvent.type === "session.updated") {
+                  const info = objectValue(objectValue(providerEvent.properties).info);
+                  if (info.id === rootNativeSessionID) forwardSessionName(info.title);
+                }
                 if (terminalEvent) finishAllChildren();
                 fire(statusFromProviderEvent(providerEvent));
                 if (terminalEvent) {

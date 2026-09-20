@@ -47,8 +47,16 @@ so the coordinator can safely clean up later. Do not launch a forbidden local
 GUI or production environment merely to make a preview available.
 
 When visual artifacts support verification, open them in the task workspace's
-browser panels and verify they display the intended image or playable video.
-A Markdown link or successful panel creation is not display verification.
+browser panels. Query each evidence panel by its explicit ID with
+`panel.browser.state`, following the bounded polling guidance in
+`toastty-capabilities`. This can start loading a background panel without
+selecting it; a detached host can finish navigation. A successful creation
+response or a ready host does not prove navigation success.
+
+Navigation completion and an observed URL do not prove visual correctness or
+video playback. Report what remains unverified, including missing navigation
+status. Preserve the user's workspace, tab, and keyboard focus during inspection;
+do not select or focus task resources to strengthen verification claims.
 Refresh regenerated artifacts and report unavailable media honestly.
 
 The user's `worktree-done` request submits acceptance of this exact version.

@@ -1,3 +1,4 @@
+import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 
@@ -29,7 +30,8 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
                 id: workspace.id,
                 title: workspace.title,
                 conversations: conversations,
-                panels: workspace.panels
+                panels: workspace.panels,
+                annotations: workspace.annotations
             )
         }
     }
@@ -173,6 +175,11 @@ struct ToasttyHomeView: View {
                         .font(.headline)
                         .foregroundStyle(ToasttyDesignTokens.primaryText)
                         .lineLimit(1)
+                    if !workspace.annotations.isEmpty {
+                        ToasttyWorkspaceHeaderAnnotations(annotations: workspace.annotations)
+                            .padding(.top, 3)
+                            .padding(.bottom, 2)
+                    }
                     Text(sessionCountLabel(workspace.conversations.count))
                         .font(.caption2.monospaced())
                         .foregroundStyle(ToasttyDesignTokens.mutedText)
@@ -189,11 +196,22 @@ struct ToasttyHomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-            "\(workspace.title), \(sessionCountLabel(workspace.conversations.count))"
-        )
+        .accessibilityLabel(Self.workspaceHeaderAccessibilityLabel(
+            workspace, sessionCount: sessionCountLabel(workspace.conversations.count)
+        ))
         .accessibilityHint("Opens the workspace")
         .accessibilityIdentifier("toastty-mobile-workspace-\(workspace.id.uuidString)")
+    }
+
+    /// Home chips are display-only, so every chip folds into the header's
+    /// label in visual order.
+    static func workspaceHeaderAccessibilityLabel(
+        _ workspace: MobileWorkspace, sessionCount: String
+    ) -> String {
+        ([workspace.title]
+            + workspace.annotations.map(ToasttyWorkspaceAnnotationAccessibility.label(for:))
+            + [sessionCount])
+            .joined(separator: ", ")
     }
 
     private var workspaceEmptyState: some View {

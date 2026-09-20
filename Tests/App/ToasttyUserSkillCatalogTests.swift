@@ -334,7 +334,7 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("examples/skills", isDirectory: true)
-        let names = ["finisher", "project-orchestrator", "worktree-create"]
+        let names = ["coordinator", "worktree-create", "worktree-done"]
         for name in names {
             try FileManager.default.copyItem(
                 at: examplesURL.appendingPathComponent(name),
@@ -350,10 +350,10 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
                 try Data(contentsOf: examplesURL.appendingPathComponent("\(name)/SKILL.md"))
             )
         }
-        let releaseReference = "project-orchestrator/references/integration-and-release.md"
+        let integrationReference = "coordinator/references/integration-and-cleanup.md"
         XCTAssertEqual(
-            try Data(contentsOf: snapshot.skillsRootURL.appendingPathComponent(releaseReference)),
-            try Data(contentsOf: examplesURL.appendingPathComponent(releaseReference))
+            try Data(contentsOf: snapshot.skillsRootURL.appendingPathComponent(integrationReference)),
+            try Data(contentsOf: examplesURL.appendingPathComponent(integrationReference))
         )
         let helperURL = snapshot.skillsRootURL
             .appendingPathComponent("worktree-create/scripts/create-worktree.sh")

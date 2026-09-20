@@ -17,6 +17,12 @@ scripts relative to the loaded skill package, including inside a plugin snapshot
 Use `scripts/create-worktree.sh`, `scripts/open-toastty-worktree-session.sh`, and
 the sibling `../coordinator/scripts/tasks.py`. Never edit the delivered snapshot.
 
+Preserve the user's visible workspace, tab, and keyboard focus during discovery,
+inspection, status reporting, and verification. Use explicit workspace/panel
+queries. Do not select a workspace/tab or focus a panel to make evidence ready;
+selection and focus actions are appropriate only for user-authorized navigation.
+Include this constraint in the child handoff.
+
 ## Select the start
 
 - **New task:** create a fresh conversation with `--mode plan` by default.

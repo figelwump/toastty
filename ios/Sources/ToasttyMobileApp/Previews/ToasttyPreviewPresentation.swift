@@ -143,12 +143,22 @@ private struct ToasttyPreviewContentView: View {
         case .html(let html):
             ToasttyHTMLPreviewWebView(document: html, target: target, resource: service.resource)
         case .webURL(let url):
-            if ToasttyPreviewURLPolicy.isReachableWebURL(url) {
-                ToasttyBrowserPreview(url: url)
-            } else {
-                ContentUnavailableView("Browser unavailable", systemImage: "network.slash",
-                    description: Text("This address belongs to your Mac or uses an unsupported scheme. Open it on your Mac."))
-            }
+            ToasttyWebURLPreview(url: url)
+        }
+    }
+}
+
+/// Loads a web address in the in-app browser, or explains why an address that
+/// only resolves on the Mac cannot load on the phone.
+struct ToasttyWebURLPreview: View {
+    let url: URL
+
+    var body: some View {
+        if ToasttyPreviewURLPolicy.isReachableWebURL(url) {
+            ToasttyBrowserPreview(url: url)
+        } else {
+            ContentUnavailableView("Browser unavailable", systemImage: "network.slash",
+                description: Text("This address belongs to your Mac or uses an unsupported scheme. Open it on your Mac."))
         }
     }
 }
@@ -162,21 +172,8 @@ enum ToasttyPreviewURLPolicy {
             && host != "0.0.0.0"
     }
 
-    /// Only actual link destinations are routed here. Plain transcript prose is never scanned.
+    /// Shared with the Mac so a tappable link and a grantable link cannot drift.
     static func localFileReference(_ url: URL) -> String? {
-        let scheme = url.scheme?.lowercased()
-        if scheme != nil && scheme != "file" {
-            // URL parses a bare filename followed by :line as a scheme. This
-            // narrow exception applies only to an existing Markdown link.
-            let raw = url.absoluteString
-            guard raw.range(of: #"^[^\s/:]+\.[A-Za-z0-9]+:[1-9][0-9]*(?::[1-9][0-9]*)?(?:#L[1-9][0-9]*)?$"#,
-                            options: .regularExpression) != nil else { return nil }
-            return raw
-        }
-        guard url.host == nil || url.host == "" || url.host == "localhost" else { return nil }
-        let reference = scheme == "file" ? url.path : url.relativeString.components(separatedBy: "#")[0]
-        guard !reference.isEmpty, !reference.hasPrefix("#") else { return nil }
-        let decoded = scheme == "file" ? reference : (reference.removingPercentEncoding ?? reference)
-        return decoded + (url.fragment.map { "#" + $0 } ?? "")
+        RemotePreviewLinkReference.localFileReference(url)
     }
 }

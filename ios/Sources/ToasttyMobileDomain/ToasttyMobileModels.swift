@@ -434,12 +434,21 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     public let title: String
     public let conversations: [MobileConversation]
     public let panels: [RemoteWorkspacePanel]
+    /// Desktop annotation chips, sorted by key by the host.
+    public let annotations: [RemoteWorkspaceAnnotation]
 
-    public init(id: UUID, title: String, conversations: [MobileConversation], panels: [RemoteWorkspacePanel] = []) {
+    public init(
+        id: UUID,
+        title: String,
+        conversations: [MobileConversation],
+        panels: [RemoteWorkspacePanel] = [],
+        annotations: [RemoteWorkspaceAnnotation] = []
+    ) {
         self.id = id
         self.title = title
         self.conversations = conversations
         self.panels = panels
+        self.annotations = annotations
     }
 
     public var sortedConversations: [MobileConversation] {
@@ -466,7 +475,8 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
                     id: workspace.id,
                     title: workspace.title,
                     conversations: workspace.sortedConversations,
-                    panels: workspace.panels
+                    panels: workspace.panels,
+                    annotations: workspace.annotations
                 )
             }
             .sorted(by: Self.isWorkspaceOrderedBefore)

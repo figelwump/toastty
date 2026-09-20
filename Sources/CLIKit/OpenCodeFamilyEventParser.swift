@@ -137,6 +137,14 @@ private extension OpenCodeFamilyEventParser {
                 properties: properties
             )
 
+        case "toastty.session_name":
+            return sessionNameCommands(
+                source: source,
+                sessionID: sessionID,
+                panelID: panelID,
+                properties: properties
+            )
+
         case "toastty.conversation.batch":
             guard let provider = agentKind(for: source) else { return [] }
             return ProviderConversationBatchParser.commands(
@@ -218,6 +226,32 @@ private extension OpenCodeFamilyEventParser {
                 nativeSessionID: nativeSessionID,
                 sessionFilePath: sessionFilePath,
                 cwd: cwd
+            ),
+        ]
+    }
+
+    /// The name is forwarded unaltered: collapsing or truncating it here
+    /// would let an over-long title reach the app looking like a valid one.
+    /// The app applies the same validation as for names it reads from disk.
+    static func sessionNameCommands(
+        source: AgentEventSource,
+        sessionID: String,
+        panelID: UUID?,
+        properties: [String: Any]
+    ) -> [CLICommand] {
+        guard let agent = agentKind(for: source),
+              let nativeSessionID = normalizedString(properties["nativeSessionID"], limit: 240),
+              let name = properties["name"] as? String,
+              name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return []
+        }
+        return [
+            .sessionProviderSessionName(
+                sessionID: sessionID,
+                panelID: panelID,
+                agent: agent,
+                nativeSessionID: nativeSessionID,
+                name: name
             ),
         ]
     }

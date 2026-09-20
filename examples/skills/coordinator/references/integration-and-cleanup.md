@@ -21,6 +21,14 @@ Record the source SHA, destination SHA and relevant peer heads actually examined
 Git mergeability alone does not establish semantic compatibility. State access
 limits and concrete risks; optional refactors do not become new merge gates.
 
+Inspect browser evidence using `panel.browser.state` with the recorded panel
+ID and a bounded polling deadline, following `toastty-capabilities`. The query
+can start loading a background panel without selecting it. A detached host
+can finish navigation, and a ready host only establishes window attachment.
+Navigation completion does not prove visual correctness or video playback.
+If the running app lacks navigation status or the deadline expires, record
+the verification limit rather than changing the user's selection or focus.
+
 For a particular interaction that inspection cannot resolve, use a disposable
 integration checkout with the candidate and the changes expected to land first.
 Run focused checks and record the exact commits and order. Do not mutate task

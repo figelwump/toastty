@@ -142,7 +142,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Select a workspace by ID or 1-based index.",
+                summary: "Change the user's visible workspace by ID or 1-based index. Use only for user-authorized navigation, not inspection or verification.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [
                     .index(summary: "1-based workspace index in the target window.", required: false),
@@ -197,7 +197,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Select a tab by ID or 1-based index.",
+                summary: "Change the selected workspace tab by ID or 1-based index. Use only for user-authorized navigation, not inspection or verification.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.tabID(required: false), .index(summary: "1-based tab index in the target workspace.", required: false)]
             )
@@ -213,9 +213,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 ]
             )
         case .workspaceTabSelectPrevious:
-            return .init(id: rawValue, kind: .action, summary: "Select the previous tab in the target workspace.", selectors: [.windowID, .workspaceID])
+            return .init(id: rawValue, kind: .action, summary: "Change the selected tab to the previous tab in the target workspace. Use only for user-authorized navigation.", selectors: [.windowID, .workspaceID])
         case .workspaceTabSelectNext:
-            return .init(id: rawValue, kind: .action, summary: "Select the next tab in the target workspace.", selectors: [.windowID, .workspaceID])
+            return .init(id: rawValue, kind: .action, summary: "Change the selected tab to the next tab in the target workspace. Use only for user-authorized navigation.", selectors: [.windowID, .workspaceID])
         case .workspaceTabRename:
             return .init(
                 id: rawValue,
@@ -283,7 +283,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Foreground navigation: focus a panel by panel ID within the target workspace and select the tab containing it.",
+                summary: "Foreground navigation: focus a panel by panel ID within the target workspace and select the tab containing it. Use only for user-authorized navigation, not inspection or verification.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.panelID(required: true)]
             )
@@ -445,7 +445,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 selectors: []
             )
         case .workspaceSnapshot:
-            return .init(id: rawValue, kind: .query, summary: "Return workspace structure and tab metadata.", selectors: [.windowID, .workspaceID])
+            return .init(id: rawValue, kind: .query, summary: "Return workspace structure and tab metadata without selecting the workspace or changing focus. Panel details cover its selected tab.", selectors: [.windowID, .workspaceID])
         case .terminalState:
             return .init(id: rawValue, kind: .query, summary: "Return terminal state metadata.", selectors: [.windowID, .workspaceID, .panelID])
         case .terminalVisibleText:
@@ -459,7 +459,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
         case .panelLocalDocumentState:
             return .init(id: rawValue, kind: .query, summary: "Return local-document panel state.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         case .panelBrowserState:
-            return .init(id: rawValue, kind: .query, summary: "Return browser panel state.", selectors: [.windowID, .workspaceID, .panelID])
+            return .init(id: rawValue, kind: .query, summary: "Return browser navigation status and host attachment state without selecting or focusing the panel. May create its runtime and start loading in the background; host ready is not navigation success.", selectors: [.windowID, .workspaceID, .panelID])
         case .panelScratchpadLookup:
             return .init(
                 id: rawValue,

@@ -45,6 +45,99 @@ struct RemoteAccessServiceSafetyTests {
         }
     }
 
+    @MainActor
+    @Test func workspaceInventoryCarriesSortedAnnotationsWithResolvedColors() throws {
+        var state = AppState.bootstrap()
+        let workspaceID = try #require(state.selectedWorkspaceSelection()?.workspaceID)
+        state.workspacesByID[workspaceID]?.annotations = [
+            "task-status": WorkspaceAnnotation(text: "Working"),
+            "github-pr": WorkspaceAnnotation(text: "PR #12", url: "https://github.com/example/repo/pull/12"),
+            "edited": WorkspaceAnnotation(text: "Hand edited", url: "file:///etc/hosts"),
+        ]
+
+        let inventory = RemoteAccessService.workspaceInventory(
+            state: state, annotationColorTokens: ["github-pr": .named(.green)])
+        let annotations = try #require(inventory.first { $0.id == workspaceID }?.annotations)
+
+        #expect(annotations.map(\.key) == ["edited", "github-pr", "task-status"])
+        #expect(annotations[0].url == nil, "A link the sidebar would not open is not sent")
+        #expect(annotations[1].url == URL(string: "https://github.com/example/repo/pull/12"))
+        #expect(annotations[1].color == "#5BA08A")
+        #expect(annotations[2].color == WorkspaceAnnotationChipPalette.hexString(
+            AnnotationStyleStore.fallbackColorToken(forKey: "task-status").baseHexValue))
+    }
+
+    @MainActor
+    @Test func annotationSetColorChangeAndClearEachRebroadcastTheSessionList() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let workspaceID = try #require(store.state.selectedWorkspaceSelection()?.workspaceID)
+        let server = RemoteAccessGatewayServerSpy()
+        let runtimeHome = "/tmp/toastty-remote-access-annotations-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
+        let annotationStyleStore = AnnotationStyleStore(runtimePaths: runtimePaths)
+        // No sessions exist, so nothing else keeps publishing session lists
+        // after setup; without the style-store subscription the color step
+        // times out.
+        let service = RemoteAccessService(
+            store: store,
+            annotationStyleStore: annotationStyleStore,
+            sessionRuntimeStore: SessionRuntimeStore(),
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            port: 42_995,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in server }
+        )
+        defer { service.setEnabled(false, persist: false) }
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_995)
+
+        server.removeAllBroadcasts()
+        #expect(store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #12", url: "https://github.com/example/repo/pull/12")
+        )))
+        let set = try await Self.deliveredAnnotations(in: workspaceID, from: server) { !$0.isEmpty }
+        #expect(set.map(\.text) == ["PR #12"])
+
+        // A color-only change never touches AppState.
+        server.removeAllBroadcasts()
+        #expect(try annotationStyleStore.setColor(.named(.red), forKey: "github-pr"))
+        let recolored = try await Self.deliveredAnnotations(in: workspaceID, from: server) { !$0.isEmpty }
+        #expect(recolored.map(\.color) == ["#E55C5C"])
+
+        server.removeAllBroadcasts()
+        #expect(store.send(.clearWorkspaceAnnotation(workspaceID: workspaceID, key: "github-pr")))
+        let cleared = try await Self.deliveredAnnotations(in: workspaceID, from: server) { $0.isEmpty }
+        #expect(cleared.isEmpty)
+    }
+
+    /// Waits for a broadcast session list whose annotations for the workspace
+    /// satisfy `isExpected`.
+    @MainActor
+    private static func deliveredAnnotations(
+        in workspaceID: UUID,
+        from server: RemoteAccessGatewayServerSpy,
+        where isExpected: ([RemoteWorkspaceAnnotation]) -> Bool
+    ) async throws -> [RemoteWorkspaceAnnotation] {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            if let annotations = server.sessionListSnapshots.last?
+                .workspaces.first(where: { $0.id == workspaceID })?.annotations,
+               isExpected(annotations) {
+                return annotations
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("No session_list broadcast delivered the expected annotations")
+        return []
+    }
+
     @Test func readAcknowledgementAcceptsAuthoritativeEmptyAndRejectsStaleBoundaries() {
         let runID = RemoteProjectionRunID()
         let empty = RemoteConversationReadAcknowledgementRequest(
@@ -308,14 +401,16 @@ struct RemoteAccessServiceSafetyTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let server = RemoteAccessGatewayServerSpy()
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: runtimeHome.path,
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome.path]
+        )
         let service = RemoteAccessService(
             store: store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            runtimePaths: ToasttyRuntimePaths.resolve(
-                homeDirectoryPath: runtimeHome.path,
-                environment: [ToasttyRuntimePaths.environmentKey: runtimeHome.path]
-            ),
+            runtimePaths: runtimePaths,
             port: 42_996,
             initiallyEnabled: false,
             gatewayServerFactory: { _ in server }
@@ -663,6 +758,26 @@ struct RemoteAccessServiceSafetyTests {
         }
     }
 
+    /// Remote clients title a conversation the way the sidebar names its row,
+    /// so a provider's generated name replaces the panel label.
+    @MainActor
+    @Test func providerSessionNameTitlesTheRemoteConversation() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .opencode)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let panelLabelTitle = fixture.summary.title
+
+        #expect(fixture.sessionRuntimeStore.applyReportedProviderSessionName(
+            sessionID: fixture.sessionID,
+            agent: .opencode,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            name: "Build system explanation"
+        ))
+
+        #expect(panelLabelTitle != "Build system explanation")
+        #expect(fixture.summary.title == "Build system explanation")
+    }
+
     @MainActor
     @Test func bootstrappedPromptClosesWhenDesktopStartsWorking() async throws {
         let fixture = try RemoteBootstrapFixture()
@@ -697,6 +812,71 @@ struct RemoteAccessServiceSafetyTests {
         )
 
         #expect(result == .rejected(reason: .surfaceUnavailable))
+    }
+
+    @MainActor
+    @Test func conversationFilePreviewServesOnlyReferencesTheAgentLinked() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .pi)
+        defer { fixture.removeRuntimeFiles() }
+        // Outside the session's project root, like a sibling worktree or /tmp.
+        let directory = URL(fileURLWithPath: "/tmp/toastty-linked-preview-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let linked = directory.appendingPathComponent("plan.md")
+        let unlinked = directory.appendingPathComponent("secret.md")
+        try Data("# Linked plan".utf8).write(to: linked)
+        try Data("# Secret".utf8).write(to: unlinked)
+
+        #expect(fixture.confirmCurrentLaunchBinding())
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID,
+            provider: .pi,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "pi-snapshot-1",
+            at: fixture.confirmedAt
+        ))
+        func ingest(_ payload: ConversationEventPayload, _ fingerprint: String) -> Bool {
+            fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID,
+                provider: .pi,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "pi-snapshot-1",
+                observation: ProviderTranscriptObservation(
+                    timestamp: fixture.confirmedAt.addingTimeInterval(1),
+                    fingerprint: fingerprint,
+                    payload: .transcript(payload),
+                    mayAuthorizeCurrentRuntime: false
+                )
+            )
+        }
+        // A link the user typed must not become a grant; only agent output does.
+        #expect(ingest(.userMessage(.init(text: "Read [it](\(unlinked.path))")), "managed:pi:user-1"))
+        #expect(ingest(
+            .assistantMessage(.init(text: "Wrote [the plan](\(linked.path):1).")),
+            "managed:pi:assistant-1"
+        ))
+        _ = fixture.summary
+
+        let previewHandler = try #require(fixture.gatewayHandler.previewHandler)
+        func preview(_ reference: String) async throws -> RemotePreviewResponse {
+            let response = await previewHandler(.init(
+                deviceID: UUID(),
+                request: .preview(.init(target: .conversationFile(
+                    conversationID: fixture.conversationID, fileReference: reference)))
+            ))
+            return try JSONDecoder().decode(RemotePreviewResponse.self, from: response.body)
+        }
+
+        guard case .document(let document) = try await preview("\(linked.path):1").content else {
+            Issue.record("Expected the linked file to preview")
+            return
+        }
+        #expect(document.content == "# Linked plan")
+        #expect(document.line == 1)
+        // A neighbouring file, even one the user's own message linked, is not granted.
+        let refused = try await preview(unlinked.path)
+        #expect(refused.content == nil)
+        #expect(refused.error != nil)
     }
 
     @MainActor
@@ -896,6 +1076,7 @@ struct RemoteAccessServiceSafetyTests {
         )
         let service = RemoteAccessService(
             store: store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
@@ -969,14 +1150,16 @@ struct RemoteAccessServiceSafetyTests {
         let server = RemoteAccessGatewayServerSpy()
         let runtimeHome = "/tmp/toastty-remote-access-failure-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
         let service = RemoteAccessService(
             store: store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            runtimePaths: ToasttyRuntimePaths.resolve(
-                homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
-                environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
-            ),
+            runtimePaths: runtimePaths,
             port: 42_998,
             initiallyEnabled: false,
             gatewayServerFactory: { _ in server }
@@ -1113,14 +1296,16 @@ private final class RemoteBootstrapFixture {
         let gatewayServer = RemoteAccessGatewayServerSpy()
         server = gatewayServer
         var capturedHandler: RemoteGatewayRequestHandler?
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
         service = RemoteAccessService(
             store: store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            runtimePaths: ToasttyRuntimePaths.resolve(
-                homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
-                environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
-            ),
+            runtimePaths: runtimePaths,
             port: 42_997,
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,

@@ -158,7 +158,7 @@ struct RemoteAccessGatewayServerTests {
         let entry = directory.appendingPathComponent("index.html")
         try Data("<h1>Preview</h1>".utf8).write(to: entry)
         try Data("body { color: red; }".utf8).write(to: directory.appendingPathComponent("style.css"))
-        let context = RemotePreviewContext(title: "HTML", source: .file(reference: entry.path, recordedCWD: nil, openPaths: [entry.path], format: nil))
+        let context = RemotePreviewContext(title: "HTML", source: .file(reference: entry.path, recordedCWD: nil, openPaths: [entry.path], format: nil, isTranscriptLinked: false))
         let harness = try Self.startHarness(previewHandler: { operation in
             let work = Task.detached { try RemotePreviewProvider.response(operation: operation, context: context) }
             do { return try await work.value } catch { return operation.errorResponse(.missing) }

@@ -218,15 +218,27 @@ running on your Mac.
   interaction transitions, and Toastty reads the local Claude transcript file
   associated with the exact provider-native session to project normalized
   conversation history for Remote Access. Toastty does not modify that file.
-- For managed Claude and Codex sessions, Toastty reads the short session name
-  the provider CLI generated, so the sidebar can label a row with it. For
-  Claude that is the newest `ai-title` record in the bound session's transcript;
-  for Codex it is the newest matching record in
-  `$CODEX_HOME/session_index.jsonl` (default `~/.codex`). Toastty reads a
-  bounded amount from the end of each file, only when the session's reported
-  status changes, and never modifies either file. The resolved name is stored
-  in the local session registry snapshot and can appear in Toastty's structured
-  local logs; no other content from those files is retained.
+- For managed Claude, Codex, and Cursor sessions, Toastty reads the short
+  session name the provider CLI generated, so the sidebar and Remote Access
+  clients can label a session with it. For Claude that is the newest `ai-title`
+  record in the bound session's transcript; for Codex it is the newest matching
+  record in `$CODEX_HOME/session_index.jsonl` (default `~/.codex`). For Cursor
+  it is the `title` field of `chats/<workspace>/<conversation>/meta.json` under
+  Cursor's config directory (`$CURSOR_CONFIG_DIR`, else
+  `$XDG_CONFIG_HOME/cursor`, else `~/.cursor`): Toastty lists the workspace
+  folders under `chats/` to find the conversation Cursor's hooks reported and
+  reads only that `meta.json`, never the chat's `store.db` or prompt history.
+  Toastty reads a bounded amount of each file, only when the session's reported
+  status changes or a new Cursor conversation starts, and never modifies these
+  files. The resolved name is stored in the local session registry snapshot and
+  can appear in Toastty's structured local logs; no other content from those
+  files is retained.
+- For managed OpenCode and MiMo Code sessions, Toastty's injected plugin
+  forwards the title the provider keeps for the root session, taken from the
+  provider's session events and its in-process SDK client. For Pi, the injected
+  extension forwards a name the user set with `/name`. Toastty stores it like
+  the names above and discards OpenCode's and MiMo Code's untitled
+  `New session - <timestamp>` placeholder.
 - For managed OpenCode, MiMo Code, and Pi sessions, Toastty's injected local
   plugin or extension reads the provider's current message snapshot and live
   lifecycle events to publish normalized conversation observations. Toastty

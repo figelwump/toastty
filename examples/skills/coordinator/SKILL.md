@@ -11,6 +11,11 @@ Use `worktree-create` to start task workspaces and `worktree-done` to submit a
 version the user accepts. Registration, passing tests, and a ready PR do not
 constitute user acceptance.
 
+Preserve the user's visible workspace, tab, and keyboard focus during discovery,
+inspection, status reporting, and verification. Use explicit workspace/panel
+queries. Do not select a workspace/tab or focus a panel to make evidence ready;
+selection and focus actions are appropriate only for user-authorized navigation.
+
 ## Start or resume
 
 Use the built-in `toastty-capabilities` skill. Require the managed CLI, socket,

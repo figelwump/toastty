@@ -1288,6 +1288,39 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.provider_session_name":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let activeSession = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            guard let agentRaw = normalizedOptionalText(event.payload.string("agent")),
+                  let agent = AgentKind(rawValue: agentRaw),
+                  agent == activeSession.agent else {
+                throw AutomationSocketError.invalidPayload("agent does not match active session")
+            }
+            guard let nativeSessionID = normalizedOptionalText(event.payload.string("nativeSessionID")) else {
+                throw AutomationSocketError.invalidPayload("nativeSessionID is required")
+            }
+            // An unusable name is the provider's data, not a malformed
+            // request, so it is ignored rather than rejected.
+            let accepted = sessionRuntimeStore.applyReportedProviderSessionName(
+                sessionID: sessionID,
+                agent: agent,
+                nativeSessionID: nativeSessionID,
+                name: event.payload.string("name") ?? ""
+            )
+            if accepted {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(accepted ? "accepted" : "ignored"),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.provider_conversation.reset":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")

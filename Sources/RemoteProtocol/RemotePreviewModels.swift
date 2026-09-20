@@ -4,10 +4,31 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
     public var id: UUID
     public var title: String
     public var panels: [RemoteWorkspacePanel]
-    public init(id: UUID, title: String, panels: [RemoteWorkspacePanel]) {
+    /// Sorted by key. Omitted from the wire when empty, and absent from older hosts.
+    public var annotations: [RemoteWorkspaceAnnotation]
+    public init(
+        id: UUID, title: String, panels: [RemoteWorkspacePanel],
+        annotations: [RemoteWorkspaceAnnotation] = []
+    ) {
         self.id = id
         self.title = title
         self.panels = panels
+        self.annotations = annotations
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(panels, forKey: .panels)
+        if !annotations.isEmpty { try container.encode(annotations, forKey: .annotations) }
+    }
+    private enum CodingKeys: String, CodingKey { case id, title, panels, annotations }
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        panels = try container.decode([RemoteWorkspacePanel].self, forKey: .panels)
+        annotations = try container.decodeIfPresent([RemoteWorkspaceAnnotation].self, forKey: .annotations) ?? []
     }
 }
 

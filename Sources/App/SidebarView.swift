@@ -1158,8 +1158,8 @@ struct SidebarView: View {
                     workspaceAgentCountBadge(agentSummary)
                 }
 
-                if let shortcutLabel {
-                    shortcutBadge(shortcutLabel, highlighted: optionKeyPressed)
+                if optionKeyPressed, let shortcutLabel {
+                    shortcutBadge(shortcutLabel, highlighted: true)
                 }
             }
 

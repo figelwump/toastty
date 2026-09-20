@@ -303,6 +303,7 @@ final class RemoteAccessService: ObservableObject {
     private var panelMetadataPollTask: Task<Void, Never>?
     private let previewScratchpadDirectory: URL
     private let store: AppStore
+    private let annotationStyleStore: AnnotationStyleStore
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let deviceStore: RemoteDeviceStore
@@ -397,6 +398,7 @@ final class RemoteAccessService: ObservableObject {
 
     init(
         store: AppStore,
+        annotationStyleStore: AnnotationStyleStore,
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
@@ -410,6 +412,7 @@ final class RemoteAccessService: ObservableObject {
     ) {
         self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
+        self.annotationStyleStore = annotationStyleStore
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.port = port
@@ -592,6 +595,20 @@ final class RemoteAccessService: ObservableObject {
             }
             .store(in: &conversationTrackingCancellables)
 
+        // Chip colors live outside AppState, so the inventory diff below never
+        // sees a color-only change. The broadcast is deferred, so it reads the
+        // store after this willSet publication lands.
+        annotationStyleStore.$colorTokensByKey
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation else { return }
+                self.scheduleSessionListBroadcast()
+            }
+            .store(in: &conversationTrackingCancellables)
+
         // Resume-record and conversation-identity changes mutate panel state
         // without touching the session registry; without this observer a
         // rollout-path change would never restart the transcript tailer.
@@ -599,7 +616,11 @@ final class RemoteAccessService: ObservableObject {
             guard let self,
                   self.isEnabled,
                   self.conversationTrackingGeneration == generation else { return }
-            if Self.workspaceInventory(state: previousState) != Self.workspaceInventory(state: nextState) {
+            // Passing the claimed colors skips deriving a fallback for every
+            // key on every action; color changes have their own trigger.
+            let colors = self.annotationStyleStore.colorTokensByKey
+            if Self.workspaceInventory(state: previousState, annotationColorTokens: colors)
+                != Self.workspaceInventory(state: nextState, annotationColorTokens: colors) {
                 self.scheduleSessionListBroadcast()
             }
             switch action {
@@ -806,13 +827,17 @@ final class RemoteAccessService: ObservableObject {
             conversations: conversations,
             generatedAt: date,
             workspaces: Self.workspaceInventory(
-                state: store.state, metadata: panelMetadataCache.metadata, associations: associations)
+                state: store.state, metadata: panelMetadataCache.metadata, associations: associations,
+                annotationColorTokens: annotationStyleStore.colorTokensByKey)
         )
     }
 
+    /// Keys missing from `annotationColorTokens` resolve to the style store's
+    /// deterministic fallback, as the sidebar does.
     static func workspaceInventory(
         state: AppState, metadata: [UUID: RemotePanelMetadataCache.Metadata] = [:],
-        associations: [UUID: RemoteConversationID] = [:]
+        associations: [UUID: RemoteConversationID] = [:],
+        annotationColorTokens: [String: AnnotationColorToken] = [:]
     ) -> [RemoteWorkspaceSummary] {
         var ids: [UUID] = []
         var seen: Set<UUID> = []
@@ -846,7 +871,24 @@ final class RemoteAccessService: ObservableObject {
                     )
                 }
             }
-            return RemoteWorkspaceSummary(id: id, title: workspace.title, panels: panels)
+            let annotations = workspace.annotations
+                .sorted { $0.key < $1.key }
+                .map { key, annotation in
+                    let token = annotationColorTokens[key]
+                        ?? AnnotationStyleStore.fallbackColorToken(forKey: key)
+                    return RemoteWorkspaceAnnotation(
+                        key: key,
+                        text: annotation.text,
+                        // Persisted layouts are user-editable; send only a link the
+                        // sidebar itself would open.
+                        url: annotation.url
+                            .flatMap(WorkspaceAnnotation.validatedURLString)
+                            .flatMap(URL.init(string:)),
+                        color: WorkspaceAnnotationChipPalette.hexString(token.baseHexValue)
+                    )
+                }
+            return RemoteWorkspaceSummary(
+                id: id, title: workspace.title, panels: panels, annotations: annotations)
         }
     }
 
@@ -961,7 +1003,8 @@ final class RemoteAccessService: ObservableObject {
                   case .web(let web) = panel.panelState else { throw RemotePreviewError.stale }
             if let path = Self.localPreviewPath(web) {
                 return .init(title: web.title, source: .file(reference: path, recordedCWD: nil,
-                                                           openPaths: [path], format: web.localDocument?.format))
+                                                           openPaths: [path], format: web.localDocument?.format,
+                                                           isTranscriptLinked: false))
             }
             if web.definition == .scratchpad, let scratchpad = web.scratchpad {
                 return .init(title: web.title, source: .scratchpad(documentID: scratchpad.documentID,
@@ -983,16 +1026,26 @@ final class RemoteAccessService: ObservableObject {
                     return Self.localPreviewPath(web)
                 }
             }
+            // The grant comes from the Mac's own transcript data for this
+            // conversation; the phone only names which reference it wants.
+            let isLinked = projectionStore.isFileReferenceLinked(reference, in: conversationID)
             return .init(title: reference, source: .file(reference: reference, recordedCWD: summary.cwd,
-                                                        openPaths: paths, format: nil))
+                                                        openPaths: paths, format: nil,
+                                                        isTranscriptLinked: isLinked))
         }
     }
 
     private func resolvePreview(_ operation: RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse {
+        // The provider logs failures of the read itself, where the applied
+        // grant is known. Failures around it are logged here.
+        var context: RemotePreviewContext?
+        var stage = RemotePreviewProvider.FailureStage.context
         do {
-            let context = try previewContext(target: operation.request.target)
+            let captured = try previewContext(target: operation.request.target)
+            context = captured
+            stage = .read
             let work = Task.detached(priority: .utility) {
-                try RemotePreviewProvider.response(operation: operation, context: context)
+                try RemotePreviewProvider.response(operation: operation, context: captured)
             }
             let response = try await withTaskCancellationHandler {
                 try await work.value
@@ -1000,14 +1053,17 @@ final class RemoteAccessService: ObservableObject {
                 work.cancel()
             }
             try Task.checkCancellation()
-            guard try previewContext(target: operation.request.target) == context else {
-                return operation.errorResponse(.stale)
+            stage = .recheck
+            guard try previewContext(target: operation.request.target) == captured else {
+                throw RemotePreviewError.stale
             }
             return response
-        } catch let error as RemotePreviewError {
-            return operation.errorResponse(error)
         } catch {
-            return operation.errorResponse(.missing)
+            if stage != .read, (error is CancellationError) == false {
+                RemotePreviewProvider.logFailure(
+                    error, stage: stage, request: operation.request, context: context)
+            }
+            return operation.errorResponse((error as? RemotePreviewError) ?? .missing)
         }
     }
 
@@ -1618,7 +1674,11 @@ final class RemoteAccessService: ObservableObject {
                 candidates.append(ConversationCandidate(
                     conversationID: conversationID,
                     provider: provider,
-                    title: activeRecord?.displayTitleOverride ?? terminalState.displayPanelLabel,
+                    // Same precedence as the sidebar row, so a provider's
+                    // generated name reaches remote clients too.
+                    title: activeRecord?.displayTitleOverride
+                        ?? activeRecord?.providerSessionName
+                        ?? terminalState.displayPanelLabel,
                     workspaceID: workspace.id,
                     workspaceTitle: workspace.title,
                     panelID: panelID,
@@ -1858,6 +1918,11 @@ final class RemoteAccessService: ObservableObject {
         }
         let stamped = stampPendingSends(observations, for: candidate.conversationID)
         let emitted = projectionStore.ingest(stamped, for: candidate.conversationID)
+        // Provider feeds are bounded snapshots and only their new suffix is
+        // parsed here, so extracting links on the main actor stays cheap.
+        projectionStore.noteLinkedFileReferences(
+            RemoteConversationProjectionStore.linkedFileReferences(in: observations),
+            for: candidate.conversationID)
         refreshPromptStabilization(for: candidate.conversationID)
         syncCoordinatorAvailability(for: candidate.conversationID)
         broadcastEvents(emitted, for: candidate.conversationID)
@@ -1944,13 +2009,14 @@ final class RemoteAccessService: ObservableObject {
         // must not rebuild projection state from the previous transcript.
         guard isEnabled, generation == conversationTrackingGeneration else { return }
         switch event {
-        case .observations(let observations):
+        case .observations(let observations, let linkedFileReferences):
             // Stamp the confirming user message for any pending remote send
             // before it enters the projection, so the sending device can tell
             // its own send apart from another device's identical text.
             let stamped = stampPendingSends(observations, for: conversationID)
             let previousProfile = projectionStore.projectorState(for: conversationID)?.executionProfile
             let emitted = projectionStore.ingest(stamped, for: conversationID)
+            projectionStore.noteLinkedFileReferences(linkedFileReferences, for: conversationID)
             refreshPromptStabilization(for: conversationID)
             // A newly ingested transcript can open the prompt; keep the
             // coordinator in step before broadcasting.
