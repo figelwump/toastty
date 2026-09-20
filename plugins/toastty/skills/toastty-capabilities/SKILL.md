@@ -63,6 +63,12 @@ in your report.
 
 Toastty has windows, workspaces, workspace tabs, and panels. A terminal panel can host a managed agent session. App-control selectors target `windowID`, `workspaceID`, and `panelID`; many commands can infer a target, but robust workflows should pass explicit IDs from `terminal.state`, `workspace.snapshot`, or action results.
 
+Discovery, inspection, status reporting, and verification must preserve the
+user's visible workspace, tab, and keyboard focus. Query explicit workspace or
+panel IDs; do not select a workspace/tab or focus a panel to inspect it.
+`workspace.select` changes the user's visible workspace. Selection and focus
+actions are appropriate only for user-authorized navigation.
+
 Current split actions return the target `workspaceID` and the newly created
 terminal `panelID`. Check both fields before composing a follow-up
 `agent.launch`; never pass placeholders such as `undefined` or `null` through
@@ -81,7 +87,10 @@ describes the selected workspace tab's right-panel tabs and includes `panelID`,
 `scratchpadDocumentID`/`scratchpadRevision`/`scratchpadSessionID` for
 Scratchpads. Match the strongest identity available (path or URL before title),
 then use the returned `panelID` for the next action or query. Do not assume this
-list includes right-panel tabs belonging to unselected workspace tabs.
+list includes right-panel tabs belonging to unselected workspace tabs. Use a
+known panel ID from creation or task records for those panels; do not select a
+tab merely to discover its contents. Report a discovery limit if no supported
+query supplies the missing identity.
 
 Common workflow families:
 
@@ -92,6 +101,46 @@ Common workflow families:
 - Agents: `agent.launch`.
 - Scratchpad: `panel.scratchpad.set-content`, `panel.scratchpad.patch-content`, `panel.scratchpad.export`, `panel.scratchpad.state`.
 - Notifications: `toastty notify`.
+
+## Background Browser Verification
+
+Query a browser by its explicit panel ID without selecting its workspace or tab:
+
+```bash
+"$TOASTTY_CLI_PATH" --json query run panel.browser.state --panel "$PANEL_ID"
+```
+
+This query can create the browser runtime and start loading its configured
+destination in the background. Panel creation alone does not eagerly load a
+hidden panel, and restored panels are not all loaded at startup. Repeating the
+query for an unchanged destination does not restart navigation. Background
+pages still use memory and can perform ongoing work; query only needed panels.
+
+- `stateRestorableURL` is the configured/persisted destination, not proof that
+  the page reached it. `observedURL` is WebKit's actual URL, or null; during a
+  pending or failed load it can still describe the previous document.
+- `navigationState` is `idle`, `loading`, `finished`, or `failed`. `idle` means
+  no observed document-navigation result, including the internal start page
+  and same-document history changes that produce no navigation callbacks.
+  `finished` requires WebKit's completion callback for the current navigation;
+  it does not prove HTTP success, application/SPA readiness, visual correctness,
+  or video playback. An invalid destination reports `failed`.
+- `title` is the current WebKit title or null. `isLoading` reports WebKit loading
+  activity; false alone is not success. `navigationError` is null or
+  `{domain, code, message}` for the current failed navigation. A new navigation
+  clears the previous error.
+- `hostLifecycleState` describes UI attachment: `detached`, `attached`, or
+  `ready`. `ready` means attached to a window, not a successfully loaded page.
+  A detached browser can finish navigation, but detached screenshot requests
+  remain unsupported.
+
+Choose a bounded deadline before polling, for example one query per second for
+up to 30 seconds. Check `.ok` each time and stop on an error, `finished`, or
+`failed`. Compare the observed destination with the expected page, allowing
+known redirects. At the deadline, or when an older app omits navigation fields,
+report verification as incomplete with the last available state. Do not select
+a workspace/tab or move focus to force a stronger result. Report visual or
+application readiness separately when the available evidence cannot establish it.
 
 ## Closing Panels
 
@@ -215,14 +264,17 @@ When launching a workspace-bounded child:
 2. If the parent is unrestricted, fence it to its current workspace with `session scope set-current --session "$TOASTTY_SESSION_ID"`. Preserve an already-scoped parent rather than resetting it.
 3. Create the workflow-authorized workspace. Because the parent is now scoped, `workspace.create` adds that new workspace to the parent's explicit scope. For an existing workspace, first verify it is in the parent's effective scope; use `session scope add` only when the user explicitly assigned it.
 4. Launch the child into the target workspace and validate the returned `workspaceID`, `panelID`, and `sessionID`.
-5. Set the returned child session's explicit scope to exactly the target with `session scope set --session <child-session-id> --workspace <workspace-id>`.
-6. Show and verify the child scope. Require `isScoped == true`, `workspaceIDs == [<workspace-id>]`, and `effectiveWorkspaceIDs == [<workspace-id>]`. Stop and report if any step fails.
+5. Set the returned child's explicit scope to the target workspace. When the delegated task requires a reply to the parent, also include the parent's workspace: `session scope set --session <child-session-id> --workspace <workspace-id> --workspace <parent-workspace-id>`. This grants automation access to both entire workspaces. Resolve the parent's workspace and panel before launch and include its exact managed session ID in the handoff. The authorized delegation includes the return message; the child does not need a separate direct user request to deliver it.
+6. Show and verify the child scope. Require `isScoped == true` and both `workspaceIDs` and `effectiveWorkspaceIDs` to contain exactly the assigned workspace IDs, regardless of order. Stop and report if any step fails.
+7. For the return message, use `terminal.send-text` with the recorded parent panel and `expectedSessionID`. No parent snapshot is required. If the parent is gone, replaced, or out of scope, report failed delivery rather than targeting another session or broadening scope.
 
 If the parent began unrestricted and step 2 succeeds, it remains scoped after a successful handoff. On failure, report whether the parent was changed and whether a workspace or child session may already exist. A transactional helper may restore a previously unrestricted parent with `session scope clear` as a recorded failure rollback; never clear a parent that was already scoped, and do not silently broaden scope.
 
 ## Worked Examples
 
 ### Launch A Workspace-Bounded Child Agent
+
+This example has no terminal reply requirement and uses child-only scope. For a task that must reply to its parent, include the parent workspace in the scope and expected scope verification as described above.
 
 This example creates a new authorized workspace. Check every response before using its result; the Python snippets below fail if Toastty reports an error or omits a required field.
 

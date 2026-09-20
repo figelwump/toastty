@@ -2004,6 +2004,13 @@ private extension AppControlExecutor {
             "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
             "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
             "runtimePageZoom": .double(runtimeState.pageZoom),
+            "observedURL": runtimeState.observedURL.map { .string($0) } ?? .null,
+            "title": runtimeState.title.map { .string($0) } ?? .null,
+            "isLoading": .bool(runtimeState.isLoading),
+            "navigationState": .string(runtimeState.navigationState.rawValue),
+            "navigationError": runtimeState.navigationError.map {
+                .object(["domain": .string($0.domain), "code": .int($0.code), "message": .string($0.message)])
+            } ?? .null,
         ]
     }
 

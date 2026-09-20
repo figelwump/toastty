@@ -17,6 +17,10 @@ the target to process the discovered tasks in the current repository.
   `error: finisher must run inside a Toastty-managed agent session`.
   Use `toastty-capabilities` to discover the running CLI's supported queries
   and actions before controlling sessions or workspaces.
+- Preserve the user's visible workspace, tab, and keyboard focus during
+  discovery, inspection, status reporting, and verification. Query explicit
+  workspace/panel IDs; do not select or focus task resources to inspect them.
+  Selection and focus actions require user-authorized navigation.
 - Resolve the task using the durable local launch record,
   `git worktree list --porcelain`, `WORKTREE_HANDOFF.md`, and live
   workspace/session metadata.
@@ -91,6 +95,13 @@ the target to process the discovered tasks in the current repository.
   is not required. Match `ValidatedCommit: <full SHA>` to the source tip. If
   evidence is missing or stale, establish the assessed head and complete the
   required verification before integration; do not equate “done” with verified.
+- Inspect browser evidence using `panel.browser.state` with the recorded panel
+  ID and a bounded polling deadline, following `toastty-capabilities`. The query
+  can start loading a background panel without selecting it. A detached host
+  can finish navigation, and a ready host only establishes window attachment.
+  Navigation completion does not prove visual correctness or video playback.
+  If the running app lacks navigation status or the deadline expires, record
+  the verification limit rather than changing the user's selection or focus.
 - For a PR, verify its repository, base branch, head branch, and live head SHA
   against the task identity. Integration requires the PR head, any assigned
   local task branch tip, and `ValidatedCommit` to agree, with required review

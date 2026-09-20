@@ -525,13 +525,20 @@ Like `action list`, human-readable output prints `id<TAB>summary`, and `--json` 
 
 ### `query run`
 
-Run a read-only app query against a live Toastty instance.
+Query a live Toastty instance without changing workspace/tab selection or
+keyboard focus. Some queries initialize runtime state: `panel.browser.state`
+can create a browser runtime and start loading its configured destination.
 
 ```
 toastty query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
 ```
 
 Query selectors and `key=value` argument handling follow the same rules as `action run`.
+
+Use explicit workspace/panel IDs for discovery, inspection, status reporting,
+and verification. Do not select a workspace/tab or focus a panel for those
+tasks. `workspace.select` changes the user's visible workspace; selection and
+focus actions are appropriate only for user-authorized navigation.
 
 ```bash
 "$TOASTTY_CLI_PATH" query run annotation.keys
@@ -568,7 +575,9 @@ reading its text.
 and `title`, plus `filePath` for local documents, `url` for browsers, and
 `scratchpadDocumentID`, `scratchpadRevision`, and `scratchpadSessionID` for
 Scratchpads. Fields that do not apply are null. Right-panel tabs belonging to
-unselected workspace tabs are not included.
+unselected workspace tabs are not included. Query a known panel ID directly
+rather than selecting a tab to discover it; report missing identity as a
+discovery limit when the supported queries cannot supply it.
 
 `workspace.snapshot` also returns `annotations` as an array of
 `{key, text, url, color}` objects sorted by key in bytewise order. `url` is
@@ -580,6 +589,37 @@ the explicit global color when one was set, otherwise the stable automatic
 array of annotation keys previously registered in the current runtime. The
 catalog is historical rather than an active-usage listing and is intentionally
 runtime-global even for workspace-scoped callers.
+
+`panel.browser.state --panel "$PANEL_ID"` returns browser navigation and host
+attachment state. It can start a hidden panel's first load; repeated queries
+for an unchanged destination do not restart navigation. Browser creation and
+app restoration do not eagerly load every hidden panel. Background pages still
+consume memory and can perform ongoing work, so query only needed panels.
+
+- `stateRestorableURL` is the configured/persisted destination. `observedURL`
+  is the actual WebKit URL or null, with no requested-URL fallback; a pending
+  or failed load may leave the previous document's URL visible.
+- `navigationState` is `idle`, `loading`, `finished`, or `failed`. `idle` means
+  no observed document-navigation result, including the internal start page
+  and same-document history changes that produce no navigation callbacks.
+  `finished` requires WebKit's completion callback for the current navigation;
+  it does not establish HTTP success, SPA readiness, visual correctness, or
+  video playback. An invalid destination reports `failed`.
+- `title` is WebKit's current title or null. `isLoading` reports WebKit loading
+  activity; false alone does not establish success. `navigationError` is null
+  or `{domain, code, message}` for the current failed navigation; starting a
+  new navigation clears the old error.
+- `hostLifecycleState` is `detached`, `attached`, or `ready` and describes UI
+  attachment independently. `ready` means attached to a window. A detached
+  browser can finish navigation, though screenshot requests remain unsupported
+  while detached.
+
+For background verification, poll the explicit panel with a bounded deadline
+(for example once per second for up to 30 seconds). Stop on a query error,
+`finished`, or `failed`, and check the observed destination against the expected
+page and any known redirect. A timeout or missing navigation fields on an older
+app leaves verification incomplete. Preserve the last state and report the
+limit; do not change selection or focus to obtain a stronger result.
 
 `panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 
