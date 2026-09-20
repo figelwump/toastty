@@ -3,6 +3,8 @@ import Foundation
 
 @MainActor
 protocol CommandPaletteActionHandling: AnyObject {
+    func canNavigateBack() -> Bool
+    func canNavigateForward() -> Bool
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection?
     func workspaceSwitchOptions(originWindowID: UUID) -> [PaletteWorkspaceSwitchOption]
     func fileSearchScope(originWindowID: UUID) -> PaletteFileSearchScope?
@@ -344,7 +346,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
               let workspaceID = store.commandSelection(preferredWindowID: originWindowID)?.workspace.id else {
             return false
         }
-        return store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+        return store.sendNavigation(.toggleRightAuxPanel(workspaceID: workspaceID))
     }
 
     func rightPanelTitle(originWindowID: UUID) -> String {
@@ -691,8 +693,17 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         }
     }
 
+    func canNavigateBack() -> Bool { store?.canNavigateBack ?? false }
+
+    func canNavigateForward() -> Bool { store?.canNavigateForward ?? false }
+
     private func executeBuiltIn(_ command: ToasttyBuiltInCommand, originWindowID: UUID) -> Bool {
         switch command {
+        case .navigateBack:
+            return store?.navigateBack() ?? false
+        case .navigateForward:
+            return store?.navigateForward() ?? false
+
         case .splitRight:
             return split(direction: .right, originWindowID: originWindowID)
         case .splitLeft:

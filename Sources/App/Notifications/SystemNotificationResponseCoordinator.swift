@@ -41,7 +41,7 @@ final class SystemNotificationResponseCoordinator: NSObject {
             } else {
                 // Workspace-only notification routes intentionally skip the
                 // panel flash because there is no concrete panel destination.
-                guard store.send(.selectWorkspace(windowID: route.windowID, workspaceID: route.workspaceID)) else {
+                guard store.sendNavigation(.selectWorkspace(windowID: route.windowID, workspaceID: route.workspaceID)) else {
                     return
                 }
             }

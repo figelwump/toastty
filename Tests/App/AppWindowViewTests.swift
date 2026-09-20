@@ -4,6 +4,13 @@ import XCTest
 
 @MainActor
 final class AppWindowViewTests: XCTestCase {
+    func testNavigationControlsFitMinimumSidebarAndReserveHiddenSidebarHeaderSpace() {
+        let controlsTrailingEdge = ToastyTheme.titlebarSidebarToggleLeadingPadding +
+            (3 * ToastyTheme.titlebarSidebarToggleButtonSize) + (2 * ToastyTheme.titlebarControlSpacing)
+        XCTAssertLessThan(controlsTrailingEdge, CGFloat(WindowState.minSidebarWidth))
+        XCTAssertGreaterThan(ToastyTheme.topBarLeadingPaddingWithoutSidebar, controlsTrailingEdge)
+    }
+
     func testSidebarToggleShowsUnreadBadgeOnlyWhenSidebarIsHidden() {
         XCTAssertTrue(
             AppWindowView.sidebarToggleShowsUnreadBadge(

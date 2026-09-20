@@ -1,6 +1,6 @@
 # Back and forward across Toastty
 
-Status: proposal; implementation is not authorized yet.
+Status: implemented. Build, focused tests and remote smoke passed; native GUI and physical mouse verification remain incomplete.
 
 ## User behavior
 
@@ -9,8 +9,7 @@ tab and restoring keyboard focus. Forward retraces the same visits. Mouse side
 buttons and two titlebar chevrons invoke the same commands.
 
 Proposed scope is one history across the app, including separate Toastty windows.
-This matches “Toastty as a whole”; the user can choose per-window history before
-implementation. Every window shows the same availability. A cross-window return
+This matches “Toastty as a whole” and was approved for implementation. Every window shows the same availability. A cross-window return
 activates the destination window, potentially on another display or Space.
 
 - Record deliberate workspace/tab/panel selection, keyboard or palette navigation,
@@ -165,12 +164,12 @@ vendor-driver mapping. Do not drive the user's local app without explicit reques
 The preserved Scratchpad shows the chevron placement and an interactive visit
 history. It is a concept, not evidence of native focus or mouse support.
 
-## Decisions before implementation
+## Chosen behavior and tradeoffs
 
 The main tradeoff is side-button ownership: terminal applications and embedded
 web content lose those buttons, including at history endpoints. This proposal
 matches the requested app-wide navigation; it does not add an unrequested modifier
-bypass or settings mode. Confirm this contract when authorizing implementation.
+bypass or settings mode. The user approved this contract with the implementation.
 
 App-wide history includes separate windows as the proposed default. Per-window
 history is simpler and sufficient for the example involving workspaces; it avoids

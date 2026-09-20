@@ -51,6 +51,12 @@ private enum WorkspaceCommandTarget {
     case newWindow
 }
 
+enum NavigationIntent: Equatable {
+    case user
+    case restoration
+    case history
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
@@ -62,6 +68,13 @@ final class AppStore: ObservableObject {
         .error,
     ]
     static let nextUnreadOrWorkingFallbackStatusKinds: Set<SessionStatusKind> = [.working]
+
+    @Published private(set) var navigationHistory = NavigationHistory()
+    // A synchronous command can select a workspace and then a panel. Only its
+    // outer boundary records; this scope never survives an await or callback.
+    private var navigationDepth = 0
+    private var navigationGeneration: UInt = 0
+    private var navigationOriginPanelID: UUID?
 
     @Published private(set) var state: AppState
     /// Persisted compatibility flag that switches windows into the wider
@@ -120,6 +133,7 @@ final class AppStore: ObservableObject {
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
         self.windowActivationHandler = windowActivationHandler
         self.recentRightPanelItemsStore = recentRightPanelItemsStore
+        navigationOriginPanelID = resolvedNavigationPanelID
     }
 
     @discardableResult
@@ -141,6 +155,15 @@ final class AppStore: ObservableObject {
             return false
         }
         state = next
+        if navigationDepth == 0 {
+            // Native key-window notifications restore focus; a later actual
+            // click must still be able to record the previous app location.
+            if case .selectWindow = action {
+                // Keep the last location until an intentional visit.
+            } else if navigationOriginPanelID == Self.resolvedNavigationPanelID(in: previousState) {
+                navigationOriginPanelID = resolvedNavigationPanelID
+            }
+        }
         recordRecentRightPanelItemIfNeeded(
             for: action,
             previousState: previousState,
@@ -172,11 +195,128 @@ final class AppStore: ObservableObject {
         let previousState = self.state
         self.state = state
         nextActiveCycleState = nil
+        navigationGeneration &+= 1
+        navigationHistory.clear()
+        navigationOriginPanelID = resolvedNavigationPanelID
         logStateReplacementIfNeeded(
             source: source,
             previousState: previousState,
             nextState: state
         )
+    }
+
+    var canNavigateBack: Bool { navigationDestination(.back) != nil }
+    var canNavigateForward: Bool { navigationDestination(.forward) != nil }
+    var navigationBackHelp: String { navigationHelp(.back) }
+    var navigationForwardHelp: String { navigationHelp(.forward) }
+
+    @discardableResult
+    func navigateBack() -> Bool { traverseHistory(.back) }
+
+    @discardableResult
+    func navigateForward() -> Bool { traverseHistory(.forward) }
+
+    @discardableResult
+    func sendNavigation(_ action: AppAction, source: AppActionSource = .unknown) -> Bool {
+        let previousPanelID = resolvedNavigationPanelID
+        return performNavigation(recordIf: { succeeded in
+            guard succeeded else { return false }
+            if previousPanelID != self.resolvedNavigationPanelID { return true }
+            // An explicit click after a native window activation still counts.
+            // Creating or updating a hidden panel does not visit that window.
+            switch action {
+            case .focusPanel(let workspaceID, let panelID):
+                return self.state.selectedWorkspaceSelection()?.workspaceID == workspaceID &&
+                    self.resolvedNavigationPanelID == panelID
+            case .selectWorkspace(let windowID, let workspaceID):
+                return self.state.selectedWindowID == windowID &&
+                    self.state.selectedWorkspaceSelection()?.workspaceID == workspaceID
+            default:
+                return false
+            }
+        }) { send(action, source: source) }
+    }
+
+    /// Explicit synchronous navigation boundary. Maintenance and replay scopes
+    /// suppress nested recording without suppressing any later input event.
+    func performNavigation<T>(
+        intent: NavigationIntent = .user,
+        recordIf: (T) -> Bool = { _ in true },
+        _ operation: () throws -> T
+    ) rethrows -> T {
+        let isOutermost = navigationDepth == 0
+        let origin = navigationOriginPanelID
+        let previousPanelID = resolvedNavigationPanelID
+        let generation = navigationGeneration
+        var completed = false
+        navigationDepth += 1
+        defer {
+            navigationDepth -= 1
+            if isOutermost, generation == navigationGeneration {
+                let destination = resolvedNavigationPanelID
+                if completed, intent == .user, let destination {
+                    let liveOrigin = origin.flatMap {
+                        state.workspaceSelection(containingPanelID: $0) == nil ? nil : $0
+                    }
+                    navigationHistory.recordVisit(from: liveOrigin, to: destination)
+                }
+                if completed || destination != previousPanelID {
+                    navigationOriginPanelID = destination
+                }
+            }
+        }
+        let result = try operation()
+        completed = recordIf(result)
+        return result
+    }
+
+    private var resolvedNavigationPanelID: UUID? {
+        Self.resolvedNavigationPanelID(in: state)
+    }
+
+    private static func resolvedNavigationPanelID(in state: AppState) -> UUID? {
+        guard let windowID = state.selectedWindowID,
+              let workspace = state.workspaceSelection(in: windowID)?.workspace else { return nil }
+        if workspace.rightAuxPanel.isVisible,
+           let panelID = workspace.rightAuxPanel.focusedPanelID,
+           workspace.rightAuxPanel.panelState(for: panelID) != nil {
+            return panelID
+        }
+        return workspace.selectedTab?.resolvedFocusedPanelID
+    }
+
+    private func navigationDestination(_ direction: NavigationHistoryDirection) -> NavigationHistoryDestination? {
+        navigationHistory.destination(direction: direction, currentPanelID: resolvedNavigationPanelID) {
+            state.workspaceSelection(containingPanelID: $0) != nil
+        }
+    }
+
+    private func navigationHelp(_ direction: NavigationHistoryDirection) -> String {
+        let label = direction == .back ? "Back" : "Forward"
+        guard let destination = navigationDestination(direction),
+              let owner = state.workspaceSelection(containingPanelID: destination.panelID),
+              let panel = owner.workspace.panelState(for: destination.panelID) else { return label }
+        let mainTabID = owner.workspace.tabID(containingPanelID: destination.panelID)
+            ?? owner.workspace.rightAuxPanelTabLocation(containingPanelID: destination.panelID)?.mainTabID
+        let tabTitle = mainTabID.flatMap { owner.workspace.tab(id: $0)?.displayTitle } ?? "Tab"
+        return "\(label) to \(owner.workspace.title) / \(tabTitle) / \(panel.notificationLabel)"
+    }
+
+    private func traverseHistory(_ direction: NavigationHistoryDirection) -> Bool {
+        guard navigationDepth == 0,
+              let destination = navigationDestination(direction),
+              let owner = state.workspaceSelection(containingPanelID: destination.panelID) else { return false }
+        guard focusPanel(
+            windowID: owner.windowID,
+            workspaceID: owner.workspaceID,
+            panelID: destination.panelID,
+            flashPanelOnSuccess: true,
+            alwaysActivateWindow: true,
+            intent: .history
+        ), resolvedNavigationPanelID == destination.panelID,
+           navigationHistory.entries.indices.contains(destination.index),
+           navigationHistory.entries[destination.index] == destination.panelID else { return false }
+        return navigationHistory.commitTraversal(to: destination.index)
     }
 
     private func logDestructiveLayoutActionIfNeeded(
@@ -240,20 +380,22 @@ final class AppStore: ObservableObject {
         workspaceID: UUID,
         preferringUnreadSessionPanelIn sessionRuntimeStore: SessionRuntimeStore?
     ) -> Bool {
-        let previousWorkspaceID = selectedWorkspaceID(in: windowID)
-        guard send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID)) else {
-            return false
-        }
+        return performNavigation(recordIf: { $0 }) {
+            let previousWorkspaceID = selectedWorkspaceID(in: windowID)
+            guard send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID)) else {
+                return false
+            }
 
-        guard previousWorkspaceID != workspaceID,
-              let sessionRuntimeStore,
-              let workspace = state.workspacesByID[workspaceID],
-              let preferredPanelID = sessionRuntimeStore.preferredUnreadStatusPanelID(in: workspace) else {
+            guard previousWorkspaceID != workspaceID,
+                  let sessionRuntimeStore,
+                  let workspace = state.workspacesByID[workspaceID],
+                  let preferredPanelID = sessionRuntimeStore.preferredUnreadStatusPanelID(in: workspace) else {
+                return true
+            }
+
+            _ = send(.focusPanel(workspaceID: workspaceID, panelID: preferredPanelID))
             return true
         }
-
-        _ = send(.focusPanel(workspaceID: workspaceID, panelID: preferredPanelID))
-        return true
     }
 
     func commandWindowID(preferredWindowID: UUID?) -> UUID? {
@@ -376,7 +518,7 @@ final class AppStore: ObservableObject {
             return false
         }
 
-        return send(
+        return sendNavigation(
             .createWorkspaceTab(
                 workspaceID: selection.workspace.id,
                 seed: windowLaunchSeed(from: selection)
@@ -396,7 +538,7 @@ final class AppStore: ObservableObject {
         let existingPanelIDs = Set(existingWorkspace.allPanelsByID.keys)
         let shouldRequestLocationFocus = request.initialURL == nil
 
-        guard send(
+        guard sendNavigation(
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
@@ -523,7 +665,7 @@ final class AppStore: ObservableObject {
                 if workspace.rightAuxPanel.activeTabID != existingTabID ||
                     workspace.rightAuxPanel.isVisible == false ||
                     workspace.rightAuxPanel.focusedPanelID != existingPanelID {
-                    guard send(
+                    guard sendNavigation(
                         .selectRightAuxPanelTab(
                             workspaceID: workspaceID,
                             tabID: existingTabID,
@@ -551,7 +693,7 @@ final class AppStore: ObservableObject {
 
         let existingPanelIDs = Set(workspace.allPanelsByID.keys)
         let displayName = Self.localDocumentDisplayName(for: resolvedLocalDocument.normalizedFilePath)
-        guard send(
+        guard sendNavigation(
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
@@ -622,7 +764,7 @@ final class AppStore: ObservableObject {
             if workspace.selectedTab?.rightAuxPanel.activeTabID != existingTab.id ||
                 workspace.selectedTab?.rightAuxPanel.isVisible == false ||
                 workspace.selectedTab?.rightAuxPanel.focusedPanelID != existingTab.panelID {
-                guard send(
+                guard sendNavigation(
                     .selectRightAuxPanelTab(
                         workspaceID: workspaceID,
                         tabID: existingTab.id,
@@ -665,7 +807,7 @@ final class AppStore: ObservableObject {
                 return false
             }
             let displayName = Self.localDocumentDisplayName(for: resolvedLocalDocument.normalizedFilePath)
-            guard send(
+            guard sendNavigation(
                 .createWebPanel(
                     workspaceID: workspaceID,
                     panel: WebPanelState(
@@ -714,7 +856,7 @@ final class AppStore: ObservableObject {
                 return false
             }
 
-            guard send(
+            guard sendNavigation(
                 .createWebPanel(
                     workspaceID: workspaceID,
                     panel: WebPanelState(
@@ -746,7 +888,7 @@ final class AppStore: ObservableObject {
                 )
                 return false
             }
-            guard send(
+            guard sendNavigation(
                 .createWebPanel(
                     workspaceID: workspaceID,
                     panel: WebPanelState(
@@ -1031,7 +1173,7 @@ final class AppStore: ObservableObject {
             revision: document.revision
         )
 
-        guard send(
+        guard sendNavigation(
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
@@ -1192,7 +1334,7 @@ final class AppStore: ObservableObject {
            case .web(let webState) = closedRecord.panelState,
            webState.definition == .scratchpad,
            webState.scratchpad?.sessionLink?.sessionID == session.sessionID {
-            return send(.reopenLastClosedPanel(workspaceID: selection.workspace.id))
+            return sendNavigation(.reopenLastClosedPanel(workspaceID: selection.workspace.id))
         }
 
         let sessionLink = ScratchpadSessionLink(
@@ -1216,7 +1358,7 @@ final class AppStore: ObservableObject {
             return false
         }
 
-        return send(
+        return sendNavigation(
             .createWebPanel(
                 workspaceID: selection.workspace.id,
                 panel: WebPanelState(
@@ -1288,7 +1430,7 @@ final class AppStore: ObservableObject {
         if workspace.resolvedSelectedTabID == targetTabID {
             return true
         }
-        return send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: targetTabID))
+        return sendNavigation(.selectWorkspaceTab(workspaceID: workspace.id, tabID: targetTabID))
     }
 
     @discardableResult
@@ -1309,7 +1451,7 @@ final class AppStore: ObservableObject {
         case .next:
             nextIndex = currentIndex < tabs.count - 1 ? currentIndex + 1 : 0
         }
-        return send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: tabs[nextIndex].id))
+        return sendNavigation(.selectWorkspaceTab(workspaceID: workspace.id, tabID: tabs[nextIndex].id))
     }
 
     func canSelectAdjacentRightAuxPanelTab(preferredWindowID: UUID?) -> Bool {
@@ -1330,7 +1472,7 @@ final class AppStore: ObservableObject {
               let workspaceID = commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        return send(.selectAdjacentRightAuxPanelTab(workspaceID: workspaceID, direction: direction))
+        return sendNavigation(.selectAdjacentRightAuxPanelTab(workspaceID: workspaceID, direction: direction))
     }
 
     @discardableResult
@@ -1338,7 +1480,7 @@ final class AppStore: ObservableObject {
         let windowIDsBeforeCreate = Set(state.windows.map(\.id))
         let windowCountBeforeCreate = state.windows.count
         let selection = commandSelection(preferredWindowID: preferredWindowID)
-        let didCreateWindow = send(
+        let didCreateWindow = sendNavigation(
             .createWindow(
                 seed: windowLaunchSeed(from: selection),
                 initialFrame: commandCreateWindowFrame(cascadingFromSourceWindow: selection != nil)
@@ -1372,9 +1514,9 @@ final class AppStore: ObservableObject {
 
         switch target {
         case .existingWindow(let windowID):
-            return send(.createWorkspace(windowID: windowID, title: nil, activate: true))
+            return sendNavigation(.createWorkspace(windowID: windowID, title: nil, activate: true))
         case .newWindow:
-            return send(
+            return sendNavigation(
                 .createWindow(
                     seed: nil,
                     initialFrame: commandCreateWindowFrame(cascadingFromSourceWindow: false)
@@ -1528,7 +1670,10 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func focusPanel(containing panelID: UUID) -> Bool {
+    func focusPanel(containing panelID: UUID, intent: NavigationIntent = .user) -> Bool {
+        if intent == .restoration {
+            return resolvedNavigationPanelID == panelID
+        }
         guard let selection = state.workspaceSelection(containingPanelID: panelID) else {
             return false
         }
@@ -1537,7 +1682,8 @@ final class AppStore: ObservableObject {
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
             panelID: panelID,
-            flashPanelOnSuccess: false
+            flashPanelOnSuccess: false,
+            intent: intent
         )
     }
 
@@ -1692,10 +1838,12 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     func autoOpenGettingStartedPanelIfNeeded(workspaceID: UUID) -> Bool {
-        guard hasAutoOpenedGettingStartedPanelThisLaunch == false else { return false }
-        guard openGettingStartedPanel(workspaceID: workspaceID) else { return false }
-        hasAutoOpenedGettingStartedPanelThisLaunch = true
-        return true
+        return performNavigation(intent: .restoration) {
+            guard hasAutoOpenedGettingStartedPanelThisLaunch == false else { return false }
+            guard openGettingStartedPanel(workspaceID: workspaceID) else { return false }
+            hasAutoOpenedGettingStartedPanelThisLaunch = true
+            return true
+        }
     }
 
     func setAskBeforeQuitting(_ askBeforeQuitting: Bool) {
@@ -2706,35 +2854,40 @@ final class AppStore: ObservableObject {
         workspaceID: UUID,
         panelID: UUID,
         flashPanelOnSuccess: Bool,
-        alwaysActivateWindow: Bool = false
+        alwaysActivateWindow: Bool = false,
+        intent: NavigationIntent = .user
     ) -> Bool {
-        let previousSelectedWindowID = state.selectedWindowID
-        let requiresWorkspaceSelection = state.selectedWorkspaceID(in: windowID) != workspaceID
+        guard let owner = state.workspaceSelection(containingPanelID: panelID),
+              owner.windowID == windowID, owner.workspaceID == workspaceID else { return false }
+        return performNavigation(intent: intent, recordIf: { $0 }) {
+            let previousSelectedWindowID = state.selectedWindowID
+            let requiresWorkspaceSelection = state.selectedWorkspaceID(in: windowID) != workspaceID
 
-        if state.selectedWindowID != windowID || requiresWorkspaceSelection {
-            guard send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID)) else {
+            if state.selectedWindowID != windowID || requiresWorkspaceSelection {
+                guard send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID)) else {
+                    return false
+                }
+            }
+
+            guard send(.focusPanel(workspaceID: workspaceID, panelID: panelID)) else {
                 return false
             }
-        }
 
-        guard send(.focusPanel(workspaceID: workspaceID, panelID: panelID)) else {
-            return false
-        }
+            if let selectedWindowID = state.selectedWindowID,
+               alwaysActivateWindow || selectedWindowID != previousSelectedWindowID {
+                windowActivationHandler(selectedWindowID)
+            }
 
-        if let selectedWindowID = state.selectedWindowID,
-           alwaysActivateWindow || selectedWindowID != previousSelectedWindowID {
-            windowActivationHandler(selectedWindowID)
-        }
+            if flashPanelOnSuccess {
+                requestPanelFlash(
+                    windowID: windowID,
+                    workspaceID: workspaceID,
+                    panelID: panelID
+                )
+            }
 
-        if flashPanelOnSuccess {
-            requestPanelFlash(
-                windowID: windowID,
-                workspaceID: workspaceID,
-                panelID: panelID
-            )
+            return true
         }
-
-        return true
     }
 
     private func requestPanelFlash(windowID: UUID, workspaceID: UUID, panelID: UUID) {

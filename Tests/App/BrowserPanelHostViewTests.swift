@@ -275,6 +275,72 @@ final class BrowserPanelHostViewTests: XCTestCase {
         return (window, webView, contentView)
     }
 
+    func testWebContentDescendantMouseDownRequestsUserFocusOnlyForPanelInput() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        let otherWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        let webView = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+        let contentDescendant = NSView(frame: webView.bounds)
+        let sibling = NSView(frame: NSRect(x: 200, y: 0, width: 120, height: 200))
+        window.contentView?.addSubview(webView)
+        webView.addSubview(contentDescendant)
+        window.contentView?.addSubview(sibling)
+
+        func requestsFocus(_ type: NSEvent.EventType, button: Int = 0,
+                           hit: NSView?, eventWindow: NSWindow? = nil) -> Bool {
+            FocusAwareWKWebView.shouldRequestUserFocus(
+                eventType: type, buttonNumber: button,
+                eventWindow: eventWindow ?? window, webViewWindow: window,
+                hitView: hit, webView: webView
+            )
+        }
+
+        let hit = window.contentView?.hitTest(NSPoint(x: 50, y: 50))
+        XCTAssertTrue(hit === contentDescendant)
+        XCTAssertTrue(requestsFocus(.leftMouseDown, hit: hit))
+        XCTAssertTrue(requestsFocus(.rightMouseDown, button: 1, hit: hit))
+        XCTAssertTrue(requestsFocus(.otherMouseDown, button: 2, hit: hit))
+        XCTAssertTrue(requestsFocus(.leftMouseDown, hit: webView))
+        XCTAssertFalse(requestsFocus(.otherMouseDown, button: 3, hit: hit))
+        XCTAssertFalse(requestsFocus(.otherMouseDown, button: 4, hit: hit))
+        XCTAssertFalse(requestsFocus(.mouseMoved, hit: hit))
+        XCTAssertFalse(requestsFocus(.leftMouseUp, hit: hit))
+        XCTAssertFalse(requestsFocus(.leftMouseDown, hit: sibling))
+        XCTAssertFalse(requestsFocus(.leftMouseDown, hit: nil))
+        XCTAssertFalse(requestsFocus(.leftMouseDown, hit: hit, eventWindow: otherWindow))
+    }
+
+    func testBrowserResponderRestorationDoesNotRequestUserNavigation() throws {
+        let panelID = UUID()
+        var userFocusRequests: [UUID] = []
+        var responderFocusRequests: [UUID] = []
+        let runtime = BrowserPanelRuntime(
+            panelID: panelID,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { userFocusRequests.append($0) },
+            responderDidRequestFocus: { responderFocusRequests.append($0) }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        runtime.attachHost(to: container, attachment: .next())
+        let webView = try XCTUnwrap(container.subviews.first as? FocusAwareWKWebView)
+
+        _ = webView.becomeFirstResponder()
+        _ = webView.becomeFirstResponder()
+
+        XCTAssertTrue(userFocusRequests.isEmpty)
+        XCTAssertEqual(responderFocusRequests, [panelID, panelID])
+
+        // Input remains wired separately after repeated responder restoration.
+        webView.interactionDidRequestFocus?()
+        XCTAssertEqual(userFocusRequests, [panelID])
+        XCTAssertEqual(responderFocusRequests, [panelID, panelID])
+    }
+
     func testBrowserRuntimeOptsIntoHistoryContextMenuItems() throws {
         let runtime = BrowserPanelRuntime(
             panelID: UUID(),

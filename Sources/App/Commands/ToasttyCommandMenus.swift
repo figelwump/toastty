@@ -548,6 +548,18 @@ struct ToasttyCommandMenus: Commands {
         }
 
         CommandMenu("Workspace") {
+            Button(ToasttyBuiltInCommand.navigateBack.title) {
+                _ = store.navigateBack()
+            }
+            .disabled(store.canNavigateBack == false)
+
+            Button(ToasttyBuiltInCommand.navigateForward.title) {
+                _ = store.navigateForward()
+            }
+            .disabled(store.canNavigateForward == false)
+
+            Divider()
+
             Button(ToasttyBuiltInCommand.newWorkspace.title) {
                 store.createWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
@@ -808,7 +820,7 @@ struct ToasttyCommandMenus: Commands {
 
     private func toggleRightPanelFromCommandSelection() {
         guard let workspaceID = commandWorkspace?.id else { return }
-        _ = store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+        _ = store.sendNavigation(.toggleRightAuxPanel(workspaceID: workspaceID))
     }
 
     private func toggleFocusedTerminalAgentReadsFromCommandSelection() {

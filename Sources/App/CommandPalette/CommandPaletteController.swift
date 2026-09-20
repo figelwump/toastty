@@ -42,6 +42,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
     private var originWindowWillCloseObserver: ObserverTokenBox?
     private var catalogRefreshCancellables: [AnyCancellable] = []
     private var isDismissing = false
+    private var submittedCommandOwnsFocus = false
 
     private(set) var isPresented = false
 
@@ -165,6 +166,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             )
         }
 
+        submittedCommandOwnsFocus = false
         isDismissing = false
     }
 
@@ -177,6 +179,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
     }
 
     private func show(originWindowID: UUID, originWindow: NSWindow, initialQuery: String?) {
+        submittedCommandOwnsFocus = false
         self.originWindowID = originWindowID
         self.originWindow = originWindow
         previousFirstResponder = originWindow.firstResponder
@@ -189,7 +192,12 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
                 self?.projectCommands(originWindowID: originWindowID) ?? []
             },
             executeCommand: { [weak self] invocation, commandOriginWindowID in
-                self?.actions.execute(invocation, originWindowID: commandOriginWindowID) ?? false
+                guard let self else { return false }
+                let didExecute = self.actions.execute(invocation, originWindowID: commandOriginWindowID)
+                self.submittedCommandOwnsFocus = self.isPresented && Self.submissionKeepsCommandFocus(
+                    invocation, didExecute: didExecute
+                )
+                return didExecute
             },
             resolveFileSearchScope: { [weak self] commandOriginWindowID in
                 self?.actions.fileSearchScope(originWindowID: commandOriginWindowID)
@@ -226,9 +234,23 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    static func submissionKeepsCommandFocus(_ invocation: PaletteCommandInvocation, didExecute: Bool) -> Bool {
+        guard didExecute else { return false }
+        switch invocation {
+        case .builtIn(.navigateBack), .builtIn(.navigateForward):
+            return true
+        default:
+            return false
+        }
+    }
+
     private func shouldRestoreFocus(for reason: DismissReason) -> Bool {
         switch reason {
-        case .cancelled, .submitted, .toggled:
+        case .submitted:
+            // History navigation has already restored its destination, which may
+            // belong to a different window or panel in the same workspace.
+            return submittedCommandOwnsFocus == false
+        case .cancelled, .toggled:
             return true
         case .clickAway, .originWindowClosed, .appDeactivated:
             return false

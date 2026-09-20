@@ -45,6 +45,23 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Ctrl+Down Arrow` | Resize split down |
 | `Cmd+Ctrl+=` | Equalize splits |
 
+## Back and forward
+
+Use the titlebar chevrons, the Workspace menu's `Go Back` / `Go Forward` commands,
+or the same commands in the command palette to return to previously visited
+panels. Mouse back/forward side buttons invoke these commands over terminals,
+browsers, documents, and Scratchpads. They belong to Toastty navigation, including
+at history endpoints; they are not forwarded to terminal applications or web pages.
+
+History spans windows, workspaces, tabs, and panels for the current app session.
+Back restores the destination panel's keyboard focus; Forward retraces visits.
+Choosing a different location after Back clears the forward path. Closed panels
+are skipped, and moved panels are found in their current location. Up to 100 visits
+are retained; scroll positions, browser URLs, and layouts are not restored.
+
+There is no new default keyboard shortcut. `Cmd+[` and `Cmd+]` still select panes.
+Browser page history remains available through the browser's own controls.
+
 ## Tab and workspace selection
 
 | Shortcut | Action |

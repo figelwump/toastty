@@ -57,7 +57,7 @@ final class TerminalStoreActionCoordinator {
             workspaceID: workspaceID,
             state: store.state
         )
-        return store.send(action)
+        return store.sendNavigation(action)
     }
 
     private func handleAppliedStoreAction(
