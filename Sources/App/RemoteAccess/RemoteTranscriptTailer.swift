@@ -13,7 +13,9 @@ import RemoteProtocol
 @MainActor
 final class RemoteTranscriptTailer {
     enum Event: Sendable {
-        case observations([ProviderTranscriptObservation])
+        /// `linkedFileReferences` are extracted here, off the main actor,
+        /// because deriving them parses every assistant message as Markdown.
+        case observations([ProviderTranscriptObservation], linkedFileReferences: [String])
         case fileReplaced
     }
 
@@ -47,7 +49,13 @@ final class RemoteTranscriptTailer {
         let conversationID = conversationID
         let fileURL = fileURL
         let pollInterval = pollIntervalNanoseconds
-        let onEvent = onEvent
+        // A batch already queued for the main actor when the owner stops this
+        // tailer must not reach a projection that has moved on: it would
+        // restore events, and file-link grants, from the abandoned transcript.
+        let onEvent: @MainActor (RemoteConversationID, Event) -> Void = { [weak self, onEvent] id, event in
+            guard let self, self.task != nil else { return }
+            onEvent(id, event)
+        }
         let makeParser = makeParser
         let provider = provider
 
@@ -102,7 +110,7 @@ final class RemoteTranscriptTailer {
                             guard let line = String(data: lineData, encoding: .utf8) else { continue }
                             observations.append(contentsOf: parser.parseLine(line))
                             if observations.count >= observationBatchSize {
-                                await onEvent(conversationID, .observations(observations))
+                                await onEvent(conversationID, Self.observationsEvent(observations))
                                 observations.removeAll(keepingCapacity: true)
                             }
                         }
@@ -110,7 +118,7 @@ final class RemoteTranscriptTailer {
                             remainder.removeSubrange(remainder.startIndex..<consumedThrough)
                         }
                         if observations.isEmpty == false {
-                            await onEvent(conversationID, .observations(observations))
+                            await onEvent(conversationID, Self.observationsEvent(observations))
                         }
 
                         if remainder.count > maximumBufferedLineBytes {
@@ -136,7 +144,7 @@ final class RemoteTranscriptTailer {
                         remainder.removeAll(keepingCapacity: true)
                         let observations = parser.parseLine(line)
                         if observations.isEmpty == false {
-                            await onEvent(conversationID, .observations(observations))
+                            await onEvent(conversationID, Self.observationsEvent(observations))
                         }
                     }
                 }
@@ -144,6 +152,15 @@ final class RemoteTranscriptTailer {
                 try? await Task.sleep(nanoseconds: pollInterval)
             }
         }
+    }
+
+    nonisolated private static func observationsEvent(
+        _ observations: [ProviderTranscriptObservation]
+    ) -> Event {
+        .observations(
+            observations,
+            linkedFileReferences: RemoteConversationProjectionStore.linkedFileReferences(
+                in: observations))
     }
 
     func stop() {

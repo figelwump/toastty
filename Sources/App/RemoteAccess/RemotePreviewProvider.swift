@@ -6,9 +6,12 @@ import RemoteProtocol
 /// IO so a closed/moved panel or changed conversation cannot keep a stale grant.
 struct RemotePreviewContext: Equatable, Sendable {
     enum Source: Equatable, Sendable {
+        /// `isTranscriptLinked` is the Mac's own finding that this reference is
+        /// a link destination in the conversation's assistant output. It is
+        /// part of the context so the post-IO equality check covers the grant.
         case file(
             reference: String, recordedCWD: String?, openPaths: [String],
-            format: LocalDocumentFormat?)
+            format: LocalDocumentFormat?, isTranscriptLinked: Bool)
         case scratchpad(documentID: UUID, revision: Int, storeDirectory: URL)
         case web(URL)
     }
@@ -20,23 +23,46 @@ enum RemotePreviewProvider {
     static func response(operation: RemoteGatewayPreviewOperation, context: RemotePreviewContext)
         throws -> RemoteGatewayHTTPResponse
     {
+        var grant: RemotePreviewFileReader.FileGrant?
+        do {
+            return try response(operation: operation, context: context, grant: &grant)
+        } catch {
+            if (error is CancellationError) == false {
+                logFailure(
+                    error, stage: .read, request: operation.request, context: context, grant: grant)
+            }
+            throw error
+        }
+    }
+
+    private static func response(
+        operation: RemoteGatewayPreviewOperation, context: RemotePreviewContext,
+        grant: inout RemotePreviewFileReader.FileGrant?
+    ) throws -> RemoteGatewayHTTPResponse {
         let encoder = JSONEncoder()
         switch operation.request {
         case .preview:
-            let content = try preview(context)
+            let content = try preview(context, grant: &grant)
             return .json(
                 status: 200, reason: "OK",
                 body: try encoder.encode(RemotePreviewResponse(content: content)))
         case .resource(let request):
-            guard case .file(let reference, let cwd, let openPaths, _) = context.source else {
+            guard case .file(let reference, let cwd, let openPaths, _, let isLinked) = context.source
+            else {
                 throw RemotePreviewError.unsupported
             }
             let parsed = try fileReference(reference)
-            let entry = try RemotePreviewFileReader.resolveFile(
-                reference: parsed.path, recordedCWD: cwd, explicitlyOpenPaths: openPaths)
+            let resolved = try RemotePreviewFileReader.resolveFile(
+                reference: parsed.path, recordedCWD: cwd, explicitlyOpenPaths: openPaths,
+                isTranscriptLinked: isLinked)
+            grant = resolved.grant
+            let entry = resolved.path
             guard ["html", "htm"].contains(URL(fileURLWithPath: entry).pathExtension.lowercased()),
                 request.expectedSourcePath == entry
             else { throw RemotePreviewError.stale }
+            guard try RemotePreviewFileReader.allowsSubresources(of: resolved) else {
+                throw RemotePreviewError.denied
+            }
             // Confirm the entry still exists as a bounded regular HTML file.
             _ = try RemotePreviewFileReader.read(
                 path: entry, maximumBytes: RemotePreviewFileReader.maximumDocumentBytes)
@@ -46,8 +72,8 @@ enum RemotePreviewProvider {
                 path: asset.path, maximumBytes: RemotePreviewFileReader.maximumAssetBytes)
             guard
                 try RemotePreviewFileReader.resolveFile(
-                    reference: parsed.path, recordedCWD: cwd, explicitlyOpenPaths: openPaths)
-                    == entry,
+                    reference: parsed.path, recordedCWD: cwd, explicitlyOpenPaths: openPaths,
+                    isTranscriptLinked: isLinked) == resolved,
                 try RemotePreviewFileReader.resourcePath(
                     relativePath: request.relativePath, entryPath: entry
                 ).path == asset.path
@@ -61,7 +87,9 @@ enum RemotePreviewProvider {
         }
     }
 
-    private static func preview(_ context: RemotePreviewContext) throws -> RemotePreviewContent {
+    private static func preview(
+        _ context: RemotePreviewContext, grant: inout RemotePreviewFileReader.FileGrant?
+    ) throws -> RemotePreviewContent {
         switch context.source {
         case .web(let url):
             guard ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
@@ -91,21 +119,32 @@ enum RemotePreviewProvider {
                 .init(
                     documentID: documentID, title: document.title ?? context.title,
                     html: document.content, revision: document.revision))
-        case .file(let reference, let cwd, let openPaths, let format):
+        case .file(let reference, let cwd, let openPaths, let format, let isLinked):
             let parsed = try fileReference(reference)
-            let path = try RemotePreviewFileReader.resolveFile(
-                reference: parsed.path, recordedCWD: cwd, explicitlyOpenPaths: openPaths)
+            let resolved = try RemotePreviewFileReader.resolveFile(
+                reference: parsed.path, recordedCWD: cwd, explicitlyOpenPaths: openPaths,
+                isTranscriptLinked: isLinked)
+            grant = resolved.grant
+            let path = resolved.path
             let snapshot = try RemotePreviewFileReader.read(
                 path: path, maximumBytes: RemotePreviewFileReader.maximumDocumentBytes)
             guard
                 try RemotePreviewFileReader.resolveFile(
-                    reference: parsed.path, recordedCWD: cwd, explicitlyOpenPaths: openPaths)
-                    == path
+                    reference: parsed.path, recordedCWD: cwd, explicitlyOpenPaths: openPaths,
+                    isTranscriptLinked: isLinked) == resolved
             else {
                 throw RemotePreviewError.stale
             }
             let content = try decodedText(snapshot.data)
             let title = URL(fileURLWithPath: path).lastPathComponent
+            // The desktop classifier opens dotenv files, and the older grants
+            // keep that. A transcript link alone does not extend it: these
+            // files usually hold secrets, wherever the agent pointed.
+            if resolved.grant == .transcriptLink,
+                LocalDocumentClassifier.supportsDotenvFileName(title)
+            {
+                throw RemotePreviewError.unsupported
+            }
             if ["html", "htm"].contains(URL(fileURLWithPath: path).pathExtension.lowercased()) {
                 return .html(
                     .init(
@@ -114,6 +153,7 @@ enum RemotePreviewProvider {
             let classification =
                 LocalDocumentClassifier.classification(forFilePath: path)
                 ?? format.map { LocalDocumentClassifier.classification(format: $0) }
+                ?? plainTextFallback(forFileName: title)
             guard let classification else { throw RemotePreviewError.unsupported }
             let state: String
             if !classification.warnsWhenSyntaxHighlightUnavailable {
@@ -133,6 +173,23 @@ enum RemotePreviewProvider {
                     highlight: state == "enabled", line: parsed.line, revision: snapshot.revision,
                     formatLabel: classification.formatLabel, highlightState: state))
         }
+    }
+
+    /// Remote-only: `LocalDocumentClassifier` also drives the desktop file
+    /// picker and panel formats, which this must not widen. The content has
+    /// already decoded as NUL-free text. Dotfiles and other unknown
+    /// extensions (for example `.env`-style secrets) stay unsupported.
+    static func plainTextFallback(forFileName fileName: String) -> LocalDocumentClassification? {
+        let pathExtension = (fileName as NSString).pathExtension.lowercased()
+        let label: String
+        switch pathExtension {
+        case "patch", "diff": label = "Patch"
+        case "" where !fileName.hasPrefix("."): label = "Plain Text"
+        default: return nil
+        }
+        return .init(
+            format: .code, syntaxLanguage: nil, formatLabel: label,
+            warnsWhenSyntaxHighlightUnavailable: false)
     }
 
     private static func decodedText(_ data: Data) throws -> String {
@@ -182,5 +239,101 @@ enum RemotePreviewProvider {
             throw RemotePreviewError.denied
         }
         return (path, line)
+    }
+
+    // MARK: - Failure logging
+
+    /// Where a request failed. Grant fields are reported only for `read`,
+    /// the one stage that decides a grant.
+    enum FailureStage: String {
+        /// Refused before any work because too many previews were in flight.
+        case admission
+        /// The panel or conversation could not be turned into a source.
+        case context
+        /// Resolving, authorizing, reading, or decoding the content.
+        case read
+        /// The content was read, but the source changed during the read.
+        case recheck
+    }
+
+    static func logFailure(
+        _ error: any Error, stage: FailureStage,
+        request: RemoteGatewayPreviewOperation.Request,
+        context: RemotePreviewContext?, grant: RemotePreviewFileReader.FileGrant? = nil
+    ) {
+        ToasttyLog.warning(
+            "Remote preview failed", category: .automation,
+            metadata: failureLogMetadata(
+                error, stage: stage, request: request, context: context, grant: grant))
+    }
+
+    /// Describes a failure without paths, file names, or content: those can
+    /// carry a login, hostname, or project name across the logging boundary.
+    static func failureLogMetadata(
+        _ error: any Error, stage: FailureStage,
+        request: RemoteGatewayPreviewOperation.Request,
+        context: RemotePreviewContext?, grant: RemotePreviewFileReader.FileGrant?
+    ) -> [String: String] {
+        var metadata: [String: String] = ["stage": stage.rawValue]
+        if let error = error as? RemotePreviewError {
+            metadata["reason"] = error.rawValue
+        } else {
+            // The gateway reports these as `missing`; keep what they were.
+            metadata["reason"] = RemotePreviewError.missing.rawValue
+            metadata["underlying_error"] = String(reflecting: type(of: error))
+        }
+        switch request {
+        case .preview: metadata["request"] = "preview"
+        case .resource: metadata["request"] = "resource"
+        }
+        let requestedReference: String?
+        switch request.target {
+        case .panel:
+            metadata["target"] = "panel"
+            requestedReference = nil
+        case .conversationFile(_, let reference):
+            metadata["target"] = "conversation-file"
+            requestedReference = reference
+        }
+        guard case .file(let contextReference, let cwd, let openPaths, _, let isLinked)? =
+            context?.source
+        else {
+            if let context {
+                metadata["source"] = if case .web = context.source { "web" } else { "scratchpad" }
+            } else if let requestedReference {
+                describe(reference: requestedReference, in: &metadata)
+            }
+            return metadata
+        }
+        describe(reference: requestedReference ?? contextReference, in: &metadata)
+        metadata["source"] = "file"
+        metadata["cwd"] = cwd == nil ? "absent" : "present"
+        metadata["transcript_linked"] = isLinked ? "true" : "false"
+        guard stage == .read else { return metadata }
+        if let grant {
+            metadata["grant"] = grant.rawValue
+        } else {
+            var attempted: [RemotePreviewFileReader.FileGrant] = []
+            if !openPaths.isEmpty { attempted.append(.openPanel) }
+            if cwd != nil { attempted.append(.projectRoot) }
+            if isLinked { attempted.append(.transcriptLink) }
+            metadata["grant"] = "none"
+            metadata["grants_attempted"] =
+                attempted.isEmpty ? "none" : attempted.map(\.rawValue).joined(separator: ",")
+        }
+        return metadata
+    }
+
+    private static func describe(reference: String, in metadata: inout [String: String]) {
+        let path = (try? fileReference(reference).path) ?? reference
+        metadata["reference"] = path.hasPrefix("/") ? "absolute" : "relative"
+        let pathExtension = (path as NSString).pathExtension.lowercased()
+        // Bounded and alphanumeric, so a crafted name cannot smuggle text.
+        metadata["extension"] =
+            pathExtension.isEmpty
+            ? "none"
+            : pathExtension.count <= 16
+                && pathExtension.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
+                ? pathExtension : "other"
     }
 }

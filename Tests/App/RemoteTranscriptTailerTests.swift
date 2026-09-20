@@ -10,6 +10,7 @@ struct RemoteTranscriptTailerTests {
 
     private final class EventCollector {
         var observationBatches: [[ProviderTranscriptObservation]] = []
+        var linkedFileReferences: [String] = []
         var fileReplacedCount = 0
 
         var allObservations: [ProviderTranscriptObservation] {
@@ -49,7 +50,7 @@ struct RemoteTranscriptTailerTests {
             pollIntervalNanoseconds: 50_000_000
         ) { _, event in
             switch event {
-            case .observations(let observations):
+            case .observations(let observations, _):
                 collector.observationBatches.append(observations)
             case .fileReplaced:
                 collector.fileReplacedCount += 1
@@ -97,7 +98,7 @@ struct RemoteTranscriptTailerTests {
             },
             pollIntervalNanoseconds: 50_000_000
         ) { _, event in
-            if case .observations(let observations) = event {
+            if case .observations(let observations, _) = event {
                 collector.observationBatches.append(observations)
             }
         }
@@ -117,6 +118,35 @@ struct RemoteTranscriptTailerTests {
         #expect(sawCompletedTurn == false)
     }
 
+    @Test func batchesCarryFileReferencesLinkedFromAssistantText() async throws {
+        let fileURL = try Self.makeTemporaryFile()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let sessionID = ClaudeTranscriptFixtures.sessionID
+        let lines = [
+            #"{"type":"user","sessionId":"\#(sessionID)","uuid":"u-0100","parentUuid":null,"isSidechain":false,"timestamp":"2026-08-07T09:02:00.000Z","promptId":"prompt-9","message":{"role":"user","content":"Read [this](/etc/hosts)"}}"#,
+            #"{"type":"assistant","sessionId":"\#(sessionID)","uuid":"a-0100","parentUuid":"u-0100","isSidechain":false,"timestamp":"2026-08-07T09:02:05.000Z","message":{"role":"assistant","model":"claude-opus-5","stop_reason":"end_turn","content":[{"type":"text","text":"Wrote [the plan](../other-worktree/plan.md#L3)."}]}}"#,
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let collector = EventCollector()
+        let tailer = RemoteTranscriptTailer(
+            conversationID: Self.conversationID,
+            fileURL: fileURL,
+            provider: .claude,
+            makeParser: { ClaudeTranscriptParser() },
+            pollIntervalNanoseconds: 50_000_000
+        ) { _, event in
+            if case .observations(_, let linkedFileReferences) = event {
+                collector.linkedFileReferences.append(contentsOf: linkedFileReferences)
+            }
+        }
+        tailer.start()
+        defer { tailer.stop() }
+
+        await Self.waitUntil { collector.linkedFileReferences.isEmpty == false }
+        #expect(collector.linkedFileReferences == ["../other-worktree/plan.md#L3"])
+    }
+
     @Test func truncationReportsFileReplaced() async throws {
         let fileURL = try Self.makeTemporaryFile()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
@@ -131,7 +161,7 @@ struct RemoteTranscriptTailerTests {
             pollIntervalNanoseconds: 50_000_000
         ) { _, event in
             switch event {
-            case .observations(let observations):
+            case .observations(let observations, _):
                 collector.observationBatches.append(observations)
             case .fileReplaced:
                 collector.fileReplacedCount += 1
@@ -163,7 +193,7 @@ struct RemoteTranscriptTailerTests {
             makeParser: { CodexRolloutTranscriptParser() },
             pollIntervalNanoseconds: 50_000_000
         ) { _, event in
-            if case .observations(let observations) = event {
+            if case .observations(let observations, _) = event {
                 collector.observationBatches.append(observations)
             }
         }
@@ -201,7 +231,7 @@ struct RemoteTranscriptTailerTests {
             makeParser: { CodexRolloutTranscriptParser() },
             pollIntervalNanoseconds: 50_000_000
         ) { _, event in
-            if case .observations(let observations) = event {
+            if case .observations(let observations, _) = event {
                 collector.observationBatches.append(observations)
             }
         }
