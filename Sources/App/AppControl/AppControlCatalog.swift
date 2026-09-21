@@ -42,6 +42,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceResizeSplitDown = "workspace.resize-split.down"
     case workspaceEqualizeSplits = "workspace.equalize-splits"
     case panelCreateBrowser = "panel.create.browser"
+    case panelBrowserReload = "panel.browser.reload"
     case panelCreateLocalDocument = "panel.create.local-document"
     case panelScratchpadSetContent = "panel.scratchpad.set-content"
     case panelScratchpadPatchContent = "panel.scratchpad.patch-content"
@@ -371,6 +372,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(id: rawValue, kind: .action, summary: "Decrease local-document text scale for a window.", selectors: [.windowID], aliases: aliases)
         case .appMarkdownTextReset:
             return .init(id: rawValue, kind: .action, summary: "Reset local-document text scale for a window.", selectors: [.windowID], aliases: aliases)
+        case .panelBrowserReload:
+            return .init(id: rawValue, kind: .action, summary: "Reload a browser without changing selection or focus. Requires panelID; completion is reported by panel.browser.state.", selectors: [.panelID])
         case .appBrowserZoomIncrease:
             return .init(id: rawValue, kind: .action, summary: "Increase browser zoom for a browser panel.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         case .appBrowserZoomDecrease:

@@ -103,6 +103,7 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
         #expect(ids.contains("workspace.move"))
         #expect(ids.contains("workspace.tab.move"))
         #expect(ids.contains("panel.close"))
+        #expect(ids.contains("panel.browser.reload"))
         #expect(ids.contains("agent.launch"))
         #expect(ids.contains("config.reload") == false)
 
