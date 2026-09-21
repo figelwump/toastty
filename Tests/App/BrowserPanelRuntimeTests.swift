@@ -103,20 +103,31 @@ final class BrowserPanelRuntimeTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertTrue(runtime.goBack())
-        try await waitForNavigation(runtime)
+        try await waitForNavigation(runtime, allowingIdle: true)
         XCTAssertEqual(runtime.automationState().navigationState, .idle)
         XCTAssertNil(runtime.automationState().navigationError)
         XCTAssertTrue(runtime.goForward())
-        try await waitForNavigation(runtime)
+        try await waitForNavigation(runtime, allowingIdle: true)
         XCTAssertEqual(runtime.automationState().navigationState, .idle)
     }
 
-    private func waitForNavigation(_ runtime: BrowserPanelRuntime) async throws {
+    private func waitForNavigation(
+        _ runtime: BrowserPanelRuntime,
+        allowingIdle: Bool = false
+    ) async throws {
+        var observedStates: [BrowserNavigationResult] = []
         for _ in 0..<100 {
-            if runtime.automationState().navigationState != .loading { return }
+            let state = runtime.automationState().navigationState
+            if observedStates.last != state { observedStates.append(state) }
+            // Idle can precede a document load's start callback. Same-document
+            // history retains its original wait for any non-loading state.
+            if state == .finished || state == .failed || (allowingIdle && state == .idle) { return }
             try await Task.sleep(for: .milliseconds(50))
         }
-        XCTFail("Navigation did not complete: \(runtime.automationState())")
+        XCTFail(
+            "Navigation did not reach a terminal result (allowingIdle: \(allowingIdle)); "
+                + "observed \(observedStates); final \(runtime.automationState())"
+        )
     }
 
     private func makeRuntime() -> BrowserPanelRuntime {
