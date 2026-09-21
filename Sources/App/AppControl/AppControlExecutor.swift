@@ -85,7 +85,7 @@ final class AppControlExecutor {
             let store = try requiredStore()
             let windowID = try resolveWindowID(args: args)
             let existingWorkspaceIDs = Set(store.state.window(id: windowID)?.workspaceIDs ?? [])
-            let didMutateState = store.send(
+            let didMutateState = store.sendNavigation(
                 .createWorkspace(
                     windowID: windowID,
                     title: normalizedOptionalText(args.stringValue("title")),
@@ -130,7 +130,7 @@ final class AppControlExecutor {
             let store = try requiredStore()
             guard focusUnreadSessionPanel else {
                 return .init(
-                    didMutateState: store.send(
+                    didMutateState: store.sendNavigation(
                         .selectWorkspace(
                             windowID: selection.windowID,
                             workspaceID: targetWorkspaceID
@@ -215,7 +215,7 @@ final class AppControlExecutor {
 
         case .workspaceTabCreate:
             return .init(
-                didMutateState: try requiredStore().send(.createWorkspaceTab(workspaceID: try resolveWorkspaceID(args: args), seed: nil)),
+                didMutateState: try requiredStore().sendNavigation(.createWorkspaceTab(workspaceID: try resolveWorkspaceID(args: args), seed: nil)),
                 result: nil
             )
 
@@ -223,7 +223,7 @@ final class AppControlExecutor {
             let workspaceID = try resolveWorkspaceID(args: args)
             let tabID = try resolveWorkspaceTabID(args: args, workspaceID: workspaceID, allowSelectedTabFallback: false)
             return .init(
-                didMutateState: try requiredStore().send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID)),
+                didMutateState: try requiredStore().sendNavigation(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID)),
                 result: nil
             )
 
@@ -303,7 +303,7 @@ final class AppControlExecutor {
 
         case .workspaceReopenLastClosedPanel:
             return .init(
-                didMutateState: try requiredStore().send(.reopenLastClosedPanel(workspaceID: try resolveWorkspaceID(args: args))),
+                didMutateState: try requiredStore().sendNavigation(.reopenLastClosedPanel(workspaceID: try resolveWorkspaceID(args: args))),
                 result: nil
             )
 
@@ -387,8 +387,13 @@ final class AppControlExecutor {
             guard let panelID = args.uuid("panelID") else {
                 throw AutomationSocketError.invalidPayload("panelID must be a UUID")
             }
+            let workspaceID = try resolveWorkspaceID(args: args)
+            let store = try requiredStore()
+            guard store.state.workspacesByID[workspaceID]?.panelState(for: panelID) != nil else {
+                throw AutomationSocketError.invalidPayload("panelID does not belong to workspaceID")
+            }
             return .init(
-                didMutateState: try requiredStore().send(.focusPanel(workspaceID: try resolveWorkspaceID(args: args), panelID: panelID)),
+                didMutateState: store.focusPanel(containing: panelID),
                 result: nil
             )
 
@@ -1011,7 +1016,7 @@ private extension AppControlExecutor {
         let workspaceID = try resolveWorkspaceID(args: args)
         let store = try requiredStore()
         return try performSplit(workspaceID: workspaceID) {
-            store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: direction))
+            store.sendNavigation(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: direction))
         }
     }
 
@@ -1019,7 +1024,7 @@ private extension AppControlExecutor {
         let workspaceID = try resolveWorkspaceID(args: args)
         let store = try requiredStore()
         return try performSplit(workspaceID: workspaceID) {
-            store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation))
+            store.sendNavigation(.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation))
         }
     }
 
@@ -1073,7 +1078,7 @@ private extension AppControlExecutor {
 
     func focusSlot(_ direction: SlotFocusDirection, args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
         .init(
-            didMutateState: try requiredStore().send(.focusSlot(workspaceID: try resolveWorkspaceID(args: args), direction: direction)),
+            didMutateState: try requiredStore().sendNavigation(.focusSlot(workspaceID: try resolveWorkspaceID(args: args), direction: direction)),
             result: nil
         )
     }

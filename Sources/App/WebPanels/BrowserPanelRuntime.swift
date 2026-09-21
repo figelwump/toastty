@@ -183,6 +183,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         panelID: UUID,
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
+        responderDidRequestFocus: (@MainActor (UUID) -> Void)? = nil,
         openSecondaryURL: @escaping @MainActor (UUID, URL) -> Bool = { _, _ in false }
     ) {
         self.panelID = panelID
@@ -202,6 +203,9 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         webView.interactionDidRequestFocus = { [panelID] in
             interactionDidRequestFocus(panelID)
         }
+        webView.responderDidRequestFocus = { [panelID] in
+            responderDidRequestFocus?(panelID)
+        }
         webView.navigationDelegate = self
         webView.uiDelegate = self
         observeMetadataChanges()
@@ -220,6 +224,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         let webView = webView
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
+            webView.responderDidRequestFocus = nil
             webView.navigationDelegate = nil
             webView.uiDelegate = nil
             webView.removeFromSuperview()

@@ -855,7 +855,7 @@ struct WorkspaceView: View {
 
         return styledTopBarButton(active: isVisible) {
             guard let workspaceID = selectedWorkspace?.id else { return }
-            _ = store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+            _ = store.sendNavigation(.toggleRightAuxPanel(workspaceID: workspaceID))
         } label: {
             Image(systemName: "sidebar.right")
                 .font(.system(size: 12, weight: .semibold))
@@ -2702,7 +2702,7 @@ struct WorkspaceView: View {
         if renamingTabID != nil {
             cancelTabRename()
         }
-        _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+        _ = store.sendNavigation(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
     }
 
     private func beginWorkspaceTabInteraction(tabID: UUID) {
@@ -3819,7 +3819,7 @@ struct PanelCardView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture {
-            store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+            store.sendNavigation(.focusPanel(workspaceID: workspaceID, panelID: panelID))
         }
         .onHover(perform: updateHoverState)
         .onChange(of: appIsActive) { _, nextValue in
@@ -3861,7 +3861,7 @@ struct PanelCardView: View {
                     runtime: localDocumentRuntime,
                     isActivePanel: isFocused,
                     activatePanel: {
-                        _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                        _ = store.sendNavigation(.focusPanel(workspaceID: workspaceID, panelID: panelID))
                     }
                 )
 
@@ -4116,7 +4116,7 @@ struct PanelCardView: View {
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
                 isActivePanel: isFocused,
                 activatePanel: {
-                    _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                    _ = store.sendNavigation(.focusPanel(workspaceID: workspaceID, panelID: panelID))
                 },
                 annotationSendCandidates: browserScreenshotSendCandidates,
                 annotationSendAvailability: browserAnnotationSendAvailability(for:),
@@ -4152,7 +4152,7 @@ struct PanelCardView: View {
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
                 isActivePanel: isFocused,
                 activatePanel: {
-                    _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                    _ = store.sendNavigation(.focusPanel(workspaceID: workspaceID, panelID: panelID))
                 },
                 annotationSendCandidates: browserScreenshotSendCandidates,
                 annotationSendAvailability: browserAnnotationSendAvailability(for:),
@@ -4244,7 +4244,7 @@ struct PanelCardView: View {
                 canAnnotate: runtime.isAnnotationContentReady,
                 sendCandidates: browserScreenshotSendCandidates,
                 activatePanel: {
-                    _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                    _ = store.sendNavigation(.focusPanel(workspaceID: workspaceID, panelID: panelID))
                 },
                 sendAvailability: browserAnnotationSendAvailability(for:),
                 sendPayloadToAgent: sendBrowserAnnotationPayload(_:to:)
@@ -4359,7 +4359,7 @@ struct PanelCardView: View {
             runtime: webPanelRuntimeRegistry.browserRuntime(for: panelID),
             screenshotInsertCandidates: browserScreenshotSendCandidates,
             activatePanel: {
-                _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                _ = store.sendNavigation(.focusPanel(workspaceID: workspaceID, panelID: panelID))
             },
             insertScreenshotPathForAgent: insertBrowserScreenshotPath(_:to:),
             annotationSendAvailability: browserAnnotationSendAvailability(for:),

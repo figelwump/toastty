@@ -261,7 +261,7 @@ final class SplitLayoutCommandController {
         guard let workspaceID = commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        return store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: direction))
+        return store.sendNavigation(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: direction))
     }
 
     func canFocusSplit(preferredWindowID: UUID?) -> Bool {
@@ -273,7 +273,7 @@ final class SplitLayoutCommandController {
         guard let workspaceID = commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        return store.send(.focusSlot(workspaceID: workspaceID, direction: direction))
+        return store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
     }
 
     func canAdjustSplitLayout(preferredWindowID: UUID?) -> Bool {

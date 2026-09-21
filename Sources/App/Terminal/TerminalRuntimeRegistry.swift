@@ -1047,7 +1047,7 @@ private extension TerminalRuntimeRegistry {
         return storeActionCoordinator?.sendSplitAction(workspaceID: workspaceID, action: action) ?? false
         #else
         guard let store else { return false }
-        return store.send(action)
+        return store.sendNavigation(action)
         #endif
     }
 
@@ -1192,7 +1192,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 }
                 let focusedPanelIDBefore = workspace.focusedPanelID
                 let selectedTabIDBefore = workspace.selectedTabID
-                let didFocus = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                // This delegate is invoked by terminal mouse input, never responder restoration.
+                let didFocus = store.focusPanel(containing: panelID)
                 let updatedWorkspace = store.state.workspacesByID[workspaceID]
                 logActivatePanelDiagnostic(
                     didFocus ? "activate-panel-focused" : "activate-panel-rejected",

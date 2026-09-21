@@ -824,6 +824,7 @@ final class TerminalHostView: NSView {
     }
 
     override func otherMouseDown(with event: NSEvent) {
+        _ = activatePanelIfNeeded?()
         focusHostViewIfNeeded()
         let button = Self.ghosttyMouseButton(for: event.buttonNumber)
         suppressedMouseReleaseButtons.removeValue(forKey: Self.forwardedMousePressKey(for: button))

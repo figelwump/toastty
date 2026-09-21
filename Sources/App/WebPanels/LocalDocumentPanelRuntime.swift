@@ -360,6 +360,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         panelID: UUID,
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
+        responderDidRequestFocus: (@MainActor (UUID) -> Void)? = nil,
         bundle: Bundle = .main,
         entryURL: URL? = nil,
         documentLoader: @escaping DocumentLoader = { await LocalDocumentPanelRuntime.loadDocument(for: $0) },
@@ -438,6 +439,9 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         webView.interactionDidRequestFocus = { [panelID] in
             interactionDidRequestFocus(panelID)
         }
+        webView.responderDidRequestFocus = { [panelID] in
+            responderDidRequestFocus?(panelID)
+        }
         webView.navigationDelegate = self
         webView.configuration.userContentController.add(self, name: Self.scriptMessageHandlerName)
     }
@@ -449,6 +453,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         let webView = webView
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
+            webView.responderDidRequestFocus = nil
             webView.navigationDelegate = nil
             webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.scriptMessageHandlerName)
             webView.removeFromSuperview()

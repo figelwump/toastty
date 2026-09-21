@@ -104,8 +104,8 @@ struct AppWindowView: View {
                 }
             }
 
-            // Sidebar toggle button in the title bar area, right of traffic lights
-            sidebarToggleButton
+            // Shared window controls remain accessible with or without the sidebar.
+            titlebarControls
 
             if let skillsProvisionedNotice {
                 ManagedAgentSkillsProvisionedBanner(
@@ -341,6 +341,54 @@ struct AppWindowView: View {
         hasUnreadBadge ? "Unread notifications" : ""
     }
 
+    private var titlebarControls: some View {
+        HStack(spacing: ToastyTheme.titlebarControlSpacing) {
+            sidebarToggleButton
+            navigationButton(
+                symbol: "chevron.left",
+                label: "Go Back",
+                help: store.navigationBackHelp,
+                enabled: store.canNavigateBack,
+                identifier: "titlebar.navigation.back"
+            ) { _ = store.navigateBack() }
+            navigationButton(
+                symbol: "chevron.right",
+                label: "Go Forward",
+                help: store.navigationForwardHelp,
+                enabled: store.canNavigateForward,
+                identifier: "titlebar.navigation.forward"
+            ) { _ = store.navigateForward() }
+        }
+        .padding(.leading, ToastyTheme.titlebarSidebarToggleLeadingPadding)
+        .padding(.top, ToastyTheme.titlebarSidebarToggleTopPadding)
+    }
+
+    private func navigationButton(
+        symbol: String,
+        label: String,
+        help: String,
+        enabled: Bool,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ToastyTheme.inactiveText.opacity(enabled ? 1 : 0.35))
+                .frame(
+                    width: ToastyTheme.titlebarSidebarToggleButtonSize,
+                    height: ToastyTheme.titlebarSidebarToggleButtonSize
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(enabled == false)
+        .help(help)
+        .accessibilityLabel(label)
+        .accessibilityHint(help)
+        .accessibilityIdentifier(identifier)
+    }
+
     private var sidebarToggleButton: some View {
         Button {
             store.send(.toggleSidebar(windowID: windowID))
@@ -362,8 +410,6 @@ struct AppWindowView: View {
                 Self.sidebarToggleAccessibilityLabel(sidebarVisible: sidebarVisible)
             )
         )
-        .padding(.leading, ToastyTheme.titlebarSidebarToggleLeadingPadding)
-        .padding(.top, ToastyTheme.titlebarSidebarToggleTopPadding)
         .accessibilityLabel(Self.sidebarToggleAccessibilityLabel(sidebarVisible: sidebarVisible))
         .accessibilityValue(Self.sidebarToggleAccessibilityValue(hasUnreadBadge: sidebarToggleHasUnreadBadge))
         .accessibilityIdentifier("titlebar.toggle.sidebar")

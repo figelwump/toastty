@@ -140,11 +140,13 @@ enum ToastyTheme {
     static let titlebarSidebarToggleButtonSize: CGFloat = 22
     static let titlebarSidebarToggleLeadingPadding: CGFloat = 76
     static let titlebarSidebarToggleTopPadding: CGFloat = 5
+    static let titlebarControlSpacing: CGFloat = 4
     static let hiddenSidebarTitleLeadingSpacing: CGFloat = 2
     /// Leading padding for the top bar content when the sidebar is hidden,
-    /// leaving room for the traffic lights and sidebar toggle button.
+    /// leaving room for the traffic lights, sidebar toggle, and history buttons.
     static let topBarLeadingPaddingWithoutSidebar: CGFloat =
-        titlebarSidebarToggleLeadingPadding + titlebarSidebarToggleButtonSize + hiddenSidebarTitleLeadingSpacing
+        titlebarSidebarToggleLeadingPadding + (3 * titlebarSidebarToggleButtonSize) +
+        (2 * titlebarControlSpacing) + hiddenSidebarTitleLeadingSpacing
     static let hiddenSidebarTitleCenterY: CGFloat =
         titlebarSidebarToggleTopPadding + (titlebarSidebarToggleButtonSize / 2)
 

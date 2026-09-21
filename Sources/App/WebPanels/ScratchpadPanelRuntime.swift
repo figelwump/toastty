@@ -83,6 +83,7 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         documentStore: ScratchpadDocumentStore,
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
+        responderDidRequestFocus: (@MainActor (UUID) -> Void)? = nil,
         openExternalLink: @escaping @MainActor (UUID, URL) -> Void = { _, _ in },
         bundle: Bundle = .main,
         entryURL: URL? = nil,
@@ -147,6 +148,9 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         webView.interactionDidRequestFocus = { [panelID] in
             interactionDidRequestFocus(panelID)
         }
+        webView.responderDidRequestFocus = { [panelID] in
+            responderDidRequestFocus?(panelID)
+        }
         webView.navigationDelegate = self
         webView.configuration.userContentController.add(self, name: Self.scriptMessageHandlerName)
         // Generated HTML cannot access this handler or forge trusted clicks in the isolated world.
@@ -176,6 +180,7 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         let webView = webView
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
+            webView.responderDidRequestFocus = nil
             webView.navigationDelegate = nil
             webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.scriptMessageHandlerName)
             webView.configuration.userContentController.removeScriptMessageHandler(

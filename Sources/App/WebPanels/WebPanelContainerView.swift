@@ -20,7 +20,10 @@ final class FocusAwareWKWebView: WKWebView {
     )
     private nonisolated static let historyContextMenuAugmentationTimeout: TimeInterval = 2
 
-    var interactionDidRequestFocus: (() -> Void)?
+    var interactionDidRequestFocus: (() -> Void)? {
+        didSet { updateUserFocusEventMonitor() }
+    }
+    var responderDidRequestFocus: (() -> Void)?
     var showsHistoryContextMenuItems = false {
         didSet {
             guard showsHistoryContextMenuItems != oldValue else { return }
@@ -30,7 +33,64 @@ final class FocusAwareWKWebView: WKWebView {
 
     private var isObservingPendingContextMenu = false
     private var historyContextMenuCancellationWorkItem: DispatchWorkItem?
+    nonisolated(unsafe) private var userFocusEventMonitor: HistoryContextMenuEventMonitorToken?
     nonisolated(unsafe) private var historyContextMenuEventMonitor: HistoryContextMenuEventMonitorToken?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateUserFocusEventMonitor()
+    }
+
+    /// WebKit content descendants can receive mouse events without invoking the
+    /// outer WKWebView override. Record the input before AppKit restores focus.
+    private func updateUserFocusEventMonitor() {
+        guard window != nil, interactionDidRequestFocus != nil else {
+            if let userFocusEventMonitor {
+                NSEvent.removeMonitor(userFocusEventMonitor.value)
+                self.userFocusEventMonitor = nil
+            }
+            return
+        }
+        guard userFocusEventMonitor == nil else { return }
+        let token = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            guard let self,
+                  let eventWindow = event.window,
+                  eventWindow === self.window,
+                  let contentView = eventWindow.contentView else { return event }
+            let location = contentView.convert(event.locationInWindow, from: nil)
+            if Self.shouldRequestUserFocus(
+                eventType: event.type,
+                buttonNumber: event.buttonNumber,
+                eventWindow: eventWindow,
+                webViewWindow: self.window,
+                hitView: contentView.hitTest(location),
+                webView: self
+            ) {
+                self.interactionDidRequestFocus?()
+            }
+            return event
+        }
+        if let token {
+            userFocusEventMonitor = HistoryContextMenuEventMonitorToken(value: token)
+        }
+    }
+
+    static func shouldRequestUserFocus(
+        eventType: NSEvent.EventType,
+        buttonNumber: Int,
+        eventWindow: NSWindow?,
+        webViewWindow: NSWindow?,
+        hitView: NSView?,
+        webView: NSView
+    ) -> Bool {
+        guard eventType == .leftMouseDown || eventType == .rightMouseDown || eventType == .otherMouseDown,
+              buttonNumber != 3, buttonNumber != 4,
+              let eventWindow, eventWindow === webViewWindow,
+              let hitView else { return false }
+        return hitView === webView || hitView.isDescendant(of: webView)
+    }
 
     override func mouseDown(with event: NSEvent) {
         interactionDidRequestFocus?()
@@ -43,7 +103,9 @@ final class FocusAwareWKWebView: WKWebView {
     }
 
     override func otherMouseDown(with event: NSEvent) {
-        interactionDidRequestFocus?()
+        if event.buttonNumber != 3 && event.buttonNumber != 4 {
+            interactionDidRequestFocus?()
+        }
         super.otherMouseDown(with: event)
     }
 
@@ -69,7 +131,9 @@ final class FocusAwareWKWebView: WKWebView {
     }
 
     override func becomeFirstResponder() -> Bool {
-        interactionDidRequestFocus?()
+        // AppKit also calls this during layout and history focus restoration.
+        // Only input callbacks above represent a new visit.
+        responderDidRequestFocus?()
         return super.becomeFirstResponder()
     }
 
@@ -87,6 +151,11 @@ final class FocusAwareWKWebView: WKWebView {
             name: NSMenu.didBeginTrackingNotification,
             object: nil
         )
+        if let userFocusEventMonitor {
+            DispatchQueue.main.async {
+                NSEvent.removeMonitor(userFocusEventMonitor.value)
+            }
+        }
         if let historyContextMenuEventMonitor {
             DispatchQueue.main.async {
                 NSEvent.removeMonitor(historyContextMenuEventMonitor.value)
