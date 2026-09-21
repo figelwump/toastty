@@ -104,6 +104,18 @@ Common workflow families:
 
 ## Background Browser Verification
 
+Reload an existing browser by its explicit panel ID without selecting its
+workspace/tab or changing focus:
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run panel.browser.reload --panel "$PANEL_ID"
+```
+
+This starts loading even for an unmounted browser and restarts any in-progress
+navigation. It revalidates cached resources for an already loaded page. A browser
+with no URL (the start page) returns an error. Success means the reload was
+requested; use `panel.browser.state` below to check completion or failure.
+
 Query a browser by its explicit panel ID without selecting its workspace or tab:
 
 ```bash

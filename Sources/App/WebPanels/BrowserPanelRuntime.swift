@@ -402,6 +402,19 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         applyPageZoom(webState.effectiveBrowserPageZoom)
     }
 
+    /// Unlike the toolbar toggle, an explicit reload always starts navigation.
+    @discardableResult
+    func reload(webState: WebPanelState) -> Bool {
+        precondition(webState.definition == .browser)
+        guard let urlString = webState.restorableURL else { return false }
+        lastRequestedURLString = urlString
+        isShowingStartPage = false
+        publishNavigationState()
+        load(urlString: urlString, forceReload: true)
+        applyPageZoom(webState.effectiveBrowserPageZoom)
+        return true
+    }
+
     func setEffectivelyVisible(_ visible: Bool) {
         let shouldHideWebView = !visible
         guard webView.isHidden != shouldHideWebView else {
@@ -594,7 +607,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         ignoreNavigation(webView.loadHTMLString(Self.defaultStartPageHTML, baseURL: nil))
     }
 
-    private func load(urlString: String) {
+    private func load(urlString: String, forceReload: Bool = false) {
         clearAnnotationsForPageChange()
         resetNavigationResult(.loading)
         guard let url = URL(string: urlString) else {
@@ -607,6 +620,14 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             return
         }
         clearFavicon()
+        if forceReload, !webView.isLoading, webView.url == url,
+           let navigation = webView.reloadFromOrigin() {
+            // Preserve WebKit's current request and file read access while
+            // revalidating cached resources, including evidence-page images.
+            // An in-progress first load may not have a committed request to reload.
+            trackNavigation(navigation)
+            return
+        }
         if let fileLoad = Self.fileLoad(for: url) {
             trackNavigation(webView.loadFileURL(
                 fileLoad.fileURL,
@@ -614,7 +635,10 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             ))
             return
         }
-        trackNavigation(webView.load(URLRequest(url: url)))
+        trackNavigation(webView.load(URLRequest(
+            url: url,
+            cachePolicy: forceReload ? .reloadIgnoringLocalCacheData : .useProtocolCachePolicy
+        )))
     }
 
     private func resetNavigationResult(_ result: BrowserNavigationResult) {

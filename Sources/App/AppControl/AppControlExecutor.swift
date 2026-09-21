@@ -517,6 +517,21 @@ final class AppControlExecutor {
         case .appMarkdownTextReset:
             return .init(didMutateState: try requiredStore().send(.resetWindowMarkdownTextScale(windowID: try resolveWindowID(args: args))), result: nil)
 
+        case .panelBrowserReload:
+            guard args.stringValue("panelID") != nil else {
+                throw AutomationSocketError.invalidPayload("panelID is required")
+            }
+            let target = try resolveBrowserTarget(payload: args)
+            guard target.webState.restorableURL != nil else {
+                throw AutomationSocketError.invalidPayload("browser panel has no URL to reload")
+            }
+            let runtime = webPanelRuntimeRegistry.browserRuntime(for: target.panelID)
+            runtime.reload(webState: target.webState)
+            return .init(didMutateState: false, result: [
+                "workspaceID": .string(target.workspaceID.uuidString),
+                "panelID": .string(target.panelID.uuidString),
+            ])
+
         case .appBrowserZoomIncrease:
             return try browserZoomAction(action: .increase, args: args)
         case .appBrowserZoomDecrease:
