@@ -1507,7 +1507,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         let didMutate: Bool
         switch actionID {
         case "workspace.tab.new":
-            didMutate = store.send(.createWorkspaceTab(workspaceID: try workspaceID(), seed: nil))
+            didMutate = store.sendNavigation(.createWorkspaceTab(workspaceID: try workspaceID(), seed: nil))
 
         case "workspace.tab.select":
             let resolvedWorkspaceID = try workspaceID()
@@ -1516,7 +1516,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 workspaceID: resolvedWorkspaceID,
                 allowSelectedTabFallback: false
             )
-            didMutate = store.send(.selectWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
+            didMutate = store.sendNavigation(.selectWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
 
         case "workspace.tab.close":
             let resolvedWorkspaceID = try workspaceID()
@@ -1531,7 +1531,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             )
 
         case "workspace.reopen-last-closed-panel":
-            didMutate = store.send(.reopenLastClosedPanel(workspaceID: try workspaceID()))
+            didMutate = store.sendNavigation(.reopenLastClosedPanel(workspaceID: try workspaceID()))
 
         case "workspace.focus-next-unread-or-active":
             didMutate = store.focusNextUnreadOrActivePanelFromCommand(
@@ -1540,22 +1540,22 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             )
 
         case "workspace.split.horizontal":
-            didMutate = store.send(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .horizontal))
+            didMutate = store.sendNavigation(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .horizontal))
 
         case "workspace.split.vertical":
-            didMutate = store.send(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .vertical))
+            didMutate = store.sendNavigation(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .vertical))
 
         case "workspace.split.right":
-            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .right))
+            didMutate = store.sendNavigation(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .right))
 
         case "workspace.split.down":
-            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .down))
+            didMutate = store.sendNavigation(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .down))
 
         case "workspace.split.left":
-            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .left))
+            didMutate = store.sendNavigation(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .left))
 
         case "workspace.split.up":
-            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .up))
+            didMutate = store.sendNavigation(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .up))
 
         case "workspace.split.right.with-profile":
             let resolvedWorkspaceID = try workspaceID()
@@ -1583,28 +1583,32 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             ).didMutateState
 
         case "workspace.focus-slot.previous":
-            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .previous))
+            didMutate = store.sendNavigation(.focusSlot(workspaceID: try workspaceID(), direction: .previous))
 
         case "workspace.focus-slot.next":
-            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .next))
+            didMutate = store.sendNavigation(.focusSlot(workspaceID: try workspaceID(), direction: .next))
 
         case "workspace.focus-slot.left":
-            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .left))
+            didMutate = store.sendNavigation(.focusSlot(workspaceID: try workspaceID(), direction: .left))
 
         case "workspace.focus-slot.right":
-            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .right))
+            didMutate = store.sendNavigation(.focusSlot(workspaceID: try workspaceID(), direction: .right))
 
         case "workspace.focus-slot.up":
-            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .up))
+            didMutate = store.sendNavigation(.focusSlot(workspaceID: try workspaceID(), direction: .up))
 
         case "workspace.focus-slot.down":
-            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .down))
+            didMutate = store.sendNavigation(.focusSlot(workspaceID: try workspaceID(), direction: .down))
 
         case "workspace.focus-panel":
             guard let panelID = args.uuid("panelID") else {
                 throw AutomationSocketError.invalidPayload("panelID must be a UUID")
             }
-            didMutate = store.send(.focusPanel(workspaceID: try workspaceID(), panelID: panelID))
+            let targetWorkspaceID = try workspaceID()
+            guard store.state.workspacesByID[targetWorkspaceID]?.panelState(for: panelID) != nil else {
+                throw AutomationSocketError.invalidPayload("panelID does not belong to workspaceID")
+            }
+            didMutate = store.focusPanel(containing: panelID)
 
         case "workspace.resize-split.left":
             didMutate = store.send(
@@ -1703,7 +1707,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         case "sidebar.workspaces.new":
             let windowID = try resolveWindowID(args: args)
             let title = args.string("title")
-            didMutate = store.send(.createWorkspace(windowID: windowID, title: title, activate: true))
+            didMutate = store.sendNavigation(.createWorkspace(windowID: windowID, title: title, activate: true))
 
         case "window.sidebar.toggle":
             didMutate = store.send(.toggleSidebar(windowID: try resolveWindowID(args: args)))

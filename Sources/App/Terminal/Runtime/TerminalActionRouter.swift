@@ -49,14 +49,22 @@ final class TerminalActionRouter {
             break
         }
 
-        guard store.send(.focusPanel(workspaceID: resolution.workspaceID, panelID: resolution.panelID)) else {
+        // Focus the command source and apply its navigation as one visit. Search
+        // and background metadata returned above never enter this transaction.
+        return store.performNavigation {
+            handleNavigationAction(action, workspaceID: resolution.workspaceID, panelID: resolution.panelID)
+        }
+    }
+
+    private func handleNavigationAction(_ action: GhosttyRuntimeAction, workspaceID: UUID, panelID: UUID) -> Bool {
+        guard store.focusPanel(containing: panelID) else {
             ToasttyLog.warning(
                 "Ghostty action failed to focus resolved panel",
                 category: .terminal,
                 metadata: [
                     "intent": action.logIntentName,
-                    "workspace_id": resolution.workspaceID.uuidString,
-                    "panel_id": resolution.panelID.uuidString,
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
                 ]
             )
             return false
@@ -66,29 +74,29 @@ final class TerminalActionRouter {
         switch action.intent {
         case .split(let direction):
             handled = registry.splitFocusedSlotInDirection(
-                workspaceID: resolution.workspaceID,
+                workspaceID: workspaceID,
                 direction: direction
             )
 
         case .focus(let direction):
             handled = store.send(
-                .focusSlot(workspaceID: resolution.workspaceID, direction: direction)
+                .focusSlot(workspaceID: workspaceID, direction: direction)
             )
 
         case .resizeSplit(let direction, let amount):
             handled = store.send(
                 .resizeFocusedSlotSplit(
-                    workspaceID: resolution.workspaceID,
+                    workspaceID: workspaceID,
                     direction: direction,
                     amount: amount
                 )
             )
 
         case .equalizeSplits:
-            handled = store.send(.equalizeLayoutSplits(workspaceID: resolution.workspaceID))
+            handled = store.send(.equalizeLayoutSplits(workspaceID: workspaceID))
 
         case .toggleFocusedPanelMode:
-            handled = registry.toggleFocusedPanelMode(workspaceID: resolution.workspaceID)
+            handled = registry.toggleFocusedPanelMode(workspaceID: workspaceID)
 
         case .startSearch, .endSearch, .searchTotal, .searchSelected:
             handled = false
@@ -106,8 +114,8 @@ final class TerminalActionRouter {
                 category: .terminal,
                 metadata: [
                     "intent": action.logIntentName,
-                    "workspace_id": resolution.workspaceID.uuidString,
-                    "panel_id": resolution.panelID.uuidString,
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
                 ]
             )
         } else {
@@ -116,8 +124,8 @@ final class TerminalActionRouter {
                 category: .terminal,
                 metadata: [
                     "intent": action.logIntentName,
-                    "workspace_id": resolution.workspaceID.uuidString,
-                    "panel_id": resolution.panelID.uuidString,
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
                 ]
             )
         }

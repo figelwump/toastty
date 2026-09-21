@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import socket
 import struct
+import subprocess
 import threading
 import time
 import uuid
@@ -79,12 +80,14 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
                 return
         body = (f'<!doctype html><title>Background {path}</title>'
                 f'<h1>Background {path}</h1>').encode()
+        if path == '/reload':
+            body = f'<title>Reload {self.server.count(path)}</title>'.encode()
         if path == '/image.png':
             body = make_png()
         self.send_response(200)
         self.send_header('Content-Type', 'image/png' if path.endswith('.png')
                          else 'text/html; charset=utf-8')
-        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Cache-Control', 'max-age=3600' if path == '/reload' else 'no-store')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         try:
@@ -143,6 +146,24 @@ class Check:
         selected = self.query('workspace.snapshot')
         return {key: selected[key] for key in
                 ('workspaceID', 'selectedTabID', 'focusedPanelID', 'rightPanel')}
+
+    def reload(self, panel):
+        bundle = Path(os.environ['TOASTTY_APP_BUNDLE'])
+        candidates = (bundle / 'Contents/Helpers/toastty', bundle / 'Contents/MacOS/toastty',
+                      bundle.parent / 'toastty')
+        cli = next((path for path in candidates if path.is_file() and os.access(path, os.X_OK)), None)
+        require(cli is not None, 'Validation build has no Toastty CLI')
+        # This disposable app owns no managed caller from the launching session.
+        environment = dict(os.environ)
+        environment.pop('TOASTTY_SESSION_ID', None)
+        result = subprocess.run([str(cli), '--json', '--socket-path', self.socket_path,
+                                 'action', 'run', 'panel.browser.reload', '--panel', panel],
+                                capture_output=True, text=True, timeout=10, env=environment)
+        require(result.returncode == 0, f'Reload CLI failed: {result.stderr} {result.stdout}')
+        response = json.loads(result.stdout)
+        require(response.get('ok'), f'Reload action failed: {response}')
+        require(response['result']['panelID'] == panel, 'Reload targeted a different panel')
+        self.unchanged()
 
     def unchanged(self):
         current = self.selection()
@@ -203,7 +224,7 @@ def main():
     evidence = {'status': 'running', 'checks': [], 'limitations': [
         'Navigation completion does not establish HTTP success, SPA readiness, or visual correctness.',
         'Unqueried panel network inactivity is checked; persisted restoration is covered separately.',
-        'The socket catalog has no browser navigation or screenshot action; superseded callbacks '
+        'The socket catalog has no arbitrary browser navigation or screenshot action; superseded callbacks '
         'and detached screenshot rejection require runtime tests.'
     ]}
     server = None
@@ -242,6 +263,24 @@ def main():
         check.poll(panel, 'finished', image.resolve().as_uri())
         evidence['checks'].append('Local PNG file finished while detached (not a visual assertion)')
 
+        reloaded = check.create_browser(workspace, base + '/reload')
+        check.reload(reloaded)
+        check.poll(reloaded, 'finished', base + '/reload', 'Reload 1')
+        require(server.count('/reload') == 1, 'First reload initiated duplicate requests')
+        check.reload(reloaded)
+        check.poll(reloaded, 'finished', base + '/reload', 'Reload 2')
+        require(server.count('/reload') == 2, 'Reload did not revalidate cached page')
+        evidence['checks'].append('CLI reload loads an unqueried panel once and refreshes a cached HTTP page')
+
+        local = artifacts / 'reload-evidence.html'
+        local.write_text('<title>Before reload</title>')
+        local_panel = check.create_browser(workspace, local.resolve().as_uri())
+        check.poll(local_panel, 'finished', local.resolve().as_uri(), 'Before reload')
+        local.write_text('<title>After reload</title>')
+        check.reload(local_panel)
+        check.poll(local_panel, 'finished', local.resolve().as_uri(), 'After reload')
+        evidence['checks'].append('CLI reload refreshes modified local HTML while detached')
+
         slow = check.create_browser(workspace, base + '/slow')
         deadline = time.monotonic() + TIMEOUT
         while time.monotonic() < deadline:
@@ -252,9 +291,14 @@ def main():
             time.sleep(0.1)
         else:
             raise AssertionError('Slow page never reported an in-progress navigation')
+        check.reload(slow)
+        deadline = time.monotonic() + TIMEOUT
+        while server.count('/slow') < 2 and time.monotonic() < deadline:
+            time.sleep(0.1)
+        require(server.count('/slow') == 2, 'Reload stopped the slow request instead of restarting it')
         server.release_slow.set()
         check.poll(slow, 'finished', base + '/slow', 'Background /slow')
-        evidence['checks'].append('Slow page transitions from loading to finished while detached')
+        evidence['checks'].append('CLI reload during loading restarts navigation and finishes while detached')
 
         for url in (base + '/disconnect', 'http://['):
             panel = check.create_browser(workspace, url)

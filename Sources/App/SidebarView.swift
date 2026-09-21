@@ -645,7 +645,7 @@ struct SidebarView: View {
 
             Button {
                 cancelWorkspaceRename()
-                store.send(.createWorkspace(windowID: windowID, title: nil, activate: true))
+                store.sendNavigation(.createWorkspace(windowID: windowID, title: nil, activate: true))
             } label: {
                 HStack(spacing: 6) {
                     Canvas { context, _ in

@@ -272,13 +272,41 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
         let originalPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
 
-        XCTAssertTrue(store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal)))
+        XCTAssertTrue(registry.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal))
 
         let splitFocusedPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
         XCTAssertNotEqual(splitFocusedPanelID, originalPanelID)
 
         XCTAssertTrue(registry.activatePanelIfNeeded(originalPanelID))
         XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalPanelID)
+        XCTAssertEqual(store.navigationHistory.entries, [originalPanelID, splitFocusedPanelID, originalPanelID])
+
+        XCTAssertTrue(registry.activatePanelIfNeeded(originalPanelID))
+        XCTAssertEqual(store.navigationHistory.entries.count, 3)
+        XCTAssertTrue(store.navigateBack())
+        XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, splitFocusedPanelID)
+        XCTAssertTrue(store.navigateForward())
+        XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalPanelID)
+    }
+
+    func testGhosttyMetadataAfterGoingBackPreservesForwardNavigation() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let originalPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        XCTAssertTrue(store.sendNavigation(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal)))
+        let secondPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        XCTAssertTrue(store.navigateBack())
+
+        XCTAssertTrue(registry.handleGhosttyRuntimeAction(
+            GhosttyRuntimeAction(surfaceHandle: nil, intent: .setTerminalTitle("updated title"))
+        ))
+
+        XCTAssertEqual(store.navigationHistory.entries, [originalPanelID, secondPanelID])
+        XCTAssertEqual(store.navigationHistory.cursor, 0)
+        XCTAssertTrue(store.navigateForward())
+        XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, secondPanelID)
     }
 
     func testOpenCommandClickLinkRoutesIntoTerminalPanelOwningWindow() throws {

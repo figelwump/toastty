@@ -865,7 +865,7 @@ final class DisplayShortcutInterceptor {
               let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        return store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+        return store.sendNavigation(.toggleRightAuxPanel(workspaceID: workspaceID))
     }
 
     private func textSizeShortcutAction(
@@ -1043,7 +1043,7 @@ final class DisplayShortcutInterceptor {
         guard window.workspaceIDs.indices.contains(index) else { return false }
         let workspaceID = window.workspaceIDs[index]
         guard store.state.workspacesByID[workspaceID] != nil else { return false }
-        return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
+        return store.sendNavigation(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
     }
 
     private func selectWorkspaceTab(shortcutNumber: Int) -> Bool {
@@ -1089,7 +1089,7 @@ final class DisplayShortcutInterceptor {
             return false
         }
         let nextIndex = (currentIndex + direction + workspaceIDs.count) % workspaceIDs.count
-        return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceIDs[nextIndex]))
+        return store.sendNavigation(.selectWorkspace(windowID: window.id, workspaceID: workspaceIDs[nextIndex]))
     }
 
     private func focusTerminalPanel(shortcutNumber: Int) -> Bool {
@@ -1101,7 +1101,7 @@ final class DisplayShortcutInterceptor {
         guard let panelID = workspace.terminalPanelID(forDisplayShortcutNumber: shortcutNumber) else {
             return false
         }
-        return store.send(.focusPanel(workspaceID: workspace.id, panelID: panelID))
+        return store.sendNavigation(.focusPanel(workspaceID: workspace.id, panelID: panelID))
     }
 
     private func focusSplit(direction: SlotFocusDirection, preferredWindowID: UUID?) -> Bool {
@@ -1110,7 +1110,7 @@ final class DisplayShortcutInterceptor {
         guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        _ = store.send(.focusSlot(workspaceID: workspaceID, direction: direction))
+        _ = store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
         // Toastty-owned pane-focus shortcuts should not fall through to
         // embedded views once the current workspace window resolves, even if
         // there is no adjacent split target in that direction.

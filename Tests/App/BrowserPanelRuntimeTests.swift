@@ -6,6 +6,65 @@ import XCTest
 
 @MainActor
 final class BrowserPanelRuntimeTests: XCTestCase {
+    func testExplicitReloadRefreshesLocalFileAndLinkedResourceWhileDetached() async throws {
+        let runtime = makeRuntime()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("index.html")
+        let script = directory.appendingPathComponent("title.js")
+        try "<title>Initial</title><script src='title.js'></script>".write(to: file, atomically: true, encoding: .utf8)
+        try "document.title = 'Before';".write(to: script, atomically: true, encoding: .utf8)
+        let state = WebPanelState(definition: .browser, initialURL: file.absoluteString)
+        XCTAssertTrue(runtime.reload(webState: state))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().title, "Before")
+        try "document.title = 'After';".write(to: script, atomically: true, encoding: .utf8)
+        XCTAssertTrue(runtime.reload(webState: state))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().navigationState, .finished)
+        XCTAssertEqual(runtime.automationState().title, "After")
+        XCTAssertEqual(runtime.automationState().lifecycleState, .detached)
+    }
+
+    func testExplicitReloadDuringNavigationRestartsInsteadOfStopping() async throws {
+        let runtime = makeRuntime()
+        let state = WebPanelState(definition: .browser, initialURL: "data:text/html,<title>Reloaded</title>")
+        runtime.apply(webState: state)
+        XCTAssertTrue(runtime.automationState().isLoading)
+        XCTAssertTrue(runtime.reload(webState: state))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().navigationState, .finished)
+        XCTAssertEqual(runtime.automationState().title, "Reloaded")
+        XCTAssertNil(runtime.automationState().navigationError)
+    }
+
+    func testExplicitReloadRejectsStartPageAndRetriesFailedDestination() async throws {
+        let runtime = makeRuntime()
+        XCTAssertFalse(runtime.reload(webState: WebPanelState(definition: .browser)))
+        let state = WebPanelState(definition: .browser, currentURL: "http://[invalid")
+        runtime.apply(webState: state)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(runtime.reload(webState: state))
+        XCTAssertEqual(runtime.automationState().navigationState, .failed)
+        XCTAssertEqual(runtime.automationState().navigationError?.code, NSURLErrorBadURL)
+    }
+
+    func testExplicitReloadKeepsNewDestinationDuringProvisionalNavigation() async throws {
+        let runtime = makeRuntime()
+        runtime.apply(webState: WebPanelState(definition: .browser, initialURL: "data:text/html,<title>Old</title>"))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().title, "Old")
+        let destination = WebPanelState(definition: .browser, initialURL: "data:text/html,<title>New</title>")
+        runtime.apply(webState: destination)
+        XCTAssertTrue(runtime.automationState().isLoading)
+        XCTAssertTrue(runtime.reload(webState: destination))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().navigationState, .finished)
+        XCTAssertEqual(runtime.automationState().title, "New")
+        XCTAssertEqual(runtime.automationState().observedURL, destination.restorableURL.flatMap { URL(string: $0)?.absoluteString })
+    }
+
     func testPendingURLIsNotReportedAsObservedURLAndRepeatedApplyPreservesFailure() {
         let runtime = makeRuntime()
         let state = WebPanelState(definition: .browser, currentURL: "http://[invalid")
@@ -103,20 +162,31 @@ final class BrowserPanelRuntimeTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertTrue(runtime.goBack())
-        try await waitForNavigation(runtime)
+        try await waitForNavigation(runtime, allowingIdle: true)
         XCTAssertEqual(runtime.automationState().navigationState, .idle)
         XCTAssertNil(runtime.automationState().navigationError)
         XCTAssertTrue(runtime.goForward())
-        try await waitForNavigation(runtime)
+        try await waitForNavigation(runtime, allowingIdle: true)
         XCTAssertEqual(runtime.automationState().navigationState, .idle)
     }
 
-    private func waitForNavigation(_ runtime: BrowserPanelRuntime) async throws {
+    private func waitForNavigation(
+        _ runtime: BrowserPanelRuntime,
+        allowingIdle: Bool = false
+    ) async throws {
+        var observedStates: [BrowserNavigationResult] = []
         for _ in 0..<100 {
-            if runtime.automationState().navigationState != .loading { return }
+            let state = runtime.automationState().navigationState
+            if observedStates.last != state { observedStates.append(state) }
+            // Idle can precede a document load's start callback. Same-document
+            // history retains its original wait for any non-loading state.
+            if state == .finished || state == .failed || (allowingIdle && state == .idle) { return }
             try await Task.sleep(for: .milliseconds(50))
         }
-        XCTFail("Navigation did not complete: \(runtime.automationState())")
+        XCTFail(
+            "Navigation did not reach a terminal result (allowingIdle: \(allowingIdle)); "
+                + "observed \(observedStates); final \(runtime.automationState())"
+        )
     }
 
     private func makeRuntime() -> BrowserPanelRuntime {

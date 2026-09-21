@@ -4,6 +4,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     // This is intentionally limited to the small set of built-ins currently
     // shared between the command palette and menu surfaces. Do not treat it as
     // a universal registry for every app command without revisiting that scope.
+    case navigateBack
+    case navigateForward
     case splitRight
     case splitLeft
     case splitDown
@@ -65,6 +67,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     // Keep these machine ids stable even if the user-facing titles change.
     var id: String {
         switch self {
+        case .navigateBack:
+            return "navigation.back"
+        case .navigateForward:
+            return "navigation.forward"
         case .splitRight:
             return "layout.split.horizontal"
         case .splitLeft:
@@ -167,6 +173,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     var title: String {
         switch self {
+        case .navigateBack:
+            return "Go Back"
+        case .navigateForward:
+            return "Go Forward"
         case .splitRight:
             return "Split Right"
         case .splitLeft:
@@ -268,6 +278,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     var shortcut: ToasttyKeyboardShortcut? {
         switch self {
+        case .navigateBack, .navigateForward:
+            return nil
         case .splitRight:
             return ToasttyKeyboardShortcuts.splitHorizontal
         case .splitLeft:
@@ -372,6 +384,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     var keywords: [String] {
         switch self {
+        case .navigateBack:
+            return ["back", "previous", "history", "navigation", "return"]
+        case .navigateForward:
+            return ["forward", "history", "navigation"]
         case .splitRight:
             return ["split", "right", "horizontal", "panel"]
         case .splitLeft:

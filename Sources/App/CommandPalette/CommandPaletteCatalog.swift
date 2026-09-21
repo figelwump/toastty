@@ -33,6 +33,8 @@ enum CommandPaletteCatalog {
         actions: CommandPaletteActionHandling
     ) -> [PaletteCommandDescriptor] {
         let staticCommands: [(ToasttyBuiltInCommand, Bool)] = [
+            (.navigateBack, actions.canNavigateBack()),
+            (.navigateForward, actions.canNavigateForward()),
             (.splitRight, actions.canSplit(direction: .right, originWindowID: originWindowID)),
             (.splitLeft, actions.canSplit(direction: .left, originWindowID: originWindowID)),
             (.splitDown, actions.canSplit(direction: .down, originWindowID: originWindowID)),

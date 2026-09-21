@@ -408,6 +408,13 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `terminal.send-text`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
 
+Explicit foreground navigation through workspace/tab selection and
+`workspace.focus-panel` participates in Toastty's session navigation history.
+Focusing a panel selects its containing workspace/tab and restores its window.
+A new visit after Back clears Forward. Background creation, metadata updates,
+and read-only queries do not create visits; use panel-targeted queries when
+inspecting another terminal without changing the user's location.
+
 Descriptors can also advertise compatibility aliases. Those aliases are accepted by the socket executor, but canonical IDs are preferred for new integrations.
 
 Successful `workspace.split.*` actions return the target `workspaceID` and the

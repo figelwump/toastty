@@ -8,6 +8,11 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var workspaceSwitchOptionsValue: [PaletteWorkspaceSwitchOption] = []
     var fileSearchScopeValue: PaletteFileSearchScope?
 
+    var canNavigateBackValue = true
+    var canNavigateForwardValue = true
+    func canNavigateBack() -> Bool { canNavigateBackValue }
+    func canNavigateForward() -> Bool { canNavigateForwardValue }
+
     var canCreateWindowValue = true
     var canCreateWorkspaceValue = true
     var canCreateWorkspaceTabValue = true
@@ -544,6 +549,10 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         switch invocation {
         case .builtIn(let command):
             switch command {
+            case .navigateBack:
+                return canNavigateBackValue
+            case .navigateForward:
+                return canNavigateForwardValue
             case .splitRight:
                 return split(direction: .right, originWindowID: originWindowID)
             case .splitLeft:

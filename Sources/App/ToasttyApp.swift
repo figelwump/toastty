@@ -691,6 +691,7 @@ struct ToasttyApp: App {
     private let processWatchCommandController: ProcessWatchCommandController
     private let commandPaletteController: CommandPaletteController
     private let displayShortcutInterceptor: DisplayShortcutInterceptor
+    private let navigationMouseInterceptor: NavigationMouseInterceptor
 
     private var profileShortcutRegistry: ProfileShortcutRegistry {
         Self.makeProfileShortcutRegistry(
@@ -1150,6 +1151,12 @@ struct ToasttyApp: App {
             )
         }
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
+        navigationMouseInterceptor = NavigationMouseInterceptor(
+            store: store,
+            isBlockingOverlayPresented: { [weak commandPaletteController] in
+                commandPaletteController?.isPresented ?? false
+            }
+        )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,

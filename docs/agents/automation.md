@@ -56,7 +56,9 @@ runtime cleanup.
 
 The check covers detached loading, redirects, failures, invalid URLs, local PNG
 navigation, repeated polling without reload, and loading only after a state
-query. It writes `browser-background-status.json` and
+query. It also invokes `panel.browser.reload` through the built CLI, covering a
+previously unloaded panel, cached HTTP content, modified local HTML, and restart
+during loading without changing selection or focus. It writes `browser-background-status.json` and
 `background-browser-fixture.png` under the run's artifacts directory. These are
 semantic navigation evidence and an input fixture, not screenshots or proof of
 visual correctness, HTTP success, SPA readiness, or video playback. Persisted

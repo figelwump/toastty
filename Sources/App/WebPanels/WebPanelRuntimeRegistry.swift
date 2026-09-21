@@ -61,6 +61,9 @@ final class WebPanelRuntimeRegistry: ObservableObject {
                 guard let self else { return }
                 _ = self.store?.focusPanel(containing: panelID)
             },
+            responderDidRequestFocus: { [weak self] panelID in
+                _ = self?.store?.focusPanel(containing: panelID, intent: .restoration)
+            },
             openSecondaryURL: { [weak self] panelID, url in
                 guard let self,
                       let store = self.store else {
@@ -99,6 +102,9 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             interactionDidRequestFocus: { [weak self] panelID in
                 guard let self else { return }
                 _ = self.store?.focusPanel(containing: panelID)
+            },
+            responderDidRequestFocus: { [weak self] panelID in
+                _ = self?.store?.focusPanel(containing: panelID, intent: .restoration)
             }
         )
         localDocumentRuntimeByPanelID[panelID] = runtime
@@ -151,6 +157,9 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             interactionDidRequestFocus: { [weak self] panelID in
                 guard let self else { return }
                 _ = self.store?.focusPanel(containing: panelID)
+            },
+            responderDidRequestFocus: { [weak self] panelID in
+                _ = self?.store?.focusPanel(containing: panelID, intent: .restoration)
             },
             openExternalLink: { [weak self] panelID, url in
                 guard let store = self?.store else { return }

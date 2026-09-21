@@ -183,6 +183,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         panelID: UUID,
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
+        responderDidRequestFocus: (@MainActor (UUID) -> Void)? = nil,
         openSecondaryURL: @escaping @MainActor (UUID, URL) -> Bool = { _, _ in false }
     ) {
         self.panelID = panelID
@@ -202,6 +203,9 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         webView.interactionDidRequestFocus = { [panelID] in
             interactionDidRequestFocus(panelID)
         }
+        webView.responderDidRequestFocus = { [panelID] in
+            responderDidRequestFocus?(panelID)
+        }
         webView.navigationDelegate = self
         webView.uiDelegate = self
         observeMetadataChanges()
@@ -220,6 +224,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         let webView = webView
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
+            webView.responderDidRequestFocus = nil
             webView.navigationDelegate = nil
             webView.uiDelegate = nil
             webView.removeFromSuperview()
@@ -395,6 +400,19 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         )
         synchronizeDisplayedContent(with: webState)
         applyPageZoom(webState.effectiveBrowserPageZoom)
+    }
+
+    /// Unlike the toolbar toggle, an explicit reload always starts navigation.
+    @discardableResult
+    func reload(webState: WebPanelState) -> Bool {
+        precondition(webState.definition == .browser)
+        guard let urlString = webState.restorableURL else { return false }
+        lastRequestedURLString = urlString
+        isShowingStartPage = false
+        publishNavigationState()
+        load(urlString: urlString, forceReload: true)
+        applyPageZoom(webState.effectiveBrowserPageZoom)
+        return true
     }
 
     func setEffectivelyVisible(_ visible: Bool) {
@@ -589,7 +607,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         ignoreNavigation(webView.loadHTMLString(Self.defaultStartPageHTML, baseURL: nil))
     }
 
-    private func load(urlString: String) {
+    private func load(urlString: String, forceReload: Bool = false) {
         clearAnnotationsForPageChange()
         resetNavigationResult(.loading)
         guard let url = URL(string: urlString) else {
@@ -602,6 +620,14 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             return
         }
         clearFavicon()
+        if forceReload, !webView.isLoading, webView.url == url,
+           let navigation = webView.reloadFromOrigin() {
+            // Preserve WebKit's current request and file read access while
+            // revalidating cached resources, including evidence-page images.
+            // An in-progress first load may not have a committed request to reload.
+            trackNavigation(navigation)
+            return
+        }
         if let fileLoad = Self.fileLoad(for: url) {
             trackNavigation(webView.loadFileURL(
                 fileLoad.fileURL,
@@ -609,7 +635,10 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             ))
             return
         }
-        trackNavigation(webView.load(URLRequest(url: url)))
+        trackNavigation(webView.load(URLRequest(
+            url: url,
+            cachePolicy: forceReload ? .reloadIgnoringLocalCacheData : .useProtocolCachePolicy
+        )))
     }
 
     private func resetNavigationResult(_ result: BrowserNavigationResult) {

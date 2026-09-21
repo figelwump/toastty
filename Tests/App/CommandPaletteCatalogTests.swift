@@ -54,12 +54,41 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertTrue(command.keywords.contains("claude"))
     }
 
+    func testHistorySubmissionPreservesDestinationFocusOnlyWhenItSucceeds() {
+        for command in [ToasttyBuiltInCommand.navigateBack, .navigateForward] {
+            XCTAssertTrue(CommandPaletteController.submissionKeepsCommandFocus(.builtIn(command), didExecute: true))
+            XCTAssertFalse(CommandPaletteController.submissionKeepsCommandFocus(.builtIn(command), didExecute: false))
+        }
+        XCTAssertFalse(CommandPaletteController.submissionKeepsCommandFocus(.builtIn(.newTab), didExecute: true))
+        XCTAssertFalse(CommandPaletteController.submissionKeepsCommandFocus(.workspaceSwitch(workspaceID: UUID()), didExecute: true))
+    }
+
+    func testNavigationCommandsFollowHistoryAvailabilityWithoutKeyboardShortcuts() {
+        let actions = CommandPaletteActionSpy()
+        actions.canNavigateBackValue = false
+        actions.canNavigateForwardValue = true
+        let commands = makeCommands(actions: actions)
+        XCTAssertFalse(commands.contains { $0.id == ToasttyBuiltInCommand.navigateBack.id })
+        let forward = commands.first { $0.id == ToasttyBuiltInCommand.navigateForward.id }
+        XCTAssertEqual(forward?.invocation, .builtIn(.navigateForward))
+        XCTAssertNil(forward?.shortcut)
+
+        actions.canNavigateBackValue = true
+        actions.canNavigateForwardValue = false
+        let updatedCommands = makeCommands(actions: actions)
+        XCTAssertTrue(updatedCommands.contains { $0.id == ToasttyBuiltInCommand.navigateBack.id })
+        XCTAssertFalse(updatedCommands.contains { $0.id == ToasttyBuiltInCommand.navigateForward.id })
+        XCTAssertNil(ToasttyBuiltInCommand.navigateBack.shortcut)
+    }
+
     func testStaticCatalogExposesExpectedBuiltInsInStableOrder() {
         let commands = makeCommands()
 
         XCTAssertEqual(
             commands.map(\.id),
             [
+                ToasttyBuiltInCommand.navigateBack.id,
+                ToasttyBuiltInCommand.navigateForward.id,
                 ToasttyBuiltInCommand.splitRight.id,
                 ToasttyBuiltInCommand.splitLeft.id,
                 ToasttyBuiltInCommand.splitDown.id,
