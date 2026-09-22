@@ -188,7 +188,9 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                     availability: availability,
                     status: status
                 ),
-                executionProfile: summary.executionProfile
+                executionProfile: summary.executionProfile,
+                workspaceTabID: summary.placement.workspaceTabID,
+                workspaceTabTitle: summary.placement.workspaceTabTitle
             )
         }
         stateTransitions.retain(mobileConversations.map(\.id))

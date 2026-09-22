@@ -143,7 +143,9 @@ public struct GatewayCompatibilityDecoder: Sendable {
         let placement = RemoteConversationPlacement(
             workspaceID: try placementObject.optionalUUID("workspaceID"),
             workspaceTitle: try placementObject.optionalString("workspaceTitle"),
-            panelID: try placementObject.optionalUUID("panelID")
+            panelID: try placementObject.optionalUUID("panelID"),
+            workspaceTabID: placementObject.lossyString("workspaceTabID").flatMap(UUID.init(uuidString:)),
+            workspaceTabTitle: placementObject.lossyString("workspaceTabTitle")
         )
         let inputAvailability = try decodeInputAvailability(try object.requiredObject("inputAvailability"))
         let pendingInteractionPreview: RemotePendingInteractionPreview?

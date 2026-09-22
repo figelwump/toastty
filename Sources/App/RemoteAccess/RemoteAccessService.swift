@@ -633,6 +633,14 @@ final class RemoteAccessService: ObservableObject {
                 != Self.workspaceInventory(state: nextState, annotationColorTokens: colors) {
                 self.scheduleSessionListBroadcast()
             }
+            // Auxiliary-panel inventory cannot detect a rename on a terminal-only
+            // tab. Compare placement values so moves, resets and focus-derived
+            // title changes publish even when no provider activity occurs.
+            let activePanels = Set(self.sessionRuntimeStore.sessionRegistry.activeSessionIDByPanelID.keys)
+            if Self.conversationPlacements(in: previousState, activePanels: activePanels)
+                != Self.conversationPlacements(in: nextState, activePanels: activePanels) {
+                self.scheduleSessionListBroadcast()
+            }
             switch action {
             case .updateScratchpadPanelState:
                 // A link can change independently of title or document revision.
@@ -1084,6 +1092,9 @@ final class RemoteAccessService: ObservableObject {
             // titles; overlay the registry-derived summary when available.
             if let summary = buildConversationSummaries().first(where: { $0.conversationID == conversationID }) {
                 snapshot.summary = summary
+            } else {
+                snapshot.summary.placement.workspaceTabID = nil
+                snapshot.summary.placement.workspaceTabTitle = nil
             }
             return snapshot
         }
@@ -1245,7 +1256,10 @@ final class RemoteAccessService: ObservableObject {
         var title: String
         var workspaceID: UUID
         var workspaceTitle: String
+        var workspaceTabID: UUID
+        var workspaceTabTitle: String
         var panelID: UUID
+
         var cwd: String?
         var activeSessionID: String?
         var runtimeBindingStartedAt: Date?
@@ -1257,6 +1271,13 @@ final class RemoteAccessService: ObservableObject {
         var transcriptPath: String?
         var providerFeed: ManagedProviderConversationFeedSnapshot?
         var nativeBindingConfirmation: ManagedNativeSessionBindingConfirmation?
+
+        var placement: RemoteConversationPlacement {
+            RemoteConversationPlacement(
+                workspaceID: workspaceID, workspaceTitle: workspaceTitle, panelID: panelID,
+                workspaceTabID: workspaceTabID, workspaceTabTitle: workspaceTabTitle
+            )
+        }
     }
 
     private struct BootstrappedPromptAuthority {
@@ -1290,11 +1311,7 @@ final class RemoteAccessService: ObservableObject {
                     descriptor: RemoteConversationProjectionStore.ConversationDescriptor(
                         provider: candidate.provider,
                         title: candidate.title,
-                        placement: RemoteConversationPlacement(
-                            workspaceID: candidate.workspaceID,
-                            workspaceTitle: candidate.workspaceTitle,
-                            panelID: candidate.panelID
-                        ),
+                        placement: candidate.placement,
                         cwd: candidate.cwd
                     ),
                     bindingID: UUID(),
@@ -1308,11 +1325,7 @@ final class RemoteAccessService: ObservableObject {
                     descriptor: RemoteConversationProjectionStore.ConversationDescriptor(
                         provider: candidate.provider,
                         title: candidate.title,
-                        placement: RemoteConversationPlacement(
-                            workspaceID: candidate.workspaceID,
-                            workspaceTitle: candidate.workspaceTitle,
-                            panelID: candidate.panelID
-                        ),
+                        placement: candidate.placement,
                         cwd: candidate.cwd
                     )
                 )
@@ -1594,6 +1607,27 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
+    private static func conversationPlacements(
+        in state: AppState, activePanels: Set<UUID>
+    ) -> [UUID: RemoteConversationPlacement] {
+        var placements: [UUID: RemoteConversationPlacement] = [:]
+        for workspace in state.workspacesByID.values {
+            for (panelID, panel) in workspace.allPanelsByID {
+                guard case .terminal(let terminal) = panel,
+                      activePanels.contains(panelID) || terminal.remoteConversationID != nil
+                        || terminal.resumeRecord != nil,
+                      let tabID = workspace.tabID(containingPanelID: panelID)
+                        ?? workspace.rightAuxPanelTabLocation(containingPanelID: panelID)?.mainTabID,
+                      let tab = workspace.tab(id: tabID) else { continue }
+                placements[panelID] = RemoteConversationPlacement(
+                    workspaceID: workspace.id, workspaceTitle: workspace.title, panelID: panelID,
+                    workspaceTabID: tab.id, workspaceTabTitle: tab.displayTitle
+                )
+            }
+        }
+        return placements
+    }
+
     private func scanConversationCandidates(mintingIDs: Bool) -> [ConversationCandidate] {
         let registry = sessionRuntimeStore.sessionRegistry
         var candidates: [ConversationCandidate] = []
@@ -1691,6 +1725,8 @@ final class RemoteAccessService: ObservableObject {
                         ?? terminalState.displayPanelLabel,
                     workspaceID: workspace.id,
                     workspaceTitle: workspace.title,
+                    workspaceTabID: workspaceTab.id,
+                    workspaceTabTitle: workspaceTab.displayTitle,
                     panelID: panelID,
                     cwd: activeRecord?.cwd ?? terminalState.resumeRecord?.cwd,
                     activeSessionID: hasLiveAgent ? activeSessionID : nil,
@@ -1762,11 +1798,7 @@ final class RemoteAccessService: ObservableObject {
                     conversationID: candidate.conversationID,
                     provider: candidate.provider,
                     title: candidate.title,
-                    placement: RemoteConversationPlacement(
-                        workspaceID: candidate.workspaceID,
-                        workspaceTitle: candidate.workspaceTitle,
-                        panelID: candidate.panelID
-                    ),
+                    placement: candidate.placement,
                     cwd: candidate.cwd,
                     executionProfile: projector.executionProfile,
                     state: projector.state,
@@ -1785,11 +1817,7 @@ final class RemoteAccessService: ObservableObject {
                 conversationID: candidate.conversationID,
                 provider: candidate.provider,
                 title: candidate.title,
-                placement: RemoteConversationPlacement(
-                    workspaceID: candidate.workspaceID,
-                    workspaceTitle: candidate.workspaceTitle,
-                    panelID: candidate.panelID
-                ),
+                placement: candidate.placement,
                 cwd: candidate.cwd,
                 state: candidate.registryState,
                 presentationStatus: candidate.presentationStatus,

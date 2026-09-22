@@ -6,6 +6,86 @@ import Testing
 
 struct RemoteAccessServiceSafetyTests {
     @MainActor
+    @Test func terminalOnlyTabRenameAndResetPublishPlacementWithoutActivity() async throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        let original = fixture.summary
+        let workspaceID = try #require(original.placement.workspaceID)
+        let tabID = try #require(original.placement.workspaceTabID)
+        #expect(fixture.service.facadeSessionList(at: .now).workspaces.allSatisfy { $0.panels.isEmpty })
+
+        let titles: [String?] = ["iOS navigation 👩🏽‍💻", nil]
+        for title in titles {
+            fixture.server.removeAllBroadcasts()
+            #expect(fixture.store.send(.setWorkspaceTabCustomTitle(
+                workspaceID: workspaceID, tabID: tabID, title: title
+            )))
+            let expected = title ?? original.placement.workspaceTabTitle
+            await SessionRuntimeStoreTestSupport.waitUntil {
+                fixture.server.sessionListSnapshots.last?.conversations.first {
+                    $0.conversationID == fixture.conversationID
+                }?.placement.workspaceTabTitle == expected
+            }
+            let summary = try #require(fixture.server.sessionListSnapshots.last?.conversations.first {
+                $0.conversationID == fixture.conversationID
+            })
+            #expect(summary.placement.workspaceTabID == tabID)
+            #expect(summary.placement.workspaceTabTitle == expected)
+            #expect(summary.title == original.title)
+            #expect(summary.updatedAt == original.updatedAt)
+            #expect(summary.latestSequence == original.latestSequence)
+            #expect(summary.inputAvailability == original.inputAvailability)
+            #expect(summary.presentationStatus == original.presentationStatus)
+            #expect(fixture.service.facadeConversationSnapshot(
+                for: fixture.conversationID, at: .now
+            )?.summary.placement == summary.placement)
+        }
+    }
+
+    @MainActor
+    @Test func closedPanelSnapshotOmitsTabPlacement() throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.summary.placement.workspaceTabID != nil)
+        #expect(fixture.store.send(.closePanel(panelID: fixture.panelID)))
+        let snapshot = try #require(fixture.service.facadeConversationSnapshot(
+            for: fixture.conversationID, at: .now
+        ))
+        #expect(snapshot.summary.placement.workspaceTabID == nil)
+        #expect(snapshot.summary.placement.workspaceTabTitle == nil)
+    }
+
+    @MainActor
+    @Test func movingConversationToAnotherWorkspacePublishesNewTabIdentity() async throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        let selection = try #require(fixture.store.state.selectedWorkspaceSelection())
+        let originalTabID = try #require(fixture.summary.placement.workspaceTabID)
+        #expect(fixture.store.send(.createWorkspace(windowID: selection.windowID, title: "Destination", activate: true)))
+        let workspaceID = try #require(fixture.store.state.selectedWorkspaceSelection()).workspaceID
+        let destination = try #require(fixture.store.state.workspacesByID[workspaceID]?.selectedTab)
+        #expect(destination.id != originalTabID)
+        #expect(fixture.store.send(.setWorkspaceTabCustomTitle(
+            workspaceID: workspaceID, tabID: destination.id, title: "Release prep"
+        )))
+        let slotID = try #require(destination.layoutTree.allSlotInfos.first?.slotID)
+        fixture.server.removeAllBroadcasts()
+        #expect(fixture.store.send(.movePanelToWorkspace(panelID: fixture.panelID, targetWorkspaceID: workspaceID, targetSlotID: slotID)))
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.server.sessionListSnapshots.last?.conversations.first {
+                $0.conversationID == fixture.conversationID
+            }?.placement.workspaceTabID == destination.id
+        }
+        let summary = try #require(fixture.server.sessionListSnapshots.last?.conversations.first {
+            $0.conversationID == fixture.conversationID
+        })
+        #expect(summary.placement.panelID == fixture.panelID)
+        #expect(summary.placement.workspaceID == workspaceID)
+        #expect(summary.placement.workspaceTabID == destination.id)
+        #expect(summary.placement.workspaceTabTitle == "Release prep")
+    }
+
+    @MainActor
     @Test func rootModelSwitchesPublishWithoutTranscriptOrInputChanges() async throws {
         let fixture = try RemoteBootstrapFixture()
         defer { fixture.removeRuntimeFiles() }

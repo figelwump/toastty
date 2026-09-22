@@ -212,12 +212,11 @@ struct ToasttyConversationScreen: View {
     private func composerBar(_ conversation: MobileConversation) -> some View {
         let presentation = composer ?? lockedComposerFallback(conversation)
         return VStack(alignment: .leading, spacing: 8) {
-            if let profile = ToasttySessionExecutionProfilePresentation(
+            ToasttyComposerMetadataView(
                 profile: conversation.executionProfile,
+                tabTitle: conversation.workspaceTabTitle,
                 isLastReported: controller.freshness != .live
-            ) {
-                ToasttySessionExecutionProfileView(presentation: profile)
-            }
+            )
             ToasttyAttachmentPicker(
                 attachments: attachments,
                 supportsAttachments: supportsAttachments,

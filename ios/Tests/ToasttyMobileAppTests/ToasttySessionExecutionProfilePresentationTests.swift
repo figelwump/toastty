@@ -5,6 +5,54 @@ import XCTest
 @testable import ToasttyMobileApp
 
 final class ToasttySessionExecutionProfilePresentationTests: XCTestCase {
+    func testTabPresentationRetainsFullNameAndMarksLastReported() throws {
+        let title = String(repeating: "Release preparation ", count: 20)
+        let live = try XCTUnwrap(ToasttyWorkspaceTabPresentation(title: title, isLastReported: false))
+        XCTAssertEqual(live.text, title)
+        XCTAssertEqual(live.accessibilityLabel, "Mac tab: \(title)")
+        let stale = try XCTUnwrap(ToasttyWorkspaceTabPresentation(title: title, isLastReported: true))
+        XCTAssertEqual(stale.text, title)
+        XCTAssertEqual(stale.accessibilityLabel, "Last reported. Mac tab: \(title)")
+        XCTAssertNil(ToasttyWorkspaceTabPresentation(title: nil, isLastReported: true))
+        XCTAssertNil(ToasttyWorkspaceTabPresentation(title: "", isLastReported: false))
+    }
+
+    @MainActor
+    func testMetadataRowFitsCompactWidthWithLongNamesAndLargestTextInBothDirections() {
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            for hasProfile in [false, true] {
+                let profile = hasProfile ? RemoteSessionExecutionProfile(
+                    modelIdentifier: String(repeating: "model-", count: 33), reasoningEffort: "xhigh"
+                ) : nil
+                let host = UIHostingController(rootView: ToasttyComposerMetadataView(
+                    profile: profile, tabTitle: String(repeating: "Release preparation ", count: 20),
+                    isLastReported: true
+                ).environment(\.dynamicTypeSize, .accessibility5).environment(\.layoutDirection, direction))
+                let size = host.sizeThatFits(in: CGSize(width: 284, height: 2_000))
+                XCTAssertLessThanOrEqual(size.width, 284)
+                XCTAssertGreaterThan(size.height, 0)
+                XCTAssertLessThanOrEqual(size.height, 120)
+            }
+        }
+    }
+
+    @MainActor
+    func testMissingTabPreservesProfileSizeAndMissingBothOmitsRow() {
+        let profile = RemoteSessionExecutionProfile(modelIdentifier: "gpt-6", reasoningEffort: "xhigh")
+        let proposal = CGSize(width: 284, height: 2_000)
+        let original = UIHostingController(rootView: ToasttySessionExecutionProfileView(
+            presentation: ToasttySessionExecutionProfilePresentation(profile: profile, isLastReported: false)!
+        ))
+        let profileOnly = UIHostingController(rootView: ToasttyComposerMetadataView(
+            profile: profile, tabTitle: nil, isLastReported: false
+        ))
+        XCTAssertEqual(original.sizeThatFits(in: proposal), profileOnly.sizeThatFits(in: proposal))
+        let absent = UIHostingController(rootView: ToasttyComposerMetadataView(
+            profile: nil, tabTitle: nil, isLastReported: false
+        ))
+        XCTAssertEqual(absent.sizeThatFits(in: proposal).height, 0)
+    }
+
     @MainActor
     func testMaximumProfileLeavesRoomForComposerAtCompactWidthAndLargestTextSize() throws {
         let profile = RemoteSessionExecutionProfile(
