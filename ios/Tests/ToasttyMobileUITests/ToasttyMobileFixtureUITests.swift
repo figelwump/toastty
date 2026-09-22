@@ -1381,6 +1381,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let list = app.scrollViews["toastty-mobile-attachment-list"]
         XCTAssertTrue(list.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertLessThanOrEqual(list.frame.height, 133)
+        let tab = app.staticTexts["toastty-mobile-workspace-tab"]
+        XCTAssertTrue(tab.isHittable, "Tab context must remain visible with attachments and the keyboard")
+        XCTAssertEqual(tab.label, "Mac tab: Release preparation — changelog, signing, and TestFlight verification")
+        XCTAssertLessThanOrEqual(tab.frame.maxY, list.frame.minY)
         let scaledBodyFont = UIFont.preferredFont(
             forTextStyle: .body,
             compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
