@@ -215,7 +215,10 @@ public enum ToasttyMobileFixture {
                 receivedAtMonotonicTime: fixtureReceiptTime
             ),
             lastActivity: last,
-            executionProfile: executionProfile
+            executionProfile: executionProfile,
+            workspaceTabID: [1, 7, 8].contains(number) ? UUID(uuidString: "D1000000-0000-0000-0000-000000000001") : nil,
+            workspaceTabTitle: [1, 7, 8].contains(number)
+                ? "Release preparation — changelog, signing, and TestFlight verification" : nil
         )
     }
 

@@ -1506,6 +1506,12 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         input.typeText("Use build 413")
         XCTAssertTrue(profile.isHittable)
         XCTAssertLessThanOrEqual(profile.frame.maxY, input.frame.minY)
+        let tab = app.staticTexts["toastty-mobile-workspace-tab"]
+        XCTAssertEqual(tab.label, "Mac tab: Release preparation — changelog, signing, and TestFlight verification")
+        XCTAssertTrue(tab.isHittable)
+        XCTAssertGreaterThanOrEqual(tab.frame.minX, profile.frame.maxX)
+        XCTAssertLessThanOrEqual(tab.frame.maxY, input.frame.minY)
+        XCTAssertEqual(input.value as? String, "Use build 413")
         attachScreenshot(named: "execution-profile-keyboard", of: app)
         app.buttons["toastty-mobile-composer-send"].tap()
         let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
@@ -1534,6 +1540,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertLessThanOrEqual(profile.frame.maxY, input.frame.minY)
         XCTAssertTrue(status.exists)
         XCTAssertLessThanOrEqual(input.frame.maxY, status.frame.minY)
+        let tab = app.staticTexts["toastty-mobile-workspace-tab"]
+        XCTAssertTrue(tab.exists)
+        XCTAssertGreaterThan(tab.frame.width, 0)
+        XCTAssertLessThanOrEqual(tab.frame.maxX, app.frame.maxX)
+        XCTAssertLessThanOrEqual(tab.frame.maxY, input.frame.minY)
         attachScreenshot(named: "execution-profile-accessibility-xxxl", of: app)
     }
 
@@ -1545,6 +1556,23 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         session.tap()
         XCTAssertTrue(composerInput(in: app).waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["toastty-mobile-session-execution-profile"].exists)
+        XCTAssertFalse(app.staticTexts["toastty-mobile-workspace-tab"].exists)
+    }
+
+    func testTabWithoutExecutionProfileUsesTrailingComposerRow() {
+        let app = launchFixtureApp()
+        openWorkspace(releaseWorkspaceID, in: app)
+        let session = app.buttons["toastty-mobile-workspace-session-B1000000-0000-0000-0000-000000000008"]
+        XCTAssertTrue(scrollWorkspaceTo(session, in: app))
+        session.tap()
+        let input = composerInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        let tab = app.staticTexts["toastty-mobile-workspace-tab"]
+        XCTAssertTrue(tab.exists)
+        XCTAssertFalse(app.staticTexts["toastty-mobile-session-execution-profile"].exists)
+        XCTAssertGreaterThan(tab.frame.midX, app.frame.midX)
+        XCTAssertLessThanOrEqual(tab.frame.maxY, input.frame.minY)
+        attachScreenshot(named: "tab-only-composer-row", of: app)
     }
 
     func testDisconnectedExecutionProfileIsLastReported() {
@@ -1555,6 +1583,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
         XCTAssertTrue(profile.waitForExistence(timeout: 5))
         XCTAssertTrue(profile.label.hasPrefix("Last reported. Model: "))
+        XCTAssertTrue(app.staticTexts["toastty-mobile-workspace-tab"].label.hasPrefix("Last reported. Mac tab: "))
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
     }
 

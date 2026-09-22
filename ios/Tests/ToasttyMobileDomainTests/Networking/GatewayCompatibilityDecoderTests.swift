@@ -640,6 +640,30 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         }
     }
 
+    func testTabPlacementHandlesOlderHostsMalformedMetadataAndSnapshotRemoval() throws {
+        let tabID = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
+        let cases: [([String: Any], UUID?, String?)] = [
+            ([:], nil, nil),
+            (["workspaceTabID": tabID.uuidString, "workspaceTabTitle": "  Release\nnotes  "], tabID, "Release notes"),
+            (["workspaceTabID": tabID.uuidString, "workspaceTabTitle": "Renamed"], tabID, "Renamed"),
+            (["workspaceTabID": "bad-id", "workspaceTabTitle": 42], nil, nil),
+            (["workspaceTabID": NSNull(), "workspaceTabTitle": " \n "], nil, nil),
+            ([:], nil, nil),
+        ]
+        var transitions = MobileStateTransitionTracker()
+        for (placement, expectedID, expectedTitle) in cases {
+            let data = try sessionSnapshotData(
+                inputAvailability: ["kind": "unavailable", "reason": "working"],
+                preview: NSNull(), placement: placement
+            )
+            let snapshot = try decoder.decodeSessionListResponse(data)
+            let conversation = try XCTUnwrap(snapshot.presentation(stateTransitions: &transitions)
+                .workspaces.first?.conversations.first)
+            XCTAssertEqual(conversation.workspaceTabID, expectedID)
+            XCTAssertEqual(conversation.workspaceTabTitle, expectedTitle)
+        }
+    }
+
     private func fixtureData(named name: String) throws -> Data {
         let url = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: name, withExtension: "json", subdirectory: "v1")
@@ -653,13 +677,14 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         presentationStatus: String? = nil,
         cwd: Any? = nil,
         statusDetail: Any? = nil,
-        executionProfile: Any? = nil
+        executionProfile: Any? = nil,
+        placement: [String: Any] = [:]
     ) throws -> Data {
         var conversation: [String: Any] = [
             "conversationID": "11111111-1111-1111-1111-111111111111",
             "provider": "codex",
             "title": "Needs review",
-            "placement": [:],
+            "placement": placement,
             "state": "awaiting_input",
             "inputAvailability": inputAvailability,
             "pendingInteractionPreview": preview,

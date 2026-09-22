@@ -79,6 +79,18 @@ with optional `modelIdentifier` and `reasoningEffort` strings. Either the host
 or iOS app can be updated first: older hosts omit the object, and older clients
 ignore it. Both updates are needed to display reported values on the phone.
 
+The composer also shows the conversation's Mac tab name on the right of the
+model/reasoning row. The name is read-only, uses one line with tail truncation,
+and is available in full to VoiceOver. It remains right-aligned when no model
+has been reported. Session list UI and conversation titles are unchanged.
+
+Conversation `placement` includes optional `workspaceTabID` and
+`workspaceTabTitle` fields. Older hosts omit them and older clients ignore them.
+The host uses the same state-backed display title as Open panels: custom names
+match the Mac, while live-only terminal title updates may differ. Renaming a tab
+on the Mac updates its remote context even without new agent activity; renaming
+from iOS is not supported.
+
 **Ready** is an unread-completion presentation, shared with Toastty on the Mac.
 When Toastty Mobile has rendered a conversation through the transcript's live
 edge, it acknowledges that boundary to the Mac. The Mac clears the panel's

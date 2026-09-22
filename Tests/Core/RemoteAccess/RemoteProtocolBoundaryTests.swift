@@ -3,6 +3,26 @@ import RemoteProtocol
 import Testing
 
 struct RemoteProtocolBoundaryTests {
+    @Test func conversationPlacementTabFieldsAreAdditive() throws {
+        let legacy = Data(#"{"workspaceTitle":"Workspace"}"#.utf8)
+        let decoder = JSONDecoder()
+        let old = try decoder.decode(RemoteConversationPlacement.self, from: legacy)
+        #expect(old.workspaceTabID == nil)
+        #expect(old.workspaceTabTitle == nil)
+        let tabID = UUID()
+        let placement = RemoteConversationPlacement(
+            workspaceTitle: "Workspace", workspaceTabID: tabID,
+            workspaceTabTitle: "Navigation 👩🏽‍💻"
+        )
+        let encoded = try JSONEncoder().encode(placement)
+        #expect(try decoder.decode(RemoteConversationPlacement.self, from: encoded) == placement)
+        struct LegacyPlacement: Decodable { let workspaceTitle: String? }
+        #expect(try decoder.decode(LegacyPlacement.self, from: encoded).workspaceTitle == "Workspace")
+        let oldObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as? [String: Any])
+        #expect(oldObject["workspaceTabID"] == nil)
+        #expect(oldObject["workspaceTabTitle"] == nil)
+    }
+
     @Test func sharedModuleImportsFoundationOnly() throws {
         let sourceDirectory = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
