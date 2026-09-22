@@ -106,6 +106,37 @@ final class GatewayClientTests: XCTestCase {
         )
     }
 
+    func testAttachmentEncodingFitsLimitEvenForSlashHeavyBase64() throws {
+        var request = Self.sendRequest
+        var bytes = Data([0xFF, 0xD8, 0xFF])
+        bytes.append(Data(repeating: 0xFF, count: RemoteAttachmentPolicy.maximumFileBytes - 3))
+        request.attachments = [.init(filename: "one.jpg", data: bytes), .init(filename: "two.jpg", data: bytes)]
+        XCTAssertNil(RemoteAttachmentPolicy.validationError(for: request.attachments))
+        let body = try GatewayClient.encodedMessageSendRequest(request)
+        XCTAssertLessThanOrEqual(body.count, request.maximumEncodedBodyBytes)
+        XCTAssertEqual(try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendRequest.self, from: body), request)
+    }
+
+    func testAttachmentSendUsesDedicatedBearerRouteAndPreservesBytes() async throws {
+        let transport = RecordingHTTPTransport(responses: [.json(Self.duplicateSendJSON)])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.tail.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "test-credential"))
+        )
+        var request = Self.sendRequest
+        request.attachments = [.init(filename: "notes.txt", data: Data("private notes".utf8))]
+        let result = try await client.send(request)
+        XCTAssertEqual(result, .duplicate)
+        let requests = await transport.recordedRequests()
+        let sent = try XCTUnwrap(requests.first)
+        XCTAssertEqual(sent.url?.path, RemoteAttachmentPolicy.sendPath)
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Authorization"), "Bearer test-credential")
+        XCTAssertNil(sent.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertEqual(try ConversationEventCoding.makeDecoder().decode(
+            RemoteMessageSendRequest.self, from: XCTUnwrap(sent.httpBody)), request)
+    }
+
     func testBearerCredentialSeamUsesAuthorizationWithoutCookie() async throws {
         let transport = RecordingHTTPTransport(responses: [.json(Self.helloJSON)])
         let client = GatewayClient(

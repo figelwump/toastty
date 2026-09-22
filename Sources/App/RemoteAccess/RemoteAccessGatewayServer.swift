@@ -39,6 +39,8 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
         let id = UUID()
         let connection: NWConnection
         var buffer = Data()
+        var admittedAttachmentUpload = false
+        var checkedHeaders = false
         var isWebSocket = false
         var hasReceivedRequest = false
         var previewTask: Task<Void, Never>?
@@ -60,13 +62,16 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
     static let maximumPendingSendsPerClient = 32
     static let defaultMaximumConnections = 64
     static let defaultRequestHeaderTimeoutNanoseconds: UInt64 = 10_000_000_000
+    static let defaultAttachmentUploadTimeoutNanoseconds: UInt64 = 120_000_000_000
     private static let closeFlushTimeoutNanoseconds: UInt64 = 1_000_000_000
 
     private let handler: RemoteGatewayRequestHandler
     private let maximumConnections: Int
     private let requestHeaderTimeoutNanoseconds: UInt64
+    private let attachmentUploadTimeoutNanoseconds: UInt64
     private let queue = DispatchQueue(label: "toastty.remote-access.gateway")
     private var activePreviewCount = 0
+    private var activeAttachmentConnectionID: UUID?
     private var listener: NWListener?
     private var connections: [UUID: GatewayConnection] = [:]
     private(set) var listeningPort: UInt16?
@@ -79,11 +84,13 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
     init(
         handler: RemoteGatewayRequestHandler,
         maximumConnections: Int = defaultMaximumConnections,
-        requestHeaderTimeoutNanoseconds: UInt64 = defaultRequestHeaderTimeoutNanoseconds
+        requestHeaderTimeoutNanoseconds: UInt64 = defaultRequestHeaderTimeoutNanoseconds,
+        attachmentUploadTimeoutNanoseconds: UInt64 = defaultAttachmentUploadTimeoutNanoseconds
     ) {
         self.handler = handler
         self.maximumConnections = max(1, maximumConnections)
         self.requestHeaderTimeoutNanoseconds = requestHeaderTimeoutNanoseconds
+        self.attachmentUploadTimeoutNanoseconds = attachmentUploadTimeoutNanoseconds
         handler.onDeviceRevoked = { [weak self] deviceID in
             // Self-revocation mutates durable store state synchronously inside
             // the handler. Queue transport teardown so `handle` can return and
@@ -113,6 +120,8 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
             native: nativeWebSocketClientCount
         )
     }
+
+    var attachmentUploadCountForTesting: Int { activeAttachmentConnectionID == nil ? 0 : 1 }
 
     var connectionCountForTesting: Int {
         connections.count
@@ -294,7 +303,10 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
 
     private func receive(on connectionID: UUID) {
         guard let connection = connections[connectionID] else { return }
-        connection.connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+        let maximumReceiveBytes = connection.checkedHeaders || connection.isWebSocket
+            ? 64 * 1024
+            : max(1, RemoteGatewayHTTPRequest.maximumHeaderBytes + 4 - connection.buffer.count)
+        connection.connection.receive(minimumIncompleteLength: 1, maximumLength: maximumReceiveBytes) { [weak self] data, _, isComplete, error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if let data, data.isEmpty == false {
@@ -321,9 +333,48 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
     }
 
     private func drainHTTPRequest(_ connection: GatewayConnection) {
+        if !connection.checkedHeaders {
+            switch RemoteGatewayHTTPRequest.parse(connection.buffer, headersOnly: true) {
+            case .needMoreData: return
+            case .invalid:
+                sendPreviewResponse(.text(status: 400, reason: "Bad Request", "Malformed request"), connectionID: connection.id)
+                connection.hasReceivedRequest = true
+                return
+            case .request(let head, _):
+                connection.checkedHeaders = true
+                if head.path == RemoteAttachmentPolicy.sendPath {
+                    switch handler.authorizeAttachmentUpload(head, at: Date()) {
+                    case .attachmentUploadAuthorized(let deviceID):
+                        guard activeAttachmentConnectionID == nil else {
+                            connection.hasReceivedRequest = true
+                            sendPreviewResponse(.text(status: 503, reason: "Service Unavailable", "Another attachment upload is in progress"), connectionID: connection.id)
+                            return
+                        }
+                        activeAttachmentConnectionID = connection.id
+                        connection.admittedAttachmentUpload = true
+                        connection.deviceID = deviceID
+                        connection.authKind = .native
+                        connection.requestTimeoutTask?.cancel()
+                        let connectionID = connection.id
+                        let timeout = attachmentUploadTimeoutNanoseconds
+                        connection.requestTimeoutTask = Task { [weak self] in
+                            do { try await Task.sleep(nanoseconds: timeout) } catch { return }
+                            self?.drop(connectionID)
+                        }
+                    case .respond(let response):
+                        connection.hasReceivedRequest = true
+                        sendPreviewResponse(response, connectionID: connection.id)
+                        return
+                    default:
+                        drop(connection.id)
+                        return
+                    }
+                }
+            }
+        }
         switch RemoteGatewayHTTPRequest.parse(connection.buffer) {
         case .needMoreData:
-            if connection.buffer.count > RemoteGatewayHTTPRequest.maximumHeaderBytes + RemoteGatewayHTTPRequest.maximumBodyBytes {
+            if connection.buffer.count > RemoteGatewayHTTPRequest.maximumHeaderBytes + (connection.admittedAttachmentUpload ? RemoteAttachmentPolicy.maximumEncodedBodyBytes : RemoteGatewayHTTPRequest.maximumBodyBytes) {
                 drop(connection.id)
             }
 
@@ -348,6 +399,21 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     }
                 })
 
+            case .attachmentUploadAuthorized:
+                drop(connectionID)
+            case .deferredAttachments(let deviceID, let body):
+                guard connection.admittedAttachmentUpload else { drop(connectionID); return }
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    // Keep the admission slot until detached decoding/staging
+                    // has unwound, even if the peer disconnects meanwhile.
+                    defer {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                    }
+                    let response = await self.handler.resolveAttachments(deviceID: deviceID, body: body)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
             case .deferredPreview(let operation):
                 guard activePreviewCount < 8 else {
                     RemotePreviewProvider.logFailure(
@@ -474,6 +540,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
 
     private func drop(_ connectionID: UUID) {
         guard let connection = connections.removeValue(forKey: connectionID) else { return }
+        if activeAttachmentConnectionID == connectionID, connection.previewTask == nil { activeAttachmentConnectionID = nil }
         connection.previewTask?.cancel()
         connection.previewTask = nil
         connection.requestTimeoutTask?.cancel()

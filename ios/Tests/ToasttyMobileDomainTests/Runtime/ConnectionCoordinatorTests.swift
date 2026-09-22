@@ -1005,6 +1005,10 @@ final class ConnectionCoordinatorTests: XCTestCase {
         )))
         let ready = try await conversationState(matching: { $0.composerAuthority.canSend }, runtime)
         let stamp = try XCTUnwrap(ready.composerAuthority.stamp)
+        let unsupported = await coordinator.sendMessage(
+            conversationID: conversationID, text: "inspect",
+            attachments: [.init(filename: "notes.txt", data: Data("notes".utf8))], composerStamp: stamp)
+        XCTAssertEqual(unsupported, .notEnqueued(.attachmentsUnsupported))
         var boundaryRequest = RemoteMessageSendRequest(
             conversationID: conversationID,
             clientRequestID: requestID,
@@ -1119,6 +1123,115 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await dispatchWaiter.open()
         try await withTimeout { try await gateway.waitForSendCallCount(1) }
         let requests = await gateway.recordedSendRequests()
+        XCTAssertEqual(requests.first?.expectedInputEpoch, epoch)
+        XCTAssertEqual(requests.first?.clientRequestID, "request-one")
+
+        await sendGate.open()
+        _ = try await reconciliationState(
+            matching: { $0["request-one"]?.deliveryState == .pending(.accepted) },
+            runtime.sendReconciliation
+        )
+        composerState = await runtime.currentState()
+        XCTAssertEqual(
+            composerState.composerAuthority.gateFailure,
+            .sendAlreadyReserved
+        )
+
+        let nextEpoch = epoch.next()
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Next prompt",
+            inputAvailability: .openPrompt(epoch: nextEpoch),
+            latestSequence: 1
+        )))
+        composerState = try await conversationState(matching: {
+            $0.composerAuthority.canSend
+                && $0.composerAuthority.stamp?.inputEpoch == nextEpoch
+        }, runtime)
+        XCTAssertNil(composerState.composerAuthority.gateFailure)
+        await coordinator.suspend()
+    }
+
+    func testAttachmentsPreserveBytesAndEpochWhileConcurrentSendIsRejected() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
+            counter: 4
+        )
+        let sendGate = CancellationAwareGate()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: [.messageAttachments]))],
+            sessions: [.success(snapshot(runID: run, title: "REST seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [ScriptedCall(result: .success(.accepted(epoch: epoch)), gate: sendGate)]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.read, .send],
+            requestIDFactory: FixedRequestIDFactory(value: "request-one")
+        )
+        let dispatchWaiter = ControlledSendDispatchWaiter()
+        await coordinator.setSendDispatchWaiter(dispatchWaiter)
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run,
+            title: "Fresh",
+            inputAvailability: .openPrompt(epoch: epoch),
+            latestSequence: 1
+        )))
+        let runtimeState = try await conversationState(
+            matching: { $0.composerAuthority.canSend },
+            runtime
+        )
+        let stamp = try XCTUnwrap(runtimeState.composerAuthority.stamp)
+        let sendConversationID = conversationID
+
+        async let firstOutcome = coordinator.sendMessage(
+            conversationID: sendConversationID,
+            text: "",
+            attachments: [.init(filename: "notes.txt", data: Data("exact bytes".utf8))],
+            composerStamp: stamp
+        )
+        async let secondOutcome = coordinator.sendMessage(
+            conversationID: sendConversationID,
+            text: "",
+            attachments: [.init(filename: "notes.txt", data: Data("exact bytes".utf8))],
+            composerStamp: stamp
+        )
+        let firstResolved = await firstOutcome
+        let secondResolved = await secondOutcome
+        let outcomes = [firstResolved, secondResolved]
+        XCTAssertEqual(outcomes.filter {
+            $0 == .enqueued(clientRequestID: "request-one")
+        }.count, 1)
+        XCTAssertEqual(outcomes.filter {
+            $0 == .notEnqueued(.sendAlreadyReserved)
+        }.count, 1)
+
+        let pending = await runtime.sendReconciliation.currentState()
+        XCTAssertEqual(pending["request-one"]?.deliveryState, .pending(.awaitingResponse))
+        var composerState = await runtime.currentState()
+        XCTAssertEqual(
+            composerState.composerAuthority.gateFailure,
+            .sendAlreadyReserved
+        )
+        await dispatchWaiter.open()
+        try await withTimeout { try await gateway.waitForSendCallCount(1) }
+        let requests = await gateway.recordedSendRequests()
+        XCTAssertEqual(requests.first?.attachments.first?.data, Data("exact bytes".utf8))
+        XCTAssertEqual(requests.first?.text, "")
         XCTAssertEqual(requests.first?.expectedInputEpoch, epoch)
         XCTAssertEqual(requests.first?.clientRequestID, "request-one")
 
@@ -1307,6 +1420,9 @@ final class ConnectionCoordinatorTests: XCTestCase {
         )))
         _ = try await conversationState(matching: { $0.phase == .live }, runtime)
 
+        // REST catch-up can finish before the fresh session snapshot grants
+        // the coordinator authority to send the answer.
+        _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
         let request = RemoteQuestionAnswerRequest(
             conversationID: conversationID,
             interactionID: interactionID,

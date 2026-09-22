@@ -12,6 +12,7 @@ struct ToasttyComposerTextView: UIViewRepresentable {
     let isEnabled: Bool
     let accessibilityLabel: String
     let accessibilityHint: String
+    var maximumVisibleLines: Int = 5
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -91,13 +92,14 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         let naturalHeight = Self.naturalHeight(of: textView, width: width)
         let height = Self.clampedHeight(
             naturalHeight: naturalHeight,
-            lineHeight: lineHeight
+            lineHeight: lineHeight,
+            maximumVisibleLines: maximumVisibleLines
         )
         textView.updateLayoutMeasurement(
             width: width,
             naturalHeight: naturalHeight,
             fittedHeight: height,
-            maximumHeight: Self.maximumHeight(lineHeight: lineHeight)
+            maximumHeight: Self.maximumHeight(lineHeight: lineHeight, maximumVisibleLines: maximumVisibleLines)
         )
         return CGSize(width: width, height: height)
     }
@@ -112,15 +114,19 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         }
     }
 
-    static func clampedHeight(naturalHeight: CGFloat, lineHeight: CGFloat) -> CGFloat {
+    static func clampedHeight(
+        naturalHeight: CGFloat,
+        lineHeight: CGFloat,
+        maximumVisibleLines: Int = 5
+    ) -> CGFloat {
         min(
             max(ceil(naturalHeight), ceil(lineHeight)),
-            maximumHeight(lineHeight: lineHeight)
+            maximumHeight(lineHeight: lineHeight, maximumVisibleLines: maximumVisibleLines)
         )
     }
 
-    static func maximumHeight(lineHeight: CGFloat) -> CGFloat {
-        ceil(lineHeight * 5)
+    static func maximumHeight(lineHeight: CGFloat, maximumVisibleLines: Int = 5) -> CGFloat {
+        ceil(lineHeight * CGFloat(max(1, maximumVisibleLines)))
     }
 
     static func lineFragmentHeight(of textView: UITextView) -> CGFloat {

@@ -5,6 +5,7 @@ import ToasttyMobileDomain
 struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
+    @State private var isLoadingAttachments = false
     @State private var selectedPreview: ToasttyPreviewSelection?
     @State private var isComposerFocused = false
     @State private var composerFocusLifecycle = ToasttyComposerFocusLifecyclePolicy()
@@ -16,6 +17,11 @@ struct ToasttyConversationScreen: View {
     let composer: ToasttyComposerPresentation?
     @Binding var draft: String
     let isSubmitting: Bool
+    let attachments: [RemoteMessageAttachment]
+    let supportsAttachments: Bool
+    let addAttachments: ([RemoteMessageAttachment]) -> String?
+    let removeAttachment: (UUID) -> Void
+    let attachmentRecoveryMessage: String?
     let loadOlder: () -> Void
     let submitDraft: () -> Bool
     let dismissSendReceipt: (String) -> Void
@@ -31,6 +37,11 @@ struct ToasttyConversationScreen: View {
         composer: ToasttyComposerPresentation? = nil,
         draft: Binding<String> = .constant(""),
         isSubmitting: Bool = false,
+        attachments: [RemoteMessageAttachment] = [],
+        supportsAttachments: Bool = false,
+        addAttachments: @escaping ([RemoteMessageAttachment]) -> String? = { _ in nil },
+        removeAttachment: @escaping (UUID) -> Void = { _ in },
+        attachmentRecoveryMessage: String? = nil,
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping () -> Bool = { false },
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
@@ -48,6 +59,11 @@ struct ToasttyConversationScreen: View {
         self.composer = composer
         _draft = draft
         self.isSubmitting = isSubmitting
+        self.attachments = attachments
+        self.supportsAttachments = supportsAttachments
+        self.addAttachments = addAttachments
+        self.removeAttachment = removeAttachment
+        self.attachmentRecoveryMessage = attachmentRecoveryMessage
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
         self.dismissSendReceipt = dismissSendReceipt
@@ -202,12 +218,27 @@ struct ToasttyConversationScreen: View {
             ) {
                 ToasttySessionExecutionProfileView(presentation: profile)
             }
+            ToasttyAttachmentPicker(
+                attachments: attachments,
+                supportsAttachments: supportsAttachments,
+                allowsInput: presentation.gate.allowsInput && !isSubmitting,
+                isLoading: $isLoadingAttachments,
+                addAttachments: addAttachments,
+                removeAttachment: removeAttachment
+            )
+            .id(conversationID)
+            if let attachmentRecoveryMessage {
+                Text(attachmentRecoveryMessage)
+                    .font(.caption)
+                    .foregroundStyle(ToasttyDesignTokens.amberText)
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 composerField(presentation)
                     .frame(maxWidth: .infinity)
                 sendButton(presentation)
                     .fixedSize(horizontal: true, vertical: true)
             }
+            .layoutPriority(usesCompactAttachmentComposer ? 1 : 0)
 
             if case .disabled(let reason) = presentation.gate {
                 composerDisabledStatus(reason)
@@ -273,8 +304,12 @@ struct ToasttyConversationScreen: View {
             accessibilityLabel: "Message \(presentation.agentDisplayName)",
             accessibilityHint: presentation.gate.allowsInput
                 ? "Enter a message, then use the Send button"
-                : disabledAccessibilityHint(presentation)
+                : disabledAccessibilityHint(presentation),
+            maximumVisibleLines: usesCompactAttachmentComposer ? 2 : 5
         )
+            // Keep the measured UIKit text height when attachments and the
+            // keyboard compete for space; the preview list can shrink instead.
+            .fixedSize(horizontal: false, vertical: usesCompactAttachmentComposer)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(minHeight: 44)
@@ -299,6 +334,10 @@ struct ToasttyConversationScreen: View {
             }
             .animation(.easeOut(duration: 0.18), value: isComposerFocused)
             .disabled(presentation.gate.allowsInput == false)
+    }
+
+    private var usesCompactAttachmentComposer: Bool {
+        dynamicTypeSize.isAccessibilitySize && !attachments.isEmpty
     }
 
     private var composerKeyboardClearance: CGFloat {
@@ -353,7 +392,9 @@ struct ToasttyConversationScreen: View {
     }
 
     private func canSubmit(_ presentation: ToasttyComposerPresentation) -> Bool {
-        isSubmitting == false && presentation.canSubmit(draft: draft)
+        isSubmitting == false && isLoadingAttachments == false
+            && (attachments.isEmpty || supportsAttachments)
+            && presentation.canSubmit(draft: draft, attachments: attachments)
     }
 
     private func lockedComposerFallback(

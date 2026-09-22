@@ -171,6 +171,7 @@ struct RemotePendingSendCorrelator: Sendable {
     private struct PendingSend: Sendable {
         var clientRequestID: String
         var trimmedText: String
+        var displayText: String?
     }
 
     private var pendingSendsByConversationID: [RemoteConversationID: [PendingSend]] = [:]
@@ -179,10 +180,11 @@ struct RemotePendingSendCorrelator: Sendable {
         Set(pendingSendsByConversationID.keys)
     }
 
-    mutating func record(_ request: RemoteMessageSendRequest) {
+    mutating func record(_ request: RemoteMessageSendRequest, deliveredText: String? = nil) {
         let pendingSend = PendingSend(
             clientRequestID: request.clientRequestID,
-            trimmedText: request.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            trimmedText: (deliveredText ?? request.text).trimmingCharacters(in: .whitespacesAndNewlines),
+            displayText: request.attachments.isEmpty ? nil : request.displayText
         )
         var pendingSends = pendingSendsByConversationID[request.conversationID, default: []]
         pendingSends.append(pendingSend)
@@ -223,6 +225,7 @@ struct RemotePendingSendCorrelator: Sendable {
             }
             guard pending.trimmedText == trimmed else { return observation }
             var stampedPayload = payload
+            if let displayText = pending.displayText { stampedPayload.text = displayText }
             stampedPayload.origin = .remote
             stampedPayload.clientRequestID = pending.clientRequestID
             var stamped = observation
@@ -310,6 +313,7 @@ final class RemoteAccessService: ObservableObject {
     private let auditLog: RemoteAccessAuditLog
     private let projectionStore = RemoteConversationProjectionStore()
     private let facadeBridge = RemoteAccessFacadeBridge()
+    private let attachmentStore: RemoteMessageAttachmentStore
     private let sendBridge = RemoteAccessSendBridge()
     private let questionAnswerBridge = RemoteAccessQuestionAnswerBridge()
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
@@ -410,6 +414,7 @@ final class RemoteAccessService: ObservableObject {
             RemoteAccessGatewayServer(handler: $0)
         }
     ) {
+        self.attachmentStore = RemoteMessageAttachmentStore(root: runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true))
         self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
         self.annotationStyleStore = annotationStyleStore
@@ -441,6 +446,11 @@ final class RemoteAccessService: ObservableObject {
             guard let self else { return operation.errorResponse(.stale) }
             return await self.resolvePreview(operation)
         }
+        handler.attachmentSendHandler = { [weak self] request, device in
+            guard let self else { return .rejected(reason: .notBound) }
+            return await self.performRemoteAttachmentSend(request, device: device)
+        }
+        Task { [attachmentStore] in try? await attachmentStore.cleanup() }
         panelMetadataCache.onChange = { [weak self] in self?.scheduleSessionListBroadcast() }
         self.devices = deviceStore.devices
         facadeBridge.service = self
@@ -2165,10 +2175,34 @@ final class RemoteAccessService: ObservableObject {
 
     // MARK: - Gated free-form send
 
+    private func performRemoteAttachmentSend(_ request: RemoteMessageSendRequest, device: RemoteDeviceRecord) async -> RemoteMessageSendResult {
+        if coordinator.hasProcessed(request.clientRequestID, for: request.conversationID) { return .duplicate }
+        let staged: RemoteMessageAttachmentStore.Staged
+        do { staged = try await attachmentStore.stage(request.attachments) }
+        catch RemoteMessageAttachmentStore.StorageError.invalidAttachments { return .rejected(reason: .invalidAttachments) }
+        catch { return .rejected(reason: .attachmentStorageUnavailable) }
+        let result: RemoteMessageSendResult
+        // Staging suspends. Re-read authorization and every input gate only
+        // after it completes; delivery itself remains synchronous.
+        if !Task.isCancelled, let currentDevice = deviceStore.devices.first(where: {
+            $0.id == device.id && !$0.isRevoked && $0.authKind == .native && $0.scopes.contains(.send)
+        }) {
+            result = performRemoteSend(request, device: currentDevice, deliveredText: staged.deliveryText(for: request))
+        } else { result = .rejected(reason: .sendScopeDenied) }
+        switch result {
+        case .accepted, .uncertain: break
+        case .rejected, .duplicate: await attachmentStore.discard(staged)
+        }
+        return result
+    }
+
     /// Performs a remote send synchronously on the main actor. The gate check
     /// and terminal delivery share this one call, so no epoch can change
     /// between `evaluate` and `markDelivered`.
-    func performRemoteSend(_ request: RemoteMessageSendRequest, device: RemoteDeviceRecord) -> RemoteMessageSendResult {
+    func performRemoteSend(_ request: RemoteMessageSendRequest, device: RemoteDeviceRecord, deliveredText: String? = nil) -> RemoteMessageSendResult {
+        guard request.attachments.isEmpty || deliveredText != nil else {
+            return .rejected(reason: .invalidAttachments)
+        }
         guard isReady else {
             return .rejected(reason: .notBound)
         }
@@ -2211,7 +2245,7 @@ final class RemoteAccessService: ObservableObject {
             // Ghostty bracketed-paste semantics for multi-line input and does
             // not steal the local first responder.
             let delivery = terminalRuntimeRegistry.sendRemoteText(
-                request.text,
+                deliveredText ?? request.text,
                 submit: true,
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -2227,7 +2261,7 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery_uncertain",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText)
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
@@ -2238,7 +2272,7 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText)
                 broadcastSessionList()
                 return .accepted(epoch: epoch)
             }
@@ -2322,9 +2356,9 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
-    private func recordPendingSend(_ request: RemoteMessageSendRequest, for conversationID: RemoteConversationID) {
+    private func recordPendingSend(_ request: RemoteMessageSendRequest, for conversationID: RemoteConversationID, deliveredText: String? = nil) {
         precondition(request.conversationID == conversationID)
-        pendingSendCorrelator.record(request)
+        pendingSendCorrelator.record(request, deliveredText: deliveredText)
         let clientRequestID = request.clientRequestID
         let key = PendingSendConfirmationKey(
             conversationID: conversationID,

@@ -341,10 +341,20 @@ public actor ConnectionCoordinator {
     public func sendMessage(
         conversationID: RemoteConversationID,
         text: String,
+        attachments: [RemoteMessageAttachment] = [],
         composerStamp: ConversationComposerStamp
     ) async -> ConversationSendOutcome {
-        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || !attachments.isEmpty else {
             return .notEnqueued(.emptyText)
+        }
+        guard attachments.isEmpty || text.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+            return .notEnqueued(.messageTooLarge)
+        }
+        guard attachments.isEmpty || activeCapabilities.contains(.messageAttachments) else {
+            return .notEnqueued(.attachmentsUnsupported)
+        }
+        guard RemoteAttachmentPolicy.validationError(for: attachments) == nil else {
+            return .notEnqueued(.invalidAttachments)
         }
         guard Task.isCancelled == false else { return .notEnqueued(.cancelled) }
 
@@ -365,6 +375,7 @@ public actor ConnectionCoordinator {
         let claim = claimSend(
             conversationID: conversationID,
             text: text,
+            attachments: attachments,
             composerStamp: composerStamp,
             validatedRuntime: validatedRuntime
         )
@@ -383,7 +394,7 @@ public actor ConnectionCoordinator {
         }
         do {
             let body = try GatewayClient.encodedMessageSendRequest(request)
-            guard body.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+            guard body.count <= request.maximumEncodedBodyBytes else {
                 rollbackUnadmittedClaim(clientRequestID: clientRequestID)
                 return .notEnqueued(.messageTooLarge)
             }
@@ -394,7 +405,7 @@ public actor ConnectionCoordinator {
 
         guard let admission = await runtime.sendReconciliation.enqueue(
             clientRequestID: clientRequestID,
-            text: text,
+            text: request.displayText,
             projectionRunID: composerStamp.projectionRunID
         ) else {
             rollbackUnadmittedClaim(clientRequestID: clientRequestID)
@@ -1425,6 +1436,7 @@ public actor ConnectionCoordinator {
     private func claimSend(
         conversationID: RemoteConversationID,
         text: String,
+        attachments: [RemoteMessageAttachment],
         composerStamp: ConversationComposerStamp,
         validatedRuntime: ConversationRuntime
     ) -> SendClaimResult {
@@ -1450,7 +1462,8 @@ public actor ConnectionCoordinator {
             conversationID: conversationID,
             clientRequestID: clientRequestID,
             expectedInputEpoch: composerStamp.inputEpoch,
-            text: text
+            text: text,
+            attachments: attachments
         )
         reservations[reservationKey] = clientRequestID
         sendOperations[clientRequestID] = SendOperation(

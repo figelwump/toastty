@@ -93,7 +93,7 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
     }
 
     /// Parses one request from the start of `buffer`.
-    public static func parse(_ buffer: Data) -> ParseOutcome {
+    public static func parse(_ buffer: Data, headersOnly: Bool = false) -> ParseOutcome {
         let separator = Data("\r\n\r\n".utf8)
         guard let headEndRange = buffer.range(of: separator) else {
             return buffer.count > maximumHeaderBytes ? .invalid : .needMoreData
@@ -151,7 +151,14 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
         } else {
             contentLength = 0
         }
-        guard contentLength >= 0, contentLength <= maximumBodyBytes else { return .invalid }
+        let isAttachmentRoute = path == RemoteAttachmentPolicy.sendPath
+        guard !isAttachmentRoute || headerValues["content-length"] != nil else { return .invalid }
+        let limit = isAttachmentRoute ? RemoteAttachmentPolicy.maximumEncodedBodyBytes : maximumBodyBytes
+        guard contentLength >= 0, contentLength <= limit else { return .invalid }
+        if headersOnly {
+            return .request(RemoteGatewayHTTPRequest(method: method, path: path, headerValues: headerValues, body: Data()),
+                            consumedBytes: buffer.distance(from: buffer.startIndex, to: bodyStart))
+        }
         guard buffer.distance(from: bodyStart, to: buffer.endIndex) >= contentLength else {
             return .needMoreData
         }

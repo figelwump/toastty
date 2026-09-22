@@ -39,6 +39,29 @@ final class ToasttyComposerTextViewTests: XCTestCase {
         )
     }
 
+    func testTwoLineAttachmentCapScrollsLongAccessibilityDraftAndShrinksAfterClear() {
+        let (window, textView) = makeTextView()
+        textView.font = .preferredFont(
+            forTextStyle: .body,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        )
+        textView.text = "1\n2\n3\n4\n5\n6"
+        textView.textDidChange()
+        fitTextViewToContent(textView, maximumVisibleLines: 2)
+        let lineHeight = ToasttyComposerTextView.lineFragmentHeight(of: textView)
+        XCTAssertEqual(textView.bounds.height, ceil(lineHeight * 2), accuracy: 0.001)
+        XCTAssertTrue(textView.isScrollEnabled)
+
+        textView.text = ""
+        textView.selectedRange = NSRange(location: 0, length: 0)
+        textView.textDidChange()
+        fitTextViewToContent(textView, maximumVisibleLines: 2)
+        XCTAssertEqual(textView.bounds.height, ceil(textView.font!.lineHeight), accuracy: 0.001)
+        XCTAssertFalse(textView.isScrollEnabled)
+        XCTAssertEqual(textView.contentOffset.y, 0, accuracy: 0.001)
+        window.isHidden = true
+    }
+
     func testProgrammaticTextUpdateClampsSelectionWithoutMovingValidRange() {
         XCTAssertEqual(
             ToasttyComposerTextView.clampedSelection(
@@ -329,7 +352,7 @@ final class ToasttyComposerTextViewTests: XCTestCase {
         return (window, textView)
     }
 
-    private func fitTextViewToContent(_ textView: ToasttyComposerUIKitTextView) {
+    private func fitTextViewToContent(_ textView: ToasttyComposerUIKitTextView, maximumVisibleLines: Int = 5) {
         let lineHeight = ToasttyComposerTextView.lineFragmentHeight(of: textView)
         let naturalHeight = ToasttyComposerTextView.naturalHeight(
             of: textView,
@@ -337,13 +360,14 @@ final class ToasttyComposerTextViewTests: XCTestCase {
         )
         let fittedHeight = ToasttyComposerTextView.clampedHeight(
             naturalHeight: naturalHeight,
-            lineHeight: lineHeight
+            lineHeight: lineHeight,
+            maximumVisibleLines: maximumVisibleLines
         )
         textView.updateLayoutMeasurement(
             width: textView.bounds.width,
             naturalHeight: naturalHeight,
             fittedHeight: fittedHeight,
-            maximumHeight: ToasttyComposerTextView.maximumHeight(lineHeight: lineHeight)
+            maximumHeight: ToasttyComposerTextView.maximumHeight(lineHeight: lineHeight, maximumVisibleLines: maximumVisibleLines)
         )
         textView.frame.size.height = fittedHeight
         textView.setNeedsLayout()

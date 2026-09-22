@@ -99,6 +99,43 @@ terminal rejects the send. An accepted send means Toastty handed it to the
 terminal; the transcript event carrying the same request ID is the later
 confirmation.
 
+### Photos and files from iOS
+
+Use **Attach** below the conversation composer to choose **Photo Library**,
+**Take Photo**, or **Choose File**. Review the selected thumbnails or filenames,
+remove anything you do not want to send, then send with or without message text.
+Camera access requires permission and a device with a camera. Selection alone
+does not upload anything. Both the iOS app and paired Mac must support attachments.
+
+A message can contain up to four files, at most 4 MiB per file and 8 MiB total.
+Photos are resized to at most 2048 pixels on their longest side and re-encoded
+as JPEG without the source metadata. Images chosen through Files use the same
+conversion; animated images use their first frame. Files supports JPEG, PNG,
+GIF, WebP, HEIC/HEIF images, PDFs, and common
+UTF-8 text/source formats; directories, packages, and unsupported binary formats
+are rejected. Attachment drafts stay with their conversation in memory and are
+lost if the app exits or the pairing is cleared.
+
+The authenticated send transfers bytes directly to your paired Mac. Toastty
+stores private copies under its runtime configuration directory at
+`remote-access/attachments/`, then asks the running agent to read those local
+files in the same prompt as your message. It creates no public upload links.
+The agent's tools, model, and filesystem permissions determine which contents
+it can read; a tool permission request may require action on the Mac. Upload
+acceptance does not mean the agent has read or understood the files.
+
+The same prompt, permission, and duplicate checks apply to attachment sends.
+A definite host rejection restores the attachment draft when it will not
+replace a newer draft. Dismissing a rejected send discards any saved attachment
+recovery for that send. For an uncertain delivery, inspect the conversation on
+the Mac before sending again; Toastty does not automatically resend. Files from
+accepted or uncertain deliveries remain available for delayed agent reads.
+The Mac removes copies older than seven days when starting attachment storage
+or staging another send, and refuses new uploads when its 256 MiB storage
+budget is full. Removing an unsent attachment only removes its local draft.
+
+### Structured questions
+
 Claude Code sessions launched or resumed through Toastty can also answer
 `AskUserQuestion` forms from the phone. Choose an option, select multiple options
 where offered, or enter a custom answer, then submit the complete form. The

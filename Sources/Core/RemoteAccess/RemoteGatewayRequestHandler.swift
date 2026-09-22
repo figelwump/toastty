@@ -35,6 +35,8 @@ public final class RemoteGatewayRequestHandler {
     public enum Outcome: Equatable {
         case respond(RemoteGatewayHTTPResponse)
         case deferredPreview(RemoteGatewayPreviewOperation)
+        case attachmentUploadAuthorized(deviceID: UUID)
+        case deferredAttachments(deviceID: UUID, body: Data)
         case upgradeToWebSocket(
             deviceID: UUID,
             authKind: RemoteDeviceAuthKind,
@@ -85,6 +87,46 @@ public final class RemoteGatewayRequestHandler {
         guard !Task.isCancelled else { return operation.errorResponse(.denied) }
         guard previewIsAuthorized(operation) else { return Self.authorizationDenied(operation) }
         return response
+    }
+
+    public var attachmentSendHandler: (@MainActor (RemoteMessageSendRequest, RemoteDeviceRecord) async -> RemoteMessageSendResult)?
+
+    /// Uses precisely the same method/origin/credential/scope policy as final
+    /// dispatch, before the listener admits a large request body.
+    public func authorizeAttachmentUpload(_ request: RemoteGatewayHTTPRequest, at date: Date) -> Outcome {
+        guard let policy = RemoteGatewayRoutePolicy.policy(for: request.path), policy.route == .messageSendWithAttachments else {
+            return .respond(.text(status: 400, reason: "Bad Request", "Invalid upload route"))
+        }
+        return handle(request, policy: policy, at: date, headersOnly: true)
+    }
+
+    @MainActor
+    public func resolveAttachments(deviceID: UUID, body: Data) async -> RemoteGatewayHTTPResponse {
+        let request = await Task.detached(priority: .userInitiated) {
+            guard body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes,
+                  let request = try? ConversationEventCoding.makeDecoder().decode(RemoteMessageSendRequest.self, from: body),
+                  request.text.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes,
+                  !request.attachments.isEmpty,
+                  RemoteAttachmentPolicy.validationError(for: request.attachments) == nil else { return Optional<RemoteMessageSendRequest>.none }
+            return request
+        }.value
+        let result: RemoteMessageSendResult
+        if Task.isCancelled {
+            result = .rejected(reason: .surfaceUnavailable)
+        } else if let request {
+            if let device = deviceStore.devices.first(where: { $0.id == deviceID && !$0.isRevoked && $0.authKind == .native && $0.scopes.contains(.send) }) {
+                if let attachmentSendHandler {
+                    result = await attachmentSendHandler(request, device)
+                } else { result = .rejected(reason: .surfaceUnavailable) }
+            } else { result = .rejected(reason: .sendScopeDenied) }
+        } else { result = .rejected(reason: .invalidAttachments) }
+        switch result {
+        case .accepted: auditLog.record(.init(at: Date(), action: .remoteSendAccepted, deviceID: deviceID))
+        case .uncertain: auditLog.record(.init(at: Date(), action: .remoteSendUncertain, deviceID: deviceID))
+        case .rejected(let reason): auditLog.record(.init(at: Date(), action: .remoteSendRejected, deviceID: deviceID, detail: reason.rawValue))
+        case .duplicate: break
+        }
+        return .json(body: (try? encoder.encode(result)) ?? Data())
     }
 
     /// The phone shows this as a file-policy refusal, so the log has to say
@@ -185,7 +227,8 @@ public final class RemoteGatewayRequestHandler {
     private func handle(
         _ request: RemoteGatewayHTTPRequest,
         policy: RemoteGatewayRoutePolicy,
-        at date: Date
+        at date: Date,
+        headersOnly: Bool = false
     ) -> Outcome {
         // 1. Method. Known routes never fall through to another handler.
         guard request.method == policy.method else {
@@ -311,6 +354,12 @@ public final class RemoteGatewayRequestHandler {
             return handleConversationReadAcknowledgement(request, device: authenticated)
         case .questionAnswer:
             return handleQuestionAnswer(request, device: authenticated, at: date)
+        case .messageSendWithAttachments:
+            if headersOnly { return .attachmentUploadAuthorized(deviceID: authenticated.id) }
+            guard request.body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes else {
+                return .respond(.text(status: 413, reason: "Content Too Large", "Attachment request is too large"))
+            }
+            return .deferredAttachments(deviceID: authenticated.id, body: request.body)
         case .messageSend:
             return handleMessageSend(request, device: authenticated, at: date)
         case .subscribe:
@@ -546,11 +595,17 @@ public final class RemoteGatewayRequestHandler {
         device: RemoteDeviceRecord,
         at date: Date
     ) -> Outcome {
+        guard request.body.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+            return .respond(.text(status: 413, reason: "Content Too Large", "Send request is too large"))
+        }
         guard let sendHandler else {
             return .respond(errorResponse(status: 404, reason: "Not Found", code: "not_found", message: "Remote send is not available"))
         }
         guard let sendRequest = try? ConversationEventCoding.makeDecoder().decode(RemoteMessageSendRequest.self, from: request.body) else {
             return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected send JSON"))
+        }
+        guard sendRequest.attachments.isEmpty else {
+            return .respond(.json(body: (try? encoder.encode(RemoteMessageSendResult.rejected(reason: .invalidAttachments))) ?? Data()))
         }
         let result = sendHandler(sendRequest, device)
         switch result {

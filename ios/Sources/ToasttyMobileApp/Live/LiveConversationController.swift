@@ -66,6 +66,7 @@ final class LiveConversationController {
     private let runtime: any LiveConversationRuntime
     private let loadOlderAction: @Sendable () async -> Void
     private let sendAction: @Sendable (String, ConversationComposerStamp) async -> ConversationSendOutcome
+    private let sendAttachmentsAction: (@Sendable (String, [RemoteMessageAttachment], ConversationComposerStamp) async -> ConversationSendOutcome)?
     private let dismissSendReceiptAction: @Sendable (String) async -> Void
     private let answerQuestionAction: @Sendable (
         RemoteQuestionAnswerRequest
@@ -79,6 +80,7 @@ final class LiveConversationController {
     private var readAcknowledgementBoundary: ReadBoundary?
     private var lastAcknowledgedBoundary: ReadBoundary?
     private var connectionPhase: ConnectionCoordinatorPhase = .idle
+    private(set) var supportsAttachments = false
     private var supportsQuestionAnswers = false
     private var connectionGeneration: UInt64 = 0
     private var runtimeRevision: UInt64 = 0
@@ -93,6 +95,7 @@ final class LiveConversationController {
         send: @escaping @Sendable (String, ConversationComposerStamp) async -> ConversationSendOutcome = { _, _ in
             .notEnqueued(.conversationNotOpen)
         },
+        sendAttachments: (@Sendable (String, [RemoteMessageAttachment], ConversationComposerStamp) async -> ConversationSendOutcome)? = nil,
         answerQuestion: @escaping @Sendable (
             RemoteQuestionAnswerRequest
         ) async throws -> RemoteQuestionAnswerResult = { _ in
@@ -107,6 +110,7 @@ final class LiveConversationController {
         self.runtime = runtime
         loadOlderAction = loadOlder
         sendAction = send
+        sendAttachmentsAction = sendAttachments
         answerQuestionAction = answerQuestion
         dismissSendReceiptAction = dismissSendReceipt
         acknowledgeReadAction = acknowledgeRead
@@ -146,14 +150,21 @@ final class LiveConversationController {
         await loadOlderAction()
     }
 
-    func send(_ text: String) async -> ConversationSendOutcome {
+    func send(_ text: String, attachments: [RemoteMessageAttachment] = []) async -> ConversationSendOutcome {
         guard let stamp = composerAuthority.stamp else {
             let failure = composerAuthority.gateFailure ?? .staleComposerAuthority
             lastSendGateFailure = failure
             return .notEnqueued(failure)
         }
         let submittedAtRuntimeRevision = runtimeRevision
-        let outcome = await sendAction(text, stamp)
+        let outcome: ConversationSendOutcome
+        if attachments.isEmpty {
+            outcome = await sendAction(text, stamp)
+        } else if supportsAttachments, let sendAttachmentsAction {
+            outcome = await sendAttachmentsAction(text, attachments, stamp)
+        } else {
+            outcome = .notEnqueued(.attachmentsUnsupported)
+        }
         guard runtimeRevision == submittedAtRuntimeRevision else { return outcome }
         switch outcome {
         case .enqueued:
@@ -263,6 +274,7 @@ final class LiveConversationController {
 
     func consumeConnectionState(_ state: ConnectionCoordinator.State) {
         supportsQuestionAnswers = state.capabilities.contains(.questionAnswers)
+        supportsAttachments = state.capabilities.contains(.messageAttachments)
         consumeConnectionPhase(state.phase)
     }
 
