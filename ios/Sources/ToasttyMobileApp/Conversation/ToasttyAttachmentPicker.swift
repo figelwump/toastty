@@ -6,6 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ToasttyAttachmentPicker: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let attachments: [RemoteMessageAttachment]
     let supportsAttachments: Bool
     let allowsInput: Bool
@@ -13,7 +14,6 @@ struct ToasttyAttachmentPicker: View {
     let addAttachments: ([RemoteMessageAttachment]) -> String?
     let removeAttachment: (UUID) -> Void
 
-    @ScaledMetric(relativeTo: .caption) private var attachmentRowHeight: CGFloat = 44
     @State private var showsChooser = false
     @State private var showsPhotos = false
     @State private var showsFiles = false
@@ -25,6 +25,12 @@ struct ToasttyAttachmentPicker: View {
 
     private var canPick: Bool {
         allowsInput && supportsAttachments && !isLoading && attachments.count < RemoteAttachmentPolicy.maximumCount
+    }
+
+    private var attachmentRowHeight: CGFloat { dynamicTypeSize.isAccessibilitySize ? 56 : 44 }
+
+    private var attachmentListHeight: CGFloat {
+        min(132, CGFloat(attachments.count) * attachmentRowHeight + CGFloat(max(0, attachments.count - 1)) * 8)
     }
 
     var body: some View {
@@ -39,8 +45,10 @@ struct ToasttyAttachmentPicker: View {
                         }
                     }
                 }
-                .frame(height: min(132, CGFloat(attachments.count) * attachmentRowHeight
-                    + CGFloat(attachments.count - 1) * 8))
+                .frame(minHeight: dynamicTypeSize.isAccessibilitySize ? min(attachmentRowHeight, attachmentListHeight) : attachmentListHeight,
+                       idealHeight: attachmentListHeight,
+                       maxHeight: attachmentListHeight)
+                .layoutPriority(-1)
                 .scrollBounceBehavior(.basedOnSize)
                 .scrollDismissesKeyboard(.never)
                 .accessibilityElement(children: .contain)
@@ -48,11 +56,19 @@ struct ToasttyAttachmentPicker: View {
             }
             HStack(spacing: 8) {
                 Button { showsChooser = true } label: {
-                    Label("Attach", systemImage: "paperclip")
-                        .font(.subheadline)
-                        .frame(minHeight: 32)
+                    if dynamicTypeSize.isAccessibilitySize {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 24))
+                            .frame(width: 44, height: 44)
+                    } else {
+                        Label("Attach", systemImage: "paperclip")
+                            .font(.subheadline)
+                            .frame(minHeight: 32)
+                    }
                 }
+                .fixedSize(horizontal: true, vertical: true)
                 .disabled(!canPick)
+                .accessibilityLabel("Attach")
                 .accessibilityIdentifier("toastty-mobile-attachment-add")
                 if isLoading {
                     ProgressView().controlSize(.small)
@@ -61,8 +77,11 @@ struct ToasttyAttachmentPicker: View {
                     Text("Update Toastty on your Mac to attach files.")
                         .font(.caption)
                 } else if attachments.isEmpty == false {
-                    Text("\(attachments.count)/4 · Up to 8 MB total")
+                    Text(dynamicTypeSize.isAccessibilitySize
+                         ? "\(attachments.count)/4"
+                         : "\(attachments.count)/4 · Up to 8 MB total")
                         .font(.caption)
+                        .accessibilityLabel("\(attachments.count) of 4 attachments. Up to 8 MB total.")
                 }
             }
             .foregroundStyle(ToasttyDesignTokens.secondaryText)
@@ -187,32 +206,50 @@ struct ToasttyAttachmentPicker: View {
 }
 
 private struct ToasttyAttachmentRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let attachment: RemoteMessageAttachment
     let canRemove: Bool
     let remove: () -> Void
     @State private var thumbnail: UIImage?
+
+    private var formattedSize: String {
+        ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file)
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             Group {
                 if let thumbnail {
                     Image(uiImage: thumbnail).resizable().scaledToFill()
-                } else { Image(systemName: "doc").font(.title2) }
+                } else { Image(systemName: "doc").font(.system(size: 24)) }
             }
             .frame(width: 40, height: 40)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 6))
             VStack(alignment: .leading, spacing: 2) {
-                Text(attachment.filename).font(.caption).lineLimit(1).truncationMode(.middle)
-                Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file))
-                    .font(.caption2).foregroundStyle(ToasttyDesignTokens.secondaryText)
+                Text(attachment.filename)
+                    .font(dynamicTypeSize.isAccessibilitySize ? .caption2 : .caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityLabel(dynamicTypeSize.isAccessibilitySize
+                        ? "\(attachment.filename), \(formattedSize)" : attachment.filename)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Text(formattedSize)
+                        .font(.caption2).foregroundStyle(ToasttyDesignTokens.secondaryText)
+                }
             }
             Spacer(minLength: 0)
-            Button(action: remove) { Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44) }
+            Button(action: remove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 24))
+                    .frame(width: 44, height: 44)
+            }
+                .fixedSize()
                 .disabled(!canRemove)
                 .accessibilityLabel("Remove \(attachment.filename)")
                 .accessibilityIdentifier("toastty-mobile-attachment-remove")
         }
+        .frame(minHeight: dynamicTypeSize.isAccessibilitySize ? 56 : 44)
         .task(id: attachment.id) {
             let data = attachment.data
             let preview = await Task.detached(priority: .utility) {

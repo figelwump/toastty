@@ -238,6 +238,7 @@ struct ToasttyConversationScreen: View {
                 sendButton(presentation)
                     .fixedSize(horizontal: true, vertical: true)
             }
+            .layoutPriority(usesCompactAttachmentComposer ? 1 : 0)
 
             if case .disabled(let reason) = presentation.gate {
                 composerDisabledStatus(reason)
@@ -303,8 +304,12 @@ struct ToasttyConversationScreen: View {
             accessibilityLabel: "Message \(presentation.agentDisplayName)",
             accessibilityHint: presentation.gate.allowsInput
                 ? "Enter a message, then use the Send button"
-                : disabledAccessibilityHint(presentation)
+                : disabledAccessibilityHint(presentation),
+            maximumVisibleLines: usesCompactAttachmentComposer ? 2 : 5
         )
+            // Keep the measured UIKit text height when attachments and the
+            // keyboard compete for space; the preview list can shrink instead.
+            .fixedSize(horizontal: false, vertical: usesCompactAttachmentComposer)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(minHeight: 44)
@@ -329,6 +334,10 @@ struct ToasttyConversationScreen: View {
             }
             .animation(.easeOut(duration: 0.18), value: isComposerFocused)
             .disabled(presentation.gate.allowsInput == false)
+    }
+
+    private var usesCompactAttachmentComposer: Bool {
+        dynamicTypeSize.isAccessibilitySize && !attachments.isEmpty
     }
 
     private var composerKeyboardClearance: CGFloat {

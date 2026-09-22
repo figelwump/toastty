@@ -1355,7 +1355,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
-    func testFourAttachmentsRemainScrollableAboveKeyboardAtAccessibilityXXXL() {
+    func testFourAttachmentsRemainScrollableAboveKeyboardAtAccessibilityXXXL() throws {
         let app = launchFixtureApp(
             launchArguments: [
                 "-UIPreferredContentSizeCategoryName",
@@ -1378,6 +1378,18 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let list = app.scrollViews["toastty-mobile-attachment-list"]
         XCTAssertTrue(list.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertLessThanOrEqual(list.frame.height, 133)
+        let scaledBodyFont = UIFont.preferredFont(
+            forTextStyle: .body,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        )
+        XCTAssertGreaterThanOrEqual(
+            input.frame.height, ceil(scaledBodyFont.lineHeight),
+            "The UIKit text field must retain at least one scaled line instead of overflowing a compressed border"
+        )
+        let attach = app.buttons["toastty-mobile-attachment-add"]
+        XCTAssertEqual(attach.label, "Attach")
+        XCTAssertGreaterThanOrEqual(attach.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(attach.frame.height, 44)
         XCTAssertTrue(input.isHittable)
         XCTAssertTrue(send.isHittable)
         XCTAssertTrue(send.isEnabled)
@@ -1385,8 +1397,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertLessThanOrEqual(input.frame.maxY, keyboardTop + 1)
         XCTAssertLessThanOrEqual(send.frame.maxY, keyboardTop + 1)
         let removeLast = app.buttons["Remove fixture-notes-4.txt"]
-        for _ in 0..<4 where !removeLast.isHittable { list.swipeUp() }
+        for _ in 0..<6 where !removeLast.isHittable || !list.frame.insetBy(dx: -1, dy: -1).contains(removeLast.frame) {
+            list.swipeUp()
+        }
         XCTAssertTrue(removeLast.isHittable, app.debugDescription)
+        XCTAssertTrue(list.frame.insetBy(dx: -1, dy: -1).contains(removeLast.frame),
+                      "The complete 44-point Remove control must fit inside the attachment list")
+        let filenameLast = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "fixture-notes-4.txt")).firstMatch
+        XCTAssertTrue(filenameLast.isHittable)
+        XCTAssertTrue(list.frame.insetBy(dx: -1, dy: -1).contains(filenameLast.frame),
+                      "The attachment filename must remain visible alongside Remove")
         attachScreenshot(named: "fixture-four-attachments-keyboard-accessibility-xxxl", of: app)
         removeLast.tap()
         XCTAssertTrue(removeLast.waitForNonExistence(timeout: 5))
@@ -1394,6 +1414,27 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.buttons["toastty-mobile-attachment-add"].isEnabled)
         XCTAssertTrue(input.isHittable)
         XCTAssertTrue(send.isHittable)
+
+        let twoLineHeight = input.frame.height
+        input.typeText("\n3\n4\n5\n6\nFOX7")
+        XCTAssertEqual(input.frame.height, twoLineHeight, accuracy: 2,
+                       "Accessibility drafts with attachments must scroll after two visible lines")
+        XCTAssertTrue(try recognizedText(in: input.screenshot()).contains("FOX7"),
+                      "The capped composer must scroll to its newest text")
+        XCTAssertLessThanOrEqual(input.frame.maxY, topOfKeyboardObstruction(keyboard) + 1)
+        XCTAssertLessThanOrEqual(send.frame.maxY, topOfKeyboardObstruction(keyboard) + 1)
+        XCTAssertLessThanOrEqual(attach.frame.maxY, topOfKeyboardObstruction(keyboard) + 1)
+        attachScreenshot(named: "fixture-attachments-long-draft-accessibility-xxxl", of: app)
+
+        let draftLength = (input.value as? String)?.count ?? 0
+        XCTAssertGreaterThan(draftLength, 0)
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: draftLength))
+        XCTAssertLessThan(input.frame.height, twoLineHeight,
+                          "Clearing a long draft must return the composer to one visible line")
+        XCTAssertTrue(input.isHittable)
+        XCTAssertTrue(send.isHittable)
+        XCTAssertTrue(send.isEnabled, "The remaining attachments allow an attachment-only send")
+        attachScreenshot(named: "fixture-attachments-cleared-draft-accessibility-xxxl", of: app)
     }
 
     func testGatedSendComposerReflowsAtAccessibilityXXXL() {
