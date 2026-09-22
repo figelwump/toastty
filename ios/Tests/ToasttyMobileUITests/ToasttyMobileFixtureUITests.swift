@@ -1371,7 +1371,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let send = app.buttons["toastty-mobile-composer-send"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         XCTAssertTrue(input.isHittable)
-        input.tap()
+        // XCTest selected the text view's fractional top edge on CI. Tap its
+        // visible center so the gesture lands inside the editor's bounds.
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        attachScreenshot(named: "fixture-attachment-composer-after-tap-accessibility-xxxl", of: app)
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         input.typeText("Review these files")

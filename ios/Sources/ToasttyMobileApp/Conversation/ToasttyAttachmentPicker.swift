@@ -73,7 +73,7 @@ struct ToasttyAttachmentPicker: View {
                 if isLoading {
                     ProgressView().controlSize(.small)
                     Text("Preparing attachment…").font(.caption)
-                } else if !supportsAttachments {
+                } else if !supportsAttachments && allowsInput {
                     Text("Update Toastty on your Mac to attach files.")
                         .font(.caption)
                 } else if attachments.isEmpty == false {

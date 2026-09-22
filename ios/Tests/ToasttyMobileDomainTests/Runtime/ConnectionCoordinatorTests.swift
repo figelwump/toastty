@@ -1420,6 +1420,9 @@ final class ConnectionCoordinatorTests: XCTestCase {
         )))
         _ = try await conversationState(matching: { $0.phase == .live }, runtime)
 
+        // REST catch-up can finish before the fresh session snapshot grants
+        // the coordinator authority to send the answer.
+        _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
         let request = RemoteQuestionAnswerRequest(
             conversationID: conversationID,
             interactionID: interactionID,
