@@ -168,9 +168,9 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         }
     }
 
-    func canSubmit(draft: String) -> Bool {
+    func canSubmit(draft: String, attachments: [RemoteMessageAttachment] = []) -> Bool {
         gate.allowsInput
-            && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            && (draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || attachments.isEmpty == false)
     }
 
     private static func gate(for authority: ConversationComposerAuthority) -> ToasttyComposerGate {
@@ -191,7 +191,7 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
                 return .disabled(.prompt(.sending))
             case .conversationNotOpen, .conversationMissing:
                 return .disabled(.prompt(.offline))
-            case .emptyText, .messageTooLarge, .requestEncodingFailed, .cancelled:
+            case .emptyText, .messageTooLarge, .requestEncodingFailed, .cancelled, .attachmentsUnsupported, .invalidAttachments:
                 return gate(for: authority.inputAvailability)
             }
         }
@@ -203,6 +203,10 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         for failure: ConversationSendGateFailure?
     ) -> String? {
         switch failure {
+        case .attachmentsUnsupported:
+            "Update Toastty on your Mac to send attachments. Your draft is still here."
+        case .invalidAttachments:
+            "An attachment could not be sent. Check its type and size. Your draft is still here."
         case .emptyText:
             "Enter a message before sending. Your draft was not changed."
         case .messageTooLarge:
@@ -255,14 +259,46 @@ struct ToasttyComposerSubmission: Equatable, Sendable {
     let id: UUID
     let conversationID: UUID
     let text: String
+    var attachments: [RemoteMessageAttachment] = []
 }
 
 struct ToasttyComposerDraftState: Equatable, Sendable {
+    static let maximumAttachmentDraftBytes = 32 * 1024 * 1024
+    private(set) var generation = UUID()
+    private(set) var attachmentRecoveries: [String: ToasttyComposerSubmission] = [:]
+    private(set) var attachmentRecoveryMessages: [UUID: String] = [:]
+    private(set) var attachmentDrafts: [UUID: [RemoteMessageAttachment]] = [:]
     private(set) var drafts: [UUID: String] = [:]
     private(set) var submissions: [UUID: ToasttyComposerSubmission] = [:]
 
     func draft(for conversationID: UUID) -> String {
         drafts[conversationID, default: ""]
+    }
+
+    func attachments(for conversationID: UUID) -> [RemoteMessageAttachment] {
+        attachmentDrafts[conversationID, default: []]
+    }
+
+    mutating func addAttachments(_ additions: [RemoteMessageAttachment], for conversationID: UUID) -> String? {
+        guard isSubmitting(conversationID) == false else { return "Wait for this message to finish sending." }
+        let updated = attachments(for: conversationID) + additions
+        if let error = RemoteAttachmentPolicy.validationError(for: updated) { return error }
+        let retained = attachmentDrafts.values.flatMap { $0 }
+            + attachmentRecoveries.values.flatMap(\.attachments)
+        var sizesByID: [UUID: Int] = [:]
+        for attachment in retained + additions { sizesByID[attachment.id] = attachment.data.count }
+        let total = sizesByID.values.reduce(0, +)
+        guard total <= Self.maximumAttachmentDraftBytes else {
+            return "Attachment drafts are full. Remove or send attachments in another conversation first."
+        }
+        attachmentDrafts[conversationID] = updated
+        return nil
+    }
+
+    mutating func removeAttachment(_ attachmentID: UUID, for conversationID: UUID) {
+        guard isSubmitting(conversationID) == false else { return }
+        attachmentDrafts[conversationID]?.removeAll { $0.id == attachmentID }
+        if attachmentDrafts[conversationID]?.isEmpty == true { attachmentDrafts.removeValue(forKey: conversationID) }
     }
 
     func isSubmitting(_ conversationID: UUID) -> Bool {
@@ -283,13 +319,15 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     ) -> ToasttyComposerSubmission? {
         guard submissions[conversationID] == nil else { return nil }
         let text = draft(for: conversationID)
-        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                || attachments(for: conversationID).isEmpty == false else {
             return nil
         }
         let submission = ToasttyComposerSubmission(
             id: submissionID,
             conversationID: conversationID,
-            text: text
+            text: text,
+            attachments: attachments(for: conversationID)
         )
         submissions[conversationID] = submission
         return submission
@@ -301,19 +339,70 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     ) {
         guard submissions[submission.conversationID]?.id == submission.id else { return }
         submissions.removeValue(forKey: submission.conversationID)
-        guard case .enqueued = outcome,
-              draft(for: submission.conversationID) == submission.text else {
-            return
+        guard case .enqueued(let clientRequestID) = outcome else { return }
+        if !submission.attachments.isEmpty {
+            attachmentRecoveries[clientRequestID] = submission
         }
-        drafts.removeValue(forKey: submission.conversationID)
+        attachmentRecoveryMessages.removeValue(forKey: submission.conversationID)
+        if draft(for: submission.conversationID) == submission.text {
+            drafts.removeValue(forKey: submission.conversationID)
+        }
+        let submittedIDs = Set(submission.attachments.map(\.id))
+        attachmentDrafts[submission.conversationID]?.removeAll { submittedIDs.contains($0.id) }
+        if attachmentDrafts[submission.conversationID]?.isEmpty == true {
+            attachmentDrafts.removeValue(forKey: submission.conversationID)
+        }
+    }
+
+    mutating func reconcileAttachments(_ state: SendReconciliationState, for conversationID: UUID) {
+        for record in state.records {
+            guard let submission = attachmentRecoveries[record.clientRequestID],
+                  submission.conversationID == conversationID else { continue }
+            switch record.deliveryState {
+            case .pending(.awaitingResponse): continue
+            case .rejected:
+                let currentText = draft(for: conversationID)
+                if !isSubmitting(conversationID), attachments(for: conversationID).isEmpty,
+                   currentText.isEmpty || currentText == submission.text {
+                    updateDraft(submission.text, for: conversationID)
+                    attachmentDrafts[conversationID] = submission.attachments
+                    attachmentRecoveries.removeValue(forKey: record.clientRequestID)
+                    attachmentRecoveryMessages[conversationID] = "The Mac rejected the send. Your attachments are back in this draft."
+                } else {
+                    attachmentRecoveryMessages[conversationID] = isSubmitting(conversationID)
+                        ? "A rejected attachment draft is saved until this send finishes. Dismiss the rejected send to discard its attachments."
+                        : "A rejected attachment draft is saved. Clear this draft to restore it, or dismiss the rejected send to discard its attachments."
+                }
+            case .pending(.accepted), .pending(.duplicate), .confirmed, .uncertain, .operationFailed, .deliveryUnconfirmed:
+                attachmentRecoveries.removeValue(forKey: record.clientRequestID)
+            }
+        }
+    }
+
+    /// Dismissing a rejected receipt also releases its deferred recovery.
+    /// Attachments already restored to the editable draft remain there.
+    mutating func discardAttachmentRecovery(clientRequestID: String, for conversationID: UUID) {
+        if attachmentRecoveries[clientRequestID]?.conversationID == conversationID {
+            attachmentRecoveries.removeValue(forKey: clientRequestID)
+        }
+        if !attachmentRecoveries.values.contains(where: { $0.conversationID == conversationID }) {
+            attachmentRecoveryMessages.removeValue(forKey: conversationID)
+        }
     }
 
     mutating func retainConversations(_ conversationIDs: Set<UUID>) {
+        attachmentRecoveries = attachmentRecoveries.filter { conversationIDs.contains($0.value.conversationID) }
+        attachmentRecoveryMessages = attachmentRecoveryMessages.filter { conversationIDs.contains($0.key) }
+        attachmentDrafts = attachmentDrafts.filter { conversationIDs.contains($0.key) }
         drafts = drafts.filter { conversationIDs.contains($0.key) }
         submissions = submissions.filter { conversationIDs.contains($0.key) }
     }
 
     mutating func reset() {
+        generation = UUID()
+        attachmentRecoveries.removeAll(keepingCapacity: false)
+        attachmentRecoveryMessages.removeAll(keepingCapacity: false)
+        attachmentDrafts.removeAll(keepingCapacity: false)
         drafts.removeAll(keepingCapacity: false)
         submissions.removeAll(keepingCapacity: false)
     }
@@ -360,6 +449,10 @@ struct ToasttySendReceiptPresentation: Equatable, Sendable {
             "The Mac could not accept this message"
         case .rejected(.promptNotOpen):
             "The prompt closed before this message was sent"
+        case .rejected(.invalidAttachments):
+            "An attachment could not be accepted"
+        case .rejected(.attachmentStorageUnavailable):
+            "The Mac could not save the attachments"
         case .rejected(.emptyText):
             "The message was empty"
         case .uncertain:
@@ -385,6 +478,8 @@ struct ToasttySendReceiptPresentation: Equatable, Sendable {
             "Respond to the interaction on the Mac. Toastty did not retry."
         case .rejected(.notBound), .rejected(.surfaceUnavailable), .rejected(.promptNotOpen):
             "Check the session on the Mac. The attempted message is shown below; Toastty did not retry it."
+        case .rejected(.invalidAttachments), .rejected(.attachmentStorageUnavailable):
+            "The attachments were not delivered. Review the draft and check Toastty on your Mac before sending again."
         case .rejected(.emptyText):
             "Enter a message before sending."
         case .uncertain:

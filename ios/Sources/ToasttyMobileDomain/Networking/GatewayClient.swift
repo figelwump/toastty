@@ -181,13 +181,16 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
     }
 
     public func send(_ request: RemoteMessageSendRequest) async throws -> RemoteMessageSendResult {
-        let urlRequest = try await makeRequest(
-            method: "POST",
-            path: "/api/conversation.message.send",
-            body: try Self.encodedMessageSendRequest(request),
-            authenticated: true,
-            sendsOrigin: true
-        )
+        let body = try Self.encodedMessageSendRequest(request)
+        var urlRequest: URLRequest
+        if request.attachments.isEmpty {
+            urlRequest = try await makeRequest(method: "POST", path: "/api/conversation.message.send",
+                                              body: body, authenticated: true, sendsOrigin: true)
+        } else {
+            urlRequest = try await makeNativeBearerRequest(method: "POST", path: RemoteAttachmentPolicy.sendPath,
+                                                          body: body, sendsOrigin: true)
+            urlRequest.timeoutInterval = 150
+        }
         let response = try await sendTransportRequest(urlRequest)
 
         if response.statusCode == 403, Self.isSendResultEnvelope(response.body) {
@@ -238,7 +241,9 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
     /// use the same JSON representation as the bytes sent to the Mac.
     static func encodedMessageSendRequest(_ request: RemoteMessageSendRequest) throws -> Data {
         do {
-            return try ConversationEventCoding.makeEncoder().encode(request)
+            let encoder = ConversationEventCoding.makeEncoder()
+            if !request.attachments.isEmpty { encoder.outputFormatting.insert(.withoutEscapingSlashes) }
+            return try encoder.encode(request)
         } catch {
             throw GatewayFailure.invalidResponse
         }

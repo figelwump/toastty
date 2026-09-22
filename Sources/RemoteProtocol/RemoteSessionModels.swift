@@ -82,10 +82,19 @@ public struct RemoteConversationPlacement: Codable, Equatable, Sendable {
     public var workspaceTitle: String?
     public var panelID: UUID?
 
-    public init(workspaceID: UUID? = nil, workspaceTitle: String? = nil, panelID: UUID? = nil) {
+    /// State-backed Mac tab context; absent on older hosts or detached conversations.
+    public var workspaceTabID: UUID?
+    public var workspaceTabTitle: String?
+
+    public init(
+        workspaceID: UUID? = nil, workspaceTitle: String? = nil, panelID: UUID? = nil,
+        workspaceTabID: UUID? = nil, workspaceTabTitle: String? = nil
+    ) {
         self.workspaceID = workspaceID
         self.workspaceTitle = workspaceTitle
         self.panelID = panelID
+        self.workspaceTabID = workspaceTabID
+        self.workspaceTabTitle = workspaceTabTitle
     }
 }
 

@@ -163,7 +163,7 @@ var appInfoPlist: [String: Plist.Value] = [
     ]),
     "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
     "ITSAppUsesNonExemptEncryption": .boolean(false),
-    "NSCameraUsageDescription": .string("Toastty scans a pairing code shown by your Mac."),
+    "NSCameraUsageDescription": .string("Toastty uses the camera to take photos for messages and scan a pairing code shown by your Mac."),
     "NSLocalNetworkUsageDescription": .string("Toastty connects to a local development gateway when local mode is enabled."),
     "UILaunchScreen": .dictionary([:]),
     // The palette in ToasttyDesignTokens is dark-only; forcing dark here keeps

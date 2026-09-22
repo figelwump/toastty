@@ -32,6 +32,8 @@ public struct ConversationComposerStamp: Equatable, Hashable, Sendable {
 /// host delivery outcomes: the draft remains owned by the caller in every case.
 public enum ConversationSendGateFailure: Equatable, Sendable {
     case emptyText
+    case attachmentsUnsupported
+    case invalidAttachments
     case messageTooLarge
     case requestEncodingFailed
     case cancelled

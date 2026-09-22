@@ -69,7 +69,9 @@ struct RemoteAccessGatewayServerTests {
     private static func startHarness(
         maximumConnections: Int = RemoteAccessGatewayServer.defaultMaximumConnections,
         requestHeaderTimeoutNanoseconds: UInt64 = RemoteAccessGatewayServer.defaultRequestHeaderTimeoutNanoseconds,
-        previewHandler: (@MainActor (RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse)? = nil
+        attachmentUploadTimeoutNanoseconds: UInt64 = RemoteAccessGatewayServer.defaultAttachmentUploadTimeoutNanoseconds,
+        previewHandler: (@MainActor (RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse)? = nil,
+        attachmentSendHandler: (@MainActor (RemoteMessageSendRequest, RemoteDeviceRecord) async -> RemoteMessageSendResult)? = nil
     ) throws -> Harness {
         let deviceStore = RemoteDeviceStore(fileURL: nil)
         var port: UInt16 = 0
@@ -93,10 +95,12 @@ struct RemoteAccessGatewayServerTests {
                 )
             )
             handler.previewHandler = previewHandler
+            handler.attachmentSendHandler = attachmentSendHandler
             let server = RemoteAccessGatewayServer(
                 handler: handler,
                 maximumConnections: maximumConnections,
-                requestHeaderTimeoutNanoseconds: requestHeaderTimeoutNanoseconds
+                requestHeaderTimeoutNanoseconds: requestHeaderTimeoutNanoseconds,
+                attachmentUploadTimeoutNanoseconds: attachmentUploadTimeoutNanoseconds
             )
             do {
                 try server.start(port: candidate)
@@ -602,6 +606,115 @@ struct RemoteAccessGatewayServerTests {
             Issue.record("Expected read stream to survive a send-scope downgrade")
             return
         }
+    }
+
+
+    @Test func attachmentUploadTraversesAuthenticatedLoopbackAndPreservesBytes() async throws {
+        var received: RemoteMessageSendRequest?
+        let harness = try Self.startHarness(attachmentSendHandler: { request, _ in
+            received = request
+            return .accepted(epoch: request.expectedInputEpoch)
+        })
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+        let native = try await Self.pairNativeDevice(harness)
+        let send = RemoteMessageSendRequest(conversationID: RemoteConversationID(), clientRequestID: "large-wire-send",
+            expectedInputEpoch: .init(bindingID: UUID(), counter: 3), text: "Read this file",
+            attachments: [.init(filename: "large.txt", data: Data(repeating: 65, count: 200_000))])
+        var request = URLRequest(url: harness.baseURL.appending(path: RemoteAttachmentPolicy.sendPath))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(native.credential)", forHTTPHeaderField: "Authorization")
+        request.setValue(native.tailscaleLogin, forHTTPHeaderField: "Tailscale-User-Login")
+        request.httpBody = try JSONEncoder().encode(send)
+        let session = Self.cookieFreeEphemeralSession()
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        #expect(try JSONDecoder().decode(RemoteMessageSendResult.self, from: data).isAccepted)
+        #expect(received == send)
+    }
+
+    @Test func attachmentHeadersRejectUnauthenticatedUploadWithoutWaitingForBodyAndLimitAdmission() async throws {
+        let harness = try Self.startHarness()
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+        let native = try await Self.pairNativeDevice(harness)
+        func connection() -> NWConnection {
+            let connection = NWConnection(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: harness.port)!, using: .tcp)
+            connection.start(queue: DispatchQueue(label: "attachment-header-test"))
+            return connection
+        }
+        func head(authenticated: Bool) -> Data {
+            let auth = authenticated ? "Authorization: Bearer \(native.credential)\r\nTailscale-User-Login: \(native.tailscaleLogin)\r\n" : ""
+            return Data("POST \(RemoteAttachmentPolicy.sendPath) HTTP/1.1\r\nHost: localhost\r\n\(auth)Content-Length: \(RemoteAttachmentPolicy.maximumEncodedBodyBytes)\r\n\r\n".utf8)
+        }
+        let unauthenticated = connection()
+        defer { unauthenticated.cancel() }
+        unauthenticated.send(content: head(authenticated: false), completion: .contentProcessed { _ in })
+        let denied: Data = await withCheckedContinuation { continuation in
+            unauthenticated.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
+                continuation.resume(returning: data ?? Data())
+            }
+        }
+        #expect(String(decoding: denied, as: UTF8.self).hasPrefix("HTTP/1.1 401"))
+        #expect(harness.server.attachmentUploadCountForTesting == 0)
+
+        let first = connection()
+        defer { first.cancel() }
+        first.send(content: head(authenticated: true), completion: .contentProcessed { _ in })
+        for _ in 0..<100 where harness.server.attachmentUploadCountForTesting == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(harness.server.attachmentUploadCountForTesting == 1)
+        let second = connection()
+        defer { second.cancel() }
+        second.send(content: head(authenticated: true), completion: .contentProcessed { _ in })
+        let busy: Data = await withCheckedContinuation { continuation in
+            second.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
+                continuation.resume(returning: data ?? Data())
+            }
+        }
+        #expect(String(decoding: busy, as: UTF8.self).hasPrefix("HTTP/1.1 503"))
+        first.cancel()
+        for _ in 0..<100 where harness.server.attachmentUploadCountForTesting != 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(harness.server.attachmentUploadCountForTesting == 0)
+    }
+
+    @Test func admittedAttachmentUploadUsesItsAbsoluteDeadlineAndReleasesSlotAfterTimeout() async throws {
+        let harness = try Self.startHarness(requestHeaderTimeoutNanoseconds: 100_000_000,
+                                            attachmentUploadTimeoutNanoseconds: 500_000_000)
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+        let native = try await Self.pairNativeDevice(harness)
+        let head = Data(("POST \(RemoteAttachmentPolicy.sendPath) HTTP/1.1\r\nHost: localhost\r\n"
+            + "Authorization: Bearer \(native.credential)\r\nTailscale-User-Login: \(native.tailscaleLogin)\r\n"
+            + "Content-Length: 100000\r\n\r\n").utf8)
+        func startUpload() -> NWConnection {
+            let connection = NWConnection(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: harness.port)!, using: .tcp)
+            connection.start(queue: DispatchQueue(label: "attachment-timeout-test"))
+            connection.send(content: head, completion: .contentProcessed { _ in })
+            return connection
+        }
+        let first = startUpload()
+        defer { first.cancel() }
+        for _ in 0..<50 where harness.server.attachmentUploadCountForTesting == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(harness.server.attachmentUploadCountForTesting == 1)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(harness.server.attachmentUploadCountForTesting == 1, "Admission replaced the shorter header deadline")
+        for _ in 0..<100 where harness.server.attachmentUploadCountForTesting != 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(harness.server.attachmentUploadCountForTesting == 0)
+        let next = startUpload()
+        defer { next.cancel() }
+        for _ in 0..<50 where harness.server.attachmentUploadCountForTesting == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(harness.server.attachmentUploadCountForTesting == 1, "A timed-out upload must release admission")
     }
 
     @Test func incompletePreAuthRequestIsDroppedAtDeadline() async throws {

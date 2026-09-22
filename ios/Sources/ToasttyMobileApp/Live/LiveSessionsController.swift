@@ -25,6 +25,12 @@ protocol LiveConnectionRuntime: Sendable {
         text: String,
         composerStamp: ConversationComposerStamp
     ) async -> ConversationSendOutcome
+    func sendMessage(
+        conversationID: RemoteConversationID,
+        text: String,
+        attachments: [RemoteMessageAttachment],
+        composerStamp: ConversationComposerStamp
+    ) async -> ConversationSendOutcome
     func answerQuestion(
         _ request: RemoteQuestionAnswerRequest
     ) async throws -> RemoteQuestionAnswerResult
@@ -38,6 +44,16 @@ protocol LiveConnectionRuntime: Sendable {
 }
 
 extension LiveConnectionRuntime {
+    func sendMessage(
+        conversationID: RemoteConversationID,
+        text: String,
+        attachments: [RemoteMessageAttachment],
+        composerStamp: ConversationComposerStamp
+    ) async -> ConversationSendOutcome {
+        guard attachments.isEmpty else { return .notEnqueued(.attachmentsUnsupported) }
+        return await sendMessage(conversationID: conversationID, text: text, composerStamp: composerStamp)
+    }
+
     func answerQuestion(
         _ request: RemoteQuestionAnswerRequest
     ) async throws -> RemoteQuestionAnswerResult {
@@ -99,6 +115,16 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
             text: text,
             composerStamp: composerStamp
         )
+    }
+
+    func sendMessage(
+        conversationID: RemoteConversationID,
+        text: String,
+        attachments: [RemoteMessageAttachment],
+        composerStamp: ConversationComposerStamp
+    ) async -> ConversationSendOutcome {
+        await coordinator.sendMessage(conversationID: conversationID, text: text,
+                                      attachments: attachments, composerStamp: composerStamp)
     }
 
     func answerQuestion(
@@ -304,6 +330,10 @@ final class LiveSessionsController {
                     text: text,
                     composerStamp: stamp
                 )
+            },
+            sendAttachments: { [runtime] text, attachments, stamp in
+                await runtime.sendMessage(conversationID: remoteID, text: text,
+                                          attachments: attachments, composerStamp: stamp)
             },
             answerQuestion: { [runtime] request in
                 try await runtime.answerQuestion(request)

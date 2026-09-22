@@ -6,6 +6,86 @@ import Testing
 
 struct RemoteAccessServiceSafetyTests {
     @MainActor
+    @Test func terminalOnlyTabRenameAndResetPublishPlacementWithoutActivity() async throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        let original = fixture.summary
+        let workspaceID = try #require(original.placement.workspaceID)
+        let tabID = try #require(original.placement.workspaceTabID)
+        #expect(fixture.service.facadeSessionList(at: .now).workspaces.allSatisfy { $0.panels.isEmpty })
+
+        let titles: [String?] = ["iOS navigation 👩🏽‍💻", nil]
+        for title in titles {
+            fixture.server.removeAllBroadcasts()
+            #expect(fixture.store.send(.setWorkspaceTabCustomTitle(
+                workspaceID: workspaceID, tabID: tabID, title: title
+            )))
+            let expected = title ?? original.placement.workspaceTabTitle
+            await SessionRuntimeStoreTestSupport.waitUntil {
+                fixture.server.sessionListSnapshots.last?.conversations.first {
+                    $0.conversationID == fixture.conversationID
+                }?.placement.workspaceTabTitle == expected
+            }
+            let summary = try #require(fixture.server.sessionListSnapshots.last?.conversations.first {
+                $0.conversationID == fixture.conversationID
+            })
+            #expect(summary.placement.workspaceTabID == tabID)
+            #expect(summary.placement.workspaceTabTitle == expected)
+            #expect(summary.title == original.title)
+            #expect(summary.updatedAt == original.updatedAt)
+            #expect(summary.latestSequence == original.latestSequence)
+            #expect(summary.inputAvailability == original.inputAvailability)
+            #expect(summary.presentationStatus == original.presentationStatus)
+            #expect(fixture.service.facadeConversationSnapshot(
+                for: fixture.conversationID, at: .now
+            )?.summary.placement == summary.placement)
+        }
+    }
+
+    @MainActor
+    @Test func closedPanelSnapshotOmitsTabPlacement() throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.summary.placement.workspaceTabID != nil)
+        #expect(fixture.store.send(.closePanel(panelID: fixture.panelID)))
+        let snapshot = try #require(fixture.service.facadeConversationSnapshot(
+            for: fixture.conversationID, at: .now
+        ))
+        #expect(snapshot.summary.placement.workspaceTabID == nil)
+        #expect(snapshot.summary.placement.workspaceTabTitle == nil)
+    }
+
+    @MainActor
+    @Test func movingConversationToAnotherWorkspacePublishesNewTabIdentity() async throws {
+        let fixture = try RemoteBootstrapFixture()
+        defer { fixture.removeRuntimeFiles() }
+        let selection = try #require(fixture.store.state.selectedWorkspaceSelection())
+        let originalTabID = try #require(fixture.summary.placement.workspaceTabID)
+        #expect(fixture.store.send(.createWorkspace(windowID: selection.windowID, title: "Destination", activate: true)))
+        let workspaceID = try #require(fixture.store.state.selectedWorkspaceSelection()).workspaceID
+        let destination = try #require(fixture.store.state.workspacesByID[workspaceID]?.selectedTab)
+        #expect(destination.id != originalTabID)
+        #expect(fixture.store.send(.setWorkspaceTabCustomTitle(
+            workspaceID: workspaceID, tabID: destination.id, title: "Release prep"
+        )))
+        let slotID = try #require(destination.layoutTree.allSlotInfos.first?.slotID)
+        fixture.server.removeAllBroadcasts()
+        #expect(fixture.store.send(.movePanelToWorkspace(panelID: fixture.panelID, targetWorkspaceID: workspaceID, targetSlotID: slotID)))
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            fixture.server.sessionListSnapshots.last?.conversations.first {
+                $0.conversationID == fixture.conversationID
+            }?.placement.workspaceTabID == destination.id
+        }
+        let summary = try #require(fixture.server.sessionListSnapshots.last?.conversations.first {
+            $0.conversationID == fixture.conversationID
+        })
+        #expect(summary.placement.panelID == fixture.panelID)
+        #expect(summary.placement.workspaceID == workspaceID)
+        #expect(summary.placement.workspaceTabID == destination.id)
+        #expect(summary.placement.workspaceTabTitle == "Release prep")
+    }
+
+    @MainActor
     @Test func rootModelSwitchesPublishWithoutTranscriptOrInputChanges() async throws {
         let fixture = try RemoteBootstrapFixture()
         defer { fixture.removeRuntimeFiles() }
@@ -985,6 +1065,112 @@ struct RemoteAccessServiceSafetyTests {
         #expect(fixture.summary.inputAvailability.allowsRemoteSend)
     }
 
+
+    @MainActor
+    @Test func attachmentSendStagesExactBytesDeliversToBoundPanelAndSuppressesReplay() async throws {
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else { Issue.record("Expected prompt"); return }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, submit, panelID, _ in
+            #expect(panelID == fixture.panelID)
+            #expect(submit)
+            delivered.append(text)
+            return true
+        }
+        let attachment = RemoteMessageAttachment(filename: "original.txt", data: Data("uploaded file bytes".utf8))
+        let request = RemoteMessageSendRequest(conversationID: fixture.conversationID, clientRequestID: "attachment-delivery",
+            expectedInputEpoch: epoch, text: "Read this", attachments: [attachment])
+        let http = RemoteGatewayHTTPRequest(method: "POST", path: RemoteAttachmentPolicy.sendPath,
+            headers: ["authorization": "Bearer \(try #require(fixture.nativeCredential))", "tailscale-user-login": "owner@example.com"],
+            body: try JSONEncoder().encode(request))
+        func send() async throws -> RemoteMessageSendResult {
+            guard case .deferredAttachments(let deviceID, let body) = fixture.gatewayHandler.handle(http, at: Date()) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            let response = await fixture.gatewayHandler.resolveAttachments(deviceID: deviceID, body: body)
+            return try JSONDecoder().decode(RemoteMessageSendResult.self, from: response.body)
+        }
+        #expect(try await send() == .accepted(epoch: epoch))
+        #expect(delivered.count == 1)
+        let directories = try FileManager.default.contentsOfDirectory(at: fixture.attachmentRoot, includingPropertiesForKeys: nil)
+        #expect(directories.count == 1)
+        let files = try FileManager.default.contentsOfDirectory(at: #require(directories.first), includingPropertiesForKeys: nil)
+        let file = try #require(files.first)
+        #expect(try Data(contentsOf: file) == attachment.data)
+        // Enumeration can resolve /tmp to /private/tmp. Delivery uses the
+        // configured runtime spelling, so derive that exact path here.
+        let deliveredFile = fixture.attachmentRoot
+            .appendingPathComponent(try #require(directories.first).lastPathComponent)
+            .appendingPathComponent(file.lastPathComponent)
+        #expect(delivered.first == "Read this\n\nRead the following files attached to this message on this Mac:\n" + TerminalDropPayloadBuilder.shellEscapedPath(deliveredFile.path))
+        #expect(try await send() == .duplicate)
+        #expect(delivered.count == 1)
+        #expect(try FileManager.default.contentsOfDirectory(at: fixture.attachmentRoot, includingPropertiesForKeys: nil).count == 1)
+
+        // Exercise the actual transcript tailer/projection using the exact
+        // payload captured at the terminal boundary.
+        let observation: [String: Any] = ["timestamp": "2026-08-07T10:00:05.000Z", "type": "event_msg",
+            "payload": ["type": "user_message", "message": try #require(delivered.first)]]
+        var line = try JSONSerialization.data(withJSONObject: observation)
+        line.append(10)
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        try transcript.seekToEnd()
+        try transcript.write(contentsOf: line)
+        try transcript.close()
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            guard case .page(let page) = fixture.service.facadeConversationEvents(for: fixture.conversationID, after: nil, limit: 100) else { return false }
+            return page.events.contains { event in
+                guard case .userMessage(let payload) = event.payload else { return false }
+                return payload.clientRequestID == request.clientRequestID && payload.text == request.displayText
+            }
+        }
+        guard case .page(let page) = fixture.service.facadeConversationEvents(for: fixture.conversationID, after: nil, limit: 100) else { Issue.record("Missing projection"); return }
+        #expect(page.events.contains { event in
+            guard case .userMessage(let payload) = event.payload else { return false }
+            return payload.clientRequestID == request.clientRequestID && payload.text == request.displayText
+        })
+    }
+
+    @MainActor
+    @Test func attachmentStagingIsRemovedWhenFinalEpochGateRejects() async throws {
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else { Issue.record("Expected prompt"); return }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var deliveries = 0
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in deliveries += 1; return true }
+        let request = RemoteMessageSendRequest(conversationID: fixture.conversationID, clientRequestID: "attachment-stale",
+            expectedInputEpoch: epoch.next(), text: "", attachments: [.init(filename: "x.txt", data: Data("private bytes".utf8))])
+        let http = RemoteGatewayHTTPRequest(method: "POST", path: RemoteAttachmentPolicy.sendPath,
+            headers: ["authorization": "Bearer \(try #require(fixture.nativeCredential))", "tailscale-user-login": "owner@example.com"],
+            body: try JSONEncoder().encode(request))
+        guard case .deferredAttachments(let deviceID, let body) = fixture.gatewayHandler.handle(http, at: Date()) else { Issue.record("Expected deferred send"); return }
+        let response = await fixture.gatewayHandler.resolveAttachments(deviceID: deviceID, body: body)
+        #expect(try JSONDecoder().decode(RemoteMessageSendResult.self, from: response.body) == .rejected(reason: .epochMismatch))
+        #expect(deliveries == 0)
+        #expect(try FileManager.default.contentsOfDirectory(at: fixture.attachmentRoot, includingPropertiesForKeys: nil).isEmpty)
+    }
+
+    @Test func attachmentCorrelationRequiresExactDeliveredPromptBeforeProjectingDisplayText() throws {
+        let conversationID = RemoteConversationID()
+        var request = Self.request(conversationID: conversationID, clientRequestID: "attachment-correlation", text: "Look")
+        request.attachments = [.init(filename: "photo.jpg", data: Data([255, 216, 255]))]
+        let deliveredText = "Look\nRead files '/private/generated.jpg'"
+        var correlator = RemotePendingSendCorrelator()
+        correlator.record(request, deliveredText: deliveredText)
+        let stamped = correlator.stamp([Self.userObservation(text: deliveredText, fingerprint: "delivered")], for: conversationID)
+        let payload = try #require(Self.userPayload(from: stamped[0]))
+        #expect(payload.clientRequestID == request.clientRequestID)
+        #expect(payload.text == request.displayText)
+        correlator.record(request, deliveredText: deliveredText)
+        let unmatched = correlator.stamp([Self.userObservation(text: request.displayText, fingerprint: "not-delivered-text")], for: conversationID)
+        #expect(Self.userPayload(from: unmatched[0])?.clientRequestID == nil)
+    }
+
     @MainActor
     @Test func acceptedSendWithoutProviderEchoEmitsUnconfirmedReceipt() async throws {
         let fixture = try RemoteBootstrapFixture(
@@ -1253,12 +1439,15 @@ private final class RemoteBootstrapFixture {
     let resumeRecord: ManagedAgentResumeRecord
     let confirmedAt: Date
     let runtimeHome: String
+    let nativeCredential: String?
+    let attachmentRoot: URL
 
     init(
         agent: AgentKind = .codex,
         statusKind: SessionStatusKind = .idle,
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
-        sendConfirmationTimeout: Duration = .seconds(10)
+        sendConfirmationTimeout: Duration = .seconds(10),
+        pairNativeDevice: Bool = false
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -1300,6 +1489,14 @@ private final class RemoteBootstrapFixture {
             homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
             environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
         )
+        attachmentRoot = runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments")
+        if pairNativeDevice {
+            let devices = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
+            let now = Date()
+            let offer = try devices.issueNativePairingOffer(gatewayURL: URL(string: "https://test.tailnet.ts.net")!, at: now)
+            guard case .paired(_, let token) = try devices.redeemNativePairingOffer(using: .qr(offerID: offer.id, secret: offer.qrPayload.secret), deviceName: "Test phone", tailscaleLogin: "owner@example.com", at: now) else { throw CocoaError(.coderInvalidValue) }
+            nativeCredential = token
+        } else { nativeCredential = nil }
         service = RemoteAccessService(
             store: store,
             annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),

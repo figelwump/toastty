@@ -724,6 +724,95 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         }
     }
 
+    func testAttachmentChooserCancelLeavesDraftUnchanged() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"])
+        openGatedSendConversation(in: app)
+        let attach = app.buttons["toastty-mobile-attachment-add"]
+        XCTAssertTrue(attach.waitForExistence(timeout: 5))
+        attach.tap()
+        XCTAssertTrue(app.buttons["Photo Library"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Take Photo"].exists)
+        XCTAssertTrue(app.buttons["Choose File"].exists)
+        attachScreenshot(named: "fixture-attachment-chooser", of: app)
+        if app.buttons["Cancel"].exists {
+            app.buttons["Cancel"].tap()
+        } else {
+            // iOS 26 presents this as a popover without a Cancel action.
+            // Tapping the inert title dismisses it without choosing a source.
+            app.staticTexts["toastty-mobile-conversation-title"].tap()
+        }
+        XCTAssertTrue(app.buttons["Photo Library"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(attach.isEnabled)
+        XCTAssertFalse(app.buttons["toastty-mobile-composer-send"].isEnabled)
+        XCTAssertFalse(app.buttons["toastty-mobile-attachment-remove"].exists)
+    }
+
+    func testAttachmentFilesPickerCancelLeavesDraftUnchanged() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"])
+        openGatedSendConversation(in: app)
+        app.buttons["toastty-mobile-attachment-add"].tap()
+        let files = app.buttons["Choose File"].firstMatch
+        XCTAssertTrue(files.waitForExistence(timeout: 5))
+        files.tap()
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10), app.debugDescription)
+        attachScreenshot(named: "fixture-attachment-system-files", of: app)
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["toastty-mobile-attachment-add"].isEnabled)
+        XCTAssertFalse(app.buttons["toastty-mobile-attachment-remove"].exists)
+        XCTAssertFalse(app.buttons["toastty-mobile-composer-send"].isEnabled)
+    }
+
+    func testAttachmentPhotoLibraryCancelLeavesDraftUnchanged() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"])
+        openGatedSendConversation(in: app)
+        app.buttons["toastty-mobile-attachment-add"].tap()
+        let photos = app.buttons["Photo Library"].firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 5))
+        photos.tap()
+        let close = app.buttons.matching(NSPredicate(format: "label == 'Cancel' OR label == 'Close'")).firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 10), app.debugDescription)
+        attachScreenshot(named: "fixture-attachment-system-photos", of: app)
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["toastty-mobile-attachment-add"].isEnabled)
+        XCTAssertFalse(app.buttons["toastty-mobile-attachment-remove"].exists)
+        XCTAssertFalse(app.buttons["toastty-mobile-composer-send"].isEnabled)
+    }
+
+    func testAttachmentCameraUnavailableExplainsAlternativeSources() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"])
+        openGatedSendConversation(in: app)
+        app.buttons["toastty-mobile-attachment-add"].tap()
+        let camera = app.buttons["Take Photo"].firstMatch
+        XCTAssertTrue(camera.waitForExistence(timeout: 5))
+        camera.tap()
+        let message = app.staticTexts["This device has no available camera. Choose Photo Library or Files instead."]
+        XCTAssertTrue(message.waitForExistence(timeout: 5), app.debugDescription)
+        attachScreenshot(named: "fixture-attachment-camera-unavailable", of: app)
+        app.alerts.buttons["OK"].tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-attachment-add"].isEnabled)
+        XCTAssertFalse(app.buttons["toastty-mobile-composer-send"].isEnabled)
+    }
+
+    func testAttachmentPreviewRemovalAndEnablesAttachmentOnlySend() {
+        let app = launchFixtureApp(environment: [
+            "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
+            "TOASTTY_MOBILE_FIXTURE_ATTACHMENT_DRAFT": "1"
+        ])
+        openGatedSendConversation(in: app)
+        let remove = app.buttons["toastty-mobile-attachment-remove"]
+        attachScreenshot(named: "fixture-attachment-preview-before-removal", of: app)
+        XCTAssertTrue(app.staticTexts["fixture-notes.txt"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(remove.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["toastty-mobile-composer-send"].isEnabled)
+        attachScreenshot(named: "fixture-attachment-preview", of: app)
+        remove.tap()
+        XCTAssertFalse(remove.exists)
+        XCTAssertFalse(app.buttons["toastty-mobile-composer-send"].isEnabled)
+    }
+
     func testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
@@ -1266,6 +1355,95 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
+    func testFourAttachmentsRemainScrollableAboveKeyboardAtAccessibilityXXXL() throws {
+        let app = launchFixtureApp(
+            launchArguments: [
+                "-UIPreferredContentSizeCategoryName",
+                UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
+            ],
+            environment: [
+                "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
+                "TOASTTY_MOBILE_FIXTURE_ATTACHMENT_DRAFT": "4",
+            ]
+        )
+        openGatedSendConversation(in: app)
+        let input = composerInput(in: app)
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(input.isHittable)
+        // XCTest selected the text view's fractional top edge on CI. Tap its
+        // visible center so the gesture lands inside the editor's bounds.
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        attachScreenshot(named: "fixture-attachment-composer-after-tap-accessibility-xxxl", of: app)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        input.typeText("Review these files")
+        let list = app.scrollViews["toastty-mobile-attachment-list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertLessThanOrEqual(list.frame.height, 133)
+        let tab = app.staticTexts["toastty-mobile-workspace-tab"]
+        XCTAssertTrue(tab.isHittable, "Tab context must remain visible with attachments and the keyboard")
+        XCTAssertEqual(tab.label, "Mac tab: Release preparation — changelog, signing, and TestFlight verification")
+        XCTAssertLessThanOrEqual(tab.frame.maxY, list.frame.minY)
+        let scaledBodyFont = UIFont.preferredFont(
+            forTextStyle: .body,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        )
+        XCTAssertGreaterThanOrEqual(
+            input.frame.height, ceil(scaledBodyFont.lineHeight),
+            "The UIKit text field must retain at least one scaled line instead of overflowing a compressed border"
+        )
+        let attach = app.buttons["toastty-mobile-attachment-add"]
+        XCTAssertEqual(attach.label, "Attach")
+        XCTAssertGreaterThanOrEqual(attach.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(attach.frame.height, 44)
+        XCTAssertTrue(input.isHittable)
+        XCTAssertTrue(send.isHittable)
+        XCTAssertTrue(send.isEnabled)
+        let keyboardTop = topOfKeyboardObstruction(keyboard)
+        XCTAssertLessThanOrEqual(input.frame.maxY, keyboardTop + 1)
+        XCTAssertLessThanOrEqual(send.frame.maxY, keyboardTop + 1)
+        let removeLast = app.buttons["Remove fixture-notes-4.txt"]
+        for _ in 0..<6 where !removeLast.isHittable || !list.frame.insetBy(dx: -1, dy: -1).contains(removeLast.frame) {
+            list.swipeUp()
+        }
+        XCTAssertTrue(removeLast.isHittable, app.debugDescription)
+        XCTAssertTrue(list.frame.insetBy(dx: -1, dy: -1).contains(removeLast.frame),
+                      "The complete 44-point Remove control must fit inside the attachment list")
+        let filenameLast = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "fixture-notes-4.txt")).firstMatch
+        XCTAssertTrue(filenameLast.isHittable)
+        XCTAssertTrue(list.frame.insetBy(dx: -1, dy: -1).contains(filenameLast.frame),
+                      "The attachment filename must remain visible alongside Remove")
+        attachScreenshot(named: "fixture-four-attachments-keyboard-accessibility-xxxl", of: app)
+        removeLast.tap()
+        XCTAssertTrue(removeLast.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(keyboard.exists)
+        XCTAssertTrue(app.buttons["toastty-mobile-attachment-add"].isEnabled)
+        XCTAssertTrue(input.isHittable)
+        XCTAssertTrue(send.isHittable)
+
+        let twoLineHeight = input.frame.height
+        input.typeText("\n3\n4\n5\n6\nFOX7")
+        XCTAssertEqual(input.frame.height, twoLineHeight, accuracy: 2,
+                       "Accessibility drafts with attachments must scroll after two visible lines")
+        XCTAssertTrue(try recognizedText(in: input.screenshot()).contains("FOX7"),
+                      "The capped composer must scroll to its newest text")
+        XCTAssertLessThanOrEqual(input.frame.maxY, topOfKeyboardObstruction(keyboard) + 1)
+        XCTAssertLessThanOrEqual(send.frame.maxY, topOfKeyboardObstruction(keyboard) + 1)
+        XCTAssertLessThanOrEqual(attach.frame.maxY, topOfKeyboardObstruction(keyboard) + 1)
+        attachScreenshot(named: "fixture-attachments-long-draft-accessibility-xxxl", of: app)
+
+        let draftLength = (input.value as? String)?.count ?? 0
+        XCTAssertGreaterThan(draftLength, 0)
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: draftLength))
+        XCTAssertLessThan(input.frame.height, twoLineHeight,
+                          "Clearing a long draft must return the composer to one visible line")
+        XCTAssertTrue(input.isHittable)
+        XCTAssertTrue(send.isHittable)
+        XCTAssertTrue(send.isEnabled, "The remaining attachments allow an attachment-only send")
+        attachScreenshot(named: "fixture-attachments-cleared-draft-accessibility-xxxl", of: app)
+    }
+
     func testGatedSendComposerReflowsAtAccessibilityXXXL() {
         let app = launchFixtureApp(
             launchArguments: [
@@ -1332,6 +1510,12 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         input.typeText("Use build 413")
         XCTAssertTrue(profile.isHittable)
         XCTAssertLessThanOrEqual(profile.frame.maxY, input.frame.minY)
+        let tab = app.staticTexts["toastty-mobile-workspace-tab"]
+        XCTAssertEqual(tab.label, "Mac tab: Release preparation — changelog, signing, and TestFlight verification")
+        XCTAssertTrue(tab.isHittable)
+        XCTAssertGreaterThanOrEqual(tab.frame.minX, profile.frame.maxX)
+        XCTAssertLessThanOrEqual(tab.frame.maxY, input.frame.minY)
+        XCTAssertEqual(input.value as? String, "Use build 413")
         attachScreenshot(named: "execution-profile-keyboard", of: app)
         app.buttons["toastty-mobile-composer-send"].tap()
         let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
@@ -1360,6 +1544,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertLessThanOrEqual(profile.frame.maxY, input.frame.minY)
         XCTAssertTrue(status.exists)
         XCTAssertLessThanOrEqual(input.frame.maxY, status.frame.minY)
+        let tab = app.staticTexts["toastty-mobile-workspace-tab"]
+        XCTAssertTrue(tab.exists)
+        XCTAssertGreaterThan(tab.frame.width, 0)
+        XCTAssertLessThanOrEqual(tab.frame.maxX, app.frame.maxX)
+        XCTAssertLessThanOrEqual(tab.frame.maxY, input.frame.minY)
         attachScreenshot(named: "execution-profile-accessibility-xxxl", of: app)
     }
 
@@ -1371,6 +1560,23 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         session.tap()
         XCTAssertTrue(composerInput(in: app).waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["toastty-mobile-session-execution-profile"].exists)
+        XCTAssertFalse(app.staticTexts["toastty-mobile-workspace-tab"].exists)
+    }
+
+    func testTabWithoutExecutionProfileUsesTrailingComposerRow() {
+        let app = launchFixtureApp()
+        openWorkspace(releaseWorkspaceID, in: app)
+        let session = app.buttons["toastty-mobile-workspace-session-B1000000-0000-0000-0000-000000000008"]
+        XCTAssertTrue(scrollWorkspaceTo(session, in: app))
+        session.tap()
+        let input = composerInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        let tab = app.staticTexts["toastty-mobile-workspace-tab"]
+        XCTAssertTrue(tab.exists)
+        XCTAssertFalse(app.staticTexts["toastty-mobile-session-execution-profile"].exists)
+        XCTAssertGreaterThan(tab.frame.midX, app.frame.midX)
+        XCTAssertLessThanOrEqual(tab.frame.maxY, input.frame.minY)
+        attachScreenshot(named: "tab-only-composer-row", of: app)
     }
 
     func testDisconnectedExecutionProfileIsLastReported() {
@@ -1381,6 +1587,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
         XCTAssertTrue(profile.waitForExistence(timeout: 5))
         XCTAssertTrue(profile.label.hasPrefix("Last reported. Model: "))
+        XCTAssertTrue(app.staticTexts["toastty-mobile-workspace-tab"].label.hasPrefix("Last reported. Mac tab: "))
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
     }
 

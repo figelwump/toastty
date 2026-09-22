@@ -6,6 +6,29 @@ import XCTest
 
 @MainActor
 final class LiveConversationControllerTests: XCTestCase {
+    func testAttachmentSendRequiresCapabilityAndPassesExactBytesWithComposerStamp() async throws {
+        let attachment = RemoteMessageAttachment(filename: "notes.txt", data: Data("inspect me".utf8))
+        let authority = enabledComposerAuthority()
+        let expectedStamp = try XCTUnwrap(authority.stamp)
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            sendAttachments: { text, attachments, stamp in
+                XCTAssertEqual(text, "")
+                XCTAssertEqual(attachments, [attachment])
+                XCTAssertEqual(stamp, expectedStamp)
+                return .enqueued(clientRequestID: "attachment-request")
+            }
+        )
+        subject.consume(state(runID: runID(1), events: [event(1)], phase: .live,
+                              composerAuthority: authority))
+        let unsupported = await subject.send("", attachments: [attachment])
+        XCTAssertEqual(unsupported, .notEnqueued(.attachmentsUnsupported))
+        subject.consumeConnectionState(.init(phase: .live, capabilities: [.messageAttachments]))
+        let outcome = await subject.send("", attachments: [attachment])
+        XCTAssertEqual(outcome, .enqueued(clientRequestID: "attachment-request"))
+    }
+
     func testPublishesOrderedValuesAndClassifiesAppendAndRebuild() {
         let subject = LiveConversationController(
             conversationID: conversationID.rawValue,

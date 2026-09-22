@@ -10,18 +10,48 @@ public struct RemoteMessageSendRequest: Codable, Equatable, Sendable {
     /// an exact match against the host's current `openPrompt` epoch is accepted.
     public var expectedInputEpoch: RemoteInputEpoch
     public var text: String
+    public var attachments: [RemoteMessageAttachment]
+
+    public var maximumEncodedBodyBytes: Int { attachments.isEmpty ? RemoteGatewayProtocol.maximumRequestBodyBytes : RemoteAttachmentPolicy.maximumEncodedBodyBytes }
+    public var displayText: String {
+        ([text].filter { !$0.isEmpty } + attachments.map { "[Attachment: \(RemoteAttachmentPolicy.displayFilename($0.filename))]" }).joined(separator: "\n")
+    }
 
     public init(
         conversationID: RemoteConversationID,
         clientRequestID: String,
         expectedInputEpoch: RemoteInputEpoch,
-        text: String
+        text: String,
+        attachments: [RemoteMessageAttachment] = []
     ) {
         self.conversationID = conversationID
         self.clientRequestID = clientRequestID
         self.expectedInputEpoch = expectedInputEpoch
         self.text = text
+        self.attachments = attachments
     }
+    private enum CodingKeys: String, CodingKey {
+        case conversationID, clientRequestID, expectedInputEpoch, text, attachments
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        conversationID = try values.decode(RemoteConversationID.self, forKey: .conversationID)
+        clientRequestID = try values.decode(String.self, forKey: .clientRequestID)
+        expectedInputEpoch = try values.decode(RemoteInputEpoch.self, forKey: .expectedInputEpoch)
+        text = try values.decode(String.self, forKey: .text)
+        attachments = try values.decodeIfPresent([RemoteMessageAttachment].self, forKey: .attachments) ?? []
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(conversationID, forKey: .conversationID)
+        try values.encode(clientRequestID, forKey: .clientRequestID)
+        try values.encode(expectedInputEpoch, forKey: .expectedInputEpoch)
+        try values.encode(text, forKey: .text)
+        if !attachments.isEmpty { try values.encode(attachments, forKey: .attachments) }
+    }
+
 }
 
 /// Why a remote send was refused. Each reason fails closed — the host never
@@ -45,6 +75,8 @@ public enum RemoteMessageRejectionReason: String, Codable, Equatable, Sendable {
     case pendingInteraction = "pending_interaction"
     /// The message text was empty after trimming.
     case emptyText = "empty_text"
+    case invalidAttachments = "invalid_attachments"
+    case attachmentStorageUnavailable = "attachment_storage_unavailable"
 }
 
 /// The immediate response to a send request. Never a claim that the agent

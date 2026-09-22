@@ -199,6 +199,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     /// back to `activityAge` when it is absent.
     public let stateEnteredAge: MobileActivityAge?
     public let lastActivity: String
+    public let workspaceTabID: UUID?
+    public let workspaceTabTitle: String?
     public let executionProfile: RemoteSessionExecutionProfile?
 
     public var age: String {
@@ -244,7 +246,9 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         activityAge: MobileActivityAge? = nil,
         stateEnteredAge: MobileActivityAge? = nil,
         lastActivity: String,
-        executionProfile: RemoteSessionExecutionProfile? = nil
+        executionProfile: RemoteSessionExecutionProfile? = nil,
+        workspaceTabID: UUID? = nil,
+        workspaceTabTitle: String? = nil
     ) {
         self.id = id
         self.workspaceID = workspaceID
@@ -258,6 +262,10 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         self.activityAge = activityAge
         self.stateEnteredAge = stateEnteredAge
         self.lastActivity = lastActivity
+        self.workspaceTabID = workspaceTabID
+        self.workspaceTabTitle = Self.nonemptyTrimmed(
+            workspaceTabTitle?.split(whereSeparator: { $0.isNewline }).joined(separator: " ")
+        )
         self.executionProfile = executionProfile.flatMap { $0.isEmpty ? nil : $0 }
     }
 
@@ -274,7 +282,9 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         activityAge: MobileActivityAge? = nil,
         stateEnteredAge: MobileActivityAge? = nil,
         lastActivity: String,
-        executionProfile: RemoteSessionExecutionProfile? = nil
+        executionProfile: RemoteSessionExecutionProfile? = nil,
+        workspaceTabID: UUID? = nil,
+        workspaceTabTitle: String? = nil
     ) {
         self.init(
             id: id,
@@ -289,7 +299,9 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             activityAge: activityAge,
             stateEnteredAge: stateEnteredAge,
             lastActivity: lastActivity,
-            executionProfile: executionProfile
+            executionProfile: executionProfile,
+            workspaceTabID: workspaceTabID,
+            workspaceTabTitle: workspaceTabTitle
         )
     }
 
