@@ -14,6 +14,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case conversationReadAcknowledge
     case questionAnswer
     case messageSend
+    case messageSendWithAttachments
     case subscribe
     case nativeDevice
     case nativeDeviceRevoke
@@ -29,6 +30,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .conversationEvents: "/api/conversation.events.get"
         case .conversationReadAcknowledge: "/api/conversation.read.acknowledge"
         case .questionAnswer: "/api/conversation.question.answer"
+        case .messageSendWithAttachments: RemoteAttachmentPolicy.sendPath
         case .messageSend: "/api/conversation.message.send"
         case .subscribe: "/api/subscribe"
         case .nativeDevice: "/v1/native-device"
@@ -79,6 +81,7 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .conversationEvents: .init(route: .conversationEvents, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
         .conversationReadAcknowledge: .init(route: .conversationReadAcknowledge, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
         .questionAnswer: .init(route: .questionAnswer, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .messageSendWithAttachments: .init(route: .messageSendWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSend: .init(route: .messageSend, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .send),
         .subscribe: .init(route: .subscribe, method: "GET", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
         .nativeDevice: .init(route: .nativeDevice, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),

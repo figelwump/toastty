@@ -244,3 +244,22 @@ struct RemoteInputCoordinatorTests {
         }
     }
 }
+
+
+extension RemoteInputCoordinatorTests {
+    @Test func attachmentOnlySendPreservesEpochLocalDraftAndIdempotencyGates() {
+        let epoch = Self.openEpoch(3)
+        var coordinator = Self.openCoordinator(epoch: epoch)
+        var request = Self.request(epoch: epoch, text: "")
+        request.attachments = [.init(filename: "x.txt", data: Data("hello".utf8))]
+        #expect(coordinator.evaluate(request, context: Self.readyContext()) == .accept(epoch: epoch))
+        var stale = request
+        stale.expectedInputEpoch = Self.openEpoch(2)
+        #expect(coordinator.evaluate(stale, context: Self.readyContext()) == .reject(.epochMismatch))
+        coordinator.markDelivered(request)
+        #expect(coordinator.evaluate(request, context: Self.readyContext()) == .duplicate)
+        var local = Self.openCoordinator(epoch: epoch)
+        local.noteLocalInput(for: Self.conversationID)
+        #expect(local.evaluate(request, context: Self.readyContext()) == .reject(.localDraftPresent))
+    }
+}

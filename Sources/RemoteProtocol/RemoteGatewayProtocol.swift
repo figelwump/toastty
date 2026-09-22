@@ -36,6 +36,7 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     case conversationReadAcknowledgement = "conversation_read_acknowledgement"
     /// Live structured questions can be answered through their provider hook.
     case questionAnswers = "question_answers"
+    case messageAttachments = "message_attachments"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -56,6 +57,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .conversationBackwardPaging,
             .conversationReadAcknowledgement,
             .questionAnswers,
+            .messageAttachments,
         ]
     ) {
         self.protocolVersion = protocolVersion

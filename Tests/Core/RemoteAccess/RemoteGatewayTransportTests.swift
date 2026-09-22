@@ -391,6 +391,7 @@ struct RemoteGatewayRequestHandlerTests {
             .conversationBackwardPaging,
             .conversationReadAcknowledgement,
             .questionAnswers,
+            .messageAttachments,
         ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
@@ -1826,5 +1827,70 @@ extension RemoteGatewayRequestHandlerTests {
         #expect(denied.status == 403)
         #expect(try ConversationEventCoding.makeDecoder().decode(RemoteQuestionAnswerResult.self, from: denied.body) == .rejected(reason: .sendScopeDenied))
         #expect(submissions == 1)
+    }
+}
+
+
+extension RemoteGatewayRequestHandlerTests {
+    @Test func attachmentAdmissionAuthenticatesHeadersAndSendScopeBeforeBody() throws {
+        let (handler, store, _) = Self.makeHandler()
+        let native = try Self.nativeCredential(handler: handler, store: store)
+        let headers = [("authorization", "Bearer \(native.credential)"), ("tailscale-user-login", "owner@example.com")]
+        func preflight(_ fields: [(String, String)]) -> RemoteGatewayRequestHandler.Outcome {
+            handler.authorizeAttachmentUpload(Self.request("POST", RemoteAttachmentPolicy.sendPath, headerFields: fields), at: Self.now)
+        }
+        #expect(preflight(headers) == .attachmentUploadAuthorized(deviceID: native.device.id))
+        for invalid in [[], [headers[0]], [headers[1]], headers + [("origin", "https://hostile.example")], [("cookie", Self.pairedDeviceCookie(store))]] {
+            guard case .respond(let response) = preflight(invalid) else {
+                Issue.record("Unauthorized attachment headers admitted")
+                continue
+            }
+            #expect(response.status == 401 || response.status == 403)
+        }
+        #expect(try store.setScopes([.read], forDevice: native.device.id))
+        guard case .respond(let denied) = preflight(headers) else { Issue.record("Missing scope admitted"); return }
+        #expect(denied.status == 403)
+    }
+
+    @Test func legacySendRejectsAttachmentsInsteadOfDroppingThem() throws {
+        var delivered = false
+        let (handler, store, _) = Self.makeHandler(sendHandler: { _, _ in delivered = true; return .duplicate })
+        let request = RemoteMessageSendRequest(conversationID: RemoteConversationID(), clientRequestID: "legacy-upload",
+            expectedInputEpoch: .init(bindingID: UUID(), counter: 1), text: "",
+            attachments: [.init(filename: "x.txt", data: Data("Hello".utf8))])
+        let cookie = Self.pairedDeviceCookie(store)
+        let body = try ConversationEventCoding.makeEncoder().encode(request)
+        guard case .respond(let response) = handler.handle(Self.request("POST", "/api/conversation.message.send",
+            headerFields: [("origin", Self.origin), ("cookie", cookie)], body: body), at: Self.now) else {
+            Issue.record("Expected attachment rejection"); return
+        }
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendResult.self, from: response.body) == .rejected(reason: .invalidAttachments))
+        #expect(!delivered)
+    }
+
+    @MainActor @Test func deferredAttachmentsValidateBytesAndRecheckRevocation() async throws {
+        let (handler, store, _) = Self.makeHandler()
+        let native = try Self.nativeCredential(handler: handler, store: store)
+        var delivered: RemoteMessageSendRequest?
+        handler.attachmentSendHandler = { request, _ in delivered = request; return .accepted(epoch: request.expectedInputEpoch) }
+        let send = RemoteMessageSendRequest(conversationID: RemoteConversationID(), clientRequestID: "native-upload",
+            expectedInputEpoch: .init(bindingID: UUID(), counter: 1), text: "",
+            attachments: [.init(filename: "x.txt", data: Data(repeating: 65, count: 100_000))])
+        let body = try ConversationEventCoding.makeEncoder().encode(send)
+        guard case .deferredAttachments(let deviceID, let received) = handler.handle(Self.request("POST", RemoteAttachmentPolicy.sendPath,
+            headerFields: [("authorization", "Bearer \(native.credential)"), ("tailscale-user-login", "owner@example.com")], body: body), at: Self.now) else {
+            Issue.record("Expected deferred attachment send"); return
+        }
+        let response = await handler.resolveAttachments(deviceID: deviceID, body: received)
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendResult.self, from: response.body).isAccepted)
+        #expect(delivered == send)
+        delivered = nil
+        handler.attachmentSendHandler = nil
+        let unavailable = await handler.resolveAttachments(deviceID: deviceID, body: received)
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendResult.self, from: unavailable.body) == .rejected(reason: .surfaceUnavailable))
+        #expect(try store.setScopes([.read], forDevice: native.device.id))
+        let denied = await handler.resolveAttachments(deviceID: deviceID, body: received)
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendResult.self, from: denied.body) == .rejected(reason: .sendScopeDenied))
+        #expect(delivered == nil)
     }
 }

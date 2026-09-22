@@ -146,7 +146,10 @@ public struct RemoteInputCoordinator: Sendable {
         }
         guard context.deviceHasSendScope else { return .reject(.sendScopeDenied) }
         guard context.sessionWritesEnabled else { return .reject(.sessionWritesDisabled) }
-        guard request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        guard RemoteAttachmentPolicy.validationError(for: request.attachments, validateContents: false) == nil else {
+            return .reject(.invalidAttachments)
+        }
+        guard !request.attachments.isEmpty || request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             return .reject(.emptyText)
         }
         guard context.isBoundToLiveSurface else { return .reject(.notBound) }
