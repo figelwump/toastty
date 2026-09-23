@@ -7,8 +7,7 @@ import Foundation
 @MainActor
 enum SidebarSubspacePresentation {
     /// Row status, in the order rows sort. Agent approval and error states
-    /// always win; `ready` covers both an unread finished turn and a task
-    /// the agent marked ready through its `task-status` annotation.
+    /// always win; `ready` covers an unread finished turn.
     enum RowStatus: Int, Comparable, Sendable {
         case ready = 0
         case needsApproval
@@ -50,8 +49,7 @@ enum SidebarSubspacePresentation {
         let status: RowStatus
         /// The `github-pr` annotation, the only chip a subspace row shows.
         let pullRequest: WorkspaceAnnotation?
-        /// The first session's summary, or the task-status text when no
-        /// session is running.
+        /// The first session's summary.
         let summary: String?
         let spawningSessionID: String?
         let spawnerName: String?
@@ -86,15 +84,11 @@ enum SidebarSubspacePresentation {
     }
 
     static let annotationKeyPullRequest = "github-pr"
-    static let annotationKeyTaskStatus = "task-status"
     static let groupTitle = "Subspaces"
 
-    /// Combines a subspace's live sessions and its `task-status` annotation
-    /// into one status. A running agent outranks a stale "Ready" annotation;
-    /// an annotation that says ready lifts an otherwise quiet workspace.
+    /// Combines a subspace's live sessions into one status.
     static func rowStatus(
-        sessionStatuses: [(kind: SessionStatusKind, showsUnreadSessionAccent: Bool)],
-        taskStatusText: String?
+        sessionStatuses: [(kind: SessionStatusKind, showsUnreadSessionAccent: Bool)]
     ) -> RowStatus {
         var status = RowStatus.idle
         for session in sessionStatuses {
@@ -115,15 +109,7 @@ enum SidebarSubspacePresentation {
                 status = candidate
             }
         }
-        if status == .idle, taskStatusSaysReady(taskStatusText) {
-            return .ready
-        }
         return status
-    }
-
-    static func taskStatusSaysReady(_ text: String?) -> Bool {
-        guard let text else { return false }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("ready")
     }
 
     static func sortedRows(_ rows: [Row]) -> [Row] {

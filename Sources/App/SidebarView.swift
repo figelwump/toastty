@@ -3033,7 +3033,6 @@ struct SidebarView: View {
         return subspaceIDs.compactMap { subspaceID in
             guard let workspace = store.state.workspacesByID[subspaceID] else { return nil }
             let statuses = sidebarSessionStatuses(for: subspaceID)
-            let taskStatusText = workspace.annotations[SidebarSubspacePresentation.annotationKeyTaskStatus]?.text
             let sessions = statuses.map { status in
                 SidebarSubspacePresentation.SessionLine(
                     title: status.displayTitle,
@@ -3050,11 +3049,10 @@ struct SidebarView: View {
                             kind: status.status.kind,
                             showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace)
                         )
-                    },
-                    taskStatusText: taskStatusText
+                    }
                 ),
                 pullRequest: workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest],
-                summary: sessions.first?.summary ?? normalizedSessionDetail(taskStatusText),
+                summary: sessions.first?.summary,
                 spawningSessionID: workspace.spawningSessionID,
                 spawnerName: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.displayTitle },
                 spawnerPanelID: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.panelID },

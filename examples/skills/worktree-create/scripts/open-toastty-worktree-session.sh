@@ -16,7 +16,7 @@ and cannot be combined with --agent-command, --initial-command, --model, or
 --reasoning-effort. Model and reasoning overrides require live agent.launch
 capability metadata for the selected profile and never use a terminal fallback.
 Structured launches scope the current parent session before creating the child
-workspace unless --no-scope-parent is passed. They initialize task-status.
+workspace unless --no-scope-parent is passed.
 --mode plan|implement defaults to plan (investigation and design only).
 --fork-from-session <managed-session-id> preserves provider conversation history.
 Repeat --additional-directory <path> to grant access to explicit shared artifacts.
@@ -25,7 +25,6 @@ against live capability metadata before creating a workspace.
 Forks cannot be combined with --initial-command. Before creating the worktree,
 follow the skill's provider preflight for the actual configured executable;
 the live descriptor does not establish the installed provider CLI's features.
-Explicit --startup-command launches do not manage task annotations.
 EOF
 }
 
@@ -312,30 +311,7 @@ except (ValueError, TypeError, KeyError, AttributeError, StopIteration) as error
   fi
 fi
 
-# Annotation actions are checked even if a CLI returns an error envelope with exit 0.
-run_annotation_cli() {
-  local response
-  if ! response="$(run_cli_json "$@")"; then
-    printf '%s\n' "$response" >&2
-    return 1
-  fi
-  if ! python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    valid = isinstance(data, dict) and data.get("ok") is True
-except (ValueError, TypeError):
-    valid = False
-raise SystemExit(0 if valid else 1)
-' <<<"$response"; then
-    printf '%s\n' "$response" >&2
-    return 1
-  fi
-}
-
 workspace_id=""
-task_status_initialized="false"
-child_launched="false"
 parent_workspace_id=""
 parent_session_id=""
 parent_scope_set="false"
@@ -343,11 +319,6 @@ parent_scope_rollback_on_error="false"
 
 rollback_parent_scope_if_needed() {
   local exit_code="$?"
-  if [[ "$exit_code" -ne 0 && "$task_status_initialized" == "true" && "$child_launched" != "true" ]]; then
-    if ! run_annotation_cli action run workspace.set-annotation --workspace "$workspace_id" key=task-status "text=Needs attention"; then
-      echo "warning: could not mark workspace $workspace_id as needing attention after launch failure" >&2
-    fi
-  fi
   if [[ "$exit_code" -ne 0 && "$parent_scope_rollback_on_error" == "true" && "$parent_scope_set" == "true" && -n "$parent_session_id" ]]; then
     local rollback_output
     if ! rollback_output="$(run_cli_json session scope clear --session "$parent_session_id" 2>&1)"; then
@@ -524,23 +495,6 @@ if [[ -z "$workspace_id" ]]; then
   exit 1
 fi
 
-if [[ -z "$startup_command" ]]; then
-  # Stable keys share the runtime's existing color claims; never supply a new color.
-  if ! run_annotation_cli query run annotation.keys \
-    || ! run_annotation_cli query run workspace.snapshot --workspace "$workspace_id"; then
-    echo "error: could not inspect annotations for created workspace $workspace_id; no child was launched" >&2
-    exit 1
-  fi
-  task_status="Planning"
-  if [[ "$mode" == "implement" ]]; then task_status="Working"; fi
-  if ! run_annotation_cli action run workspace.set-annotation --workspace "$workspace_id" key=task-status "text=$task_status"; then
-    echo "error: could not initialize annotations for created workspace $workspace_id; no child was launched" >&2
-    exit 1
-  fi
-  # Set before launching: a fast child must not have its newer status overwritten.
-  task_status_initialized="true"
-fi
-
 if [[ -f "$handoff_file" ]]; then
   local_document_output=""
   if ! local_document_output="$(
@@ -601,7 +555,6 @@ if [[ -z "$startup_command" ]]; then
   done
 
   if [[ "$launch_succeeded" == "true" ]]; then
-    child_launched="true"
     panel_id="$(extract_json_result_field "panelID" <<<"$launch_output")"
     if ! session_id="$(extract_json_result_field "sessionID" <<<"$launch_output" 2>/dev/null)"; then
       echo "error: agent.launch response did not include sessionID; cannot scope workspace handoff" >&2
@@ -645,7 +598,7 @@ raise SystemExit(0 if valid else 1)
     fi
     scope_set="true"
   elif [[ "$agent_command" == "codex" || "$agent_command" == "claude" || -n "$model" || -n "$reasoning_effort" || -n "$fork_from_session" || "${#additional_directories[@]}" -gt 0 ]]; then
-    echo "error: failed to launch managed agent with agent.launch: $launch_output" >&2
+    echo "error: failed to launch managed agent with agent.launch in workspace $workspace_id: $launch_output" >&2
     exit 1
   else
     echo "warning: agent.launch failed for '$agent_command'; falling back to terminal.send-text" >&2

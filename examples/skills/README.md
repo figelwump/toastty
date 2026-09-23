@@ -32,8 +32,9 @@ No summary-only fallback silently replaces a requested fork. Provider context
 limits and compaction still apply.
 
 New tasks default to planning. Explicit implementation requests retain their
-authorization and use implementation mode. Workspaces show task status and PR
-annotations; the launcher does not add a branch chip.
+authorization and use implementation mode. Session rows show live agent status;
+workspaces show a PR annotation when one exists. The launcher adds no task or
+branch chip.
 
 ## Local queue and waiting
 

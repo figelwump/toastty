@@ -1706,7 +1706,7 @@ final class SidebarViewTests: XCTestCase {
     private struct SubspacesHarnessIDs {
         let parentID: UUID
         let approvalID: UUID
-        let readyByAnnotationID: UUID
+        let annotatedIdleID: UUID
         let workingID: UUID
         let readyUnreadID: UUID
         let siblingID: UUID
@@ -1757,7 +1757,7 @@ final class SidebarViewTests: XCTestCase {
             )
         }
         let approval = subspace("qa-mobile-navigation", spawner: "spawner")
-        let readyByAnnotation = subspace(
+        let annotatedIdle = subspace(
             "qa-private-app-verification",
             spawner: "spawner",
             annotations: [
@@ -1770,7 +1770,7 @@ final class SidebarViewTests: XCTestCase {
         let sibling = makeSinglePanelWorkspace(id: UUID(), title: "ios-tab-footer")
 
         let windowID = UUID()
-        let workspaces = [parent, approval, readyByAnnotation, working, readyUnread, sibling]
+        let workspaces = [parent, approval, annotatedIdle, working, readyUnread, sibling]
         let state = AppState(
             windows: [
                 WindowState(
@@ -1819,7 +1819,7 @@ final class SidebarViewTests: XCTestCase {
         return (harness, SubspacesHarnessIDs(
             parentID: parentID,
             approvalID: approval.id,
-            readyByAnnotationID: readyByAnnotation.id,
+            annotatedIdleID: annotatedIdle.id,
             workingID: working.id,
             readyUnreadID: readyUnread.id,
             siblingID: sibling.id
@@ -1838,7 +1838,7 @@ final class SidebarViewTests: XCTestCase {
 
         // Subspaces are rows in the parent card, not cards of their own.
         let subspaceTitles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
-        for subspaceID in [ids.approvalID, ids.readyByAnnotationID, ids.workingID, ids.readyUnreadID] {
+        for subspaceID in [ids.approvalID, ids.annotatedIdleID, ids.workingID, ids.readyUnreadID] {
             let workspace = try XCTUnwrap(harness.store.state.workspacesByID[subspaceID])
             XCTAssertTrue(
                 textValues.contains { $0.hasPrefix("\(workspace.title), subspace") },
@@ -1848,9 +1848,10 @@ final class SidebarViewTests: XCTestCase {
             XCTAssertFalse(textValues.contains(cardLabel), "Subspace rendered as a card: \(cardLabel)")
         }
         XCTAssertTrue(textValues.contains("ios-tab-footer"), "Sibling card should still render: \(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("qa-private-app-verification, subspace, ready") })
 
-        // Sorted ready, approval, then working; the two ready rows keep
-        // window order (annotation-ready was created before unread-ready).
+        // The legacy Ready annotation does not lift an idle row above the
+        // unread ready session, approval, or working rows.
         let rowFrames = try subspaceTitles.map { title in
             (title, try semanticTextFrame(in: rootView, prefix: "\(title), subspace"))
         }
@@ -1862,7 +1863,7 @@ final class SidebarViewTests: XCTestCase {
             .map(\.0)
         XCTAssertEqual(
             orderedTitles,
-            ["qa-private-app-verification", "launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture"]
+            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
         )
         // The PR chip and spawner tags render; the ↗ child row for a
         // subspace agent does not (the chip replaces it).

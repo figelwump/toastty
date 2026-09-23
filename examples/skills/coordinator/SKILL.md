@@ -129,9 +129,8 @@ user's task delegation or completion handoff authorizes the specific message.
 
 ## Reporting
 
-Update existing `task-status` chips at meaningful changes, such as `Queued`,
-`Waiting for PR #42`, `Merging`, or `Cleanup needs attention`. Keep the PR chip;
-do not add a Git branch chip. A dashboard is optional and is never the queue.
+Keep the PR chip; do not add task or Git branch annotations. A dashboard is
+optional and is never the queue.
 Use `toastty-scratchpad` only when a visual overview is useful.
 
 Report each task's accepted/landed commits, actual verification, removed resources,

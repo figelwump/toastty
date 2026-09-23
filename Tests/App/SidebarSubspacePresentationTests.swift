@@ -23,52 +23,40 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
     }
 
-    func testRowStatusLetsAgentAttentionWinAndTaskStatusLiftIdleRows() {
+    func testRowStatusUsesSessionAttentionAndUnreadReadyState() {
         typealias Session = (kind: SessionStatusKind, showsUnreadSessionAccent: Bool)
         XCTAssertEqual(
             SidebarSubspacePresentation.rowStatus(
-                sessionStatuses: [Session(.working, false), Session(.needsApproval, false)],
-                taskStatusText: "Ready for your testing"
+                sessionStatuses: [Session(.working, false), Session(.needsApproval, false)]
             ),
             .needsApproval
         )
         XCTAssertEqual(
             SidebarSubspacePresentation.rowStatus(
-                sessionStatuses: [Session(.ready, true), Session(.error, false)],
-                taskStatusText: nil
+                sessionStatuses: [Session(.ready, true), Session(.error, false)]
             ),
             .error
         )
         XCTAssertEqual(
             SidebarSubspacePresentation.rowStatus(
-                sessionStatuses: [Session(.error, false), Session(.needsApproval, false), Session(.ready, true)],
-                taskStatusText: nil
+                sessionStatuses: [Session(.error, false), Session(.needsApproval, false), Session(.ready, true)]
             ),
             .needsApproval
         )
-        // A running agent outranks a stale "Ready" annotation.
         XCTAssertEqual(
-            SidebarSubspacePresentation.rowStatus(
-                sessionStatuses: [Session(.working, false)],
-                taskStatusText: "Ready"
-            ),
+            SidebarSubspacePresentation.rowStatus(sessionStatuses: [Session(.working, false)]),
             .working
         )
-        // A finished turn the user has already looked at is quiet; the
-        // annotation says the task is ready, so the row does too.
         XCTAssertEqual(
-            SidebarSubspacePresentation.rowStatus(
-                sessionStatuses: [Session(.ready, false)],
-                taskStatusText: " ready for your testing "
-            ),
-            .ready
-        )
-        XCTAssertEqual(
-            SidebarSubspacePresentation.rowStatus(sessionStatuses: [], taskStatusText: "Working"),
+            SidebarSubspacePresentation.rowStatus(sessionStatuses: [Session(.ready, false)]),
             .idle
         )
         XCTAssertEqual(
-            SidebarSubspacePresentation.rowStatus(sessionStatuses: [Session(.ready, true)], taskStatusText: nil),
+            SidebarSubspacePresentation.rowStatus(sessionStatuses: []),
+            .idle
+        )
+        XCTAssertEqual(
+            SidebarSubspacePresentation.rowStatus(sessionStatuses: [Session(.ready, true)]),
             .ready
         )
     }
@@ -167,10 +155,10 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(model.metaItems, ["needs approval", "PR #132", "spawned by Test EmptyOS beta experience"])
 
         let empty = SidebarSubspacePresentation.hoverTipModel(SidebarSubspacePresentation.Row(
-            id: UUID(), title: "idle-space", status: .idle, pullRequest: nil, summary: "Ready",
+            id: UUID(), title: "idle-space", status: .idle, pullRequest: nil, summary: nil,
             spawningSessionID: nil, spawnerName: nil, sessions: [], creationIndex: 1
         ))
-        XCTAssertEqual(empty.bodyText, "No agent · Ready")
+        XCTAssertEqual(empty.bodyText, "No agent")
         XCTAssertEqual(empty.metaItems, ["idle"])
     }
 

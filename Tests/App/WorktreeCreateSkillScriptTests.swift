@@ -308,44 +308,18 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertLessThan(parentScopeIndex, workspaceCreateIndex)
         XCTAssertLessThan(workspaceCreateIndex, childScopeIndex)
 
-        let annotationKeysIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json query run annotation.keys"))
-        let snapshotIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json query run workspace.snapshot --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertFalse(invocationLines.contains { $0.contains("annotation") })
         XCTAssertFalse(invocationLines.contains { $0.contains("git-branch") })
-        let statusIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=task-status text=Planning"))
         let launchIndex = try XCTUnwrap(invocationLines.firstIndex(of: agentLaunchLine))
-        XCTAssertLessThan(workspaceCreateIndex, annotationKeysIndex)
-        XCTAssertLessThan(annotationKeysIndex, snapshotIndex)
-        XCTAssertLessThan(snapshotIndex, statusIndex)
-        XCTAssertLessThan(statusIndex, launchIndex)
-        XCTAssertEqual(invocationLines.filter { $0.contains("key=task-status") }.count, 1)
-        XCTAssertFalse(invocationLines.contains(where: { $0.contains("color=") }))
+        XCTAssertLessThan(workspaceCreateIndex, launchIndex)
     }
 
-    func testOpenSessionScriptStopsBeforeLaunchWhenAnnotationReturnsErrorEnvelope() throws {
-        for failedOperation in ["annotation.keys", "workspace.snapshot", "key=task-status"] {
-            let result = try runAnnotationScenario(environment: ["FAKE_ANNOTATION_ERROR_AT": failedOperation])
-
-            XCTAssertEqual(result.exitCode, 1, failedOperation)
-            XCTAssertTrue(result.stderr.contains("annotation failure"), failedOperation)
-            XCTAssertTrue(result.stderr.contains("no child was launched"), failedOperation)
-            XCTAssertTrue(result.invocations.contains(where: { $0.contains(failedOperation) }), failedOperation)
-            XCTAssertFalse(result.invocations.contains(where: { $0.contains("agent.launch") }), failedOperation)
-            XCTAssertFalse(result.invocations.contains(where: { $0.hasPrefix("--json action run terminal.send-text ") }), failedOperation)
-            XCTAssertFalse(result.invocations.contains(where: { $0.contains("panel.create.local-document") }), failedOperation)
-            XCTAssertTrue(result.invocations.contains("--json session scope clear --session 77777777-7777-7777-7777-777777777777"), failedOperation)
-        }
-    }
-
-    func testOpenSessionScriptMarksTaskNeedsAttentionWhenDocumentOrManagedLaunchFails() throws {
+    func testOpenSessionScriptDoesNotWriteAnnotationsWhenDocumentOrManagedLaunchFails() throws {
         for failure in ["FAKE_DOCUMENT_FAILURE", "FAKE_AGENT_LAUNCH_FAILURE"] {
-            let result = try runAnnotationScenario(environment: [failure: "1"])
+            let result = try runLaunchScenario(environment: [failure: "1"])
 
             XCTAssertEqual(result.exitCode, 1, failure)
-            let statusInvocations = result.invocations.filter { $0.contains("key=task-status") }
-            XCTAssertEqual(statusInvocations, [
-                "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=task-status text=Planning",
-                "--json action run workspace.set-annotation --workspace 44444444-4444-4444-4444-444444444444 key=task-status text=Needs attention",
-            ], failure)
+            XCTAssertFalse(result.invocations.contains { $0.contains("annotation") }, failure)
             XCTAssertFalse(result.invocations.contains(where: { $0.hasPrefix("--json action run terminal.send-text ") }), failure)
             XCTAssertTrue(result.invocations.contains("--json session scope clear --session 77777777-7777-7777-7777-777777777777"), failure)
         }
@@ -434,7 +408,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
     func testOpenSessionScriptStopsBeforeMutationWhenParentReplyWorkspaceIsUnavailable() throws {
         for failure in ["FAKE_PARENT_STATE_FAILURE", "FAKE_PARENT_STATE_MISSING_WORKSPACE"] {
-            let result = try runAnnotationScenario(
+            let result = try runLaunchScenario(
                 environment: [failure: "1"],
                 arguments: ["--window-id", "11111111-1111-1111-1111-111111111111"]
             )
@@ -445,7 +419,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
     }
 
     func testOpenSessionScriptRejectsMissingParentWorkspaceInReturnedScope() throws {
-        let result = try runAnnotationScenario(environment: ["FAKE_SCOPE_MISMATCH": "1"])
+        let result = try runLaunchScenario(environment: ["FAKE_SCOPE_MISMATCH": "1"])
         XCTAssertNotEqual(result.exitCode, 0)
         XCTAssertTrue(result.stderr.contains("child scope did not match"))
         XCTAssertTrue(result.stderr.contains("already exist"))
@@ -697,8 +671,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             .map(String.init)
         XCTAssertTrue(invocationLines.contains("--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
         XCTAssertFalse(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444 --workspace 22222222-2222-2222-2222-222222222222"))
-        XCTAssertEqual(invocationLines.filter { $0.contains("key=task-status") }.count, 1)
-        XCTAssertFalse(invocationLines.contains(where: { $0.contains("text=Needs attention") }))
+        XCTAssertFalse(invocationLines.contains { $0.contains("annotation") })
     }
 
     func testOpenSessionScriptFailsClearlyWhenScopeSetFails() throws {
@@ -741,8 +714,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             .split(whereSeparator: \.isNewline)
             .map(String.init)
         XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444 --workspace 22222222-2222-2222-2222-222222222222"))
-        XCTAssertEqual(invocationLines.filter { $0.contains("key=task-status") }.count, 1)
-        XCTAssertFalse(invocationLines.contains(where: { $0.contains("text=Needs attention") }))
+        XCTAssertFalse(invocationLines.contains { $0.contains("annotation") })
     }
 
     func testOpenSessionScriptHonorsAgentCommandOverride() throws {
@@ -952,7 +924,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
     func testOpenSessionScriptForwardsModelAndReasoningForManagedProfiles() throws {
         for (profile, model, effort) in [("codex", "gpt-6", "medium"), ("claude", "opus", "high")] {
-            let result = try runAnnotationScenario(
+            let result = try runLaunchScenario(
                 environment: ["TOASTTY_AGENT": profile],
                 arguments: ["--model", model, "--reasoning-effort", effort]
             )
@@ -980,7 +952,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             "{\"ok\":true,\"result\":{\"commands\":[{\"id\":\"agent.launch\",\"parameters\":[{\"name\":\"model\",\"supportedProfileIDs\":[\"claude\"]}]}]}}",
         ]
         for catalog in catalogs {
-            let result = try runAnnotationScenario(
+            let result = try runLaunchScenario(
                 environment: ["TOASTTY_AGENT": "codex", "FAKE_ACTION_CATALOG": catalog],
                 arguments: ["--model", "gpt-6"]
             )
@@ -988,7 +960,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             XCTAssertTrue(result.stderr.contains("cannot apply requested launch selections"))
             XCTAssertEqual(result.invocations, ["--json action list"])
         }
-        let reasoning = try runAnnotationScenario(
+        let reasoning = try runLaunchScenario(
             environment: ["TOASTTY_AGENT": "cursor"],
             arguments: ["--agent-command", "cursor", "--reasoning-effort", "high"]
         )
@@ -997,7 +969,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
     }
 
     func testOpenSessionScriptNeverFallsBackWhenOverridesWereSelected() throws {
-        let result = try runAnnotationScenario(
+        let result = try runLaunchScenario(
             environment: ["FAKE_AGENT_LAUNCH_FAILURE": "1"],
             arguments: ["--agent-command", "cursor", "--model", "model with spaces"]
         )
@@ -1033,7 +1005,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         ]
         for flag in ["--model", "--reasoning-effort"] {
             for value in values {
-                let result = try runAnnotationScenario(environment: [:], arguments: [flag, value])
+                let result = try runLaunchScenario(environment: [:], arguments: [flag, value])
                 XCTAssertEqual(result.exitCode, 64, result.stderr)
                 XCTAssertTrue(result.invocations.isEmpty)
             }
@@ -1042,7 +1014,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
     func testOpenSessionScriptPreservesSelectionsAtUTF8ByteLimit() throws {
         let value = String(repeating: "🦉", count: 64)
-        let result = try runAnnotationScenario(
+        let result = try runLaunchScenario(
             environment: ["TOASTTY_AGENT": "codex"],
             arguments: ["--model", value, "--reasoning-effort", " high "]
         )
@@ -1054,11 +1026,11 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(result.invocations.contains { $0.contains("reasoningEffort= high ") })
     }
 
-    func testOpenSessionScriptImplementModeStartsWorking() throws {
-        let result = try runAnnotationScenario(environment: [:], arguments: ["--mode", "implement"])
+    func testOpenSessionScriptImplementModeStartsAgentWithoutTaskAnnotation() throws {
+        let result = try runLaunchScenario(environment: [:], arguments: ["--mode", "implement"])
         XCTAssertEqual(result.exitCode, 0, result.stderr)
         XCTAssertEqual(try jsonObject(from: result.stdout)["mode"] as? String, "implement")
-        XCTAssertTrue(result.invocations.contains { $0.contains("key=task-status text=Working") })
+        XCTAssertFalse(result.invocations.contains { $0.contains("annotation") })
         XCTAssertTrue(result.invocations.contains { $0.contains("Mode: implement. Continue the authorized implementation") })
         XCTAssertFalse(result.invocations.contains { $0.contains("git-branch") })
     }
@@ -1066,7 +1038,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
     func testOpenSessionScriptForwardsForkAndAdditionalDirectoriesForBothProviders() throws {
         let source = "77777777-7777-7777-7777-777777777777"
         for provider in ["codex", "claude"] {
-            let result = try runAnnotationScenario(
+            let result = try runLaunchScenario(
                 environment: ["TOASTTY_AGENT": provider],
                 arguments: ["--fork-from-session", source, "--additional-directory", "/tmp/shared artifacts",
                             "--additional-directory", "/tmp/queue", "--model", "exact-model", "--reasoning-effort", "high"]
@@ -1090,14 +1062,14 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let catalog = #"{"ok":true,"result":{"commands":[{"id":"agent.launch","parameters":[]}]}}"#
         for arguments in [["--fork-from-session", "77777777-7777-7777-7777-777777777777"],
                           ["--additional-directory", "/tmp/shared"]] {
-            let result = try runAnnotationScenario(environment: ["FAKE_ACTION_CATALOG": catalog], arguments: arguments)
+            let result = try runLaunchScenario(environment: ["FAKE_ACTION_CATALOG": catalog], arguments: arguments)
             XCTAssertNotEqual(result.exitCode, 0)
             XCTAssertEqual(result.invocations, ["--json action list"])
         }
     }
 
     func testOpenSessionScriptForkFailureNeverFallsBackToFreshOrTerminalLaunch() throws {
-        let result = try runAnnotationScenario(
+        let result = try runLaunchScenario(
             environment: ["FAKE_AGENT_LAUNCH_FAILURE": "1"],
             arguments: ["--fork-from-session", "77777777-7777-7777-7777-777777777777"]
         )
@@ -1109,7 +1081,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
     }
 
     func testOpenSessionScriptRejectsInitialCommandsWithForkBeforeCreatingResources() throws {
-        let result = try runAnnotationScenario(
+        let result = try runLaunchScenario(
             environment: [:],
             arguments: ["--fork-from-session", "77777777-7777-7777-7777-777777777777",
                         "--initial-command", "echo setup"]
@@ -1123,17 +1095,17 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         for arguments in [["--mode", "plan"], ["--mode", "implement"],
                           ["--fork-from-session", "77777777-7777-7777-7777-777777777777"],
                           ["--additional-directory", "/tmp/shared"], ["--no-scope-parent"]] {
-            let result = try runAnnotationScenario(environment: [:], arguments: arguments + ["--startup-command", "echo ready"])
+            let result = try runLaunchScenario(environment: [:], arguments: arguments + ["--startup-command", "echo ready"])
             XCTAssertEqual(result.exitCode, 64, result.stderr)
             XCTAssertTrue(result.invocations.isEmpty)
         }
     }
 
-    private func runAnnotationScenario(
+    private func runLaunchScenario(
         environment: [String: String],
         arguments: [String] = []
     ) throws -> (exitCode: Int32, stdout: String, stderr: String, invocations: [String]) {
-        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-annotations")
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-launch")
         defer { try? FileManager.default.removeItem(at: rootURL) }
         let worktreeURL = try makeGitRepository(named: "worktree", in: rootURL)
         let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md")
@@ -1152,7 +1124,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
             ].merging(environment) { _, new in new },
             arguments: [
-                "--workspace-name", "annotations",
+                "--workspace-name", "smoke",
                 "--worktree-path", worktreeURL.path,
                 "--handoff-file", handoffURL.path,
                 "--json",
@@ -1202,14 +1174,6 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             if [ \"${1:-}\" = \"--json\" ]; then
               shift
             fi
-            if [ -n "${FAKE_ANNOTATION_ERROR_AT:-}" ]; then
-              case "$*" in
-                *"${FAKE_ANNOTATION_ERROR_AT}"*)
-                  printf '%s\\n' '{"ok":false,"error":{"message":"annotation failure"}}'
-                  exit 0
-                  ;;
-              esac
-            fi
             if [ "${FAKE_PARENT_STATE_FAILURE:-0}" = "1" ] && [ "${3:-}" = "terminal.state" ]; then
               exit 1
             fi
@@ -1246,9 +1210,6 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 cat <<'EOF'
             {"result":{"windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444"}}
             EOF
-                ;;
-              "query run annotation.keys"|"query run workspace.snapshot"|"action run workspace.set-annotation")
-                printf '%s\\n' '{"ok":true,"result":{}}'
                 ;;
               "action run panel.create.local-document")
                 if [ "${FAKE_DOCUMENT_FAILURE:-0}" = "1" ]; then

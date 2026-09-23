@@ -152,8 +152,8 @@ do not silently omit an artifact that is the task's design source.
 Add `--fork-from-session "$TOASTTY_SESSION_ID"` for an existing discussion.
 The source must have verified native session metadata and use the same provider.
 The helper passes the worktree cwd explicitly, creates a background workspace,
-opens the handoff, sets only `task-status` (`Planning` or `Working`), launches a
-managed session and applies workspace scope. It does not set a branch annotation.
+opens the handoff, launches a managed session and applies workspace scope. It
+does not set task or branch annotations.
 
 The helper preserves an existing parent scope, scopes an unrestricted parent
 to its current workspace, and includes the created workspace. The child receives
@@ -192,7 +192,7 @@ brief. The user continues planning, implementation and testing in that workspace
 then invokes `worktree-done`. Neither launcher nor child merges automatically.
 
 Use the helper's JSON results and live metadata to verify child placement and
-scope. Confirm task-status exists and no Git branch annotation was added.
+scope. Confirm no task or Git branch annotation was added.
 For workflow changes, validate scripts and run `WorktreeCreateSkillScriptTests`
 under the repository's verification guide. Custom `--startup-command` launches
 are only for explicit smoke/custom shell use and cannot claim managed forks.

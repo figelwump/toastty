@@ -71,14 +71,12 @@ using `rebind --task <id> --previous-session <old> --session <new>
 Reopen an accepted task before rebinding for further work. Never redirect a
 record to a different workspace or app instance based only on its title.
 
-## Workspace status
+## Workspace annotations
 
-Maintain only `task-status` and `github-pr` annotations. Use `Planning`, `Working`,
-`Validating`, `Needs attention`, and `Ready for your testing` as appropriate.
-Reuse existing keys/colors and verified PR URLs. Do not create or maintain a
-`git-branch` annotation; the workspace name already identifies the task.
-Annotations are displays, not readiness evidence. Report failed annotation writes
-without broadening scope. A Scratchpad is optional and does not replace records.
+Add a `github-pr` annotation when a PR exists, using its verified URL. Session
+status shows agent activity, and task records track acceptance and integration.
+Do not create task-status or Git branch annotations; the workspace name already
+identifies the task. A Scratchpad is optional and does not replace records.
 
 ## Coordinator replies
 

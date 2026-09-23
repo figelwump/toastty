@@ -64,9 +64,8 @@ After acceptance, stop modifying this task. Keep its resources available until
 the coordinator verifies integration and cleans them up. Do not terminate or
 delete this active workspace from inside itself.
 
-Set the existing `task-status` chip to `Queued` or a specific dependency blocker.
-Keep its PR chip; do not add a branch annotation. Queue records are authoritative
-for acceptance; annotations only display them.
+Keep the PR chip; do not add task or branch annotations. Queue records are
+authoritative for acceptance and dependencies.
 
 The coordinator's foreground `tasks wait` loop discovers this record. A direct
 notification is optional: only use a verified coordinator route assigned by this
