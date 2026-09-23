@@ -421,6 +421,13 @@ struct SidebarView: View {
     @State private var sidebarWorkspaceListViewportHeight: CGFloat = 0
     @State private var sidebarSessionRowDiagnosticsByPanelID: [UUID: SidebarSessionRowDiagnosticState] = [:]
     @State private var expandedSessionChildrenBySessionID: [String: Bool] = [:]
+    @State private var collapsedSubspaceGroupParentIDs: Set<UUID> = []
+    /// Spawning session whose subspaces the group shows, per parent workspace.
+    @State private var subspaceFilterSessionIDByParentID: [UUID: String] = [:]
+    /// Row order captured when the pointer entered a group, so rows hold
+    /// still under the pointer; released on exit.
+    @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
+    @State private var hoveredSpawnerSessionID: String?
     @State private var optionKeyPressed = false
 
     /// Fixed height for the session detail text area (1 line at the detail
@@ -562,8 +569,12 @@ struct SidebarView: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
-                        if let window = store.window(id: windowID) {
-                            ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
+                        if store.window(id: windowID) != nil {
+                            // Subspaces render inside their parent's card, so
+                            // the card list, its numbering, and drag reordering
+                            // all work on the top-level workspaces only.
+                            let topLevelWorkspaceIDs = store.state.topLevelWorkspaceIDs(in: windowID)
+                            ForEach(Array(topLevelWorkspaceIDs.enumerated()), id: \.element) { index, workspaceID in
                                 if let workspace = store.state.workspacesByID[workspaceID] {
                                     workspaceRow(
                                         workspaceID: workspaceID,
@@ -571,7 +582,7 @@ struct SidebarView: View {
                                         shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
                                         isSelected: selectedWorkspaceID == workspaceID,
                                         index: index + 1,
-                                        orderedWorkspaceIDs: window.workspaceIDs
+                                        orderedWorkspaceIDs: topLevelWorkspaceIDs
                                     )
                                     .id(workspaceID)
                                 }
@@ -607,7 +618,7 @@ struct SidebarView: View {
                         if let activeWorkspaceDrag,
                            activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex,
                            let indicatorFrame = Self.workspaceInsertionIndicatorFrame(
-                               orderedWorkspaceIDs: store.window(id: windowID)?.workspaceIDs ?? [],
+                               orderedWorkspaceIDs: store.state.topLevelWorkspaceIDs(in: windowID),
                                measuredRowFramesByID: measuredWorkspaceRowFramesByID,
                                draggedWorkspaceID: activeWorkspaceDrag.workspaceID,
                                targetIndex: activeWorkspaceDrag.targetIndex
@@ -639,6 +650,7 @@ struct SidebarView: View {
                     scrollToSelectedWorkspace(using: proxy, animated: false)
                 }
                 .onChange(of: selectedWorkspaceID) { _, _ in
+                    revealSelectedSubspaceIfNeeded()
                     scrollToSelectedWorkspace(using: proxy, animated: true)
                 }
             }
@@ -683,19 +695,26 @@ struct SidebarView: View {
         .background(ToastyTheme.chromeBackground)
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
+            pruneSubspaceGroupState()
             pruneTransientWorkspaceDragState()
             pruneSessionDrag()
             pruneSidebarSessionRowDiagnostics()
         }
-        .onChange(of: sessionRuntimeStore.sessionRegistry) { _, _ in
+        .onChange(of: sessionRuntimeStore.sessionRegistry) { _, registry in
             pruneSessionDrag()
             pruneSidebarSessionRowDiagnostics()
+            if let hoveredSpawnerSessionID, registry.activeSession(sessionID: hoveredSpawnerSessionID) == nil {
+                self.hoveredSpawnerSessionID = nil
+            }
         }
         .onChange(of: store.pendingRenameWorkspaceRequest) { _, _ in
             guard let request = store.consumePendingWorkspaceRenameRequest(windowID: windowID),
                   let window = store.window(id: windowID),
                   window.workspaceIDs.contains(request.workspaceID),
-                  let workspace = store.state.workspacesByID[request.workspaceID] else { return }
+                  let workspace = store.state.workspacesByID[request.workspaceID],
+                  // Subspace rows have no inline rename field yet; entering the
+                  // rename state for one would be invisible and block card drags.
+                  workspace.parentWorkspaceID == nil else { return }
             beginWorkspaceRename(workspace)
         }
         .onAppear {
@@ -848,6 +867,7 @@ struct SidebarView: View {
         orderedWorkspaceIDs: [UUID]
     ) -> some View {
         let sessionStatuses = sidebarSessionStatuses(for: workspace.id)
+        let subspaceRows = subspaceRows(for: workspace.id, parentSessionStatuses: sessionStatuses)
         let agentSummary = WorkspaceAgentSummary.make(from: sessionStatuses, workspaceID: workspace.id)
         let accessibilityLabel = SidebarSessionPresentation.workspaceAccessibilityLabel(
             for: workspace,
@@ -924,10 +944,12 @@ struct SidebarView: View {
                 workspaceAnnotationChipsRow(workspace: workspace)
 
                 if !sessionStatuses.isEmpty {
-                    sessionStatusesContent(sessionStatuses, workspace: workspace)
+                    sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
                         .padding(.horizontal, 10)
                         .padding(.bottom, 14)
                 }
+
+                subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
             }
         }
     }
@@ -941,6 +963,7 @@ struct SidebarView: View {
         orderedWorkspaceIDs _: [UUID]
     ) -> some View {
         let sessionStatuses = sidebarSessionStatuses(for: workspace.id)
+        let subspaceRows = subspaceRows(for: workspace.id, parentSessionStatuses: sessionStatuses)
         let agentSummary = WorkspaceAgentSummary.make(from: sessionStatuses, workspaceID: workspace.id)
 
         return workspaceRowChrome(
@@ -976,10 +999,11 @@ struct SidebarView: View {
                 }
                 workspaceAnnotationChipsRow(workspace: workspace)
                 if !sessionStatuses.isEmpty {
-                    sessionStatusesContent(sessionStatuses, workspace: workspace)
+                    sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
                         .padding(.horizontal, 10)
                         .padding(.bottom, 14)
                 }
+                subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
             }
         }
     }
@@ -1198,14 +1222,20 @@ struct SidebarView: View {
     @ViewBuilder
     private func sessionStatusesContent(
         _ workspaceSessionStatuses: [WorkspaceSessionStatus],
-        workspace: WorkspaceState
+        workspace: WorkspaceState,
+        subspaceRows: [SidebarSubspacePresentation.Row] = []
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(workspaceSessionStatuses, id: \.sessionID) { workspaceSessionStatus in
                 sessionStatusContent(
-                    workspaceSessionStatus,
+                    hidingSubspaceChildren(workspaceSessionStatus, subspaceRows: subspaceRows),
                     workspace: workspace,
-                    isHovered: hoveredPanelID == workspaceSessionStatus.panelID
+                    isHovered: hoveredPanelID == workspaceSessionStatus.panelID,
+                    spawnerChip: SidebarSubspacePresentation.spawnerChip(
+                        sessionID: workspaceSessionStatus.sessionID,
+                        rows: subspaceRows,
+                        activeFilterSessionID: subspaceFilterSessionIDByParentID[workspace.id]
+                    )
                 )
             }
         }
@@ -1222,7 +1252,8 @@ struct SidebarView: View {
     private func sessionStatusContent(
         _ workspaceSessionStatus: WorkspaceSessionStatus,
         workspace: WorkspaceState,
-        isHovered: Bool
+        isHovered: Bool,
+        spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil
     ) -> some View {
         let sessionRowID = SidebarSessionPresentation.SidebarSessionRowID(
             workspaceID: workspace.id,
@@ -1344,8 +1375,22 @@ struct SidebarView: View {
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
             parentSessionName: parentSessionName,
             customTabTitle: customTabTitle,
+            spawnerChip: spawnerChip,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
+            },
+            onToggleSpawnerFilter: {
+                toggleSubspaceFilter(
+                    parentWorkspaceID: workspace.id,
+                    spawningSessionID: workspaceSessionStatus.sessionID
+                )
+            },
+            onHoverSpawnerChip: { isHovering in
+                if isHovering {
+                    hoveredSpawnerSessionID = workspaceSessionStatus.sessionID
+                } else if hoveredSpawnerSessionID == workspaceSessionStatus.sessionID {
+                    hoveredSpawnerSessionID = nil
+                }
             }
         )
 
@@ -1389,6 +1434,13 @@ struct SidebarView: View {
                 childRowsExpanded: childRowsExpanded,
                 action: {
                     toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
+                },
+                spawnerChip: spawnerChip,
+                spawnerFilterAction: {
+                    toggleSubspaceFilter(
+                        parentWorkspaceID: workspace.id,
+                        spawningSessionID: workspaceSessionStatus.sessionID
+                    )
                 }
             )
             .overlayPreferenceValue(SidebarSessionDisclosureAnchorKey.self) { anchors in
@@ -1478,16 +1530,31 @@ struct SidebarView: View {
         _ content: Content,
         childCount: Int,
         childRowsExpanded: Bool,
-        action: @escaping () -> Void
+        action: @escaping () -> Void,
+        spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil,
+        spawnerFilterAction: @escaping () -> Void = {}
     ) -> some View {
-        if childCount > 0 {
-            content
+        // The row is one accessibility element, so its interactive chips are
+        // exposed as named actions rather than as child buttons.
+        let withChildAction = Group {
+            if childCount > 0 {
+                content
+                    .accessibilityAction(
+                        named: Text(childRowsExpanded ? "Collapse sub-agents" : "Expand sub-agents"),
+                        action
+                    )
+            } else {
+                content
+            }
+        }
+        if let spawnerChip {
+            withChildAction
                 .accessibilityAction(
-                    named: Text(childRowsExpanded ? "Collapse sub-agents" : "Expand sub-agents"),
-                    action
+                    named: Text(SidebarSubspacePresentation.spawnerFilterActionTitle(isFilterActive: spawnerChip.isFilterActive)),
+                    spawnerFilterAction
                 )
         } else {
-            content
+            withChildAction
         }
     }
 
@@ -1506,7 +1573,10 @@ struct SidebarView: View {
         collapsedChildNeedsAttention: Bool,
         parentSessionName: String?,
         customTabTitle: String?,
-        onToggleChildRows: @escaping () -> Void
+        spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil,
+        onToggleChildRows: @escaping () -> Void,
+        onToggleSpawnerFilter: @escaping () -> Void = {},
+        onHoverSpawnerChip: @escaping (Bool) -> Void = { _ in }
     ) -> some View {
         let railState = SidebarSessionPresentation.sessionRailState(
             for: status.kind,
@@ -1542,7 +1612,10 @@ struct SidebarView: View {
             parentSessionName: parentSessionName,
             childCount: childCount,
             childRowsExpanded: childRowsExpanded,
-            collapsedChildNeedsAttention: collapsedChildNeedsAttention
+            collapsedChildNeedsAttention: collapsedChildNeedsAttention,
+            spawnerChip: spawnerChip,
+            onToggleSpawnerFilter: onToggleSpawnerFilter,
+            onHoverSpawnerChip: onHoverSpawnerChip
         )
         let hasParentTag = parentSessionName != nil
         let hasWaitingChip = accessories.waitingChipLabel != nil
@@ -1654,6 +1727,9 @@ struct SidebarView: View {
         let childCount: Int
         let childRowsExpanded: Bool
         let collapsedChildNeedsAttention: Bool
+        var spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil
+        var onToggleSpawnerFilter: () -> Void = {}
+        var onHoverSpawnerChip: (Bool) -> Void = { _ in }
     }
 
     /// A standing mark on the session, as opposed to its current status. The
@@ -1770,6 +1846,16 @@ struct SidebarView: View {
 
         if let parentTagLabel = model.parentTagLabel, showsParentTag {
             sessionParentTag(label: parentTagLabel)
+        }
+
+        if let spawnerChip = model.spawnerChip {
+            spawnerSubspacesChip(
+                spawnerChip,
+                onToggle: model.onToggleSpawnerFilter,
+                onHover: model.onHoverSpawnerChip
+            )
+            .layoutPriority(1)
+            .anchorPreference(key: SidebarSessionDisclosureAnchorKey.self, value: .bounds) { [$0] }
         }
 
         if model.childCount > 0 {
@@ -2244,13 +2330,46 @@ struct SidebarView: View {
                 "translationHeight": "\(activeWorkspaceDrag.translationHeight)",
             ]
         )
+        // Drag indexes count cards; the window order also holds subspaces.
+        guard let moveIndices = Self.windowWorkspaceMoveIndices(
+            draggedWorkspaceID: activeWorkspaceDrag.workspaceID,
+            targetIndex: activeWorkspaceDrag.targetIndex,
+            topLevelWorkspaceIDs: store.state.topLevelWorkspaceIDs(in: windowID),
+            windowWorkspaceIDs: store.window(id: windowID)?.workspaceIDs ?? []
+        ) else {
+            return
+        }
         _ = store.send(
             .moveWorkspace(
                 windowID: windowID,
-                fromIndex: activeWorkspaceDrag.sourceIndex,
-                toIndex: activeWorkspaceDrag.targetIndex
+                fromIndex: moveIndices.fromIndex,
+                toIndex: moveIndices.toIndex
             )
         )
+    }
+
+    /// Maps a drop position among the top-level cards to `moveWorkspace`
+    /// indexes in the window's full order, which interleaves subspaces.
+    /// `targetIndex` is the position among the cards with the dragged one
+    /// removed, as `workspaceReorderTargetIndex` reports it.
+    nonisolated static func windowWorkspaceMoveIndices(
+        draggedWorkspaceID: UUID,
+        targetIndex: Int,
+        topLevelWorkspaceIDs: [UUID],
+        windowWorkspaceIDs: [UUID]
+    ) -> (fromIndex: Int, toIndex: Int)? {
+        guard let fromIndex = windowWorkspaceIDs.firstIndex(of: draggedWorkspaceID) else { return nil }
+        let remainingWindowIDs = windowWorkspaceIDs.filter { $0 != draggedWorkspaceID }
+        let remainingCardIDs = topLevelWorkspaceIDs.filter { $0 != draggedWorkspaceID }
+        guard targetIndex >= 0, targetIndex <= remainingCardIDs.count else { return nil }
+        let toIndex: Int
+        if targetIndex < remainingCardIDs.count,
+           let anchorIndex = remainingWindowIDs.firstIndex(of: remainingCardIDs[targetIndex]) {
+            toIndex = anchorIndex
+        } else {
+            toIndex = remainingWindowIDs.count
+        }
+        return (fromIndex, toIndex)
     }
 
     private func cancelWorkspaceDrag() {
@@ -2880,6 +2999,494 @@ struct SidebarView: View {
     private func normalizedSessionDetail(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - Subspaces
+
+    /// Sub-agent rows that live in one of this workspace's subspaces are
+    /// represented by the ⑂ chip and the group instead of a ↗ row.
+    private func hidingSubspaceChildren(
+        _ status: WorkspaceSessionStatus,
+        subspaceRows: [SidebarSubspacePresentation.Row]
+    ) -> WorkspaceSessionStatus {
+        guard subspaceRows.isEmpty == false else { return status }
+        let subspaceIDs = Set(subspaceRows.map(\.id))
+        var status = status
+        status.children.removeAll { child in
+            child.source == .session && child.workspaceID.map(subspaceIDs.contains) == true
+        }
+        return status
+    }
+
+    private func subspaceRows(
+        for parentWorkspaceID: UUID,
+        parentSessionStatuses: [WorkspaceSessionStatus]
+    ) -> [SidebarSubspacePresentation.Row] {
+        let subspaceIDs = store.state.subspaceWorkspaceIDs(of: parentWorkspaceID)
+        guard subspaceIDs.isEmpty == false else { return [] }
+        let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
+        let spawnerNamesBySessionID = Dictionary(
+            parentSessionStatuses.map { ($0.sessionID, $0.displayTitle) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return subspaceIDs.compactMap { subspaceID in
+            guard let workspace = store.state.workspacesByID[subspaceID] else { return nil }
+            let statuses = sidebarSessionStatuses(for: subspaceID)
+            let taskStatusText = workspace.annotations[SidebarSubspacePresentation.annotationKeyTaskStatus]?.text
+            let sessions = statuses.map { status in
+                SidebarSubspacePresentation.SessionLine(
+                    title: status.displayTitle,
+                    statusKind: status.status.kind,
+                    summary: normalizedSessionDetail(status.status.detail) ?? normalizedSessionDetail(status.status.summary)
+                )
+            }
+            return SidebarSubspacePresentation.Row(
+                id: subspaceID,
+                title: workspace.title,
+                status: SidebarSubspacePresentation.rowStatus(
+                    sessionStatuses: statuses.map { status in
+                        (
+                            kind: status.status.kind,
+                            showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace)
+                        )
+                    },
+                    taskStatusText: taskStatusText
+                ),
+                pullRequest: workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest],
+                summary: sessions.first?.summary ?? normalizedSessionDetail(taskStatusText),
+                spawningSessionID: workspace.spawningSessionID,
+                spawnerName: workspace.spawningSessionID.flatMap { spawnerNamesBySessionID[$0] },
+                sessions: sessions,
+                creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func subspacesGroup(
+        _ rows: [SidebarSubspacePresentation.Row],
+        parentWorkspaceID: UUID
+    ) -> some View {
+        if rows.isEmpty == false {
+            subspacesGroupContent(rows, parentWorkspaceID: parentWorkspaceID)
+        }
+    }
+
+    private func subspacesGroupContent(
+        _ rows: [SidebarSubspacePresentation.Row],
+        parentWorkspaceID: UUID
+    ) -> some View {
+        let filterSessionID = subspaceFilterSessionIDByParentID[parentWorkspaceID]
+        let isExpanded = collapsedSubspaceGroupParentIDs.contains(parentWorkspaceID) == false
+        let filteredRows = SidebarSubspacePresentation.filteredRows(rows, spawningSessionID: filterSessionID)
+        let orderedRows = SidebarSubspacePresentation.orderedRows(
+            filteredRows,
+            frozenOrder: frozenSubspaceOrderByParentID[parentWorkspaceID]
+        )
+        let tally = SidebarSubspacePresentation.tally(rows)
+        let needsAttention = SidebarSubspacePresentation.needsAttention(rows)
+        let attentionRowIDs = Set(rows.filter { $0.status.needsAttention }.map(\.id))
+        let showsSpawnerTags = SidebarSubspacePresentation.showsSpawnerTags(rows)
+        let filterSpawnerName = filterSessionID.flatMap { sessionID in
+            rows.first { $0.spawningSessionID == sessionID }?.spawnerName
+        }
+        let orderedRowIDs = orderedRows.map(\.id)
+
+        return VStack(alignment: .leading, spacing: 3) {
+            subspacesGroupHeader(
+                parentWorkspaceID: parentWorkspaceID,
+                shownCount: filteredRows.count,
+                totalCount: rows.count,
+                tally: tally,
+                isExpanded: isExpanded
+            )
+
+            if isExpanded {
+                if filterSessionID != nil {
+                    subspacesFilterBar(
+                        spawnerName: filterSpawnerName ?? "this agent",
+                        parentWorkspaceID: parentWorkspaceID
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(orderedRows) { row in
+                        subspaceRow(row, showsSpawnerTag: showsSpawnerTags)
+                    }
+                }
+                .animation(
+                    accessibilityReduceMotion ? nil : .easeInOut(duration: 0.28),
+                    value: orderedRowIDs
+                )
+                .onHover { isHovering in
+                    if isHovering {
+                        frozenSubspaceOrderByParentID[parentWorkspaceID] = orderedRowIDs
+                    } else {
+                        frozenSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 12)
+        .accessibilityIdentifier("sidebar.workspace.subspaces.\(parentWorkspaceID.uuidString)")
+        .onAppear {
+            if needsAttention {
+                collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
+            }
+        }
+        // A subspace that newly needs the user reopens a collapsed group and
+        // clears a filter that would hide it, the same rule sub-agent rows
+        // follow. Attention that already existed when the user chose the
+        // filter does not fight the choice; the header tally still shows it.
+        .onChange(of: needsAttention) { _, needsAttention in
+            if needsAttention {
+                collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
+            }
+        }
+        .onChange(of: attentionRowIDs) { previousIDs, currentIDs in
+            let hiddenNewIDs = currentIDs.subtracting(previousIDs).filter { rowID in
+                rows.first { $0.id == rowID }?.spawningSessionID != filterSessionID
+            }
+            if filterSessionID != nil, hiddenNewIDs.isEmpty == false {
+                subspaceFilterSessionIDByParentID.removeValue(forKey: parentWorkspaceID)
+            }
+        }
+        .onChange(of: filteredRows.isEmpty, initial: true) { _, isEmpty in
+            // The filtered agent has no open subspaces left; show everything.
+            if isEmpty, filterSessionID != nil {
+                subspaceFilterSessionIDByParentID.removeValue(forKey: parentWorkspaceID)
+            }
+        }
+    }
+
+    private func subspacesGroupHeader(
+        parentWorkspaceID: UUID,
+        shownCount: Int,
+        totalCount: Int,
+        tally: SidebarSubspacePresentation.Tally,
+        isExpanded: Bool
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                if isExpanded {
+                    collapsedSubspaceGroupParentIDs.insert(parentWorkspaceID)
+                } else {
+                    collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .frame(width: 9)
+                    Text(SidebarSubspacePresentation.groupTitle.uppercased())
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .tracking(0.8)
+                    Text(SidebarSubspacePresentation.headerCountLabel(shownCount: shownCount, totalCount: totalCount))
+                        .font(ToastyTheme.fontWorkspaceAgentCount)
+                        .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                }
+                .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(SidebarSubspacePresentation.groupAccessibilityLabel(
+                rowCount: totalCount,
+                isExpanded: isExpanded,
+                tally: tally
+            ))
+            .accessibilityIdentifier("sidebar.workspace.subspaces.toggle")
+            .background {
+                SidebarSemanticTextBridge(text: SidebarSubspacePresentation.groupAccessibilityLabel(
+                    rowCount: totalCount,
+                    isExpanded: isExpanded,
+                    tally: tally
+                ))
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+            }
+
+            Spacer(minLength: 0)
+
+            if tally.isEmpty == false {
+                HStack(spacing: 8) {
+                    subspacesTallyItem(count: tally.ready, color: ToastyTheme.sessionReadyText)
+                    subspacesTallyItem(count: tally.needsApproval, color: ToastyTheme.sessionNeedsApprovalText)
+                    subspacesTallyItem(count: tally.error, color: ToastyTheme.sessionErrorText)
+                }
+                .accessibilityHidden(true)
+            }
+        }
+        .frame(minHeight: 16)
+        .padding(.top, 8)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(ToastyTheme.subtleBorder)
+                .frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func subspacesTallyItem(count: Int, color: Color) -> some View {
+        if count > 0 {
+            HStack(spacing: 3) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                Text("\(count)")
+                    .font(ToastyTheme.fontWorkspaceAgentCount)
+                    .foregroundStyle(color)
+            }
+        }
+    }
+
+    private func subspacesFilterBar(spawnerName: String, parentWorkspaceID: UUID) -> some View {
+        HStack(spacing: 5) {
+            Text(SidebarSubspacePresentation.filterBarLabel(spawnerName: spawnerName))
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+            Button {
+                subspaceFilterSessionIDByParentID.removeValue(forKey: parentWorkspaceID)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                    .padding(2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear subspace filter")
+            .accessibilityIdentifier("sidebar.workspace.subspaces.clearFilter")
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(ToastyTheme.sidebarDisclosureBackground, in: RoundedRectangle(cornerRadius: 5))
+        .background {
+            SidebarSemanticTextBridge(text: SidebarSubspacePresentation.filterBarLabel(spawnerName: spawnerName))
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func subspaceRow(
+        _ row: SidebarSubspacePresentation.Row,
+        showsSpawnerTag: Bool
+    ) -> some View {
+        let isSelected = selectedWorkspaceID == row.id
+        let isSpawnerHighlighted = hoveredSpawnerSessionID != nil
+            && hoveredSpawnerSessionID == row.spawningSessionID
+        let background: Color = if isSelected {
+            ToastyTheme.sidebarSessionActiveBackground
+        } else if isSpawnerHighlighted {
+            ToastyTheme.sidebarSessionHoverBackground
+        } else {
+            Color.clear
+        }
+        let accessibilityLabel = SidebarSubspacePresentation.rowAccessibilityLabel(
+            row,
+            showsSpawnerTag: showsSpawnerTag
+        )
+
+        let select = {
+            cancelWorkspaceRename()
+            store.selectWorkspace(
+                windowID: windowID,
+                workspaceID: row.id,
+                preferringUnreadSessionPanelIn: sessionRuntimeStore
+            )
+        }
+
+        // A tap on the row selects the workspace; the PR chip inside stays a
+        // real link button, as it is on top-level cards.
+        return HStack(alignment: .top, spacing: 6) {
+            subspaceRowStatusView(row)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(row.title)
+                        .font(ToastyTheme.fontWorkspaceSessionChildName)
+                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
+                    if let pullRequest = row.pullRequest {
+                        // The chip keeps its width; the title truncates instead.
+                        workspaceAnnotationChip(
+                            key: SidebarSubspacePresentation.annotationKeyPullRequest,
+                            annotation: pullRequest
+                        )
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(2)
+                    }
+                }
+                .frame(minHeight: Self.sessionRowSecondaryLineMinHeight)
+
+                if row.summary != nil || (showsSpawnerTag && row.spawnerName != nil) {
+                    HStack(spacing: 6) {
+                        if let summary = row.summary {
+                            Text(summary)
+                                .font(ToastyTheme.fontWorkspaceSessionChildContext)
+                                .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        Spacer(minLength: 0)
+                        if showsSpawnerTag, let spawnerName = row.spawnerName {
+                            // Capped so the summary keeps most of the line; the
+                            // tooltip carries the full spawner name.
+                            sessionParentTag(label: SidebarSubspacePresentation.spawnerTagLabel(spawnerName))
+                                .frame(maxWidth: 110, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(background, in: RoundedRectangle(cornerRadius: 4))
+        .contentShape(RoundedRectangle(cornerRadius: 4))
+        .onTapGesture(perform: select)
+        .background {
+            ZStack {
+                SidebarTooltipBridge(text: SidebarSubspacePresentation.rowTooltip(row))
+                SidebarSemanticTextBridge(text: accessibilityLabel)
+                    .frame(width: 0, height: 0)
+            }
+            .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(.default, select)
+        .accessibilityAction(named: Text("Move to top level")) {
+            _ = store.send(
+                .setWorkspaceParent(workspaceID: row.id, parentWorkspaceID: nil, spawningSessionID: nil),
+                source: .ui("sidebar_subspace_move_to_top_level")
+            )
+        }
+        .accessibilityIdentifier("sidebar.workspace.subspace.\(row.id.uuidString)")
+        .id(row.id)
+        .contextMenu {
+            Button("Move to top level") {
+                _ = store.send(
+                    .setWorkspaceParent(workspaceID: row.id, parentWorkspaceID: nil, spawningSessionID: nil),
+                    source: .ui("sidebar_subspace_move_to_top_level")
+                )
+            }
+            Button(ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"), role: .destructive) {
+                requestWorkspaceClose(workspaceID: row.id)
+            }
+        }
+    }
+
+    /// Selecting a subspace whose row is collapsed or filtered away would
+    /// leave nothing highlighted, so open the group and drop the filter.
+    private func revealSelectedSubspaceIfNeeded() {
+        guard let selectedWorkspaceID,
+              let parentWorkspaceID = store.state.workspacesByID[selectedWorkspaceID]?.parentWorkspaceID else {
+            return
+        }
+        collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
+        if let filterSessionID = subspaceFilterSessionIDByParentID[parentWorkspaceID],
+           store.state.workspacesByID[selectedWorkspaceID]?.spawningSessionID != filterSessionID {
+            subspaceFilterSessionIDByParentID.removeValue(forKey: parentWorkspaceID)
+        }
+    }
+
+    @ViewBuilder
+    private func subspaceRowStatusView(_ row: SidebarSubspacePresentation.Row) -> some View {
+        switch row.status {
+        case .ready, .needsApproval, .error:
+            sessionStatusChip(kind: row.status == .ready ? .ready : row.status == .error ? .error : .needsApproval)
+        case .working:
+            SessionChildActivityDot(
+                phaseOffset: SessionChildActivityDot.phaseOffset(forStableID: row.id.uuidString)
+            )
+            .frame(width: 10, height: Self.sessionRowSecondaryLineMinHeight)
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    private func spawnerSubspacesChip(
+        _ chip: SidebarSubspacePresentation.SpawnerChip,
+        onToggle: @escaping () -> Void,
+        onHover: @escaping (Bool) -> Void
+    ) -> some View {
+        let foreground: Color
+        let background: Color
+        let border: Color
+        if chip.isFilterActive {
+            foreground = ToastyTheme.chromeBackground
+            background = ToastyTheme.sidebarDisclosureText
+            border = ToastyTheme.sidebarDisclosureText
+        } else {
+            switch chip.tone {
+            case .neutral:
+                foreground = ToastyTheme.sidebarDisclosureText
+                background = ToastyTheme.sidebarDisclosureBackground
+                border = ToastyTheme.sidebarDisclosureBorder
+            case .needsApproval:
+                foreground = ToastyTheme.sessionNeedsApprovalText
+                background = ToastyTheme.sessionNeedsApprovalBackground
+                border = ToastyTheme.sessionNeedsApprovalText.opacity(0.6)
+            case .error:
+                foreground = ToastyTheme.sessionErrorText
+                background = ToastyTheme.sessionErrorBackground
+                border = ToastyTheme.sessionErrorText.opacity(0.6)
+            }
+        }
+        return Button(action: onToggle) {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 8.5, weight: .semibold))
+                Text("\(chip.count)")
+                    .font(ToastyTheme.fontWorkspaceAgentCount)
+            }
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(background, in: Capsule())
+            .overlay {
+                Capsule().stroke(border, lineWidth: 1)
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover(perform: onHover)
+        .accessibilityLabel(SidebarSubspacePresentation.spawnerChipAccessibilityLabel(chip))
+        .accessibilityIdentifier("sidebar.workspace.session.spawnerChip")
+        // The row folds its children into one accessibility element, so the
+        // chip's wording is otherwise invisible to AppKit inspectors and
+        // host-based tests.
+        .background {
+            SidebarSemanticTextBridge(text: SidebarSubspacePresentation.spawnerChipAccessibilityLabel(chip))
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func toggleSubspaceFilter(parentWorkspaceID: UUID, spawningSessionID: String) {
+        if subspaceFilterSessionIDByParentID[parentWorkspaceID] == spawningSessionID {
+            subspaceFilterSessionIDByParentID.removeValue(forKey: parentWorkspaceID)
+        } else {
+            subspaceFilterSessionIDByParentID[parentWorkspaceID] = spawningSessionID
+            collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
+        }
+    }
+
+    private func pruneSubspaceGroupState() {
+        // Keep state only for cards that still have a group, so a later
+        // group under the same card starts fresh.
+        let parentIDs = Set(store.state.workspacesByID.keys.filter { store.state.subspaceWorkspaceIDs(of: $0).isEmpty == false })
+        collapsedSubspaceGroupParentIDs = collapsedSubspaceGroupParentIDs.filter(parentIDs.contains)
+        subspaceFilterSessionIDByParentID = subspaceFilterSessionIDByParentID.filter { parentIDs.contains($0.key) }
+        frozenSubspaceOrderByParentID = frozenSubspaceOrderByParentID.filter { parentIDs.contains($0.key) }
     }
 
     private func toggleSessionChildRows(sessionID: String) {

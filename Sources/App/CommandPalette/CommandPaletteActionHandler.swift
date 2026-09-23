@@ -168,13 +168,22 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return []
         }
 
-        return selection.window.workspaceIDs.enumerated().compactMap { index, workspaceID in
-            guard let workspace = store?.state.workspacesByID[workspaceID] else {
+        guard let state = store?.state else { return [] }
+        // Subspaces list after the cards they nest under, with no numbered
+        // shortcut, matching the sidebar.
+        let topLevelWorkspaceIDs = state.topLevelWorkspaceIDs(in: selection.windowID)
+        let shortcutNumbersByWorkspaceID = Dictionary(
+            uniqueKeysWithValues: topLevelWorkspaceIDs.enumerated().map { ($1, $0 + 1) }
+        )
+        return state.sidebarOrderedWorkspaceIDs(in: selection.windowID).compactMap { workspaceID in
+            guard let workspace = state.workspacesByID[workspaceID] else {
                 return nil
             }
-            let shortcut = index < DisplayShortcutConfig.maxWorkspaceShortcutCount
-                ? PaletteShortcut(symbolLabel: "\u{2325}\(index + 1)")
-                : nil
+            let shortcut = shortcutNumbersByWorkspaceID[workspaceID].flatMap { number in
+                number <= DisplayShortcutConfig.maxWorkspaceShortcutCount
+                    ? PaletteShortcut(symbolLabel: "\u{2325}\(number)")
+                    : nil
+            }
             return PaletteWorkspaceSwitchOption(
                 workspaceID: workspaceID,
                 title: workspace.title,

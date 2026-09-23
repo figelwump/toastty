@@ -1701,6 +1701,262 @@ final class SidebarViewTests: XCTestCase {
         harness.window.orderOut(nil)
     }
 
+    // MARK: - Subspaces
+
+    private struct SubspacesHarnessIDs {
+        let parentID: UUID
+        let approvalID: UUID
+        let readyByAnnotationID: UUID
+        let workingID: UUID
+        let readyUnreadID: UUID
+        let siblingID: UUID
+    }
+
+    /// A parent card with two spawning sessions and four subspaces in one
+    /// group, plus a second top-level card, so the test can see sorting,
+    /// the spawner tags, and that subspaces do not render as cards.
+    private func makeSubspacesHarness() throws -> (SidebarHarness, SubspacesHarnessIDs) {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let parentLeftPanelID = UUID()
+        let parentRightPanelID = UUID()
+        let parentID = UUID()
+        let parent = WorkspaceState(
+            id: parentID,
+            title: "emptyos-computer",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: parentLeftPanelID),
+                second: .slot(slotID: UUID(), panelID: parentRightPanelID)
+            ),
+            panels: [
+                parentLeftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo")),
+                parentRightPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo")),
+            ],
+            focusedPanelID: parentLeftPanelID
+        )
+
+        func subspace(
+            _ title: String,
+            spawner: String?,
+            annotations: [String: WorkspaceAnnotation] = [:],
+            unread: Bool = false
+        ) -> WorkspaceState {
+            let panelID = UUID()
+            return WorkspaceState(
+                id: UUID(),
+                title: title,
+                layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo/\(title)"))],
+                focusedPanelID: panelID,
+                unreadPanelIDs: unread ? [panelID] : [],
+                annotations: annotations,
+                parentWorkspaceID: parentID,
+                spawningSessionID: spawner
+            )
+        }
+        let approval = subspace("qa-mobile-navigation", spawner: "spawner")
+        let readyByAnnotation = subspace(
+            "qa-private-app-verification",
+            spawner: "spawner",
+            annotations: [
+                "github-pr": WorkspaceAnnotation(text: "PR #130", url: "https://github.com/example/repo/pull/130"),
+                "task-status": WorkspaceAnnotation(text: "Ready for your testing", url: nil),
+            ]
+        )
+        let working = subspace("qa-update-visitor-fixture", spawner: "spawner")
+        let readyUnread = subspace("launch-checklist", spawner: "assessor", unread: true)
+        let sibling = makeSinglePanelWorkspace(id: UUID(), title: "ios-tab-footer")
+
+        let windowID = UUID()
+        let workspaces = [parent, approval, readyByAnnotation, working, readyUnread, sibling]
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: parentID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID)
+
+        func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
+            harness.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: workspace.focusedPanelID!,
+                windowID: windowID,
+                workspaceID: workspace.id,
+                displayTitleOverride: title,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(sessionID: sessionID, status: status, at: now.addingTimeInterval(1))
+        }
+        start("spawner", title: "Test EmptyOS beta experience", in: parent,
+              status: SessionStatus(kind: .working, summary: "Working", detail: "Merging QA fixes back to main"))
+        start("assessor", title: "Assess beta launch readiness", in: WorkspaceState(
+            id: parentID, title: parent.title, layoutTree: parent.layoutTree, panels: parent.panels,
+            focusedPanelID: parentRightPanelID
+        ), status: SessionStatus(kind: .idle, summary: "Idle", detail: "Started three Toastty workspaces"))
+        start("approval-agent", title: "Fix nav drawer focus", in: approval,
+              status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "pnpm db:migrate"))
+        start("working-agent", title: "Rebase fixture", in: working,
+              status: SessionStatus(kind: .working, summary: "Working", detail: "Rebasing onto main"))
+        start("ready-agent", title: "Checklist", in: readyUnread,
+              status: SessionStatus(kind: .ready, summary: "Ready", detail: "Checklist covers auth and billing"))
+        // Rows animate into their sorted positions (0.28s); let that settle
+        // before reading frames or text.
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        return (harness, SubspacesHarnessIDs(
+            parentID: parentID,
+            approvalID: approval.id,
+            readyByAnnotationID: readyByAnnotation.id,
+            workingID: working.id,
+            readyUnreadID: readyUnread.id,
+            siblingID: sibling.id
+        ))
+    }
+
+    func testSubspacesRenderInsideParentCardSortedByStatusNotAsCards() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        let rootView = harness.hostingView
+        let textValues = renderedTextValues(in: rootView)
+
+        XCTAssertTrue(
+            textValues.contains { $0.hasPrefix("4 subspaces, expanded") },
+            "Group header should describe the rows: \(textValues)"
+        )
+
+        // Subspaces are rows in the parent card, not cards of their own.
+        let subspaceTitles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
+        for subspaceID in [ids.approvalID, ids.readyByAnnotationID, ids.workingID, ids.readyUnreadID] {
+            let workspace = try XCTUnwrap(harness.store.state.workspacesByID[subspaceID])
+            XCTAssertTrue(
+                textValues.contains { $0.hasPrefix("\(workspace.title), subspace") },
+                "Expected a subspace row for \(workspace.title): \(textValues)"
+            )
+            let cardLabel = SidebarSessionPresentation.workspaceAccessibilityLabel(for: workspace, isSelected: false)
+            XCTAssertFalse(textValues.contains(cardLabel), "Subspace rendered as a card: \(cardLabel)")
+        }
+        XCTAssertTrue(textValues.contains("ios-tab-footer"), "Sibling card should still render: \(textValues)")
+
+        // Sorted ready, approval, then working; the two ready rows keep
+        // window order (annotation-ready was created before unread-ready).
+        let rowFrames = try subspaceTitles.map { title in
+            (title, try semanticTextFrame(in: rootView, prefix: "\(title), subspace"))
+        }
+        let siblingFrame = try semanticTextFrame(in: rootView, prefix: "ios-tab-footer")
+        let parentFrame = try semanticTextFrame(in: rootView, prefix: "emptyos-computer")
+        let growsDownward = siblingFrame.minY > parentFrame.minY
+        let orderedTitles = rowFrames
+            .sorted { growsDownward ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }
+            .map(\.0)
+        XCTAssertEqual(
+            orderedTitles,
+            ["qa-private-app-verification", "launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture"]
+        )
+        // The PR chip and spawner tags render; the ↗ child row for a
+        // subspace agent does not (the chip replaces it).
+        XCTAssertTrue(textValues.contains { $0.contains("PR #130") }, "PR chip missing: \(textValues)")
+        XCTAssertTrue(textValues.contains { $0.contains("spawned by Test EmptyOS beta experience") })
+        XCTAssertTrue(textValues.contains { $0.contains("spawned by Assess beta launch readiness") })
+        XCTAssertFalse(textValues.contains { $0.contains("sub-agent") }, "Subspace agents should not be ↗ rows: \(textValues)")
+
+        try writeSidebarEvidence(rootView, name: "sidebar-subspaces-sorted")
+    }
+
+    func testSpawnerChipFiltersTheSubspacesGroupAndClearsOnSecondPress() throws {
+        let (harness, _) = try makeSubspacesHarness()
+        let rootView = harness.hostingView
+
+        // A real click on the chip, which sits inside the row header's AppKit
+        // pointer overlay and must be excluded from it like the disclosure pill.
+        try clickSemanticText(prefix: "3 subspaces, one needs approval", in: rootView)
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        var textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains("Only subspaces from Test EmptyOS beta experience"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, subspace") })
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, subspace") }, "Other spawner's row should hide: \(textValues)")
+        XCTAssertTrue(textValues.contains("3 subspaces, one needs approval, filtering the Subspaces list"), "\(textValues)")
+        try writeSidebarEvidence(rootView, name: "sidebar-subspaces-filtered")
+
+        try clickSemanticText(prefix: "3 subspaces, one needs approval, filtering", in: rootView)
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertFalse(textValues.contains("Only subspaces from Test EmptyOS beta experience"))
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace") })
+    }
+
+    /// Clicks the hosted view at the semantic text bridge whose text starts
+    /// with `prefix`; the bridge is a zero-size field centered on its view.
+    private func clickSemanticText(prefix: String, in rootView: NSView) throws {
+        let frame = try semanticTextFrame(in: rootView, prefix: prefix)
+        let window = try XCTUnwrap(rootView.window)
+        let windowPoint = rootView.convert(CGPoint(x: frame.midX, y: frame.midY), to: nil)
+        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: windowPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: eventNumber,
+                clickCount: 1,
+                pressure: pressure
+            ))
+            window.sendEvent(event)
+            pumpMainRunLoop(duration: 0.05)
+        }
+    }
+
+    private func semanticTextFrame(in rootView: NSView, prefix: String) throws -> CGRect {
+        let field = try XCTUnwrap(
+            semanticTextField(in: rootView, prefix: prefix),
+            "No rendered text starting with \"\(prefix)\": \(renderedTextValues(in: rootView))"
+        )
+        return field.convert(field.bounds, to: rootView)
+    }
+
+    private func semanticTextField(in rootView: NSView, prefix: String) -> NSTextField? {
+        if let field = rootView as? NSTextField, field.stringValue.hasPrefix(prefix) {
+            return field
+        }
+        for subview in rootView.subviews {
+            if let match = semanticTextField(in: subview, prefix: prefix) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    /// Writes a PNG of the hosted sidebar when the runner sets
+    /// `TOASTTY_SIDEBAR_EVIDENCE_DIR` (pass it as `TEST_RUNNER_…` to
+    /// xcodebuild), so a review can see the rendered rows.
+    private func writeSidebarEvidence(_ view: NSView, name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["TOASTTY_SIDEBAR_EVIDENCE_DIR"],
+              directory.isEmpty == false else {
+            return
+        }
+        let bitmap = try renderedBitmap(for: view)
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try data.write(to: directoryURL.appendingPathComponent("\(name).png"))
+    }
+
     private func pumpMainRunLoop(duration: TimeInterval = 0) {
         let expectation = expectation(description: "Flush SwiftUI update")
         DispatchQueue.main.async {
