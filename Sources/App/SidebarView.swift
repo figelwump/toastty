@@ -3332,8 +3332,12 @@ struct SidebarView: View {
 
         // A tap on the row selects the workspace; the PR chip inside stays a
         // real link button, as it is on top-level cards.
-        return HStack(alignment: .top, spacing: 6) {
-            subspaceRowStatusView(row)
+        // Same rail and padding as a session row, so the title's left edge
+        // lines up with the session titles above whatever the status is.
+        return HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
+            sessionStatusRailStatusSlot(Self.subspaceRailState(row.status))
+                .frame(width: Self.sessionStatusRailWidth)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
@@ -3344,6 +3348,10 @@ struct SidebarView: View {
                         .truncationMode(.tail)
                         .layoutPriority(1)
                     Spacer(minLength: 0)
+                    if let chipKind = Self.subspaceStatusChipKind(row.status) {
+                        sessionStatusChip(kind: chipKind)
+                            .layoutPriority(2)
+                    }
                     if let pullRequest = row.pullRequest {
                         // The chip keeps its width; the title truncates instead.
                         workspaceAnnotationChip(
@@ -3381,8 +3389,8 @@ struct SidebarView: View {
                 }
             }
         }
-        .padding(.horizontal, 6)
         .padding(.vertical, 4)
+        .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(background, in: RoundedRectangle(cornerRadius: 5))
         .overlay {
@@ -3452,18 +3460,26 @@ struct SidebarView: View {
         }
     }
 
-    @ViewBuilder
-    private func subspaceRowStatusView(_ row: SidebarSubspacePresentation.Row) -> some View {
-        switch row.status {
-        case .ready, .needsApproval, .error:
-            sessionStatusChip(kind: row.status == .ready ? .ready : row.status == .error ? .error : .needsApproval)
-        case .working:
-            SessionChildActivityDot(
-                phaseOffset: SessionChildActivityDot.phaseOffset(forStableID: row.id.uuidString)
-            )
-            .frame(width: 10, height: Self.sessionRowSecondaryLineMinHeight)
-        case .idle:
-            EmptyView()
+    private static func subspaceRailState(
+        _ status: SidebarSubspacePresentation.RowStatus
+    ) -> SidebarSessionPresentation.SessionRailState {
+        switch status {
+        case .ready: return .unreadDot
+        case .needsApproval: return .approvalDot
+        case .error: return .errorDot
+        case .working: return .spinner
+        case .idle: return .empty
+        }
+    }
+
+    private static func subspaceStatusChipKind(
+        _ status: SidebarSubspacePresentation.RowStatus
+    ) -> SessionStatusKind? {
+        switch status {
+        case .ready: return .ready
+        case .needsApproval: return .needsApproval
+        case .error: return .error
+        case .working, .idle: return nil
         }
     }
 
