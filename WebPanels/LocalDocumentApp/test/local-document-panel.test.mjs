@@ -350,7 +350,6 @@ test("header uses bootstrap-provided format labels", async () => {
   assert.match(source, /bootstrap\.formatLabel/);
 });
 
-
 test("bootstrap contract includes the plain-text highlight state and version 7", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/bootstrap.ts"),
@@ -361,8 +360,6 @@ test("bootstrap contract includes the plain-text highlight state and version 7",
   assert.match(source, /contractVersion: 7;/);
   assert.match(source, /Expected bootstrap contractVersion 7/);
 });
-
-
 
 test("native bridge forwards local-document diagnostics and render lifecycle events", async () => {
   const source = await readFile(

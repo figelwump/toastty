@@ -59,31 +59,45 @@ final class LocalDocumentPanelActionTests: XCTestCase {
             if (!copy || !open || copy.disabled || open.disabled) {
               throw new Error("Expected enabled read-mode action buttons");
             }
+            const copyStatus = () => copy.parentElement.querySelector('[role="status"]');
+            function waitForDOM(read, timeoutMs, message) {
+              return new Promise((resolve, reject) => {
+                const observer = new MutationObserver(inspect);
+                const timeout = setTimeout(() => {
+                  observer.disconnect();
+                  reject(new Error(message));
+                }, timeoutMs);
+                function inspect() {
+                  const value = read();
+                  if (!value) return;
+                  observer.disconnect();
+                  clearTimeout(timeout);
+                  resolve(value);
+                }
+                observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+                inspect();
+              });
+            }
             const initialCopyTitle = copy.title;
-            return await new Promise((resolve, reject) => {
-              const observer = new MutationObserver(inspectFeedback);
-              const timeout = setTimeout(() => {
-                observer.disconnect();
-                reject(new Error("Copy confirmation did not render"));
-              }, 3000);
-              function inspectFeedback() {
-                const status = copy.parentElement.querySelector('[role="status"]');
-                if (!status) return;
-                observer.disconnect();
-                clearTimeout(timeout);
-                resolve({
-                  initialCopyTitle,
-                  copyTitle: copy.title,
-                  openTitle: open.title,
-                  confirmation: status.textContent.trim(),
-                  live: status.getAttribute('aria-live')
-                });
-              }
-              observer.observe(document.body, { childList: true, subtree: true, attributes: true });
-              copy.click();
-              open.click();
-              inspectFeedback();
-            });
+            const confirmationShown = waitForDOM(() => {
+              const status = copyStatus();
+              return status && {
+                copyTitle: copy.title,
+                openTitle: open.title,
+                confirmation: status.textContent.trim(),
+                live: status.getAttribute('aria-live')
+              };
+            }, 3000, "Copy confirmation did not render");
+            copy.click();
+            open.click();
+            const confirmation = await confirmationShown;
+            // The confirmation clears itself after 1.5 seconds.
+            const dismissedCopyTitle = await waitForDOM(
+              () => !copyStatus() && copy.title,
+              5000,
+              "Copy confirmation did not dismiss"
+            );
+            return { initialCopyTitle, ...confirmation, dismissedCopyTitle };
             """,
             arguments: [:],
             in: nil,
@@ -96,6 +110,7 @@ final class LocalDocumentPanelActionTests: XCTestCase {
             "openTitle": "Open in Default App",
             "confirmation": "Full path copied",
             "live": "polite",
+            "dismissedCopyTitle": "Copy Full Path",
         ])
         await fulfillment(of: [actionsReceived], timeout: 5)
         XCTAssertEqual(handler.actions, [["type": "copyFullPath"], ["type": "openInDefaultApp"]])
