@@ -428,6 +428,7 @@ struct SidebarView: View {
     /// still under the pointer; released on exit.
     @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     @State private var hoveredSpawnerSessionID: String?
+    @State private var hoveredSubspaceID: UUID?
     @State private var optionKeyPressed = false
 
     /// Fixed height for the session detail text area (1 line at the detail
@@ -3025,8 +3026,8 @@ struct SidebarView: View {
         let subspaceIDs = store.state.subspaceWorkspaceIDs(of: parentWorkspaceID)
         guard subspaceIDs.isEmpty == false else { return [] }
         let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
-        let spawnerNamesBySessionID = Dictionary(
-            parentSessionStatuses.map { ($0.sessionID, $0.displayTitle) },
+        let spawnersBySessionID = Dictionary(
+            parentSessionStatuses.map { ($0.sessionID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         return subspaceIDs.compactMap { subspaceID in
@@ -3055,7 +3056,8 @@ struct SidebarView: View {
                 pullRequest: workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest],
                 summary: sessions.first?.summary ?? normalizedSessionDetail(taskStatusText),
                 spawningSessionID: workspace.spawningSessionID,
-                spawnerName: workspace.spawningSessionID.flatMap { spawnerNamesBySessionID[$0] },
+                spawnerName: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.displayTitle },
+                spawnerPanelID: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.panelID },
                 sessions: sessions,
                 creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max
             )
@@ -3111,7 +3113,7 @@ struct SidebarView: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(orderedRows) { row in
-                        subspaceRow(row, showsSpawnerTag: showsSpawnerTags)
+                        subspaceRow(row, parentWorkspaceID: parentWorkspaceID, showsSpawnerTag: showsSpawnerTags)
                     }
                 }
                 .animation(
@@ -3218,12 +3220,7 @@ struct SidebarView: View {
             }
         }
         .frame(minHeight: 16)
-        .padding(.top, 8)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(ToastyTheme.subtleBorder)
-                .frame(height: 1)
-        }
+        .padding(.top, 6)
     }
 
     @ViewBuilder
@@ -3271,20 +3268,54 @@ struct SidebarView: View {
         }
     }
 
+    /// The ↖ tag on a subspace row. While the spawning session runs it is a
+    /// button that focuses that session's panel in the parent workspace.
+    @ViewBuilder
+    private func spawnerTag(
+        label: String,
+        spawnerName: String,
+        parentWorkspaceID: UUID,
+        spawnerPanelID: UUID?
+    ) -> some View {
+        if let spawnerPanelID {
+            Button {
+                focusSessionPanel(workspaceID: parentWorkspaceID, panelID: spawnerPanelID)
+            } label: {
+                sessionParentTag(label: label)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Go to \(spawnerName)")
+            .accessibilityIdentifier("sidebar.workspace.subspace.spawnerTag")
+            .background {
+                SidebarSemanticTextBridge(text: "Go to \(spawnerName)")
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+        } else {
+            sessionParentTag(label: label)
+        }
+    }
+
     private func subspaceRow(
         _ row: SidebarSubspacePresentation.Row,
+        parentWorkspaceID: UUID,
         showsSpawnerTag: Bool
     ) -> some View {
         let isSelected = selectedWorkspaceID == row.id
+        let isHovered = hoveredSubspaceID == row.id
         let isSpawnerHighlighted = hoveredSpawnerSessionID != nil
             && hoveredSpawnerSessionID == row.spawningSessionID
+        // Same chrome as a session row: hover fills and outlines, selection
+        // uses the active fill.
         let background: Color = if isSelected {
-            ToastyTheme.sidebarSessionActiveBackground
-        } else if isSpawnerHighlighted {
+            isHovered ? ToastyTheme.sidebarSessionActiveHoverBackground : ToastyTheme.sidebarSessionActiveBackground
+        } else if isHovered || isSpawnerHighlighted {
             ToastyTheme.sidebarSessionHoverBackground
         } else {
             Color.clear
         }
+        let borderColor = isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear
+        let hoverTipModel = SidebarSubspacePresentation.hoverTipModel(row)
         let accessibilityLabel = SidebarSubspacePresentation.rowAccessibilityLabel(
             row,
             showsSpawnerTag: showsSpawnerTag
@@ -3337,9 +3368,14 @@ struct SidebarView: View {
                         Spacer(minLength: 0)
                         if showsSpawnerTag, let spawnerName = row.spawnerName {
                             // Capped so the summary keeps most of the line; the
-                            // tooltip carries the full spawner name.
-                            sessionParentTag(label: SidebarSubspacePresentation.spawnerTagLabel(spawnerName))
-                                .frame(maxWidth: 110, alignment: .trailing)
+                            // hover card carries the full spawner name.
+                            spawnerTag(
+                                label: SidebarSubspacePresentation.spawnerTagLabel(spawnerName),
+                                spawnerName: spawnerName,
+                                parentWorkspaceID: parentWorkspaceID,
+                                spawnerPanelID: row.spawnerPanelID
+                            )
+                            .frame(maxWidth: 110, alignment: .trailing)
                         }
                     }
                 }
@@ -3348,16 +3384,34 @@ struct SidebarView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(background, in: RoundedRectangle(cornerRadius: 4))
-        .contentShape(RoundedRectangle(cornerRadius: 4))
+        .background(background, in: RoundedRectangle(cornerRadius: 5))
+        .overlay {
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(borderColor, lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 5))
         .onTapGesture(perform: select)
-        .background {
-            ZStack {
-                SidebarTooltipBridge(text: SidebarSubspacePresentation.rowTooltip(row))
-                SidebarSemanticTextBridge(text: accessibilityLabel)
-                    .frame(width: 0, height: 0)
+        // No AppKit pointer overlay covers this row, so SwiftUI hover works
+        // directly, unlike the session rows above it.
+        .onHover { isHovering in
+            guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
+            if isHovering {
+                hoveredSubspaceID = row.id
+            } else if hoveredSubspaceID == row.id {
+                hoveredSubspaceID = nil
             }
-            .allowsHitTesting(false)
+        }
+        .hoverTip(
+            id: row.id,
+            refreshID: hoverTipModel,
+            placement: .trailing(gap: Self.sessionHoverTipTrailingGap)
+        ) {
+            SessionChildHoverTipCard(model: hoverTipModel)
+        }
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityLabel)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
@@ -3484,6 +3538,9 @@ struct SidebarView: View {
         // Keep state only for cards that still have a group, so a later
         // group under the same card starts fresh.
         let parentIDs = Set(store.state.workspacesByID.keys.filter { store.state.subspaceWorkspaceIDs(of: $0).isEmpty == false })
+        if let hoveredSubspaceID, store.state.workspacesByID[hoveredSubspaceID]?.parentWorkspaceID == nil {
+            self.hoveredSubspaceID = nil
+        }
         collapsedSubspaceGroupParentIDs = collapsedSubspaceGroupParentIDs.filter(parentIDs.contains)
         subspaceFilterSessionIDByParentID = subspaceFilterSessionIDByParentID.filter { parentIDs.contains($0.key) }
         frozenSubspaceOrderByParentID = frozenSubspaceOrderByParentID.filter { parentIDs.contains($0.key) }

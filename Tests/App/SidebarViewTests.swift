@@ -1922,6 +1922,30 @@ final class SidebarViewTests: XCTestCase {
         }
     }
 
+    func testSpawnerTagOnASubspaceRowFocusesTheSpawningSessionsPanel() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        // Start inside a subspace so the jump is observable.
+        harness.store.selectWorkspace(
+            windowID: harness.windowID,
+            workspaceID: ids.approvalID,
+            preferringUnreadSessionPanelIn: harness.sessionRuntimeStore
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.approvalID)
+
+        // launch-checklist was spawned by "Assess beta launch readiness".
+        try clickSemanticText(prefix: "Go to Assess beta launch readiness", in: rootView)
+        pumpMainRunLoop(duration: 0.3)
+
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.parentID)
+        let parent = try XCTUnwrap(harness.store.state.workspacesByID[ids.parentID])
+        let assessor = try XCTUnwrap(harness.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: "assessor"))
+        XCTAssertEqual(parent.focusedPanelID, assessor.panelID)
+    }
+
     private func semanticTextFrame(in rootView: NSView, prefix: String) throws -> CGRect {
         let field = try XCTUnwrap(
             semanticTextField(in: rootView, prefix: prefix),

@@ -55,6 +55,9 @@ enum SidebarSubspacePresentation {
         let summary: String?
         let spawningSessionID: String?
         let spawnerName: String?
+        /// The spawning session's panel while it is still running, so the
+        /// ↖ tag can jump to it.
+        var spawnerPanelID: UUID? = nil
         let sessions: [SessionLine]
         /// Position in the window's workspace order, the tie-breaker so rows
         /// with the same status never swap.
@@ -257,27 +260,53 @@ enum SidebarSubspacePresentation {
         return label
     }
 
-    /// Tooltip listing every session in the subspace, since the row only
-    /// has room for the first one's summary.
-    static func rowTooltip(_ row: Row) -> String {
-        var lines = [row.title]
-        if let pullRequest = row.pullRequest {
-            lines.append(pullRequest.text)
-        }
-        if row.sessions.isEmpty {
-            lines.append("No agent")
-        }
-        for session in row.sessions {
-            var line = "\(session.title) — \(sessionStatusLabel(session.statusKind))"
-            if let summary = session.summary {
-                line += ": \(summary)"
+    /// The hover card for a subspace row: every session in the workspace,
+    /// since the row only has room for the first one's summary.
+    static func hoverTipModel(_ row: Row) -> SessionChildHoverTipModel {
+        let bodyLines: [String] = row.sessions.isEmpty
+            ? [row.summary.map { "No agent · \($0)" } ?? "No agent"]
+            : row.sessions.map { session in
+                var line = "\(session.title) — \(sessionStatusLabel(session.statusKind))"
+                if let summary = session.summary {
+                    line += ": \(summary)"
+                }
+                return line
             }
-            lines.append(line)
+        var metaItems = [rowStatusLabel(row.status)]
+        if let pullRequest = row.pullRequest {
+            metaItems.append(pullRequest.text)
         }
         if let spawnerName = row.spawnerName {
-            lines.append("Spawned by \(spawnerName)")
+            metaItems.append("spawned by \(spawnerName)")
         }
-        return lines.joined(separator: "\n")
+        return SessionChildHoverTipModel(
+            name: row.title,
+            typeLabel: "subspace",
+            statusDotColorKind: statusDotColorKind(row.status),
+            bodyText: bodyLines.joined(separator: "\n"),
+            executionProfileText: nil,
+            metaItems: metaItems
+        )
+    }
+
+    private static func rowStatusLabel(_ status: RowStatus) -> String {
+        switch status {
+        case .ready: return "ready"
+        case .needsApproval: return "needs approval"
+        case .error: return "error"
+        case .working: return "working"
+        case .idle: return "idle"
+        }
+    }
+
+    private static func statusDotColorKind(_ status: RowStatus) -> SessionChildHoverTipModel.StatusDotColorKind {
+        switch status {
+        case .ready: return .ready
+        case .needsApproval: return .needsApproval
+        case .error: return .error
+        case .working: return .working
+        case .idle: return .idle
+        }
     }
 
     private static func sessionStatusLabel(_ kind: SessionStatusKind) -> String {

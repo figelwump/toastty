@@ -148,6 +148,32 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(SidebarSubspacePresentation.headerCountLabel(shownCount: 4, totalCount: 4), "4")
     }
 
+    func testHoverTipModelListsEverySessionAndTheSpawner() {
+        let row = SidebarSubspacePresentation.Row(
+            id: UUID(), title: "qa-mobile-navigation", status: .needsApproval,
+            pullRequest: WorkspaceAnnotation(text: "PR #132"), summary: "pnpm db:migrate",
+            spawningSessionID: "a", spawnerName: "Test EmptyOS beta experience",
+            sessions: [
+                .init(title: "Fix nav drawer focus", statusKind: .needsApproval, summary: "pnpm db:migrate"),
+                .init(title: "Review nav tests", statusKind: .idle, summary: nil),
+            ],
+            creationIndex: 0
+        )
+        let model = SidebarSubspacePresentation.hoverTipModel(row)
+        XCTAssertEqual(model.name, "qa-mobile-navigation")
+        XCTAssertEqual(model.typeLabel, "subspace")
+        XCTAssertEqual(model.statusDotColorKind, .needsApproval)
+        XCTAssertEqual(model.bodyText, "Fix nav drawer focus — needs approval: pnpm db:migrate\nReview nav tests — idle")
+        XCTAssertEqual(model.metaItems, ["needs approval", "PR #132", "spawned by Test EmptyOS beta experience"])
+
+        let empty = SidebarSubspacePresentation.hoverTipModel(SidebarSubspacePresentation.Row(
+            id: UUID(), title: "idle-space", status: .idle, pullRequest: nil, summary: "Ready",
+            spawningSessionID: nil, spawnerName: nil, sessions: [], creationIndex: 1
+        ))
+        XCTAssertEqual(empty.bodyText, "No agent · Ready")
+        XCTAssertEqual(empty.metaItems, ["idle"])
+    }
+
     func testWorkspaceMoveIndicesSkipSubspacesInTheWindowOrder() {
         let a = UUID(), b = UUID(), c = UUID(), subA = UUID(), subB = UUID()
         // Window order interleaves subspaces; the sidebar drags cards only.
