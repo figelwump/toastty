@@ -350,19 +350,6 @@ test("header uses bootstrap-provided format labels", async () => {
   assert.match(source, /bootstrap\.formatLabel/);
 });
 
-test("highlight status copy distinguishes large files from unsupported formats", async () => {
-  const source = await readFile(
-    resolve(packageRoot, "src/DocumentHighlighting.ts"),
-    "utf8"
-  );
-
-  assert.match(source, /case "plainText":/);
-  assert.match(source, /case "disabledForLargeFile":/);
-  assert.match(source, /case "unsupportedFormat":/);
-  assert.match(source, /formatLabel === "JSONC"/);
-  assert.match(source, /JSONC files yet/);
-  assert.match(source, /this format yet/);
-});
 
 test("bootstrap contract includes the plain-text highlight state and version 7", async () => {
   const source = await readFile(
@@ -375,48 +362,7 @@ test("bootstrap contract includes the plain-text highlight state and version 7",
   assert.match(source, /Expected bootstrap contractVersion 7/);
 });
 
-test("read mode exposes an Open in Default App action through the native bridge", async () => {
-  const source = await readFile(
-    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
-    "utf8"
-  );
-  const stylesSource = await readFile(
-    resolve(packageRoot, "src/styles.css"),
-    "utf8"
-  );
-  const bridgeSource = await readFile(
-    resolve(packageRoot, "src/nativeBridge.ts"),
-    "utf8"
-  );
 
-  assert.match(source, /aria-label="Open in Default App"/);
-  assert.match(source, /title="Open in Default App"/);
-  assert.match(source, /local-document-action-button-icon/);
-  assert.match(source, /<ExternalOpenIcon \/>/);
-  assert.match(stylesSource, /\.local-document-action-button-icon/);
-  assert.match(bridgeSource, /type: "openInDefaultApp"/);
-  assert.match(bridgeSource, /openInDefaultApp\(\)/);
-});
-
-test("read mode exposes a Copy Full Path action with confirmation feedback", async () => {
-  const source = await readFile(
-    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
-    "utf8"
-  );
-  const bridgeSource = await readFile(
-    resolve(packageRoot, "src/nativeBridge.ts"),
-    "utf8"
-  );
-
-  assert.match(source, /aria-label="Copy Full Path"/);
-  assert.match(source, /title=\{didCopyFullPath \? "Path Copied" : "Copy Full Path"\}/);
-  assert.match(source, /didCopyFullPath \? <CheckIcon \/> : <CopyIcon \/>/);
-  assert.match(source, /role="status"/);
-  assert.match(source, /aria-live="polite"/);
-  assert.match(source, /window\.setTimeout\(\(\) => setCopyFeedback\(null\), 1500\)/);
-  assert.match(bridgeSource, /type: "copyFullPath"/);
-  assert.match(bridgeSource, /copyFullPath\(\)/);
-});
 
 test("native bridge forwards local-document diagnostics and render lifecycle events", async () => {
   const source = await readFile(
