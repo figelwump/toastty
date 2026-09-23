@@ -138,6 +138,7 @@ final class PointerInteractionView: NSView {
     }
 
     private var hoverTrackingArea: NSTrackingArea?
+    private var isHoverReconciliationScheduled = false
     private let hoverDiagnosticViewID = UUID()
     private var hoverTrackingGeneration = 0
     private var sequenceWindowMovementSuppressionOwner = PointerWindowMovementSuppressionOwner()
@@ -212,31 +213,65 @@ final class PointerInteractionView: NSView {
         } else if suppressesWindowMovementWhileHovered, isPointerInside {
             suppressWindowMovementForHover()
         }
+        scheduleHoverExitReconciliation()
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
+
+        // SwiftUI hosting can report a visibleRect larger than this row. Track
+        // only the row's clipped bounds, and preserve AppKit's entry/exit state
+        // across layout passes that do not change the tracking rectangle.
+        let trackingRect = bounds.intersection(visibleRect)
+        if let hoverTrackingArea, hoverTrackingArea.rect == trackingRect,
+           trackingAreas.contains(where: { $0 === hoverTrackingArea }) {
+            scheduleHoverExitReconciliation()
+            return
+        }
         if let hoverTrackingArea {
             removeTrackingArea(hoverTrackingArea)
         }
+        hoverTrackingArea = nil
 
-        let trackingArea = NSTrackingArea(
-            rect: .zero,
-            options: [.activeAlways, .enabledDuringMouseDrag, .inVisibleRect, .mouseEnteredAndExited, .cursorUpdate],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-        hoverTrackingArea = trackingArea
+        if trackingRect.isEmpty == false {
+            let trackingArea = NSTrackingArea(
+                rect: trackingRect,
+                options: [.activeAlways, .enabledDuringMouseDrag, .mouseEnteredAndExited, .cursorUpdate],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(trackingArea)
+            hoverTrackingArea = trackingArea
+        }
         hoverTrackingGeneration &+= 1
         logSidebarHoverDiagnostic("tracking-area-updated")
         logCursorDiagnostic("tracking-area-updated")
+        scheduleHoverExitReconciliation()
+    }
+
+    private func scheduleHoverExitReconciliation() {
+        guard isPointerInside, isHoverReconciliationScheduled == false else { return }
+        isHoverReconciliationScheduled = true
+        // Updating tracking areas can happen inside SwiftUI layout. Defer the
+        // callback and sample live geometry, not the position from scheduling.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isHoverReconciliationScheduled = false
+            guard self.isPointerInside, let window = self.window else { return }
+            let point = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if self.isHiddenOrHasHiddenAncestor || self.bounds.intersection(self.visibleRect).contains(point) == false {
+                self.logSidebarHoverDiagnostic("tracking-update-hover-exit")
+                self.setPointerInside(false)
+            }
+        }
     }
 
     override func mouseEntered(with event: NSEvent) {
         logSidebarHoverDiagnostic("mouse-entered", event: event)
         logCursorDiagnostic("mouse-entered", event: event)
-        setPointerInside(true)
+        // An entry is authoritative even if a missed exit left native state
+        // unchanged: another row may now own the sidebar hover.
+        setPointerInside(true, refreshUnchangedHover: true)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -270,8 +305,13 @@ final class PointerInteractionView: NSView {
         onHoverChanged = nil
     }
 
-    private func setPointerInside(_ isInside: Bool, notify: Bool = true) {
+    private func setPointerInside(_ isInside: Bool, notify: Bool = true, refreshUnchangedHover: Bool = false) {
         guard isPointerInside != isInside else {
+            if notify, refreshUnchangedHover {
+                logSidebarHoverDiagnostic("callback-refreshed-unchanged")
+                onHoverChanged?(isInside)
+                return
+            }
             logSidebarHoverDiagnostic("callback-suppressed-unchanged")
             return
         }

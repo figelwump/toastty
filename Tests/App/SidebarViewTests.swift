@@ -210,6 +210,48 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testSessionHoverRecoversAfterTrackingUpdateWithoutMouseExit() throws {
+        let window = SidebarHoverTestWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let harness = try makeMultiSessionSidebarHarness(sessionCount: 2, providedWindow: window)
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            window.orderOut(nil)
+        }
+        let first = try sessionPointerInteractionView(in: harness.hostingView, sessionID: harness.sessionIDs[0])
+        let second = try sessionPointerInteractionView(in: harness.hostingView, sessionID: harness.sessionIDs[1])
+        let firstID = SidebarSessionPresentation.SidebarSessionRowID(
+            workspaceID: harness.workspaceID, sessionID: harness.sessionIDs[0], panelID: harness.panelIDs[0]
+        )
+        let secondID = SidebarSessionPresentation.SidebarSessionRowID(
+            workspaceID: harness.workspaceID, sessionID: harness.sessionIDs[1], panelID: harness.panelIDs[1]
+        )
+        func enter(_ region: PointerInteractionView) throws {
+            let point = NSPoint(x: region.bounds.midX, y: region.bounds.midY)
+            window.pointerLocation = region.convert(point, to: nil)
+            region.mouseEntered(with: try XCTUnwrap(pointerMouseEvent(
+                type: .mouseMoved, view: region, at: point, timestamp: 0, eventNumber: 0
+            )))
+        }
+
+        try enter(first)
+        pumpMainRunLoop(duration: 0.8)
+        XCTAssertTrue(HoverTipPresenter.shared.isVisible(id: firstID))
+        // Match the captured failure: another row enters without the first
+        // native view receiving an exit, then layout updates its tracking area.
+        try enter(second)
+        first.updateTrackingAreas()
+        pumpMainRunLoop(duration: 0.2)
+        XCTAssertTrue(HoverTipPresenter.shared.isVisible(id: secondID), "The old row's deferred exit must not clear the new row")
+
+        try enter(first)
+        second.updateTrackingAreas()
+        pumpMainRunLoop(duration: 0.2)
+        XCTAssertTrue(HoverTipPresenter.shared.isVisible(id: firstID), "Re-entry must restore the row's hover card without another exit/entry")
+    }
+
     func testSessionRowBadgeRendersShortLabelWhileAccessibilityKeepsSpokenWording() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "approval-badge-row",
@@ -1921,7 +1963,7 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    private func makeMultiSessionSidebarHarness(sessionCount: Int) throws -> MultiSessionSidebarHarness {
+    private func makeMultiSessionSidebarHarness(sessionCount: Int, providedWindow: NSWindow? = nil) throws -> MultiSessionSidebarHarness {
         XCTAssertGreaterThanOrEqual(sessionCount, 2)
         let panelIDs = (0..<sessionCount).map { _ in UUID() }
         let workspaceID = UUID()
@@ -1990,7 +2032,7 @@ final class SidebarViewTests: XCTestCase {
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
-        let window = NSWindow(
+        let window = providedWindow ?? NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
             styleMask: [.titled],
             backing: .buffered,
@@ -2670,4 +2712,10 @@ final class SidebarViewTests: XCTestCase {
         return values
     }
 
+}
+
+@MainActor
+private final class SidebarHoverTestWindow: NSWindow {
+    var pointerLocation = NSPoint(x: -100, y: -100)
+    override var mouseLocationOutsideOfEventStream: NSPoint { pointerLocation }
 }

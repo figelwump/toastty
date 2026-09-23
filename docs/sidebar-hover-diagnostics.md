@@ -12,7 +12,7 @@ xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp \
   -derivedDataPath Derived build
 ```
 
-The diagnostic flag is read once per process; changing it requires relaunching.
+The diagnostic flag works in Debug and Release builds. It is read once per process; changing it requires relaunching.
 
 For an already-built local Debug app, this command launches a separate worktree-isolated instance and writes its runtime data under this worktree's `artifacts/dev-runs/` (it does not replace the installed app):
 
@@ -36,12 +36,14 @@ When it fails, note the approximate time and row, pause briefly with the pointer
 
 ## Interpret the trace
 
-- `row-configured`, `view-did-move-to-window`, and `tracking-area-updated` identify native view lifetimes and tracking rebuilds. `viewID` identifies one native view, while workspace/session/panel IDs identify its row. `trackingGeneration` increments on each rebuild. Tracking-area options/registration and row bounds in window coordinates help inspect stale geometry; the area uses `inVisibleRect`, so its zero rect is expected.
+- `row-configured`, `view-did-move-to-window`, and `tracking-area-updated` identify native view lifetimes and tracking rebuilds. `viewID` identifies one native view, while workspace/session/panel IDs identify its row. `trackingGeneration` increments on each rebuild. Tracking-area options/registration and row bounds in window coordinates help inspect stale geometry. The area uses the intersection of row bounds and `visibleRect`; unchanged rectangles reuse their tracking area.
 - `mouse-entered` / `mouse-exited` record the incoming event, its location and timestamp, the current pointer position, and whether its tracking area matches the currently installed area. Stored `pointerInside` is the value before handling the event. The tracking-area comparison is omitted for synthetic non-tracking events used by host tests.
+- `tracking-update-hover-exit` clears stale native hover after layout when the current pointer is outside the visible row or the row is hidden. The callback runs after layout.
+- `callback-refreshed-unchanged` forwards a new entry even when native state is already inside, so a missed exit cannot suppress recovery.
 - `callback-forwarded` records the new native state. `callback-suppressed-unchanged` means the native view already stored that state. Check `callbackInstalled` before assuming a callback was delivered.
 - `sidebar-hover-accepted` / `sidebar-hover-ignored` record the incoming state and the sidebar's previous/resulting hovered panel. A late exit from a different panel can be accepted without clearing the current panel. `changed` distinguishes a state change from a no-op. Drag flags are recorded as context, not a presumed cause.
 - `sidebar-hover-cleared` records explicit clearing during drag activation. `invalidate`, `teardown-hover-check`, and `teardown-callback-forwarded` identify removal-driven clears.
 
 Correlate entries by window, row, native view, and order. A native entry with no forwarded callback differs from a forwarded callback ignored by the sidebar, or a successful entry immediately followed by teardown/exit. A rebuild with the pointer inside but `pointerInside=false` is evidence to investigate; it does not alone prove a lost AppKit event. Without a native entry or nearby lifecycle event, this trace cannot independently prove that the pointer crossed the row.
 
-The trace logs identifiers, geometry, and state, not session names, prompts, or terminal content. It does not log every mouse movement. Rebuild-heavy sessions can still produce substantial output and logging may affect timing; enable it only for a focused reproduction. Disable it by removing the flag and relaunching. Once the failure is understood, remove this temporary instrumentation and document the confirmed fix.
+The trace logs identifiers, geometry, and state, not session names, prompts, or terminal content. It does not log every mouse movement. Rebuild-heavy sessions can still produce substantial output and logging may affect timing; enable it only for a focused reproduction. Disable it by removing the flag and relaunching. The captured failure showed native inside state suppressing a real re-entry while the sidebar still hovered a different row. Tracking areas now stay within row bounds and survive unchanged layout, deferred cleanup clears stale hover, and entry events refresh sidebar state. Keep this default-off trace available until the fix is verified in normal use, then remove the temporary instrumentation.
