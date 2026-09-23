@@ -1965,38 +1965,12 @@ struct SidebarView: View {
         isHovering: Bool
     ) {
         let panelID = rowID.panelID
-        let previousPanelID = hoveredPanelID
-        let ignored = activeWorkspaceDrag != nil || activeSessionDrag != nil
-        defer {
-            SidebarHoverDiagnostics.log(ignored ? "sidebar-hover-ignored" : "sidebar-hover-accepted", metadata: [
-                "windowID": windowID.uuidString,
-                "workspaceID": rowID.workspaceID.uuidString,
-                "sessionID": rowID.sessionID,
-                "panelID": panelID.uuidString,
-                "incomingHover": String(isHovering),
-                "previousHoveredPanelID": previousPanelID?.uuidString ?? "none",
-                "hoveredPanelID": hoveredPanelID?.uuidString ?? "none",
-                "changed": String(previousPanelID != hoveredPanelID),
-                "workspaceDragActive": String(activeWorkspaceDrag != nil),
-                "sessionDragActive": String(activeSessionDrag != nil),
-            ])
-        }
-        guard ignored == false else { return }
+        guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return }
         if isHovering {
             hoveredPanelID = panelID
         } else if hoveredPanelID == panelID {
             hoveredPanelID = nil
         }
-    }
-
-    private func logSessionHoverClear(reason: String) {
-        guard hoveredPanelID != nil else { return }
-        SidebarHoverDiagnostics.log("sidebar-hover-cleared", metadata: [
-            "windowID": windowID.uuidString,
-            "previousHoveredPanelID": hoveredPanelID?.uuidString ?? "none",
-            "hoveredPanelID": "none",
-            "reason": reason,
-        ])
     }
 
     private func sessionDropTarget(
@@ -2026,7 +2000,6 @@ struct SidebarView: View {
         guard activeSessionDrag != nil || Self.workspaceDragActivationExceeded(translation: value.translation) else {
             return
         }
-        logSessionHoverClear(reason: "session-drag")
         hoveredPanelID = nil
         activeSessionDrag = SessionDragState(rowID: rowID, target: sessionDropTarget(rowID: rowID, value: value))
     }
@@ -2138,7 +2111,6 @@ struct SidebarView: View {
         }
 
         hoveredWorkspaceID = nil
-        logSessionHoverClear(reason: "workspace-drag")
         hoveredPanelID = nil
 
         var dragState = activeWorkspaceDrag
