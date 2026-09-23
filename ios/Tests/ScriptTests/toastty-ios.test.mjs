@@ -178,17 +178,30 @@ test("generation forwards the public development-team override to Tuist", () => 
 });
 
 test("bundle suffix sanitization is deterministic, bounded, and collision-resistant when truncated", () => {
-  const raw = "  123/Feature_This Is A Very Long Worktree Name With Ünicode And Punctuation!!!  ";
-  const result = runDispatcher(["generate", "--dry-run"], {
-    PATH: "",
-    TOASTTY_IOS_WORKTREE_ID: raw,
-    TOASTTY_IOS_RUN_ROOT: "/tmp/toastty-ios-suffix",
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const plan = JSON.parse(result.stdout);
-  assert.match(plan.worktreeComponent, /^[a-z0-9-]+-[a-f0-9]{8}$/);
-  assert.ok(plan.worktreeComponent.length <= 40);
-  assert.equal(plan.bundleSuffix, `.dev.${plan.worktreeComponent}`);
+  function suffixPlan(raw) {
+    const result = runDispatcher(["generate", "--dry-run"], {
+      PATH: "",
+      TOASTTY_IOS_WORKTREE_ID: raw,
+      TOASTTY_IOS_RUN_ROOT: "/tmp/toastty-ios-suffix",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const plan = JSON.parse(result.stdout);
+    assert.match(plan.worktreeComponent, /^[a-z0-9-]+-[a-f0-9]{8}$/);
+    assert.ok(plan.worktreeComponent.length <= 40);
+    assert.equal(plan.bundleSuffix, `.dev.${plan.worktreeComponent}`);
+    return plan;
+  }
+
+  // The names differ only after the portion that fits in the bundle suffix.
+  const sharedPrefix = "  123/Feature_This Is A Very Long Worktree Name With Ünicode And Punctuation!!!";
+  const first = suffixPlan(`${sharedPrefix} First  `);
+  const repeated = suffixPlan(`${sharedPrefix} First  `);
+  const second = suffixPlan(`${sharedPrefix} Other  `);
+
+  assert.equal(repeated.worktreeComponent, first.worktreeComponent);
+  assert.equal(repeated.bundleSuffix, first.bundleSuffix);
+  assert.notEqual(second.worktreeComponent, first.worktreeComponent);
+  assert.notEqual(second.bundleSuffix, first.bundleSuffix);
 });
 
 test("native-device dry-run pins the fixed Debug identity without invoking tools", () => {
