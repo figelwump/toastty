@@ -197,9 +197,17 @@ final class ToasttyPreviewTests: XCTestCase {
         <!doctype html><html><head><meta name="viewport" content="width=device-width">
         <script>
         window.violations=[];
-        document.addEventListener('securitypolicyviolation', e => window.violations.push(e.effectiveDirective));
+        window.violationsReady = new Promise(resolve => {
+          const pending = new Set(['connect-src', 'img-src', 'frame-src']);
+          document.addEventListener('securitypolicyviolation', e => {
+            window.violations.push(e.effectiveDirective);
+            pending.delete(e.effectiveDirective);
+            if (pending.size === 0) resolve();
+          });
+        });
         window.inlineRan=true;
-        fetch('https://toastty-preview-test.invalid/blocked').catch(() => window.fetchBlocked=true);
+        window.fetchSettled = fetch('https://toastty-preview-test.invalid/blocked')
+          .catch(() => window.fetchBlocked=true);
         </script><script src="scripts/test.js"></script><link rel="stylesheet" href="styles/test.css"></head>
         <body><button id="count" onclick="this.textContent='Count: 1'">Count: 0</button>
         <img src="https://toastty-preview-test.invalid/image.png">
@@ -226,8 +234,29 @@ final class ToasttyPreviewTests: XCTestCase {
         let loaded = expectation(description: "Local HTML loaded")
         let probe = PreviewNavigationProbe(loaded: loaded)
         webView.navigationDelegate = probe
+        defer {
+            webView.stopLoading()
+            loader.cancelAll()
+            withExtendedLifetime(probe) {}
+        }
         webView.load(URLRequest(url: loader.entryURL))
         await fulfillment(of: [loaded], timeout: 15)
+        // Navigation completion does not wait for fetch rejection or queued
+        // CSP events. Bound the wait, then inspect even a partial result so a
+        // missing policy violation remains a specific assertion failure.
+        let probesFinished = expectation(description: "Fetch rejection and all CSP violations arrived")
+        var isWaitingForProbes = true
+        webView.callAsyncJavaScript("""
+            await Promise.all([window.fetchSettled, window.violationsReady]);
+            """, arguments: [:], in: nil, in: .page) { result in
+            guard isWaitingForProbes else { return }
+            if case .failure(let error) = result {
+                XCTFail("Policy probe wait failed: \(error)")
+            }
+            probesFinished.fulfill()
+        }
+        await fulfillment(of: [probesFinished], timeout: 10)
+        isWaitingForProbes = false
         let inspected = expectation(description: "Policy inspected")
         webView.evaluateJavaScript("""
             document.querySelector('#count').click();
@@ -269,9 +298,6 @@ final class ToasttyPreviewTests: XCTestCase {
             }
         }
         await fulfillment(of: [syntheticRejected], timeout: 5)
-        webView.stopLoading()
-        loader.cancelAll()
-        withExtendedLifetime(probe) {}
     }
 }
 

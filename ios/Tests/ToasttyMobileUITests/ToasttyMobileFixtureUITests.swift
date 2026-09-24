@@ -1433,11 +1433,21 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertLessThanOrEqual(attach.frame.maxY, topOfKeyboardObstruction(keyboard) + 1)
         attachScreenshot(named: "fixture-attachments-long-draft-accessibility-xxxl", of: app)
 
-        let draftLength = (input.value as? String)?.count ?? 0
-        XCTAssertGreaterThan(draftLength, 0)
-        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: draftLength))
-        XCTAssertLessThan(input.frame.height, twoLineHeight,
-                          "Clearing a long draft must return the composer to one visible line")
+        let expectedDraft = "Review these files\n3\n4\n5\n6\nFOX7"
+        XCTAssertEqual(input.value as? String, expectedDraft)
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: expectedDraft.count))
+        // The editor exposes its placeholder only when the text is empty.
+        // Confirm deletion before checking layout so a remaining draft cannot
+        // be misreported as a failure to collapse.
+        let cleared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Message Codex…"),
+            object: input
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 3), .completed,
+                       "Backspaces must clear the draft; value=\(String(describing: input.value)), height=\(input.frame.height)")
+        XCTAssertEqual(input.frame.height, ceil(scaledBodyFont.lineHeight), accuracy: 2,
+                       "Clearing a long draft must return the composer to one visible line")
+        XCTAssertTrue(keyboard.exists)
         XCTAssertTrue(input.isHittable)
         XCTAssertTrue(send.isHittable)
         XCTAssertTrue(send.isEnabled, "The remaining attachments allow an attachment-only send")
