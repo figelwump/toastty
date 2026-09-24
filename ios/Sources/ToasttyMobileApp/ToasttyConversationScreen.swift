@@ -211,21 +211,27 @@ struct ToasttyConversationScreen: View {
 
     private func composerBar(_ conversation: MobileConversation) -> some View {
         let presentation = composer ?? lockedComposerFallback(conversation)
+        let allowsAttachmentInput = presentation.gate.allowsInput && !isSubmitting
         return VStack(alignment: .leading, spacing: 8) {
             ToasttyComposerMetadataView(
                 profile: conversation.executionProfile,
                 tabTitle: conversation.workspaceTabTitle,
                 isLastReported: controller.freshness != .live
             )
-            ToasttyAttachmentPicker(
+            if ToasttyAttachmentTray.isVisible(
                 attachments: attachments,
                 supportsAttachments: supportsAttachments,
-                allowsInput: presentation.gate.allowsInput && !isSubmitting,
-                isLoading: $isLoadingAttachments,
-                addAttachments: addAttachments,
-                removeAttachment: removeAttachment
-            )
-            .id(conversationID)
+                allowsInput: allowsAttachmentInput,
+                isLoading: isLoadingAttachments
+            ) {
+                ToasttyAttachmentTray(
+                    attachments: attachments,
+                    supportsAttachments: supportsAttachments,
+                    allowsInput: allowsAttachmentInput,
+                    isLoading: isLoadingAttachments,
+                    removeAttachment: removeAttachment
+                )
+            }
             if let attachmentRecoveryMessage {
                 Text(attachmentRecoveryMessage)
                     .font(.caption)
@@ -309,7 +315,10 @@ struct ToasttyConversationScreen: View {
             // Keep the measured UIKit text height when attachments and the
             // keyboard compete for space; the preview list can shrink instead.
             .fixedSize(horizontal: false, vertical: usesCompactAttachmentComposer)
-            .padding(.horizontal, 12)
+            .padding(.leading, 12)
+            // Reserve the trailing inset for the attach button pinned inside
+            // the field, so text never runs underneath the paperclip.
+            .padding(.trailing, ToasttyAttachmentPicker.buttonSize)
             .padding(.vertical, 10)
             .frame(minHeight: 44)
             .background(
@@ -319,6 +328,16 @@ struct ToasttyConversationScreen: View {
                     style: .continuous
                 )
             )
+            .overlay(alignment: .bottomTrailing) {
+                ToasttyAttachmentPicker(
+                    attachments: attachments,
+                    supportsAttachments: supportsAttachments,
+                    allowsInput: presentation.gate.allowsInput && !isSubmitting,
+                    isLoading: $isLoadingAttachments,
+                    addAttachments: addAttachments
+                )
+                .id(conversationID)
+            }
             .overlay {
                 RoundedRectangle(
                     cornerRadius: ToasttyDesignTokens.controlCornerRadius,

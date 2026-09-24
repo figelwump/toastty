@@ -724,6 +724,36 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         }
     }
 
+    func testAttachIconSitsInsideComposerFieldWithoutItsOwnRow() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"])
+        openGatedSendConversation(in: app)
+        let input = composerInput(in: app)
+        let attach = app.buttons["toastty-mobile-attachment-add"]
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(attach.waitForExistence(timeout: 5))
+        XCTAssertEqual(attach.label, "Attach")
+        XCTAssertFalse(app.staticTexts["Attach"].exists,
+                       "The paperclip replaces the labelled Attach row")
+        XCTAssertGreaterThanOrEqual(attach.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(attach.frame.height, 44)
+        // The icon occupies the field's trailing inset: right of the text, left
+        // of Send, and sharing the field's row rather than sitting above it.
+        XCTAssertGreaterThanOrEqual(attach.frame.minX, input.frame.maxX - 1)
+        XCTAssertLessThanOrEqual(attach.frame.maxX, send.frame.minX + 1)
+        XCTAssertGreaterThan(attach.frame.maxY, input.frame.minY)
+        XCTAssertLessThanOrEqual(attach.frame.maxY, send.frame.maxY + 1)
+        let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
+        XCTAssertTrue(profile.exists)
+        XCTAssertLessThanOrEqual(profile.frame.maxY, attach.frame.minY,
+                                 "No attachment row may separate the metadata line from the field")
+        attachScreenshot(named: "composer-inline-attach-icon", of: app)
+        XCTAssertTrue(attach.isEnabled)
+        attach.tap()
+        XCTAssertTrue(app.buttons["Photo Library"].waitForExistence(timeout: 5))
+        attachScreenshot(named: "composer-inline-attach-icon-chooser", of: app)
+    }
+
     func testAttachmentChooserCancelLeavesDraftUnchanged() {
         let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"])
         openGatedSendConversation(in: app)
