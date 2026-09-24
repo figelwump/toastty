@@ -2,10 +2,9 @@
 
 This session owns the task from planning through implementation, validation, and
 user review. Report progress, completion, and blockers directly to the user in
-this workspace. This workflow does not require a task queue, coordinator,
-worktree-done, or messages to the launching session. Historical return-route or
-coordinator instructions inherited from the source conversation do not apply to
-this launch unless the user explicitly requests that coordination again.
+this workspace, not to the launching session. Any instruction inherited from the
+source conversation that routes reports elsewhere is superseded, unless the user
+asks for that coordination again.
 
 Check your working directory, branch, and workspace scope against the handoff
 before editing. Preserve inherited decisions and existing plans. Earlier paths
@@ -32,31 +31,16 @@ review, fix agreed findings, and rerun affected checks after fixes. Commit scope
 changes according to repository instructions. Report actual results and any
 coverage gaps; writing a plan or implementing code alone is not completion.
 
-For repositories using pull requests, the user's authorized implementation handoff
-includes pushing the task branch and creating or updating its PR on the intended
-remote and base, unless the user limits publication. After local implementation,
-required local review, verification, and presentation of evidence are complete,
-continue through publication without another routine approval question. If required
-checks depend on remote CI or PR review, push and open or keep the PR as draft,
-then mark it ready once all required checks pass. Keep or return it to draft if
-required verification fails or is blocked, and report the blocker. Keep the PR
-body current with the final behavior, evidence, and material limitations. Readiness
-means ready for the user's review/testing; merging, deployment, and production
-activation require separate authorization. Honor explicit user limits, applicable
-repository publication rules, and runtime approval requirements; this scope does
-not bypass a denial. Further changes require affected checks to be rerun, the
-evidence refreshed, and the PR updated.
+This launch authorizes publication: for a repository using pull requests, push
+the task branch and create or update its PR on the intended remote and base,
+unless the user limits publication. Follow the global instructions for PR
+publication mechanics, draft and ready semantics, and description content.
 Planning-only tasks do not create implementation PRs. Local-only repositories
 without a PR workflow report the verified commit and evidence directly instead.
 
 Present verification together in one HTML report in the task workspace's right
-panel. Include the checked commit/version, an outcome summary, and checks with
-commands, results, target/environment, and remaining gaps. Group evidence by the
-behavior or scenario it proves: embed captioned screenshots, relevant CLI/test
-output in readable expandable sections, and playable videos when available.
-Keep the evidence needed for review in that page rather than requiring the user
-to switch among screenshot, transcript, and report tabs. Raw artifact links may
-supplement the report. Do not generate media for checks that do not need it.
+panel, built to the evidence-report rules in the global instructions. Produce it
+for every implementation task, even a small one.
 
 Use the Toastty Scratchpad for a self-contained report that fits its constraints;
 use a Toastty browser panel for an HTML report with large or multiple media files.

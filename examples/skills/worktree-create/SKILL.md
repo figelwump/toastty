@@ -8,8 +8,8 @@ description: Create a named Toastty task workspace and Git worktree for planning
 Create the task's worktree and workspace together. Launch a fresh task session,
 or fork the current conversation when the task has already been discussed.
 A generated summary must not replace inherited conversation or a settled plan.
-The user continues directly in the new workspace; this workflow does not register
-a task queue, assign a coordinator, or request reports to the launching session.
+The user continues directly in the new workspace, and the task session reports
+to them there.
 
 Resolve scripts relative to the loaded package, including inside plugin snapshots.
 Use `scripts/create-worktree.sh` and `scripts/open-toastty-worktree-session.sh`.
@@ -50,9 +50,10 @@ Never edit the delivered snapshot.
 Read `toastty-capabilities` and require executable `TOASTTY_CLI_PATH`, current
 `TOASTTY_PANEL_ID`, and managed `TOASTTY_SESSION_ID`. Use the injected socket
 for the owning instance. Discover live actions and queries. Structured forks
-require `agent.launch` support for `forkFromSessionID`. Check selected-provider support before
-creating resources. Older running apps need an updated app; no raw-terminal
-fallback bypasses missing launch support.
+require `agent.launch` support for `forkFromSessionID`, and that parameter's
+`supportedProfileIDs` must list the selected profile. Check this before creating
+resources. Older running apps need an updated app; no raw-terminal fallback
+bypasses missing launch support.
 
 Before creating a worktree or workspace for a fork, also verify the installed
 provider CLI supports the native fork arguments. Establish the actual executable
@@ -68,14 +69,17 @@ or `command -v claude` result as proof. The current action descriptor does not
 expose the resolved executable; if it cannot be established reliably, stop
 before resource creation and report this preflight as blocked.
 
-Run only read-only help/version probes on that verified executable, without
+Toastty composes the provider's fork invocation itself; the helper only passes
+`forkFromSessionID`. These probes confirm the installed CLI accepts the flags
+Toastty will use. Run them read-only on the verified executable, without
 launching or authenticating an agent:
 
 - Codex: `"$PROVIDER_EXECUTABLE" fork --help` must succeed and advertise the
   session and prompt arguments, plus the `-C`/`--cd` option used by Toastty.
-- Claude: `"$PROVIDER_EXECUTABLE" --version` must identify version 2.1.257 or
-  newer; `"$PROVIDER_EXECUTABLE" --help` must advertise `--resume`,
+- Claude: `"$PROVIDER_EXECUTABLE" --help` must advertise `--resume`,
   `--fork-session`, and `--system-prompt-snapshot` with its `off` value.
+  `"$PROVIDER_EXECUTABLE" --version` must meet the minimum the live
+  `forkFromSessionID` descriptor states, rather than a floor pinned here.
 
 Missing or ambiguous evidence is a blocked fork, not permission to substitute a
 fresh session. Record the verified executable and capability evidence in the
@@ -103,8 +107,7 @@ The examples use `SKILL_DIR` for the loaded skill directory and `TASK` for the s
   --slug "$TASK" --branch-prefix "$PREFIX" --base-ref "$BASE_SHA" --json
 ```
 
-Parse the returned branch, worktree, and handoff paths. Do not create queue records
-or grant access to coordinator state directories as part of this workflow.
+Parse the returned branch, worktree, and handoff paths.
 
 Run the required setup. Keep any failure and the created resources visible; do
 not launch an agent into a half-configured task or delete resources to hide an
@@ -114,10 +117,14 @@ error.
 
 Keep `WORKTREE_HANDOFF.md` to current worktree/branch, pinned base/destination,
 mode and launch selections, publication scope and user limits, source session
-identity, setup result, and artifact paths/URLs to open. Link the existing task workflow at
-`$SKILL_DIR/references/task-workflow.md` using the resolved absolute path and verify
-that it exists. Explicitly instruct the child to read and follow that linked file;
-do not paste its contents. Keep the private handoff out of commits.
+identity, setup result, and artifact paths/URLs to open. Link the task workflow at
+`$TOASTTY_USER_SKILLS_ROOT/worktree-create/references/task-workflow.md`, falling
+back to `~/.toastty/skills/...` when that variable is absent, and verify that the
+file exists. Use that stable source rather than `$SKILL_DIR`, whose delivered
+snapshot path is content-addressed: it changes whenever the skill is edited, so a
+handoff pointing into it pins the child to a superseded copy. Explicitly instruct
+the child to read and follow that linked file; do not paste its contents. Keep the
+private handoff out of commits.
 
 For forks, use inherited history for the request, decisions, authorization,
 progress, and next steps. Add a brief task pointer only when the history contains
@@ -149,8 +156,7 @@ managed session and applies workspace scope. It does not set a branch annotation
 The helper preserves an existing parent scope, scopes an unrestricted parent
 to its current workspace, and includes the new workspace so the launcher can
 finish setup. The child receives only its own workspace. Scope is cooperative
-guidance, not a security sandbox. No parent reply is requested or authorized by
-this workflow. Do not add a return route to the handoff or launch prompt.
+guidance, not a security sandbox.
 
 Forks must establish a new native session identity and use the worktree's effective
 cwd and permissions. Check launch/runtime evidence before claiming context was
@@ -165,7 +171,8 @@ completion notes. Do not rewrite the child's handoff or task state after launch.
 ## Open referenced artifacts
 
 After the helper returns the new workspace and session IDs, the launcher opens
-the task artifacts explicitly referenced by the handoff in the new workspace's right panel. Do this as part of creation, not as a later offer.
+the task artifacts explicitly referenced by the handoff in the new workspace's
+right panel. Do this as part of creation, not as a later offer.
 Use the references assembled while writing the handoff; do not build a Markdown
 link parser or scan unrelated files or panels. Deduplicate identical artifacts.
 Include the associated plans, design documents, mocks, and linked Scratchpad,
@@ -187,8 +194,9 @@ Record the artifact paths/URLs and titles in the handoff before launch.
   Scratchpad for the returned child `sessionID` with `panel.scratchpad.set-content`
   and its original title, using `createPolicy=new` to avoid overwriting a Scratchpad
   the child has already created. Use separate new panels for distinct HTML mocks;
-  never overwrite one artifact with another. This is an independent copy for the fork; retain the
-  source panel and record the original document/revision as provenance. Do not
+  never overwrite one artifact with another. This is an independent copy for the
+  fork; retain the source panel and record the original document/revision as
+  provenance. Do not
   rebind or close the source Scratchpad. Preserve supporting assets required to
   render it; report anything that cannot be preserved.
 - Check every response for success. Verify document paths and right-panel
@@ -200,19 +208,19 @@ Record the artifact paths/URLs and titles in the handoff before launch.
 
 The launcher owns this initial opening step; the child should not duplicate it.
 Artifact failure does not justify launching another child or deleting the
-created workspace. Continue opening the remaining independent artifacts, retain successful setup,
-and report what remains.
+created workspace. Continue opening the remaining independent artifacts, retain
+successful setup, and report what remains.
 
 ## Handoff and checks
 
 Report the task workspace, worktree/branch, selected mode/provider/model/effort,
 whether conversation forking was verified, setup result, and artifact-opening results.
 Include exact resource IDs in the durable record; keep the user-facing summary
-brief. The user continues planning, implementation and testing in that workspace,
-with no required coordinator or completion skill. Neither session merges automatically.
+brief. The user continues planning, implementation and testing in that workspace.
+Neither session merges automatically.
 
 Use the helper's JSON results and live metadata to verify child placement and
-scope. Confirm no task or Git branch annotation was added.
-For workflow changes, validate scripts and exercise the changed launch behavior
-with a disposable CLI fixture. For repository copies, also follow that repository's verification guide. Custom `--startup-command` launches
-are only for explicit smoke/custom shell use and cannot claim managed forks.
+scope. For workflow changes, validate scripts and exercise the changed launch
+behavior with a disposable CLI fixture. For repository copies, also follow that
+repository's verification guide. Custom `--startup-command` launches are only for
+explicit smoke/custom shell use and cannot claim managed forks.

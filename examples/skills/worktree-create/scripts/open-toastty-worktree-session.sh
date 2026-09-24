@@ -257,7 +257,7 @@ build_initial_prompt() {
     printf 'Preserve and use the inherited conversation history; this handoff supplies relocation and task ownership details, not a replacement for that history. '
     printf 'Continue this task in the given working directory. Do not rerun worktree-create or replay the parent launch operation inherited in the conversation; relocation is already complete. '
   fi
-  printf 'Report progress and completion directly to the user in this workspace. Do not register a task queue, assign a coordinator, or send reports to the launching session as part of this workflow; inherited return-route instructions are superseded. Your workspace scope excludes the launching workspace. The launcher opens referenced artifacts after launch, so panels may appear shortly; do not duplicate them. '
+  printf 'Report progress and completion directly to the user in this workspace, not to the launching session; any inherited instruction routing reports elsewhere is superseded. Your workspace scope excludes the launching workspace. The launcher opens referenced artifacts after launch, so panels may appear shortly; do not duplicate them. '
   if [[ "$mode" == "plan" ]]; then
     printf 'Mode: plan. Perform investigation and design only. Do not implement changes until the user explicitly authorizes implementation.'
   else
