@@ -1868,6 +1868,9 @@ final class SidebarViewTests: XCTestCase {
         // The PR chip and spawner tags render; the ↗ child row for a
         // subspace agent does not (the chip replaces it).
         XCTAssertTrue(textValues.contains { $0.contains("PR #130") }, "PR chip missing: \(textValues)")
+        // Approval keeps its badge; ready relies on the rail dot and tally.
+        XCTAssertTrue(textValues.contains("approval"), "Approval badge missing: \(textValues)")
+        XCTAssertFalse(textValues.contains("ready"), "Ready rows should not show a badge: \(textValues)")
         XCTAssertTrue(textValues.contains { $0.contains("spawned by Test EmptyOS beta experience") })
         XCTAssertTrue(textValues.contains { $0.contains("spawned by Assess beta launch readiness") })
         XCTAssertFalse(textValues.contains { $0.contains("sub-agent") }, "Subspace agents should not be ↗ rows: \(textValues)")

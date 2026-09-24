@@ -3470,14 +3470,15 @@ struct SidebarView: View {
         }
     }
 
+    /// Ready gets no chip: the rail dot, the header tally, and the sort order
+    /// already show it, and the chip would squeeze the title next to a PR chip.
     private static func subspaceStatusChipKind(
         _ status: SidebarSubspacePresentation.RowStatus
     ) -> SessionStatusKind? {
         switch status {
-        case .ready: return .ready
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .working, .idle: return nil
+        case .ready, .working, .idle: return nil
         }
     }
 
