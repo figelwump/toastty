@@ -99,6 +99,57 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
     }
 
+    func testSelectedRowKeepsTheSlotItWasFoundInUntilTheSelectionMoves() {
+        typealias Presentation = SidebarSubspacePresentation
+        let a = row("a", status: .ready, index: 2)
+        let b = row("b", status: .ready, index: 3)
+        let w = row("w", status: .working, index: 0)
+        let i = row("i", status: .idle, index: 1)
+        let shownBeforeSelection = [a.id, b.id, w.id, i.id]
+        func read(_ row: Presentation.Row) -> Presentation.Row {
+            Presentation.Row(
+                id: row.id, title: row.title, status: .idle, pullRequest: nil, summary: nil,
+                spawningSessionID: row.spawningSessionID, spawnerName: row.spawnerName,
+                sessions: [], creationIndex: row.creationIndex
+            )
+        }
+        func order(
+            _ rows: [Presentation.Row],
+            previous: Presentation.Pin?,
+            selected: UUID,
+            shown: [UUID]
+        ) -> (pin: Presentation.Pin?, titles: [String]) {
+            let unpinned = Presentation.sortedRows(rows)
+            let pin = Presentation.pin(
+                previous: previous,
+                selectedRowID: selected,
+                displayedOrder: shown,
+                unpinnedOrder: unpinned.map(\.id)
+            )
+            return (pin, Presentation.applyingPin(pin, to: unpinned).map(\.title))
+        }
+
+        // Selecting a reads it, but it stays first instead of sorting last.
+        let first = order([read(a), b, w, i], previous: nil, selected: a.id, shown: shownBeforeSelection)
+        XCTAssertEqual(first.titles, ["a", "b", "w", "i"])
+
+        // Moving to b: b holds its slot and a settles among the idle rows.
+        let second = order([read(a), read(b), w, i], previous: first.pin, selected: b.id, shown: shownBeforeSelection)
+        XCTAssertEqual(second.pin, Presentation.Pin(rowID: b.id, index: 1))
+        XCTAssertEqual(second.titles, ["w", "b", "i", "a"])
+
+        // A filter that hides b keeps its pin for when the filter clears.
+        XCTAssertEqual(
+            Presentation.pin(previous: second.pin, selectedRowID: b.id, displayedOrder: [w.id, i.id], unpinnedOrder: [w.id, i.id]),
+            second.pin
+        )
+
+        // Leaving the group releases the pin.
+        let left = order([read(a), read(b), w, i], previous: second.pin, selected: UUID(), shown: [])
+        XCTAssertNil(left.pin)
+        XCTAssertEqual(left.titles, ["w", "i", "a", "b"])
+    }
+
     func testSpawnerChipCountsToneAndFilterState() {
         let rows = [
             row("one", status: .ready, spawner: "a", index: 0),

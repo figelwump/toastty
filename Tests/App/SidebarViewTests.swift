@@ -1837,7 +1837,6 @@ final class SidebarViewTests: XCTestCase {
         )
 
         // Subspaces are rows in the parent card, not cards of their own.
-        let subspaceTitles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
         for subspaceID in [ids.approvalID, ids.annotatedIdleID, ids.workingID, ids.readyUnreadID] {
             let workspace = try XCTUnwrap(harness.store.state.workspacesByID[subspaceID])
             XCTAssertTrue(
@@ -1852,17 +1851,8 @@ final class SidebarViewTests: XCTestCase {
 
         // The legacy Ready annotation does not lift an idle row above the
         // unread ready session, approval, or working rows.
-        let rowFrames = try subspaceTitles.map { title in
-            (title, try semanticTextFrame(in: rootView, prefix: "\(title), subspace"))
-        }
-        let siblingFrame = try semanticTextFrame(in: rootView, prefix: "ios-tab-footer")
-        let parentFrame = try semanticTextFrame(in: rootView, prefix: "emptyos-computer")
-        let growsDownward = siblingFrame.minY > parentFrame.minY
-        let orderedTitles = rowFrames
-            .sorted { growsDownward ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }
-            .map(\.0)
         XCTAssertEqual(
-            orderedTitles,
+            try subspaceRowOrder(in: rootView),
             ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
         )
         // The PR chip and spawner tags render; the ↗ child row for a
@@ -1876,6 +1866,53 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.contains("sub-agent") }, "Subspace agents should not be ↗ rows: \(textValues)")
 
         try writeSidebarEvidence(rootView, name: "sidebar-subspaces-sorted")
+    }
+
+    func testNextUnreadJumpLeavesTheSubspaceInItsSlotUntilSelectionMoves() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        let rootView = harness.hostingView
+
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID,
+            sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        // The jump read launch-checklist, which would now sort last; it stays
+        // where the jump found it.
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
+        XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("launch-checklist, subspace, ready") })
+        XCTAssertEqual(
+            try subspaceRowOrder(in: rootView),
+            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
+        )
+
+        harness.store.selectWorkspace(
+            windowID: harness.windowID,
+            workspaceID: ids.parentID,
+            preferringUnreadSessionPanelIn: harness.sessionRuntimeStore
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(
+            try subspaceRowOrder(in: rootView),
+            ["qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification", "launch-checklist"]
+        )
+    }
+
+    /// The harness's subspace row titles in on-screen order, top first.
+    private func subspaceRowOrder(in rootView: NSView) throws -> [String] {
+        let titles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
+        let rowFrames = try titles.map { title in
+            (title, try semanticTextFrame(in: rootView, prefix: "\(title), subspace"))
+        }
+        let siblingFrame = try semanticTextFrame(in: rootView, prefix: "ios-tab-footer")
+        let parentFrame = try semanticTextFrame(in: rootView, prefix: "emptyos-computer")
+        let growsDownward = siblingFrame.minY > parentFrame.minY
+        return rowFrames
+            .sorted { growsDownward ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }
+            .map(\.0)
     }
 
     func testSpawnerChipFiltersTheSubspacesGroupAndClearsOnSecondPress() throws {

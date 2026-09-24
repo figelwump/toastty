@@ -371,6 +371,16 @@ private extension SessionChildRow {
     }
 }
 
+/// What each Subspaces group last put on screen, and the slot its selected
+/// row holds. A plain reference rather than SwiftUI state: the group records
+/// it while computing its order, where state writes are not allowed, and the
+/// pin must be in place in the same update that reads the jumped-to row.
+@MainActor
+private final class SubspaceOrderMemory {
+    var displayedOrderByParentID: [UUID: [UUID]] = [:]
+    var pinByParentID: [UUID: SidebarSubspacePresentation.Pin] = [:]
+}
+
 struct SidebarView: View {
     struct WorkspaceDragState: Equatable {
         let workspaceID: UUID
@@ -427,6 +437,7 @@ struct SidebarView: View {
     /// Row order captured when the pointer entered a group, so rows hold
     /// still under the pointer; released on exit.
     @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
+    @State private var subspaceOrderMemory = SubspaceOrderMemory()
     @State private var hoveredSpawnerSessionID: String?
     @State private var hoveredSubspaceID: UUID?
     @State private var optionKeyPressed = false
@@ -3079,10 +3090,17 @@ struct SidebarView: View {
         let filterSessionID = subspaceFilterSessionIDByParentID[parentWorkspaceID]
         let isExpanded = collapsedSubspaceGroupParentIDs.contains(parentWorkspaceID) == false
         let filteredRows = SidebarSubspacePresentation.filteredRows(rows, spawningSessionID: filterSessionID)
-        let orderedRows = SidebarSubspacePresentation.orderedRows(
+        let unpinnedRows = SidebarSubspacePresentation.orderedRows(
             filteredRows,
             frozenOrder: frozenSubspaceOrderByParentID[parentWorkspaceID]
         )
+        let pin = SidebarSubspacePresentation.pin(
+            previous: subspaceOrderMemory.pinByParentID[parentWorkspaceID],
+            selectedRowID: selectedWorkspaceID,
+            displayedOrder: subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID],
+            unpinnedOrder: unpinnedRows.map(\.id)
+        )
+        let orderedRows = SidebarSubspacePresentation.applyingPin(pin, to: unpinnedRows)
         let tally = SidebarSubspacePresentation.tally(rows)
         let needsAttention = SidebarSubspacePresentation.needsAttention(rows)
         let attentionRowIDs = Set(rows.filter { $0.status.needsAttention }.map(\.id))
@@ -3091,6 +3109,8 @@ struct SidebarView: View {
             rows.first { $0.spawningSessionID == sessionID }?.spawnerName
         }
         let orderedRowIDs = orderedRows.map(\.id)
+        subspaceOrderMemory.pinByParentID[parentWorkspaceID] = pin
+        subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID] = orderedRowIDs
 
         return VStack(alignment: .leading, spacing: 3) {
             subspacesGroupHeader(
@@ -3559,6 +3579,9 @@ struct SidebarView: View {
         collapsedSubspaceGroupParentIDs = collapsedSubspaceGroupParentIDs.filter(parentIDs.contains)
         subspaceFilterSessionIDByParentID = subspaceFilterSessionIDByParentID.filter { parentIDs.contains($0.key) }
         frozenSubspaceOrderByParentID = frozenSubspaceOrderByParentID.filter { parentIDs.contains($0.key) }
+        subspaceOrderMemory.displayedOrderByParentID = subspaceOrderMemory.displayedOrderByParentID
+            .filter { parentIDs.contains($0.key) }
+        subspaceOrderMemory.pinByParentID = subspaceOrderMemory.pinByParentID.filter { parentIDs.contains($0.key) }
     }
 
     private func toggleSessionChildRows(sessionID: String) {

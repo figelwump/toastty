@@ -62,6 +62,12 @@ enum SidebarSubspacePresentation {
         let creationIndex: Int
     }
 
+    /// The slot the selected row holds while it stays selected.
+    struct Pin: Equatable, Sendable {
+        let rowID: UUID
+        let index: Int
+    }
+
     struct Tally: Equatable, Sendable {
         var ready = 0
         var needsApproval = 0
@@ -131,6 +137,38 @@ enum SidebarSubspacePresentation {
         var result = frozenOrder.compactMap { rowsByID[$0] }
         let placed = Set(result.map(\.id))
         result += sorted.filter { placed.contains($0.id) == false }
+        return result
+    }
+
+    /// Selecting a row reads it, which would sort a ready row away from
+    /// where the user found it, most visibly after a Next Unread jump. So
+    /// the selected row keeps the slot it had in `displayedOrder`, the order
+    /// on screen before the selection changed, until the selection moves.
+    /// The pin survives a filter that hides the row for a while.
+    static func pin(
+        previous: Pin?,
+        selectedRowID: UUID?,
+        displayedOrder: [UUID]?,
+        unpinnedOrder: [UUID]
+    ) -> Pin? {
+        guard let selectedRowID else { return nil }
+        if let previous, previous.rowID == selectedRowID {
+            return previous
+        }
+        guard let unpinnedIndex = unpinnedOrder.firstIndex(of: selectedRowID) else {
+            return nil
+        }
+        let index = displayedOrder?.firstIndex(of: selectedRowID) ?? unpinnedIndex
+        return Pin(rowID: selectedRowID, index: index)
+    }
+
+    static func applyingPin(_ pin: Pin?, to rows: [Row]) -> [Row] {
+        guard let pin, let currentIndex = rows.firstIndex(where: { $0.id == pin.rowID }) else {
+            return rows
+        }
+        var result = rows
+        let row = result.remove(at: currentIndex)
+        result.insert(row, at: min(pin.index, result.count))
         return result
     }
 
