@@ -37,6 +37,7 @@ public struct WorkspaceLayoutSnapshot: Codable, Equatable, Sendable {
         )
         state.pruneManagedAgentResumeRecordScopes(validWorkspaceIDs: Set(restoredWorkspaces.keys))
         state.pruneDuplicateManagedAgentResumeRecords()
+        state.normalizeWorkspaceParentLinks()
         return state
     }
 }
@@ -168,6 +169,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
     public var sidebarSessionPanelOrder: [UUID]
     public var annotations: [String: WorkspaceAnnotation]
+    public var parentWorkspaceID: UUID?
+    public var spawningSessionID: String?
 
     public init(
         id: UUID,
@@ -177,7 +180,9 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         tabIDs: [UUID],
         tabsByID: [UUID: WorkspaceLayoutTabSnapshot],
         annotations: [String: WorkspaceAnnotation] = [:],
-        sidebarSessionPanelOrder: [UUID] = []
+        sidebarSessionPanelOrder: [UUID] = [],
+        parentWorkspaceID: UUID? = nil,
+        spawningSessionID: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -187,6 +192,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         self.tabsByID = tabsByID
         self.annotations = annotations
         self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
+        self.parentWorkspaceID = parentWorkspaceID
+        self.spawningSessionID = spawningSessionID
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -201,6 +208,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         }
         annotations = workspace.annotations
         sidebarSessionPanelOrder = workspace.sidebarSessionPanelOrder
+        parentWorkspaceID = workspace.parentWorkspaceID
+        spawningSessionID = workspace.spawningSessionID
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -252,7 +261,9 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             },
             annotations: annotations,
             unreadWorkspaceNotificationCount: 0,
-            sidebarSessionPanelOrder: sidebarSessionPanelOrder
+            sidebarSessionPanelOrder: sidebarSessionPanelOrder,
+            parentWorkspaceID: parentWorkspaceID,
+            spawningSessionID: spawningSessionID
         )
     }
 }
@@ -267,6 +278,8 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case tabsByID
         case annotations
         case sidebarSessionPanelOrder
+        case parentWorkspaceID
+        case spawningSessionID
         case layoutTree
         case panels
         case focusedPanelID
@@ -305,6 +318,11 @@ extension WorkspaceLayoutWorkspaceSnapshot {
             tabsByID = [legacyTab.id: legacyTab]
         }
         sidebarSessionPanelOrder = try container.decodeIfPresent([UUID].self, forKey: .sidebarSessionPanelOrder) ?? []
+        // The parent link is validated against the whole restored state in
+        // `WorkspaceLayoutSnapshot.makeAppState`, where the other workspaces
+        // are known.
+        parentWorkspaceID = (try? container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)) ?? nil
+        spawningSessionID = (try? container.decodeIfPresent(String.self, forKey: .spawningSessionID)) ?? nil
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -318,6 +336,8 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encode(tabsByID, forKey: .tabsByID)
         try container.encode(annotations, forKey: .annotations)
         try container.encode(sidebarSessionPanelOrder, forKey: .sidebarSessionPanelOrder)
+        try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
+        try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)
         // Preserve a selected-tab legacy mirror while older layout snapshots
         // are still on disk in the field.
         let legacyTab = selectedTabID.flatMap { tabsByID[$0] } ?? tabIDs.first.flatMap { tabsByID[$0] }

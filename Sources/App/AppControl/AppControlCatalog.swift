@@ -10,6 +10,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceRename = "workspace.rename"
     case workspaceSetAnnotation = "workspace.set-annotation"
     case workspaceClearAnnotation = "workspace.clear-annotation"
+    case workspaceSetParent = "workspace.set-parent"
     case workspaceClose = "workspace.close"
     case workspaceTabCreate = "workspace.tab.create"
     case workspaceTabSelect = "workspace.tab.select"
@@ -134,9 +135,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Create a workspace in a window.",
+                summary: "Create a workspace in a window. When a managed session calls this, the new workspace nests under the caller's workspace as a subspace unless parent=none.",
                 selectors: [.windowID],
-                parameters: [.title(required: false), .activate(required: false)],
+                parameters: [.title(required: false), .activate(required: false), .workspaceParent(required: false)],
                 aliases: aliases
             )
         case .workspaceSelect:
@@ -190,8 +191,16 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [.windowID, .workspaceID],
                 parameters: [.annotationKey(required: true)]
             )
+        case .workspaceSetParent:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Nest a workspace under a top-level workspace in the same window as a subspace, or detach it with parent=none. Nesting stays one level deep, so a parent that is itself a subspace resolves to its root.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [.workspaceParent(required: true)]
+            )
         case .workspaceClose:
-            return .init(id: rawValue, kind: .action, summary: "Close a workspace.", selectors: [.windowID, .workspaceID])
+            return .init(id: rawValue, kind: .action, summary: "Close a workspace. Its subspaces stay open as top-level workspaces.", selectors: [.windowID, .workspaceID])
         case .workspaceTabCreate:
             return .init(id: rawValue, kind: .action, summary: "Create a new workspace tab.", selectors: [.windowID, .workspaceID], aliases: aliases)
         case .workspaceTabSelect:
@@ -488,6 +497,15 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
 }
 
 private extension AppControlParameterDescriptor {
+    static func workspaceParent(required: Bool) -> Self {
+        .init(
+            name: "parent",
+            summary: "Workspace ID to nest under as a subspace, or none for a top-level workspace. Sidebar shows subspaces in a Subspaces group inside the parent card.",
+            valueType: .string,
+            required: required
+        )
+    }
+
     static func activate(required: Bool) -> Self {
         .init(
             name: "activate",

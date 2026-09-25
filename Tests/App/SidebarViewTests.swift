@@ -188,6 +188,10 @@ final class SidebarViewTests: XCTestCase {
             "Hovering a session row should open its hover card"
         )
 
+        // Leave upward, away from the card, so it closes at once.
+        let regionScreenRect = try XCTUnwrap(region.window).convertToScreen(region.convert(region.bounds, to: nil))
+        HoverTipPresenter.pointerLocation = { CGPoint(x: regionScreenRect.midX, y: regionScreenRect.maxY + 20) }
+        defer { HoverTipPresenter.pointerLocation = { NSEvent.mouseLocation } }
         let exitEvent = try XCTUnwrap(pointerMouseEvent(
             type: .mouseMoved,
             view: region,
@@ -208,6 +212,159 @@ final class SidebarViewTests: XCTestCase {
             0,
             "Leaving the row should drop the hover background"
         )
+    }
+
+    /// Leaving a row toward its card keeps the card up long enough to reach
+    /// it; the card then stays while the pointer is on it and closes after
+    /// the pointer leaves. Leaving any other way closes it at once.
+    func testHoverCardHandsOffFromItsRowToThePointer() throws {
+        let presenter = HoverTipPresenter.shared
+        defer {
+            presenter.hideAll()
+            HoverTipPresenter.pointerLocation = { NSEvent.mouseLocation }
+        }
+        let screen = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        let anchor = CGRect(x: screen.minX + 40, y: screen.midY, width: 240, height: 22)
+        let corridor = CGPoint(x: anchor.maxX + 2, y: anchor.midY)
+        func show(_ id: String) {
+            presenter.show(id: id, content: Text(id).frame(width: 200), anchorScreenRect: anchor, placement: .trailing(gap: 6))
+        }
+        let grace = HoverTipPresenter.handoffGrace + 0.2
+
+        // Toward the card, never arriving: closes after the grace.
+        show("a")
+        HoverTipPresenter.pointerLocation = { corridor }
+        presenter.anchorHoverEnded(id: "a")
+        XCTAssertTrue(presenter.isVisible(id: "a"))
+        pumpMainRunLoop(duration: grace)
+        XCTAssertFalse(presenter.isVisible(id: "a"))
+
+        // Arriving on the card holds it; leaving the card closes it.
+        show("a")
+        presenter.anchorHoverEnded(id: "a")
+        presenter.cardPointerChanged(inside: true)
+        pumpMainRunLoop(duration: grace)
+        XCTAssertTrue(presenter.isVisible(id: "a"))
+        presenter.cardPointerChanged(inside: false)
+        pumpMainRunLoop(duration: grace)
+        XCTAssertFalse(presenter.isVisible(id: "a"))
+
+        // Another row taking over mid-handoff is not closed by the old grace.
+        show("a")
+        presenter.anchorHoverEnded(id: "a")
+        XCTAssertTrue(presenter.isHandingOff(awayFrom: "b"))
+        show("b")
+        pumpMainRunLoop(duration: grace)
+        XCTAssertTrue(presenter.isVisible(id: "b"))
+
+        // Leaving upward closes at once.
+        HoverTipPresenter.pointerLocation = { CGPoint(x: anchor.midX, y: anchor.maxY + 20) }
+        show("c")
+        presenter.anchorHoverEnded(id: "c")
+        XCTAssertFalse(presenter.isVisible(id: "c"))
+
+        // Only an exit through the row's card-facing side, within its height,
+        // counts as heading to a trailing card; the corner above does not.
+        let card = CGRect(x: anchor.maxX + 6, y: anchor.maxY - 120, width: 320, height: 120)
+        XCTAssertTrue(HoverTipPresenter.isHeadingToCard(pointer: corridor, anchor: anchor, card: card))
+        XCTAssertFalse(HoverTipPresenter.isHeadingToCard(
+            pointer: CGPoint(x: anchor.maxX + 2, y: anchor.maxY + 6), anchor: anchor, card: card
+        ))
+        XCTAssertFalse(HoverTipPresenter.isHeadingToCard(
+            pointer: CGPoint(x: anchor.midX, y: anchor.minY - 4), anchor: anchor, card: card
+        ))
+
+        XCTAssertFalse(HoverTipPresenter.eventDismissesCard(.leftMouseDown, isInCard: true))
+        XCTAssertTrue(HoverTipPresenter.eventDismissesCard(.leftMouseDown, isInCard: false))
+        XCTAssertTrue(HoverTipPresenter.eventDismissesCard(.rightMouseDown, isInCard: true))
+        XCTAssertTrue(HoverTipPresenter.eventDismissesCard(.scrollWheel, isInCard: true))
+        XCTAssertTrue(HoverTipPresenter.eventDismissesCard(.keyDown, isInCard: true))
+    }
+
+    /// The card panel never becomes key, so the first click on a card row or
+    /// its copy button must reach the button directly and leave keyboard
+    /// focus where it was.
+    func testSubspaceHoverCardRowJumpsAndPathCopiesOnFirstClickWithoutTakingFocus() throws {
+        let presenter = HoverTipPresenter.shared
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 300, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            presenter.hideAll()
+            window.orderOut(nil)
+        }
+        pumpMainRunLoop()
+        let windowWasKey = window.isKeyWindow
+
+        let targetPanelID = UUID()
+        let path = NSHomeDirectory() + "/worktrees/hover-card-copy"
+        let model = SubspaceHoverTipModel(
+            name: "qa-mobile-navigation",
+            statusDotColorKind: .needsApproval,
+            sessions: [
+                .init(
+                    title: "Fix nav drawer focus", panelID: targetPanelID, agentLabel: "claude",
+                    statusKind: .needsApproval, isUnread: false, railState: .approvalDot,
+                    badgeKind: .needsApproval, turnStartedAt: nil, summary: "pnpm db:migrate"
+                ),
+            ],
+            hiddenSessionCount: 0,
+            annotations: [],
+            path: "~/worktrees/hover-card-copy",
+            absolutePath: path,
+            spawnerName: "Test EmptyOS beta experience"
+        )
+        var selectedPanelIDs: [UUID] = []
+        let screen = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        let anchor = CGRect(x: screen.minX + 40, y: screen.midY, width: 240, height: 22)
+        func showCard() throws -> NSView {
+            presenter.show(
+                id: "subspace-card",
+                content: SubspaceHoverTipCard(model: model) { selectedPanelIDs.append($0) },
+                anchorScreenRect: anchor,
+                placement: .trailing(gap: 6)
+            )
+            pumpMainRunLoop(duration: 0.2)
+            let cardView = try XCTUnwrap(renderedHoverCardView())
+            cardView.layoutSubtreeIfNeeded()
+            return cardView
+        }
+
+        var cardView = try showCard()
+        try clickSemanticText(prefix: "Go to Fix nav drawer focus", in: cardView)
+        pumpMainRunLoop(duration: 0.1)
+        XCTAssertEqual(selectedPanelIDs, [targetPanelID], "The first click on a card row should reach it")
+        XCTAssertFalse(presenter.isVisible(id: "subspace-card"), "Jumping to a session closes the card")
+        XCTAssertEqual(window.isKeyWindow, windowWasKey, "Clicking the card must not move keyboard focus")
+        XCTAssertFalse(try XCTUnwrap(cardView.window).isKeyWindow)
+
+        NSPasteboard.general.clearContents()
+        cardView = try showCard()
+        try clickSemanticText(prefix: "Copy path", in: cardView)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), path, "The copy button copies the full path")
+        XCTAssertTrue(presenter.isVisible(id: "subspace-card"), "The card stays up briefly to show the check")
+        XCTAssertNotNil(semanticTextField(in: cardView, prefix: "Copied path"))
+        pumpMainRunLoop(duration: 0.9)
+        XCTAssertFalse(presenter.isVisible(id: "subspace-card"))
+        XCTAssertEqual(window.isKeyWindow, windowWasKey)
+        XCTAssertEqual(selectedPanelIDs, [targetPanelID], "Copying must not also jump")
+
+        // The next card starts without the last one's copy check.
+        cardView = try showCard()
+        XCTAssertNotNil(semanticTextField(in: cardView, prefix: "Copy path"))
+        XCTAssertNil(semanticTextField(in: cardView, prefix: "Copied path"))
+    }
+
+    /// The presenter's panel content, found through the app's windows since
+    /// the presenter keeps its panel private.
+    private func renderedHoverCardView() -> NSView? {
+        NSApp.windows
+            .first { $0.isVisible && $0.contentView is HoverTipContainerView }?
+            .contentView
     }
 
     func testSessionHoverRecoversAfterTrackingUpdateWithoutMouseExit() throws {
@@ -1741,6 +1898,366 @@ final class SidebarViewTests: XCTestCase {
         )
 
         harness.window.orderOut(nil)
+    }
+
+    // MARK: - Subspaces
+
+    private struct SubspacesHarnessIDs {
+        let parentID: UUID
+        let approvalID: UUID
+        let annotatedIdleID: UUID
+        let workingID: UUID
+        let readyUnreadID: UUID
+        let siblingID: UUID
+    }
+
+    /// A parent card with two spawning sessions and four subspaces in one
+    /// group, plus a second top-level card, so the test can see sorting,
+    /// the spawner tags, and that subspaces do not render as cards.
+    private func makeSubspacesHarness() throws -> (SidebarHarness, SubspacesHarnessIDs) {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let parentLeftPanelID = UUID()
+        let parentRightPanelID = UUID()
+        let parentID = UUID()
+        let parent = WorkspaceState(
+            id: parentID,
+            title: "emptyos-computer",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: parentLeftPanelID),
+                second: .slot(slotID: UUID(), panelID: parentRightPanelID)
+            ),
+            panels: [
+                parentLeftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo")),
+                parentRightPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo")),
+            ],
+            focusedPanelID: parentLeftPanelID
+        )
+
+        func subspace(
+            _ title: String,
+            spawner: String?,
+            annotations: [String: WorkspaceAnnotation] = [:],
+            unread: Bool = false
+        ) -> WorkspaceState {
+            let panelID = UUID()
+            return WorkspaceState(
+                id: UUID(),
+                title: title,
+                layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo/\(title)"))],
+                focusedPanelID: panelID,
+                unreadPanelIDs: unread ? [panelID] : [],
+                annotations: annotations,
+                parentWorkspaceID: parentID,
+                spawningSessionID: spawner
+            )
+        }
+        let approval = subspace("qa-mobile-navigation", spawner: "spawner")
+        let annotatedIdle = subspace(
+            "qa-private-app-verification",
+            spawner: "spawner",
+            annotations: [
+                "github-pr": WorkspaceAnnotation(text: "PR #130", url: "https://github.com/example/repo/pull/130"),
+                "task-status": WorkspaceAnnotation(text: "Ready for your testing", url: nil),
+            ]
+        )
+        let working = subspace("qa-update-visitor-fixture", spawner: "spawner")
+        let readyUnread = subspace("launch-checklist", spawner: "assessor", unread: true)
+        let sibling = makeSinglePanelWorkspace(id: UUID(), title: "ios-tab-footer")
+
+        let windowID = UUID()
+        let workspaces = [parent, approval, annotatedIdle, working, readyUnread, sibling]
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: parentID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID)
+
+        func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
+            harness.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: workspace.focusedPanelID!,
+                windowID: windowID,
+                workspaceID: workspace.id,
+                displayTitleOverride: title,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(sessionID: sessionID, status: status, at: now.addingTimeInterval(1))
+        }
+        start("spawner", title: "Test EmptyOS beta experience", in: parent,
+              status: SessionStatus(kind: .working, summary: "Working", detail: "Merging QA fixes back to main"))
+        start("assessor", title: "Assess beta launch readiness", in: WorkspaceState(
+            id: parentID, title: parent.title, layoutTree: parent.layoutTree, panels: parent.panels,
+            focusedPanelID: parentRightPanelID
+        ), status: SessionStatus(kind: .idle, summary: "Idle", detail: "Started three Toastty workspaces"))
+        start("approval-agent", title: "Fix nav drawer focus", in: approval,
+              status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "pnpm db:migrate"))
+        start("working-agent", title: "Rebase fixture", in: working,
+              status: SessionStatus(kind: .working, summary: "Working", detail: "Rebasing onto main"))
+        start("ready-agent", title: "Checklist", in: readyUnread,
+              status: SessionStatus(kind: .ready, summary: "Ready", detail: "Checklist covers auth and billing"))
+        // Rows animate into their sorted positions (0.28s); let that settle
+        // before reading frames or text.
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        return (harness, SubspacesHarnessIDs(
+            parentID: parentID,
+            approvalID: approval.id,
+            annotatedIdleID: annotatedIdle.id,
+            workingID: working.id,
+            readyUnreadID: readyUnread.id,
+            siblingID: sibling.id
+        ))
+    }
+
+    func testSubspacesRenderInsideParentCardSortedByStatusNotAsCards() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        let rootView = harness.hostingView
+        let textValues = renderedTextValues(in: rootView)
+
+        XCTAssertTrue(
+            textValues.contains { $0.hasPrefix("4 subspaces, expanded") },
+            "Group header should describe the rows: \(textValues)"
+        )
+
+        // Subspaces are rows in the parent card, not cards of their own.
+        for subspaceID in [ids.approvalID, ids.annotatedIdleID, ids.workingID, ids.readyUnreadID] {
+            let workspace = try XCTUnwrap(harness.store.state.workspacesByID[subspaceID])
+            XCTAssertTrue(
+                textValues.contains { $0.hasPrefix("\(workspace.title), subspace") },
+                "Expected a subspace row for \(workspace.title): \(textValues)"
+            )
+            let cardLabel = SidebarSessionPresentation.workspaceAccessibilityLabel(for: workspace, isSelected: false)
+            XCTAssertFalse(textValues.contains(cardLabel), "Subspace rendered as a card: \(cardLabel)")
+        }
+        XCTAssertTrue(textValues.contains("ios-tab-footer"), "Sibling card should still render: \(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("qa-private-app-verification, subspace, ready") })
+
+        // The legacy Ready annotation does not lift an idle row above the
+        // unread ready session, approval, or working rows.
+        XCTAssertEqual(
+            try subspaceRowOrder(in: rootView),
+            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
+        )
+        // The PR chip and spawner tags render; the ↗ child row for a
+        // subspace agent does not (the chip replaces it).
+        XCTAssertTrue(textValues.contains { $0.contains("PR #130") }, "PR chip missing: \(textValues)")
+        // Approval keeps its badge; ready relies on the rail dot and tally.
+        XCTAssertTrue(textValues.contains("approval"), "Approval badge missing: \(textValues)")
+        XCTAssertFalse(textValues.contains("ready"), "Ready rows should not show a badge: \(textValues)")
+        XCTAssertTrue(textValues.contains { $0.contains("spawned by Test EmptyOS beta experience") })
+        XCTAssertTrue(textValues.contains { $0.contains("spawned by Assess beta launch readiness") })
+        XCTAssertFalse(textValues.contains { $0.contains("sub-agent") }, "Subspace agents should not be ↗ rows: \(textValues)")
+
+        try writeSidebarEvidence(rootView, name: "sidebar-subspaces-sorted")
+    }
+
+    func testNextUnreadJumpLeavesTheSubspaceInItsSlotUntilSelectionMoves() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        let rootView = harness.hostingView
+
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID,
+            sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        // The jump read launch-checklist, which would now sort last; it stays
+        // where the jump found it.
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
+        XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("launch-checklist, subspace, ready") })
+        XCTAssertEqual(
+            try subspaceRowOrder(in: rootView),
+            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
+        )
+
+        harness.store.selectWorkspace(
+            windowID: harness.windowID,
+            workspaceID: ids.parentID,
+            preferringUnreadSessionPanelIn: harness.sessionRuntimeStore
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(
+            try subspaceRowOrder(in: rootView),
+            ["qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification", "launch-checklist"]
+        )
+    }
+
+    /// The harness's subspace row titles in on-screen order, top first.
+    private func subspaceRowOrder(in rootView: NSView) throws -> [String] {
+        let titles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
+        let rowFrames = try titles.map { title in
+            (title, try semanticTextFrame(in: rootView, prefix: "\(title), subspace"))
+        }
+        let siblingFrame = try semanticTextFrame(in: rootView, prefix: "ios-tab-footer")
+        let parentFrame = try semanticTextFrame(in: rootView, prefix: "emptyos-computer")
+        let growsDownward = siblingFrame.minY > parentFrame.minY
+        return rowFrames
+            .sorted { growsDownward ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }
+            .map(\.0)
+    }
+
+    func testSpawnerChipFiltersTheSubspacesGroupAndClearsOnSecondPress() throws {
+        let (harness, _) = try makeSubspacesHarness()
+        let rootView = harness.hostingView
+
+        // A real click on the chip, which sits inside the row header's AppKit
+        // pointer overlay and must be excluded from it like the disclosure pill.
+        try clickSemanticText(prefix: "3 subspaces, one needs approval", in: rootView)
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        var textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains("Only subspaces from Test EmptyOS beta experience"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, subspace") })
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, subspace") }, "Other spawner's row should hide: \(textValues)")
+        XCTAssertTrue(textValues.contains("3 subspaces, one needs approval, filtering the Subspaces list"), "\(textValues)")
+        try writeSidebarEvidence(rootView, name: "sidebar-subspaces-filtered")
+
+        try clickSemanticText(prefix: "3 subspaces, one needs approval, filtering", in: rootView)
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertFalse(textValues.contains("Only subspaces from Test EmptyOS beta experience"))
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace") })
+    }
+
+    /// Clicks the hosted view at the semantic text bridge whose text starts
+    /// with `prefix`; the bridge is a zero-size field centered on its view.
+    private func clickSemanticText(prefix: String, in rootView: NSView) throws {
+        let frame = try semanticTextFrame(in: rootView, prefix: prefix)
+        let window = try XCTUnwrap(rootView.window)
+        let windowPoint = rootView.convert(CGPoint(x: frame.midX, y: frame.midY), to: nil)
+        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: windowPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: eventNumber,
+                clickCount: 1,
+                pressure: pressure
+            ))
+            window.sendEvent(event)
+            pumpMainRunLoop(duration: 0.05)
+        }
+    }
+
+    func testSpawnerTagOnASubspaceRowFocusesTheSpawningSessionsPanel() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        // Start inside a subspace so the jump is observable.
+        harness.store.selectWorkspace(
+            windowID: harness.windowID,
+            workspaceID: ids.approvalID,
+            preferringUnreadSessionPanelIn: harness.sessionRuntimeStore
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.approvalID)
+
+        // launch-checklist was spawned by "Assess beta launch readiness".
+        try clickSemanticText(prefix: "Go to Assess beta launch readiness", in: rootView)
+        pumpMainRunLoop(duration: 0.3)
+
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.parentID)
+        let parent = try XCTUnwrap(harness.store.state.workspacesByID[ids.parentID])
+        let assessor = try XCTUnwrap(harness.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: "assessor"))
+        XCTAssertEqual(parent.focusedPanelID, assessor.panelID)
+    }
+
+    func testSpawnerInAnotherWorkspaceIsNamedAndItsTagJumpsThere() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        // An orchestrator in the sibling card nests a subspace under the
+        // parent, as `workspace.create parent=<id>` does.
+        let sibling = try XCTUnwrap(harness.store.state.workspacesByID[ids.siblingID])
+        let orchestratorPanelID = try XCTUnwrap(sibling.focusedPanelID)
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "orchestrator",
+            agent: .claude,
+            panelID: orchestratorPanelID,
+            windowID: harness.windowID,
+            workspaceID: sibling.id,
+            displayTitleOverride: "Merge ready PRs",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "orchestrator",
+            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Waiting on subspaces"),
+            at: Date(timeIntervalSince1970: 1_700_000_001)
+        )
+        _ = harness.store.send(.setWorkspaceParent(
+            workspaceID: ids.workingID,
+            parentWorkspaceID: ids.parentID,
+            spawningSessionID: "orchestrator"
+        ))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        try clickSemanticText(prefix: "Go to Merge ready PRs", in: rootView)
+        pumpMainRunLoop(duration: 0.3)
+
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.siblingID)
+        XCTAssertEqual(harness.store.state.workspacesByID[ids.siblingID]?.focusedPanelID, orchestratorPanelID)
+    }
+
+    private func semanticTextFrame(in rootView: NSView, prefix: String) throws -> CGRect {
+        let field = try XCTUnwrap(
+            semanticTextField(in: rootView, prefix: prefix),
+            "No rendered text starting with \"\(prefix)\": \(renderedTextValues(in: rootView))"
+        )
+        return field.convert(field.bounds, to: rootView)
+    }
+
+    private func semanticTextField(in rootView: NSView, prefix: String) -> NSTextField? {
+        if let field = rootView as? NSTextField, field.stringValue.hasPrefix(prefix) {
+            return field
+        }
+        for subview in rootView.subviews {
+            if let match = semanticTextField(in: subview, prefix: prefix) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    /// Writes a PNG of the hosted sidebar when the runner sets
+    /// `TOASTTY_SIDEBAR_EVIDENCE_DIR` (pass it as `TEST_RUNNER_…` to
+    /// xcodebuild), so a review can see the rendered rows.
+    private func writeSidebarEvidence(_ view: NSView, name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["TOASTTY_SIDEBAR_EVIDENCE_DIR"],
+              directory.isEmpty == false else {
+            return
+        }
+        let bitmap = try renderedBitmap(for: view)
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try data.write(to: directoryURL.appendingPathComponent("\(name).png"))
     }
 
     private func pumpMainRunLoop(duration: TimeInterval = 0) {

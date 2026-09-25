@@ -179,6 +179,39 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .setWorkspaceParent(let workspaceID, let parentWorkspaceID, let spawningSessionID):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            let resolvedParentID: UUID?
+            if let parentWorkspaceID {
+                guard let rootID = state.resolvedParentWorkspaceID(
+                    forNesting: workspaceID,
+                    under: parentWorkspaceID
+                ) else {
+                    return false
+                }
+                resolvedParentID = rootID
+            } else {
+                resolvedParentID = nil
+            }
+            let resolvedSpawningSessionID = resolvedParentID == nil
+                ? nil
+                : normalizedMetadataValue(spawningSessionID)
+            guard workspace.parentWorkspaceID != resolvedParentID
+                || workspace.spawningSessionID != resolvedSpawningSessionID else {
+                return false
+            }
+            // Nesting stays one level deep: anything that was nested under
+            // this workspace moves under the same root. Resolved before the
+            // commit, while this workspace still counts as their parent.
+            let nestedWorkspaceIDs = resolvedParentID == nil ? [] : state.subspaceWorkspaceIDs(of: workspaceID)
+            workspace.parentWorkspaceID = resolvedParentID
+            workspace.spawningSessionID = resolvedSpawningSessionID
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            for nestedWorkspaceID in nestedWorkspaceIDs {
+                state.workspacesByID[nestedWorkspaceID]?.parentWorkspaceID = resolvedParentID
+            }
+            return true
+
         case .setWorkspaceTabCustomTitle(let workspaceID, let tabID, let title):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let normalizedTitle = normalizedMetadataValue(title)
@@ -1985,6 +2018,12 @@ public struct AppReducer {
         var window = state.windows[windowIndex]
         guard let workspaceIndex = window.workspaceIDs.firstIndex(of: workspaceID) else { return false }
 
+        // Closing a parent keeps its subspaces open as top-level workspaces
+        // rather than closing work the user may still be running there.
+        for subspaceID in state.subspaceWorkspaceIDs(of: workspaceID) {
+            state.workspacesByID[subspaceID]?.parentWorkspaceID = nil
+            state.workspacesByID[subspaceID]?.spawningSessionID = nil
+        }
         state.workspacesByID.removeValue(forKey: workspaceID)
         window.workspaceIDs.remove(at: workspaceIndex)
 

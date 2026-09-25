@@ -82,6 +82,9 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
     public var providerSessionName: String?
     public var cwd: String?
     public var updatedAt: Date
+    /// When the session last reported a status. Unlike `updatedAt`, file,
+    /// panel, and background-activity changes leave it alone.
+    public var statusUpdatedAt: Date?
     /// Start of the current turn, present only while the session's reported
     /// status is `.working`. A projected working state (waiting on children,
     /// resuming) has no turn of its own and leaves this `nil`.
@@ -108,6 +111,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         providerSessionName: String? = nil,
         cwd: String?,
         updatedAt: Date,
+        statusUpdatedAt: Date? = nil,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
         isActive: Bool,
@@ -126,6 +130,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         self.providerSessionName = Self.normalizedOptionalText(providerSessionName)
         self.cwd = cwd
         self.updatedAt = updatedAt
+        self.statusUpdatedAt = statusUpdatedAt
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration
         self.isActive = isActive

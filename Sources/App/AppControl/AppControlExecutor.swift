@@ -84,6 +84,30 @@ final class AppControlExecutor {
         case .workspaceCreate:
             let store = try requiredStore()
             let windowID = try resolveWindowID(args: args)
+            // Resolve the parent before creating anything, so a bad request
+            // cannot leave a workspace behind.
+            let parentArgument = try parseParentArgument(args: args, required: false)
+            let callerSession = callerManagedSession()
+            let parentWorkspaceID: UUID?
+            switch parentArgument {
+            case .topLevel:
+                parentWorkspaceID = nil
+            case .workspace(let requestedID):
+                guard let rootID = store.state.resolvedParentWorkspaceID(
+                    forNewWorkspaceIn: windowID,
+                    under: requestedID
+                ) else {
+                    throw AutomationSocketError.invalidPayload("parent must be a workspace in the target window")
+                }
+                try enforceWorkspaceAutomationAccess(requestedID)
+                try enforceWorkspaceAutomationAccess(rootID)
+                parentWorkspaceID = rootID
+            case .omitted:
+                // A managed caller's own workspace, when it is in this window.
+                parentWorkspaceID = callerSession.flatMap { session in
+                    store.state.resolvedParentWorkspaceID(forNewWorkspaceIn: windowID, under: session.workspaceID)
+                }
+            }
             let existingWorkspaceIDs = Set(store.state.window(id: windowID)?.workspaceIDs ?? [])
             let didMutateState = store.sendNavigation(
                 .createWorkspace(
@@ -100,11 +124,22 @@ final class AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("workspace.create did not return a created workspace")
             }
             try bindWorkspaceToScopedCallerIfNeeded(workspaceID, operation: action.rawValue)
+            if let parentWorkspaceID {
+                _ = store.send(
+                    .setWorkspaceParent(
+                        workspaceID: workspaceID,
+                        parentWorkspaceID: parentWorkspaceID,
+                        spawningSessionID: callerSession?.sessionID
+                    )
+                )
+            }
             return .init(
                 didMutateState: true,
                 result: [
                     "windowID": .string(windowID.uuidString),
                     "workspaceID": .string(workspaceID.uuidString),
+                    "parentWorkspaceID": store.state.workspacesByID[workspaceID]?.parentWorkspaceID
+                        .map { .string($0.uuidString) } ?? .null,
                 ]
             )
 
@@ -202,6 +237,45 @@ final class AppControlExecutor {
                     .clearWorkspaceAnnotation(workspaceID: workspaceID, key: key)
                 ),
                 result: nil
+            )
+
+        case .workspaceSetParent:
+            let store = try requiredStore()
+            let workspaceID = try resolveWorkspaceID(args: args)
+            let parentWorkspaceID: UUID?
+            switch try parseParentArgument(args: args, required: true) {
+            case .topLevel, .omitted:
+                parentWorkspaceID = nil
+            case .workspace(let requestedID):
+                guard let rootID = store.state.resolvedParentWorkspaceID(forNesting: workspaceID, under: requestedID) else {
+                    throw AutomationSocketError.invalidPayload(
+                        "parent must be a different workspace in the same window that is not nested under this one"
+                    )
+                }
+                // The link lands on the root, so the caller needs access to
+                // both the workspace it named and the one it attaches to.
+                try enforceWorkspaceAutomationAccess(requestedID)
+                try enforceWorkspaceAutomationAccess(rootID)
+                parentWorkspaceID = rootID
+            }
+            // Reparenting keeps the original spawner; a caller only becomes
+            // the spawner of a workspace that had none.
+            let spawningSessionID = store.state.workspacesByID[workspaceID]?.spawningSessionID
+                ?? callerManagedSession()?.sessionID
+            let didMutateState = store.send(
+                .setWorkspaceParent(
+                    workspaceID: workspaceID,
+                    parentWorkspaceID: parentWorkspaceID,
+                    spawningSessionID: spawningSessionID
+                )
+            )
+            return .init(
+                didMutateState: didMutateState,
+                result: [
+                    "workspaceID": .string(workspaceID.uuidString),
+                    "parentWorkspaceID": store.state.workspacesByID[workspaceID]?.parentWorkspaceID
+                        .map { .string($0.uuidString) } ?? .null,
+                ]
             )
 
         case .workspaceClose:
@@ -922,6 +996,13 @@ private extension AppControlExecutor {
         )
     }
 
+    func callerMayAutomate(_ workspaceID: UUID) -> Bool {
+        sessionRuntimeStore.allowsWorkspaceAutomation(
+            callerSessionID: requestContext().callerSessionID,
+            of: workspaceID
+        )
+    }
+
     func enforceWorkspaceAutomationAccess(_ workspaceID: UUID) throws {
         let context = requestContext()
         guard sessionRuntimeStore.allowsWorkspaceAutomation(
@@ -1002,6 +1083,43 @@ private extension AppControlExecutor {
             return nil
         }
         return sessionRuntimeStore.effectiveWorkspaceScope(sessionID: callerSessionID)
+    }
+
+    enum ParentWorkspaceArgument {
+        case omitted
+        case topLevel
+        case workspace(UUID)
+    }
+
+    /// Parses the `parent` argument without applying any default policy.
+    func parseParentArgument(
+        args: [String: AutomationJSONValue],
+        required: Bool
+    ) throws -> ParentWorkspaceArgument {
+        guard let rawValue = normalizedOptionalText(args.stringValue("parent")) else {
+            if required {
+                throw AutomationSocketError.invalidPayload("parent is required: a workspace ID or none")
+            }
+            return .omitted
+        }
+        if rawValue.lowercased() == "none" {
+            return .topLevel
+        }
+        guard let parentWorkspaceID = UUID(uuidString: rawValue) else {
+            throw AutomationSocketError.invalidPayload("parent must be a workspace ID or none")
+        }
+        return .workspace(parentWorkspaceID)
+    }
+
+    /// The calling managed agent session, if the request came from one.
+    /// Process watches are not agents and never count as spawners.
+    func callerManagedSession() -> SessionRecord? {
+        guard let callerSessionID = requestContext().callerSessionID,
+              let session = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
+              session.agent != .processWatch else {
+            return nil
+        }
+        return session
     }
 
     func parentSessionIDForChildLaunch() -> String? {
@@ -2563,6 +2681,16 @@ private extension AppControlExecutor {
         return [
             "workspaceID": .string(workspaceID.uuidString),
             "annotations": .array(annotations),
+            // Related workspaces outside the caller's scope stay hidden, as
+            // they are everywhere else in the automation surface.
+            "parentWorkspaceID": workspace.parentWorkspaceID
+                .flatMap { callerMayAutomate($0) ? .string($0.uuidString) : nil } ?? .null,
+            "spawningSessionID": workspace.spawningSessionID.map(AutomationJSONValue.string) ?? .null,
+            "subspaceWorkspaceIDs": .array(
+                store.state.subspaceWorkspaceIDs(of: workspaceID)
+                    .filter { callerMayAutomate($0) }
+                    .map { .string($0.uuidString) }
+            ),
             "tabCount": .int(workspace.tabIDs.count),
             "selectedTabID": selectedTabID.map { .string($0.uuidString) } ?? .null,
             "selectedTabIndex": selectedTabIndex.map { .int($0) } ?? .null,
