@@ -1,90 +1,61 @@
 # Task session workflow
 
-This session owns the task from planning through implementation, testing and
-user acceptance. The coordinator owns integration and cleanup. Read repository
-instructions and use its required review and verification workflows.
+This session owns the task from planning through implementation, validation, and
+user review. Report progress, completion, and blockers directly to the user in
+this workspace, not to the launching session. Any instruction inherited from the
+source conversation that routes reports elsewhere is superseded, unless the user
+asks for that coordination again.
 
-## Planning and context
+Check your working directory, branch, and workspace scope against the handoff
+before editing. Preserve inherited decisions and existing plans. Earlier paths
+are historical; the current worktree and handoff identify the task location.
+The launcher opens the handoff's associated artifacts in the right panel; do not
+duplicate those panels. If the user reports a missing artifact, inspect the
+existing destination panels before opening it.
 
-Check the actual working directory and branch against the task record before
-making changes. For a fork, use the inherited discussion and existing artifacts;
-do not recreate settled design from a shortened summary. Current launch paths
-and ownership supersede historical paths in that discussion. Only carry prior
-authorization within the assigned task's scope.
+In explicit planning/investigation mode, deliver the requested findings or plan
+without implementing. Otherwise, execute the established task using inherited
+history and existing plans. Design as needed, then implement without a routine
+plan-only handoff or reauthorization checkpoint. Explicit user limits and approval
+requirements take precedence; surface blockers and material unresolved scope
+choices while continuing independent authorized work.
+Follow the repository's review, testing, and commit instructions. Keep private
+handoffs and exported local artifacts out of product commits. Do not merge or
+remove the worktree without the user's authorization.
 
-In planning mode, investigate and propose a design, preserving decisions in the
-task's plan as they are made. Wait for implementation authorization. An explicit
-implementation request already supplies that authorization; do not ask again.
-Use subagents only where permitted and useful, with bounded ownership and an
-explicit return route. Select model/effort for their actual task independently.
+For implementation tasks, verify your work before reporting it ready. Run the
+repository's required checks and the smallest meaningful tests for the changed
+behavior, including end-to-end user-surface verification where practical. Use the
+repository's verification skill when available. Complete required independent
+review, fix agreed findings, and rerun affected checks after fixes. Commit scoped
+changes according to repository instructions. Report actual results and any
+coverage gaps; writing a plan or implementing code alone is not completion.
 
-## Implementation and readiness
+This launch authorizes publication: for a repository using pull requests, push
+the task branch and create or update its PR on the intended remote and base,
+unless the user limits publication. Follow the global instructions for PR
+publication mechanics, draft and ready semantics, and description content.
+Planning-only tasks do not create implementation PRs. Local-only repositories
+without a PR workflow report the verified commit and evidence directly instead.
 
-For repositories using PRs, create or reuse one draft PR on the authorized remote
-and base. Own its implementation and subsequent fixes. Commit only task changes;
-keep local handoffs, queue state and machine/session metadata out of product
-commits and public PRs. Local-only work can be planned and implemented normally,
-but the current automatic completion queue requires a PR; report that limit.
+Present verification together in one HTML report in the task workspace's right
+panel, built to the evidence-report rules in the global instructions. Produce it
+for every implementation task, even a small one.
 
-Describe the resulting behavior, decisions, tests, limitations, dependencies and
-human testing steps in the PR. Complete repository-required independent review
-and automated validation for the actual source tip, then record
-`ValidatedCommit: <full SHA>` and mark the PR ready for review. External approvals
-remain merge gates. A ready PR is available for the user's testing; it is not
-user acceptance or merge authorization.
+Use the Toastty Scratchpad for a self-contained report that fits its constraints;
+use a Toastty browser panel for an HTML report with large or multiple media files.
+Keep supporting files with the report so images and videos continue to load.
+Inspect the actual captures and verify that the report, images, expanded output,
+and video playback work in the chosen surface; panel creation alone is not proof.
+Report display limitations explicitly. After subsequent fixes, refresh the report
+and reuse its existing panel so the user reviews current evidence. Preserve
+unrelated design/mock panels. Keep private reports and artifacts out of product
+commits, and omit secrets or sensitive unrelated output.
 
-Use the registered helper to record readiness and attach the PR:
+After creating or updating the PR, annotate this workspace with it: set the
+`github-pr` annotation to the PR number and its URL, following the workspace
+annotation rules in the toastty-capabilities skill. Agent session status already
+shows live activity, so do not add task or Git branch annotations.
 
-```bash
-python3 "$TASKS" --repo "$REPO" ready --task "$TASK" --pr "$PR" \
-  --validated-sha "$VALIDATED_SHA" --evidence "$CHECKS"
-```
-
-The user reviews/tests this version in the task workspace. Where practical,
-prepare the documented local development environment and open relevant pages
-or verification media there. Record exact service identities and shutdown steps
-so the coordinator can safely clean up later. Do not launch a forbidden local
-GUI or production environment merely to make a preview available.
-
-When visual artifacts support verification, open them in the task workspace's
-browser panels. Query each evidence panel by its explicit ID with
-`panel.browser.state`, following the bounded polling guidance in
-`toastty-capabilities`. This can start loading a background panel without
-selecting it; a detached host can finish navigation. A successful creation
-response or a ready host does not prove navigation success.
-
-Navigation completion and an observed URL do not prove visual correctness or
-video playback. Report what remains unverified, including missing navigation
-status. Preserve the user's workspace, tab, and keyboard focus during inspection;
-do not select or focus task resources to strengthen verification claims.
-Refresh regenerated artifacts and report unavailable media honestly.
-
-The user's `worktree-done` request submits acceptance of this exact version.
-Never submit it automatically because a test passed or your implementation ended.
-After acceptance stop writing. If the user requests further changes, reopen the
-record before editing; merging or landed tasks must be reconciled first. Changed
-heads need new checks/review and renewed user acceptance. On any resume, check
-whether the task already landed or was removed before continuing. If the managed
-session ID changed, verify live workspace/panel identity and update the record
-using `rebind --task <id> --previous-session <old> --session <new>
---workspace <same-workspace> --panel <new-panel> --socket <same-socket>`.
-Reopen an accepted task before rebinding for further work. Never redirect a
-record to a different workspace or app instance based only on its title.
-
-## Workspace status
-
-Maintain only `task-status` and `github-pr` annotations. Use `Planning`, `Working`,
-`Validating`, `Needs attention`, and `Ready for your testing` as appropriate.
-Reuse existing keys/colors and verified PR URLs. Do not create or maintain a
-`git-branch` annotation; the workspace name already identifies the task.
-Annotations are displays, not readiness evidence. Report failed annotation writes
-without broadening scope. A Scratchpad is optional and does not replace records.
-
-## Coordinator replies
-
-The coordinator may send task-scoped findings to the exact managed session.
-Keep fixes within the user's approved behavior. Before replying, verify the
-recorded coordinator instance/panel/session and use `terminal.send-text` with
-`expectedSessionID` and `submit=true`. Include the task, exact commit, checks and
-blockers. Do not grant new authority in a status message. If delivery fails,
-preserve the task record and report it rather than redirecting the reply.
+At completion, state validation results, remaining work, and its owner directly
+to the user here.
