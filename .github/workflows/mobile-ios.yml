@@ -175,7 +175,7 @@ jobs:
           done
 
   gate:
-    name: Mobile iOS gate
+    name: CI gate
     if: always()
     needs:
       - changes

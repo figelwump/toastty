@@ -11,7 +11,7 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 - Web-panel sources and generated bundles select both apps, which embed the bundles, plus web-panel tests on Linux. `npm test` also checks generated bundle synchronization.
 - Documentation-only PR changes skip app jobs.
 
-The required check remains named **Mobile iOS gate** for compatibility with existing repository rules. It requires selection to succeed, all selected jobs to pass, and rejects failed or cancelled jobs. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` runs local selection and gate regression tests without launching either app; it installs test dependencies under `Tests/CI/node_modules`.
+Branch protection on `main` requires the **CI gate** check, so renaming the gate job also means updating that rule. The gate requires selection to succeed, all selected jobs to pass, and rejects failed or cancelled jobs. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` runs local selection and gate regression tests without launching either app; it installs test dependencies under `Tests/CI/node_modules`.
 
 GitHub jobs use disposable runners and no production host. The macOS commands build/test the `ToasttyApp` scheme with `TUIST_DISABLE_GHOSTTY=1`; Release uses `CODE_SIGNING_ALLOWED=NO` and does not archive or publish. This arm64 Release compile check is not release validation: it does not cover Intel compilation, signing, the embedded Ghostty runtime, or GUI smoke flows. Ghostty-backed pre-release validation still uses the existing remote workflows below with the required local artifact.
 

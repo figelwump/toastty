@@ -55,7 +55,8 @@ test('every PR gets a gate; pushes target main and manual runs remain available'
   assert.equal(workflow.on.pull_request, null);
   assert.deepEqual(workflow.on.push, { branches: ['main'] });
   assert.ok(Object.hasOwn(workflow.on, 'workflow_dispatch'));
-  assert.equal(workflow.jobs.gate.name, 'Mobile iOS gate');
+  // Branch protection on main requires this exact check name.
+  assert.equal(workflow.jobs.gate.name, 'CI gate');
   assert.equal(workflow.jobs.gate.if, 'always()');
   assert.deepEqual([...workflow.jobs.gate.needs].sort(), ['changes', 'ios', 'macos', 'web']);
 });
