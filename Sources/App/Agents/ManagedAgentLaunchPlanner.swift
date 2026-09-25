@@ -1144,6 +1144,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 detail: event.detail,
                 threadID: event.completionThreadID,
                 turnID: event.completionTurnID,
+                turnError: event.turnError,
                 at: nowProvider()
             )
             return
@@ -1415,6 +1416,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     childThreadID: childThreadID
                 )
             }
+        case .taskCompleted:
+            // Hooks report successful turns through `Stop`, but Codex fires no
+            // hook when a turn fails, so the rollout is the only failure signal.
+            guard let turnError = event.turnError else { return }
+            sessionRuntimeStore?.handleCodexRolloutTurnFailure(
+                sessionID: sessionID,
+                turnID: event.completionTurnID,
+                detail: turnError,
+                at: nowProvider()
+            )
         default:
             return
         }

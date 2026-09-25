@@ -1421,6 +1421,7 @@ final class SessionRuntimeStore: ObservableObject {
         detail: String,
         threadID: String?,
         turnID: String?,
+        turnError: String? = nil,
         at now: Date
     ) -> Bool {
         guard let record = sessionRegistry.sessionsByID[sessionID],
@@ -1539,9 +1540,69 @@ final class SessionRuntimeStore: ObservableObject {
             decision: "accepted",
             reason: acceptedReason
         )
+        if let turnError {
+            // Keep an error the visible-text parser already reported for this turn.
+            if record.status?.kind != .error {
+                updateStatus(
+                    sessionID: sessionID,
+                    status: SessionStatus(kind: .error, summary: "Error", detail: turnError),
+                    at: now
+                )
+            }
+            return true
+        }
         updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .ready, summary: "Ready", detail: detail),
+            at: now
+        )
+        return true
+    }
+
+    /// Codex fires neither `Stop` nor `notify` when a turn fails, for example
+    /// when the model request is rejected, so a hook-tracked session would stay
+    /// working. The rollout's `task_complete` records the error instead. It
+    /// applies only while its turn is still the root turn, so a failure replayed
+    /// from an older turn or a previous launch cannot override newer state.
+    @discardableResult
+    func handleCodexRolloutTurnFailure(
+        sessionID: String,
+        turnID: String?,
+        detail: String,
+        at now: Date
+    ) -> Bool {
+        let ignoredReason: String?
+        let record = sessionRegistry.activeSession(sessionID: sessionID)
+        let rootTurnID = codexLegacyPolicySnapshot(sessionID: sessionID).rootTurnID
+        if record?.agent != .codex || record?.usesSessionStatusNotifications != true {
+            ignoredReason = "session_not_tracking_codex_status"
+        } else if codexStatusTrackingSourceBySessionID[sessionID] != .hooks {
+            // The fallback session log reports its own completions, failures included.
+            ignoredReason = "status_source_not_hooks"
+        } else if turnID == nil || turnID != rootTurnID {
+            ignoredReason = "turn_mismatch"
+        } else if record?.status?.kind == .error {
+            // The visible-text parser may already show the same failure with
+            // its full banner; replacing it would flip the detail back and forth.
+            ignoredReason = "already_error"
+        } else {
+            ignoredReason = nil
+        }
+        let metadata = [
+            "session_id": sessionID,
+            "turn_id": turnID ?? "none",
+            "root_turn_id": rootTurnID ?? "none",
+            "decision": ignoredReason == nil ? "accepted" : "ignored",
+            "reason": ignoredReason ?? "turn_match",
+        ]
+        guard ignoredReason == nil else {
+            ToasttyLog.debug("Codex rollout turn failure decision", category: .terminal, metadata: metadata)
+            return false
+        }
+        ToasttyLog.info("Codex rollout turn failure decision", category: .terminal, metadata: metadata)
+        updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .error, summary: "Error", detail: detail),
             at: now
         )
         return true
