@@ -6,9 +6,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# A newer PR push supersedes the older run. Pushes to main and manual runs group by
+# commit so each one runs to completion and every merged commit is tested.
 concurrency:
-  group: mobile-ios-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: mobile-ios-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
@@ -37,7 +39,7 @@ jobs:
 
       - name: Select affected graphs
         id: filter
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
         with:
           filters: .github/ci-paths.yml
@@ -45,7 +47,7 @@ jobs:
   ios:
     name: iOS tests (${{ matrix.configuration }})
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.ios == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ios == 'true'
     runs-on: macos-26
     timeout-minutes: 45
     strategy:
@@ -93,7 +95,7 @@ jobs:
   macos:
     name: macOS contract tests
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.macos == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.macos == 'true'
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -152,7 +154,7 @@ jobs:
   web:
     name: Web panel tests
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -190,11 +192,11 @@ jobs:
           IOS_SELECTED: ${{ needs.changes.outputs.ios }}
           MACOS_SELECTED: ${{ needs.changes.outputs.macos }}
           WEB_SELECTED: ${{ needs.changes.outputs.web }}
-          MANUAL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+          FULL_RUN: ${{ github.event_name != 'pull_request' }}
         run: |
           test "$CHANGES_RESULT" = success
           require_result() {
-            if [[ "$MANUAL_RUN" == true || "$1" == true ]]; then
+            if [[ "$FULL_RUN" == true || "$1" == true ]]; then
               test "$2" = success
             else
               case "$2" in success|skipped) ;; *) return 1 ;; esac
