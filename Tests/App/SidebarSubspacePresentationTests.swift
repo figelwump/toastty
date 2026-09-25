@@ -14,7 +14,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             id: UUID(),
             title: name,
             status: status,
-            pullRequest: nil,
+            annotations: [:],
             summary: nil,
             spawningSessionID: spawner,
             spawnerName: spawner.map { "Agent \($0)" },
@@ -83,7 +83,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
 
         var promoted = first
         promoted = SidebarSubspacePresentation.Row(
-            id: first.id, title: first.title, status: .ready, pullRequest: nil, summary: nil,
+            id: first.id, title: first.title, status: .ready, annotations: [:], summary: nil,
             spawningSessionID: first.spawningSessionID, spawnerName: first.spawnerName,
             sessions: [], creationIndex: first.creationIndex
         )
@@ -108,7 +108,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         let shownBeforeSelection = [a.id, b.id, w.id, i.id]
         func read(_ row: Presentation.Row) -> Presentation.Row {
             Presentation.Row(
-                id: row.id, title: row.title, status: .idle, pullRequest: nil, summary: nil,
+                id: row.id, title: row.title, status: .idle, annotations: [:], summary: nil,
                 spawningSessionID: row.spawningSessionID, spawnerName: row.spawnerName,
                 sessions: [], creationIndex: row.creationIndex
             )
@@ -187,30 +187,73 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(SidebarSubspacePresentation.headerCountLabel(shownCount: 4, totalCount: 4), "4")
     }
 
-    func testHoverTipModelListsEverySessionAndTheSpawner() {
+    func testHoverTipModelListsSessionsAnnotationsAndWhereTheSubspaceLives() {
         let row = SidebarSubspacePresentation.Row(
             id: UUID(), title: "qa-mobile-navigation", status: .needsApproval,
-            pullRequest: WorkspaceAnnotation(text: "PR #132"), summary: "pnpm db:migrate",
+            annotations: [
+                "task-status": WorkspaceAnnotation(text: "Ready for your testing"),
+                "github-pr": WorkspaceAnnotation(text: "PR #132", url: "https://github.com/example/repo/pull/132"),
+            ],
+            summary: "Rebasing onto main",
             spawningSessionID: "a", spawnerName: "Test EmptyOS beta experience",
             sessions: [
-                .init(title: "Fix nav drawer focus", statusKind: .needsApproval, summary: "pnpm db:migrate"),
-                .init(title: "Review nav tests", statusKind: .idle, summary: nil),
+                .init(title: "Rebase fixture", statusKind: .working, summary: "Rebasing onto main"),
+                .init(title: "Screenshot pass", statusKind: .idle, summary: nil),
+                .init(title: "Collect logs", statusKind: .ready, showsUnreadSessionAccent: true, summary: "Saved 3 logs"),
+                .init(title: "Fix nav drawer focus", agentLabel: "claude", statusKind: .needsApproval, summary: "pnpm db:migrate"),
             ],
-            creationIndex: 0
+            creationIndex: 0,
+            path: "~/worktrees/qa-mobile-navigation"
         )
-        let model = SidebarSubspacePresentation.hoverTipModel(row)
+        let model = SidebarSubspacePresentation.hoverTipModel(row) { key in
+            key == "github-pr" ? .named(.green) : .named(.blue)
+        }
         XCTAssertEqual(model.name, "qa-mobile-navigation")
-        XCTAssertEqual(model.typeLabel, "subspace")
         XCTAssertEqual(model.statusDotColorKind, .needsApproval)
-        XCTAssertEqual(model.bodyText, "Fix nav drawer focus — needs approval: pnpm db:migrate\nReview nav tests — idle")
-        XCTAssertEqual(model.metaItems, ["needs approval", "PR #132", "spawned by Test EmptyOS beta experience"])
+
+        // Attention first, then unread, then working; the idle session is past
+        // the three-row cap.
+        XCTAssertEqual(model.sessions.map(\.title), ["Fix nav drawer focus", "Collect logs", "Rebase fixture"])
+        XCTAssertEqual(model.hiddenSessionCount, 1)
+        XCTAssertEqual(model.sessions.map(\.railState), [.approvalDot, .unreadDot, .spinner])
+        XCTAssertEqual(model.sessions.map(\.badgeKind), [.needsApproval, nil, nil])
+        XCTAssertEqual(model.sessions.map(\.isUnread), [false, true, false])
+
+        XCTAssertEqual(model.annotations, [
+            .init(key: "github-pr", text: "PR #132", colorToken: .named(.green)),
+            .init(key: "task-status", text: "Ready for your testing", colorToken: .named(.blue)),
+        ])
+        XCTAssertEqual(model.path, "~/worktrees/qa-mobile-navigation")
+        XCTAssertEqual(model.spawnerName, "Test EmptyOS beta experience")
 
         let empty = SidebarSubspacePresentation.hoverTipModel(SidebarSubspacePresentation.Row(
-            id: UUID(), title: "idle-space", status: .idle, pullRequest: nil, summary: nil,
+            id: UUID(), title: "idle-space", status: .idle, annotations: [:], summary: nil,
             spawningSessionID: nil, spawnerName: nil, sessions: [], creationIndex: 1
-        ))
-        XCTAssertEqual(empty.bodyText, "No agent")
-        XCTAssertEqual(empty.metaItems, ["idle"])
+        )) { _ in .named(.neutral) }
+        XCTAssertTrue(empty.sessions.isEmpty)
+        XCTAssertEqual(empty.hiddenSessionCount, 0)
+        XCTAssertTrue(empty.annotations.isEmpty)
+        XCTAssertNil(empty.path)
+    }
+
+    func testPathPrefersTheFirstAgentsDirectoryThenTheFirstTerminal() {
+        let panelID = UUID()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "qa-www-docs",
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [panelID: .terminal(TerminalPanelState(title: "zsh", shell: "zsh", cwd: "/repo/www-docs"))],
+            focusedPanelID: panelID
+        )
+        XCTAssertEqual(
+            SidebarSubspacePresentation.path(sessionCWDs: [nil, "/repo/worktree", "/repo/other"], workspace: workspace),
+            "/repo/worktree"
+        )
+        XCTAssertEqual(SidebarSubspacePresentation.path(sessionCWDs: [], workspace: workspace), "/repo/www-docs")
+        XCTAssertEqual(
+            SidebarSubspacePresentation.path(sessionCWDs: [NSHomeDirectory() + "/code/app"], workspace: workspace),
+            "~/code/app"
+        )
     }
 
     func testWorkspaceMoveIndicesSkipSubspacesInTheWindowOrder() {

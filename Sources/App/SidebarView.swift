@@ -371,6 +371,58 @@ private extension SessionChildRow {
     }
 }
 
+/// The status mark in a session row's left rail. The subspace hover card
+/// draws its session rows with it too.
+struct SessionRailStatusIcon: View {
+    private static let dotSize: CGFloat = 7
+
+    let state: SidebarSessionPresentation.SessionRailState
+
+    var body: some View {
+        switch state {
+        case .empty:
+            Color.clear
+        case .spinner:
+            SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
+        case .approvalDot:
+            Circle()
+                .fill(ToastyTheme.sessionNeedsApprovalText)
+                .frame(width: Self.dotSize, height: Self.dotSize)
+                .overlay {
+                    Circle()
+                        .stroke(ToastyTheme.sidebarSessionRailApprovalHalo, lineWidth: 3)
+                }
+        case .unreadDot:
+            Circle()
+                .fill(ToastyTheme.sessionReadyText)
+                .frame(width: Self.dotSize, height: Self.dotSize)
+        case .errorDot:
+            Circle()
+                .fill(ToastyTheme.sessionErrorText)
+                .frame(width: Self.dotSize, height: Self.dotSize)
+        }
+    }
+}
+
+/// The approval/error/ready badge at the trailing edge of a session row.
+struct SessionStatusBadge: View {
+    let kind: SessionStatusKind
+
+    var body: some View {
+        Text(SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: kind))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                ToastyTheme.sessionStatusBackgroundColor(for: kind),
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+    }
+}
+
 /// What each Subspaces group last put on screen, and the slot its selected
 /// row holds. A plain reference rather than SwiftUI state: the group records
 /// it while computing its order, where state writes are not allowed, and the
@@ -456,7 +508,6 @@ struct SidebarView: View {
     /// row text stays aligned down the list.
     private static let sessionStatusRailWidth: CGFloat = 12
     private static let sessionStatusRailGap: CGFloat = 6
-    private static let sessionStatusRailDotSize: CGFloat = 7
     /// The rail's second slot, under the status one, for a standing mark on the
     /// session: the later flag or the watch bell. Short enough that a two-line
     /// row is still taller than the rail, so the rail never sets row height.
@@ -1774,31 +1825,8 @@ struct SidebarView: View {
     private func sessionStatusRailStatusSlot(
         _ state: SidebarSessionPresentation.SessionRailState
     ) -> some View {
-        Group {
-            switch state {
-            case .empty:
-                Color.clear
-            case .spinner:
-                SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
-            case .approvalDot:
-                Circle()
-                    .fill(ToastyTheme.sessionNeedsApprovalText)
-                    .frame(width: Self.sessionStatusRailDotSize, height: Self.sessionStatusRailDotSize)
-                    .overlay {
-                        Circle()
-                            .stroke(ToastyTheme.sidebarSessionRailApprovalHalo, lineWidth: 3)
-                    }
-            case .unreadDot:
-                Circle()
-                    .fill(ToastyTheme.sessionReadyText)
-                    .frame(width: Self.sessionStatusRailDotSize, height: Self.sessionStatusRailDotSize)
-            case .errorDot:
-                Circle()
-                    .fill(ToastyTheme.sessionErrorText)
-                    .frame(width: Self.sessionStatusRailDotSize, height: Self.sessionStatusRailDotSize)
-            }
-        }
-        .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
+        SessionRailStatusIcon(state: state)
+            .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
     }
 
     private func sessionStatusRailMarkerSlot(_ marker: SessionRailMarker) -> some View {
@@ -2602,24 +2630,12 @@ struct SidebarView: View {
     }
 
     private func sessionStatusChip(kind: SessionStatusKind) -> some View {
-        let badgeLabel = SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind)
-
-        return Text(badgeLabel)
-            .font(ToastyTheme.fontWorkspaceSessionChip)
-            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: kind))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                ToastyTheme.sessionStatusBackgroundColor(for: kind),
-                in: RoundedRectangle(cornerRadius: 4)
-            )
+        SessionStatusBadge(kind: kind)
             .background {
                 // The row is one accessibility element and carries the spoken
                 // wording, so the badge's shortened text is otherwise
                 // invisible to AppKit inspectors and host-based tests.
-                SidebarSemanticTextBridge(text: badgeLabel)
+                SidebarSemanticTextBridge(text: SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
                     .frame(width: 0, height: 0)
                     .allowsHitTesting(false)
             }
@@ -3047,28 +3063,30 @@ struct SidebarView: View {
             let sessions = statuses.map { status in
                 SidebarSubspacePresentation.SessionLine(
                     title: status.displayTitle,
+                    // An unnamed session's title is already the agent's name.
+                    agentLabel: status.sessionName == nil ? nil : SidebarSessionPresentation.sessionAgentLabel(for: status.agent),
                     statusKind: status.status.kind,
-                    summary: normalizedSessionDetail(status.status.detail) ?? normalizedSessionDetail(status.status.summary)
+                    showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace),
+                    summary: normalizedSessionDetail(status.status.detail) ?? normalizedSessionDetail(status.status.summary),
+                    turnStartedAt: status.turnStartedAt
                 )
             }
             return SidebarSubspacePresentation.Row(
                 id: subspaceID,
                 title: workspace.title,
                 status: SidebarSubspacePresentation.rowStatus(
-                    sessionStatuses: statuses.map { status in
-                        (
-                            kind: status.status.kind,
-                            showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace)
-                        )
+                    sessionStatuses: sessions.map { session in
+                        (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
                     }
                 ),
-                pullRequest: workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest],
+                annotations: workspace.annotations,
                 summary: sessions.first?.summary,
                 spawningSessionID: workspace.spawningSessionID,
                 spawnerName: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.displayTitle },
                 spawnerPanelID: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.panelID },
                 sessions: sessions,
-                creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max
+                creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max,
+                path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace)
             )
         }
     }
@@ -3333,7 +3351,10 @@ struct SidebarView: View {
             Color.clear
         }
         let borderColor = isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear
-        let hoverTipModel = SidebarSubspacePresentation.hoverTipModel(row)
+        let hoverTipModel = SidebarSubspacePresentation.hoverTipModel(
+            row,
+            annotationColorToken: annotationStyleStore.effectiveColorToken(forKey:)
+        )
         let accessibilityLabel = SidebarSubspacePresentation.rowAccessibilityLabel(
             row,
             showsSpawnerTag: showsSpawnerTag
@@ -3432,7 +3453,7 @@ struct SidebarView: View {
             refreshID: hoverTipModel,
             placement: .trailing(gap: Self.sessionHoverTipTrailingGap)
         ) {
-            SessionChildHoverTipCard(model: hoverTipModel)
+            SubspaceHoverTipCard(model: hoverTipModel)
         }
         .background {
             SidebarSemanticTextBridge(text: accessibilityLabel)

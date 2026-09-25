@@ -54,32 +54,7 @@ struct SessionChildHoverTipCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(model.statusDotColorKind.color.opacity(0.85))
-                    .frame(width: 6, height: 6)
-                    .accessibilityHidden(true)
-
-                Text(model.name)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.hoverTipText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Spacer(minLength: 8)
-
-                Text(model.typeLabel)
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
-                    .lineLimit(1)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1.5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(ToastyTheme.hoverTipTagBackground)
-                    )
-            }
-            .padding(.bottom, 4)
+            HoverTipHeader(dotColor: model.statusDotColorKind.color, name: model.name, tag: model.typeLabel)
 
             if let bodyText = model.bodyText {
                 Text(bodyText)
@@ -118,18 +93,7 @@ struct SessionChildHoverTipCard: View {
                 .padding(.top, 5)
             }
         }
-        .padding(.top, 8)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 7)
-        .frame(width: 320, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(ToastyTheme.hoverTipBackground)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(ToastyTheme.hoverTipBorder, lineWidth: 1)
-        }
+        .hoverTipCardChrome()
     }
 }
 
@@ -153,36 +117,9 @@ struct SessionRowHoverTipModel: Hashable {
 struct SessionRowHoverTipCard: View {
     let model: SessionRowHoverTipModel
 
-    private static let labelColumnWidth: CGFloat = 56
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(model.statusDotColorKind.color.opacity(0.85))
-                    .frame(width: 6, height: 6)
-                    .accessibilityHidden(true)
-
-                Text(model.name)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.hoverTipText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Spacer(minLength: 8)
-
-                Text(model.agentLabel)
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
-                    .lineLimit(1)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1.5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(ToastyTheme.hoverTipTagBackground)
-                    )
-            }
-            .padding(.bottom, 4)
+            HoverTipHeader(dotColor: model.statusDotColorKind.color, name: model.name, tag: model.agentLabel)
 
             if let bodyText = model.bodyText {
                 // The row truncates the summary to one line; the card is where
@@ -205,7 +142,7 @@ struct SessionRowHoverTipCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     if let turnStartedAt = model.turnStartedAt {
                         TimelineView(.periodic(from: turnStartedAt, by: 1)) { timeline in
-                            metaRow(
+                            HoverTipMetaRow(
                                 label: "elapsed",
                                 value: SidebarSessionPresentation.elapsedChildActivityText(
                                     startedAt: turnStartedAt,
@@ -217,27 +154,217 @@ struct SessionRowHoverTipCard: View {
                     }
 
                     ForEach(Array(model.metaItems.enumerated()), id: \.offset) { _, item in
-                        metaRow(label: item.label, value: item.value, wraps: item.wraps)
+                        HoverTipMetaRow(label: item.label, value: item.value, wraps: item.wraps)
                     }
                 }
                 .padding(.top, 6)
             }
         }
-        .padding(.top, 8)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 7)
-        .frame(width: 320, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(ToastyTheme.hoverTipBackground)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(ToastyTheme.hoverTipBorder, lineWidth: 1)
-        }
+        .hoverTipCardChrome()
     }
 
-    private func metaRow(label: String, value: String, wraps: Bool) -> some View {
+}
+
+/// A subspace row's hover card: its agent sessions as compact rows shaped
+/// like the sidebar's session rows, then every annotation and where the
+/// subspace lives.
+struct SubspaceHoverTipModel: Hashable {
+    struct Session: Hashable {
+        let title: String
+        let agentLabel: String?
+        let statusKind: SessionStatusKind
+        let isUnread: Bool
+        let railState: SidebarSessionPresentation.SessionRailState
+        /// Approval and error only; the rail carries the other states.
+        let badgeKind: SessionStatusKind?
+        let turnStartedAt: Date?
+        let summary: String?
+    }
+
+    struct Annotation: Hashable {
+        let key: String
+        let text: String
+        let colorToken: AnnotationColorToken
+    }
+
+    var name: String
+    var statusDotColorKind: SessionChildHoverTipModel.StatusDotColorKind
+    var sessions: [Session]
+    var hiddenSessionCount: Int
+    var annotations: [Annotation]
+    var path: String?
+    var spawnerName: String?
+}
+
+struct SubspaceHoverTipCard: View {
+    let model: SubspaceHoverTipModel
+
+    private static let railWidth: CGFloat = 12
+    private static let railGap: CGFloat = 6
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HoverTipHeader(dotColor: model.statusDotColorKind.color, name: model.name, tag: "subspace")
+
+            if model.sessions.isEmpty {
+                Text("No agent sessions")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                    .padding(.bottom, 6)
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(model.sessions.enumerated()), id: \.offset) { _, session in
+                        sessionRow(session)
+                    }
+                    if model.hiddenSessionCount > 0 {
+                        Text("+\(model.hiddenSessionCount) more")
+                            .font(ToastyTheme.fontWorkspaceSessionChildContext)
+                            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                            .padding(.leading, Self.railWidth + Self.railGap)
+                    }
+                }
+                .padding(.top, 2)
+                .padding(.bottom, 7)
+            }
+
+            if model.annotations.isEmpty == false || model.path != nil || model.spawnerName != nil {
+                Rectangle()
+                    .fill(ToastyTheme.hoverTipDivider)
+                    .frame(height: 1)
+
+                if model.annotations.isEmpty == false {
+                    // Text only: the card cannot be clicked, so no chip is a link.
+                    SidebarWrappingFlowLayout(horizontalSpacing: 4, verticalSpacing: 4) {
+                        ForEach(model.annotations, id: \.key) { annotation in
+                            SidebarView.workspaceAnnotationChipLabel(
+                                annotation: WorkspaceAnnotation(text: annotation.text),
+                                chipColors: ToastyTheme.annotationChipColors(for: annotation.colorToken),
+                                isLink: false
+                            )
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+
+                if model.path != nil || model.spawnerName != nil {
+                    VStack(alignment: .leading, spacing: 3) {
+                        if let path = model.path {
+                            // Cut from the front so the worktree name stays.
+                            HoverTipMetaRow(label: "path", value: path, truncationMode: .head)
+                        }
+                        if let spawnerName = model.spawnerName {
+                            HoverTipMetaRow(label: "spawner", value: spawnerName)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            }
+        }
+        .hoverTipCardChrome()
+    }
+
+    private func sessionRow(_ session: SubspaceHoverTipModel.Session) -> some View {
+        HStack(alignment: .top, spacing: Self.railGap) {
+            SessionRailStatusIcon(state: session.railState)
+                .frame(width: Self.railWidth, height: 15)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    SidebarView.styledSessionNameText(
+                        session.title,
+                        statusKind: session.statusKind,
+                        showsUnreadSessionAccent: session.isUnread
+                    )
+                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                    Spacer(minLength: 6)
+
+                    if let agentLabel = session.agentLabel {
+                        Text(agentLabel)
+                            .font(ToastyTheme.fontWorkspaceSessionAgentLabel)
+                            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    if let badgeKind = session.badgeKind {
+                        SessionStatusBadge(kind: badgeKind)
+                    }
+                    if let turnStartedAt = session.turnStartedAt {
+                        TimelineView(.periodic(from: turnStartedAt, by: 1)) { timeline in
+                            Text(SidebarSessionPresentation.elapsedChildActivityText(
+                                startedAt: turnStartedAt,
+                                now: timeline.date
+                            ))
+                            .font(ToastyTheme.fontWorkspaceSessionElapsed)
+                            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize()
+                        }
+                    }
+                }
+                .frame(minHeight: 15)
+
+                if let summary = session.summary {
+                    Text(SidebarSessionPresentation.sessionSummaryAttributedText(summary))
+                        .font(ToastyTheme.fontWorkspaceSessionChildContext)
+                        .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+        }
+    }
+}
+
+/// Status dot, name, and type tag across the top of a hover card.
+private struct HoverTipHeader: View {
+    let dotColor: Color
+    let name: String
+    let tag: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(dotColor.opacity(0.85))
+                .frame(width: 6, height: 6)
+                .accessibilityHidden(true)
+
+            Text(name)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(ToastyTheme.hoverTipText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 8)
+
+            Text(tag)
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                .lineLimit(1)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1.5)
+                .background(
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(ToastyTheme.hoverTipTagBackground)
+                )
+        }
+        .padding(.bottom, 4)
+    }
+}
+
+/// A labeled line under a hover card's divider.
+private struct HoverTipMetaRow: View {
+    private static let labelColumnWidth: CGFloat = 56
+
+    let label: String
+    let value: String
+    var wraps = false
+    var truncationMode: Text.TruncationMode = .middle
+
+    var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
                 .foregroundStyle(ToastyTheme.sidebarChildMetaText)
@@ -246,11 +373,28 @@ struct SessionRowHoverTipCard: View {
             Text(value)
                 .foregroundStyle(ToastyTheme.hoverTipMutedText)
                 .lineLimit(wraps ? 3 : 1)
-                .truncationMode(wraps ? .tail : .middle)
+                .truncationMode(wraps ? .tail : truncationMode)
                 .fixedSize(horizontal: false, vertical: wraps)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+    }
+}
+
+private extension View {
+    func hoverTipCardChrome() -> some View {
+        padding(.top, 8)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 7)
+            .frame(width: 320, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(ToastyTheme.hoverTipBackground)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(ToastyTheme.hoverTipBorder, lineWidth: 1)
+            }
     }
 }
 

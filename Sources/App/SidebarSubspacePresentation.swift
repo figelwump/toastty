@@ -39,16 +39,18 @@ enum SidebarSubspacePresentation {
 
     struct SessionLine: Equatable, Sendable {
         let title: String
+        var agentLabel: String? = nil
         let statusKind: SessionStatusKind
+        var showsUnreadSessionAccent = false
         let summary: String?
+        var turnStartedAt: Date? = nil
     }
 
     struct Row: Equatable, Identifiable, Sendable {
         let id: UUID
         let title: String
         let status: RowStatus
-        /// The `github-pr` annotation, the only chip a subspace row shows.
-        let pullRequest: WorkspaceAnnotation?
+        let annotations: [String: WorkspaceAnnotation]
         /// The first session's summary.
         let summary: String?
         let spawningSessionID: String?
@@ -60,6 +62,13 @@ enum SidebarSubspacePresentation {
         /// Position in the window's workspace order, the tie-breaker so rows
         /// with the same status never swap.
         let creationIndex: Int
+        /// Where the subspace lives; see `path(sessionCWDs:workspace:)`.
+        var path: String? = nil
+
+        /// The `github-pr` annotation, the only chip a subspace row shows.
+        var pullRequest: WorkspaceAnnotation? {
+            annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
+        }
     }
 
     /// The slot the selected row holds while it stays selected.
@@ -89,7 +98,7 @@ enum SidebarSubspacePresentation {
         let isFilterActive: Bool
     }
 
-    static let annotationKeyPullRequest = "github-pr"
+    nonisolated static let annotationKeyPullRequest = "github-pr"
     static let groupTitle = "Subspaces"
 
     /// Combines a subspace's live sessions into one status.
@@ -284,42 +293,89 @@ enum SidebarSubspacePresentation {
         return label
     }
 
-    /// The hover card for a subspace row: every session in the workspace,
-    /// since the row only has room for the first one's summary.
-    static func hoverTipModel(_ row: Row) -> SessionChildHoverTipModel {
-        let bodyLines: [String] = row.sessions.isEmpty
-            ? [row.summary.map { "No agent · \($0)" } ?? "No agent"]
-            : row.sessions.map { session in
-                var line = "\(session.title) — \(sessionStatusLabel(session.statusKind))"
-                if let summary = session.summary {
-                    line += ": \(summary)"
-                }
-                return line
+    static let hoverTipSessionLimit = 3
+
+    /// The hover card for a subspace row: its sessions as compact rows, then
+    /// every annotation and where the subspace lives, since the row itself
+    /// only has room for the first session's summary and the PR chip.
+    static func hoverTipModel(
+        _ row: Row,
+        annotationColorToken: (String) -> AnnotationColorToken
+    ) -> SubspaceHoverTipModel {
+        let sessions = row.sessions.enumerated()
+            .sorted { lhs, rhs in
+                let lhsRank = hoverSessionRank(lhs.element)
+                let rhsRank = hoverSessionRank(rhs.element)
+                return lhsRank != rhsRank ? lhsRank < rhsRank : lhs.offset < rhs.offset
             }
-        var metaItems = [rowStatusLabel(row.status)]
-        if let pullRequest = row.pullRequest {
-            metaItems.append(pullRequest.text)
-        }
-        if let spawnerName = row.spawnerName {
-            metaItems.append("spawned by \(spawnerName)")
-        }
-        return SessionChildHoverTipModel(
+            .map { _, session in
+                SubspaceHoverTipModel.Session(
+                    title: session.title,
+                    agentLabel: session.agentLabel,
+                    statusKind: session.statusKind,
+                    isUnread: session.statusKind == .ready && session.showsUnreadSessionAccent,
+                    railState: SidebarSessionPresentation.sessionRailState(
+                        for: session.statusKind,
+                        showsUnreadSessionAccent: session.showsUnreadSessionAccent
+                    ),
+                    badgeKind: session.statusKind == .needsApproval || session.statusKind == .error
+                        ? session.statusKind
+                        : nil,
+                    turnStartedAt: session.turnStartedAt,
+                    summary: session.summary
+                )
+            }
+        return SubspaceHoverTipModel(
             name: row.title,
-            typeLabel: "subspace",
             statusDotColorKind: statusDotColorKind(row.status),
-            bodyText: bodyLines.joined(separator: "\n"),
-            executionProfileText: nil,
-            metaItems: metaItems
+            sessions: Array(sessions.prefix(hoverTipSessionLimit)),
+            hiddenSessionCount: max(0, sessions.count - hoverTipSessionLimit),
+            annotations: row.annotations.sorted { $0.key < $1.key }.map { key, annotation in
+                SubspaceHoverTipModel.Annotation(
+                    key: key,
+                    text: annotation.text,
+                    colorToken: annotationColorToken(key)
+                )
+            },
+            path: row.path,
+            spawnerName: row.spawnerName
         )
     }
 
-    private static func rowStatusLabel(_ status: RowStatus) -> String {
-        switch status {
-        case .ready: return "ready"
-        case .needsApproval: return "needs approval"
-        case .error: return "error"
-        case .working: return "working"
-        case .idle: return "idle"
+    /// Where the subspace lives. Toastty does not record a directory for the
+    /// workspace itself, so this is the directory of the first agent that
+    /// reports one (the worktree, for agent-spawned subspaces). Another
+    /// agent's launch directory is a closer match than a terminal's live cwd,
+    /// so the first terminal's directory is only the fallback when no agent
+    /// reports a directory.
+    static func path(sessionCWDs: [String?], workspace: WorkspaceState) -> String? {
+        let sessionPath = sessionCWDs.lazy
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { $0.isEmpty == false }
+        return (sessionPath ?? firstTerminalDirectory(in: workspace))
+            .map(SidebarSessionPresentation.abbreviatedHomePathLabel)
+    }
+
+    private static func firstTerminalDirectory(in workspace: WorkspaceState) -> String? {
+        for tab in workspace.orderedTabs {
+            for slot in tab.layoutTree.allSlotInfos {
+                if case .terminal(let terminal) = tab.panels[slot.panelID],
+                   let directory = terminal.agentLaunchWorkingDirectory {
+                    return directory
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Attention first, then an unread finished turn, then work in progress.
+    private static func hoverSessionRank(_ session: SessionLine) -> Int {
+        switch session.statusKind {
+        case .needsApproval: return 0
+        case .error: return 1
+        case .ready: return session.showsUnreadSessionAccent ? 2 : 4
+        case .working: return 3
+        case .idle: return 4
         }
     }
 
@@ -330,15 +386,6 @@ enum SidebarSubspacePresentation {
         case .error: return .error
         case .working: return .working
         case .idle: return .idle
-        }
-    }
-
-    private static func sessionStatusLabel(_ kind: SessionStatusKind) -> String {
-        switch kind {
-        case .working: return "working"
-        case .idle: return "idle"
-        case .needsApproval, .ready, .error:
-            return SidebarSessionPresentation.sessionStatusChipLabel(for: kind)
         }
     }
 }

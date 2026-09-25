@@ -250,7 +250,7 @@ enum SidebarSessionPresentation {
 
     /// The left gutter every session row reserves, so states line up down the
     /// list instead of shifting with the row's text.
-    enum SessionRailState: Equatable {
+    enum SessionRailState: Hashable {
         case empty
         case spinner
         case approvalDot
