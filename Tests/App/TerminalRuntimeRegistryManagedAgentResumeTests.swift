@@ -541,7 +541,10 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertNil(terminalState.resumeRecord)
     }
 
-    func testSurfaceLaunchConfigurationClearsMissingWorkingDirectoryAndFallsBackToProfileStartup() throws {
+    /// A missing directory skips the resume but keeps the record, so a later
+    /// restore can resume once the directory is back. The pane prints why; the
+    /// notice's own finish must not clear the record, a later command's does.
+    func testSurfaceLaunchConfigurationKeepsRecordAndPrintsNoticeWhenWorkingDirectoryIsMissing() throws {
         let fixture = try makeRuntimeResumeFixture(createCWD: false)
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let panelID = UUID()
@@ -560,7 +563,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
                 workspaceID: workspaceID,
                 panelID: panelID,
                 resumeRecord: record,
-                profileBinding: TerminalProfileBinding(profileID: "zmx")
+                profileBinding: nil
             ),
             persistTerminalFontPreference: false
         )
@@ -571,13 +574,50 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
 
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
 
-        XCTAssertEqual(launchConfiguration.initialInput, "zmx attach toastty.$TOASTTY_PANEL_ID")
-        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_TERMINAL_PROFILE_ID"], "zmx")
-        guard case .terminal(let terminalState)? = store.state.workspacesByID[workspaceID]?.panels[panelID] else {
-            XCTFail("expected terminal panel")
-            return
+        XCTAssertEqual(launchConfiguration.initialInput, " printf '%s\\n' \"$TOASTTY_RESTORE_NOTICE\"")
+        let notice = try XCTUnwrap(launchConfiguration.environmentVariables["TOASTTY_RESTORE_NOTICE"])
+        XCTAssertTrue(notice.hasPrefix("Toastty: \(fixture.cwdURL.path) no longer exists.\n"), notice)
+        XCTAssertTrue(notice.hasSuffix("To resume it: codex resume 019e2823-f520-7690-91b6-cd84eb52dd8a"), notice)
+
+        func resumeRecord() -> ManagedAgentResumeRecord? {
+            guard case .terminal(let terminalState)? = store.state.workspacesByID[workspaceID]?.panels[panelID] else {
+                XCTFail("expected terminal panel")
+                return nil
+            }
+            return terminalState.resumeRecord
         }
-        XCTAssertNil(terminalState.resumeRecord)
+        XCTAssertEqual(resumeRecord(), record)
+
+        func finishCommand() {
+            _ = registry.handleRuntimeMetadataAction(
+                .commandFinished(exitCode: 0),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state,
+                store: store
+            )
+        }
+        finishCommand()
+        XCTAssertEqual(resumeRecord(), record, "The notice finishing must not clear the kept record")
+        finishCommand()
+        XCTAssertNil(resumeRecord(), "A later command in the pane clears the record as before")
+    }
+
+    func testRestoreNoticeRunsBeforeTheProfileStartupCommand() {
+        let configuration = TerminalRuntimeRegistry.addingRestoreNotice(
+            "Toastty: /repo/gone no longer exists.",
+            to: TerminalSurfaceLaunchConfiguration(
+                environmentVariables: ["TOASTTY_TERMINAL_PROFILE_ID": "zmx"],
+                initialInput: "zmx attach toastty.$TOASTTY_PANEL_ID"
+            )
+        )
+
+        XCTAssertEqual(
+            configuration.initialInput,
+            " printf '%s\\n' \"$TOASTTY_RESTORE_NOTICE\"\nzmx attach toastty.$TOASTTY_PANEL_ID\n"
+        )
+        XCTAssertEqual(configuration.environmentVariables["TOASTTY_TERMINAL_PROFILE_ID"], "zmx")
+        XCTAssertEqual(configuration.environmentVariables["TOASTTY_RESTORE_NOTICE"], "Toastty: /repo/gone no longer exists.")
     }
 }
 

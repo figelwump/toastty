@@ -966,7 +966,7 @@ final class GhosttyRuntimeManager {
         surfaceConfig.wait_after_command = false
 
         let requestedWorkingDirectory = Self.normalizedWorkingDirectoryValue(workingDirectory)
-        let resolvedWorkingDirectory: String
+        let candidateWorkingDirectory: String
         if let requestedWorkingDirectory {
             if let inheritedWorkingDirectory,
                requestedWorkingDirectory != inheritedWorkingDirectory {
@@ -979,11 +979,22 @@ final class GhosttyRuntimeManager {
                     ]
                 )
             }
-            resolvedWorkingDirectory = requestedWorkingDirectory
+            candidateWorkingDirectory = requestedWorkingDirectory
         } else if let inheritedWorkingDirectory {
-            resolvedWorkingDirectory = inheritedWorkingDirectory
+            candidateWorkingDirectory = inheritedWorkingDirectory
         } else {
-            resolvedWorkingDirectory = NSHomeDirectory()
+            candidateWorkingDirectory = NSHomeDirectory()
+        }
+        let resolvedWorkingDirectory = TerminalLaunchWorkingDirectory.existing(candidateWorkingDirectory)
+        if resolvedWorkingDirectory != candidateWorkingDirectory {
+            ToasttyLog.info(
+                "Terminal working directory no longer exists; starting in the nearest existing directory",
+                category: .terminal,
+                metadata: [
+                    "missing_cwd": candidateWorkingDirectory,
+                    "cwd": resolvedWorkingDirectory,
+                ]
+            )
         }
 
         let surface = Self.createGhosttySurface(
