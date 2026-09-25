@@ -841,8 +841,37 @@ final class AppControlExecutor {
                 webState: resolved.webState,
                 runtimeState: runtime.automationState()
             )
+
+        case .agentProfileState:
+            guard let profileID = normalizedOptionalText(args.stringValue("profileID")) else {
+                throw AutomationSocketError.invalidPayload("profileID is required")
+            }
+            // Profile-scoped and read-only: it inspects configuration and the
+            // filesystem, never a workspace, so no workspace access check applies.
+            return agentProfileStateSnapshot(
+                try agentLaunchService.profileExecutableState(profileID: profileID)
+            )
         }
         }
+    }
+
+    private func agentProfileStateSnapshot(
+        _ state: AgentProfileExecutableState
+    ) -> [String: AutomationJSONValue] {
+        var snapshot: [String: AutomationJSONValue] = [
+            "profileID": .string(state.profileID),
+            "displayName": .string(state.displayName),
+            "command": .string(state.command),
+            "argumentCount": .int(state.argumentCount),
+            "source": .string(state.source.rawValue),
+            "commandIsExplicitPath": .bool(state.commandIsExplicitPath),
+            "executablePath": state.executablePath.map { AutomationJSONValue.string($0) } ?? .null,
+            "resolved": .bool(state.executablePath != nil),
+            "fallbackProbeUsed": .bool(state.fallbackProbeUsed),
+            "directExecutableProbeUsed": .bool(state.directExecutableProbeUsed),
+        ]
+        snapshot["failure"] = state.failure.map { AutomationJSONValue.string($0.rawValue) } ?? .null
+        return snapshot
     }
 }
 
