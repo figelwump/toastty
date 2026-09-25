@@ -188,6 +188,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
     }
 
     func testHoverTipModelListsSessionsAnnotationsAndWhereTheSubspaceLives() {
+        let approvalPanelID = UUID()
         let row = SidebarSubspacePresentation.Row(
             id: UUID(), title: "qa-mobile-navigation", status: .needsApproval,
             annotations: [
@@ -197,13 +198,16 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             summary: "Rebasing onto main",
             spawningSessionID: "a", spawnerName: "Test EmptyOS beta experience",
             sessions: [
-                .init(title: "Rebase fixture", statusKind: .working, summary: "Rebasing onto main"),
-                .init(title: "Screenshot pass", statusKind: .idle, summary: nil),
-                .init(title: "Collect logs", statusKind: .ready, showsUnreadSessionAccent: true, summary: "Saved 3 logs"),
-                .init(title: "Fix nav drawer focus", agentLabel: "claude", statusKind: .needsApproval, summary: "pnpm db:migrate"),
+                .init(title: "Rebase fixture", panelID: UUID(), statusKind: .working, summary: "Rebasing onto main"),
+                .init(title: "Screenshot pass", panelID: UUID(), statusKind: .idle, summary: nil),
+                .init(title: "Collect logs", panelID: UUID(), statusKind: .ready, showsUnreadSessionAccent: true, summary: "Saved 3 logs"),
+                .init(
+                    title: "Fix nav drawer focus", panelID: approvalPanelID, agentLabel: "claude",
+                    statusKind: .needsApproval, summary: "pnpm db:migrate"
+                ),
             ],
             creationIndex: 0,
-            path: "~/worktrees/qa-mobile-navigation"
+            path: NSHomeDirectory() + "/worktrees/qa-mobile-navigation"
         )
         let model = SidebarSubspacePresentation.hoverTipModel(row) { key in
             key == "github-pr" ? .named(.green) : .named(.blue)
@@ -218,12 +222,16 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(model.sessions.map(\.railState), [.approvalDot, .unreadDot, .spinner])
         XCTAssertEqual(model.sessions.map(\.badgeKind), [.needsApproval, nil, nil])
         XCTAssertEqual(model.sessions.map(\.isUnread), [false, true, false])
+        // Clicking a row jumps to its panel.
+        XCTAssertEqual(model.sessions.first?.panelID, approvalPanelID)
 
         XCTAssertEqual(model.annotations, [
             .init(key: "github-pr", text: "PR #132", colorToken: .named(.green)),
             .init(key: "task-status", text: "Ready for your testing", colorToken: .named(.blue)),
         ])
+        // Shown with `~`, copied in full.
         XCTAssertEqual(model.path, "~/worktrees/qa-mobile-navigation")
+        XCTAssertEqual(model.absolutePath, NSHomeDirectory() + "/worktrees/qa-mobile-navigation")
         XCTAssertEqual(model.spawnerName, "Test EmptyOS beta experience")
 
         let empty = SidebarSubspacePresentation.hoverTipModel(SidebarSubspacePresentation.Row(
@@ -250,10 +258,6 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             "/repo/worktree"
         )
         XCTAssertEqual(SidebarSubspacePresentation.path(sessionCWDs: [], workspace: workspace), "/repo/www-docs")
-        XCTAssertEqual(
-            SidebarSubspacePresentation.path(sessionCWDs: [NSHomeDirectory() + "/code/app"], workspace: workspace),
-            "~/code/app"
-        )
     }
 
     func testWorkspaceMoveIndicesSkipSubspacesInTheWindowOrder() {

@@ -104,6 +104,9 @@ struct SessionRowHoverTipModel: Hashable {
         let value: String
         /// Long values such as a scope list wrap instead of truncating.
         let wraps: Bool
+        /// Set for values worth copying, such as a path; the row then shows a
+        /// copy button.
+        var copyValue: String? = nil
     }
 
     var name: String
@@ -154,7 +157,7 @@ struct SessionRowHoverTipCard: View {
                     }
 
                     ForEach(Array(model.metaItems.enumerated()), id: \.offset) { _, item in
-                        HoverTipMetaRow(label: item.label, value: item.value, wraps: item.wraps)
+                        HoverTipMetaRow(label: item.label, value: item.value, wraps: item.wraps, copyValue: item.copyValue)
                     }
                 }
                 .padding(.top, 6)
@@ -171,6 +174,7 @@ struct SessionRowHoverTipCard: View {
 struct SubspaceHoverTipModel: Hashable {
     struct Session: Hashable {
         let title: String
+        let panelID: UUID
         let agentLabel: String?
         let statusKind: SessionStatusKind
         let isUnread: Bool
@@ -192,15 +196,25 @@ struct SubspaceHoverTipModel: Hashable {
     var sessions: [Session]
     var hiddenSessionCount: Int
     var annotations: [Annotation]
+    /// Display form, with the home directory shortened to `~`.
     var path: String?
+    /// What the copy button copies.
+    var absolutePath: String?
     var spawnerName: String?
 }
 
 struct SubspaceHoverTipCard: View {
     let model: SubspaceHoverTipModel
+    /// Jumps to a session; the card closes afterwards.
+    var onSelectSession: ((UUID) -> Void)? = nil
+
+    @State private var hoveredSessionPanelID: UUID?
 
     private static let railWidth: CGFloat = 12
     private static let railGap: CGFloat = 6
+    /// Room for the row hover fill, taken back outside so text still lines
+    /// up with the header.
+    private static let rowInset: CGFloat = 4
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -214,7 +228,7 @@ struct SubspaceHoverTipCard: View {
             } else {
                 VStack(alignment: .leading, spacing: 5) {
                     ForEach(Array(model.sessions.enumerated()), id: \.offset) { _, session in
-                        sessionRow(session)
+                        selectableSessionRow(session)
                     }
                     if model.hiddenSessionCount > 0 {
                         Text("+\(model.hiddenSessionCount) more")
@@ -250,7 +264,12 @@ struct SubspaceHoverTipCard: View {
                     VStack(alignment: .leading, spacing: 3) {
                         if let path = model.path {
                             // Cut from the front so the worktree name stays.
-                            HoverTipMetaRow(label: "path", value: path, truncationMode: .head)
+                            HoverTipMetaRow(
+                                label: "path",
+                                value: path,
+                                truncationMode: .head,
+                                copyValue: model.absolutePath
+                            )
                         }
                         if let spawnerName = model.spawnerName {
                             HoverTipMetaRow(label: "spawner", value: spawnerName)
@@ -261,6 +280,43 @@ struct SubspaceHoverTipCard: View {
             }
         }
         .hoverTipCardChrome()
+    }
+
+    @ViewBuilder
+    private func selectableSessionRow(_ session: SubspaceHoverTipModel.Session) -> some View {
+        if let onSelectSession {
+            Button {
+                let generation = HoverTipPresenter.shared.currentGeneration
+                onSelectSession(session.panelID)
+                HoverTipPresenter.shared.hide(generation: generation)
+            } label: {
+                sessionRow(session)
+                    .padding(.horizontal, Self.rowInset)
+                    .padding(.vertical, 2)
+                    .background(
+                        hoveredSessionPanelID == session.panelID ? ToastyTheme.hoverTipTagBackground : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, -Self.rowInset)
+            .onHover { isHovering in
+                if isHovering {
+                    hoveredSessionPanelID = session.panelID
+                } else if hoveredSessionPanelID == session.panelID {
+                    hoveredSessionPanelID = nil
+                }
+            }
+            .accessibilityLabel("Go to \(session.title)")
+            .background {
+                SidebarSemanticTextBridge(text: "Go to \(session.title)")
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+        } else {
+            sessionRow(session)
+        }
     }
 
     private func sessionRow(_ session: SubspaceHoverTipModel.Session) -> some View {
@@ -363,6 +419,7 @@ private struct HoverTipMetaRow: View {
     let value: String
     var wraps = false
     var truncationMode: Text.TruncationMode = .middle
+    var copyValue: String? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -376,8 +433,46 @@ private struct HoverTipMetaRow: View {
                 .truncationMode(wraps ? .tail : truncationMode)
                 .fixedSize(horizontal: false, vertical: wraps)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let copyValue {
+                HoverTipCopyButton(label: label, value: copyValue)
+            }
         }
         .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+    }
+}
+
+/// Copies a card value, shows a check, then closes the card.
+private struct HoverTipCopyButton: View {
+    let label: String
+    let value: String
+
+    @State private var didCopy = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(value, forType: .string)
+            didCopy = true
+            let generation = HoverTipPresenter.shared.currentGeneration
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                HoverTipPresenter.shared.hide(generation: generation)
+            }
+        } label: {
+            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(didCopy ? ToastyTheme.sessionReadyText : ToastyTheme.hoverTipMutedText)
+                .frame(width: 16, height: 12)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(didCopy ? "Copied" : "Copy \(label)")
+        .background {
+            SidebarSemanticTextBridge(text: didCopy ? "Copied \(label)" : "Copy \(label)")
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -417,10 +512,23 @@ final class HoverTipPresenter {
     /// After a card closes, a card on another row opens immediately instead of
     /// waiting out the warm-up again, so scanning down a list does not stutter.
     private nonisolated static let warmWindow: TimeInterval = 0.35
+    /// How long a card stays up after the pointer leaves its row toward it, or
+    /// leaves the card itself, so the pointer can cross the gap between them.
+    nonisolated static let handoffGrace: TimeInterval = 0.2
+
+    /// Test seam: the pointer's screen location when a row loses hover.
+    static var pointerLocation: () -> CGPoint = { NSEvent.mouseLocation }
 
     private var panel: NSPanel?
+    private var containerView: HoverTipContainerView?
     private var hostingView: NSHostingView<AnyView>?
     private var currentID: AnyHashable?
+    private var currentAnchor: CGRect?
+    /// Bumped on every show and hide, so a grace period started for one card
+    /// never closes the card that replaced it.
+    private var generation = 0
+    private var isPointerInCard = false
+    private var pendingHide: Task<Void, Never>?
     private var lastHiddenAt: Date?
     private var eventMonitor: Any?
     private var deactivationObserver: NSObjectProtocol?
@@ -433,22 +541,13 @@ final class HoverTipPresenter {
         anchorScreenRect: CGRect,
         placement: HoverTipPlacement = .below
     ) {
-        let rootView = AnyView(content.fixedSize(horizontal: false, vertical: true))
-        let hostingView = resolvedHostingView(rootView: rootView)
-        hostingView.rootView = rootView
-        hostingView.layoutSubtreeIfNeeded()
-
-        var tipSize = hostingView.fittingSize
-        if tipSize.width <= 0 || tipSize.height <= 0 {
-            tipSize = CGSize(width: 320, height: 72)
-        }
-        hostingView.frame = CGRect(origin: .zero, size: tipSize)
-
         let panel = resolvedPanel()
-        if panel.contentView !== hostingView {
-            panel.contentView = hostingView
+        if currentID != id {
+            generation += 1
+            isPointerInCard = false
         }
-        panel.setContentSize(tipSize)
+        cancelPendingHide()
+        let tipSize = layOut(content: content, in: panel)
         panel.setFrameOrigin(Self.tipOrigin(
             anchor: anchorScreenRect,
             tipSize: tipSize,
@@ -459,6 +558,7 @@ final class HoverTipPresenter {
         let shouldAnimate = panel.isVisible == false
             && NSWorkspace.shared.accessibilityDisplayShouldReduceMotion == false
         currentID = id
+        currentAnchor = anchorScreenRect
         installEventMonitorIfNeeded()
         installDeactivationObserverIfNeeded()
 
@@ -476,9 +576,118 @@ final class HoverTipPresenter {
         }
     }
 
+    /// Replaces an open card's content without touching the hover handoff.
+    /// While the pointer is on the card it keeps its top edge where it is,
+    /// so a row re-sorting underneath does not pull the card away.
+    func update<Content: View>(
+        id: AnyHashable,
+        content: Content,
+        anchorScreenRect: CGRect,
+        placement: HoverTipPlacement = .below
+    ) {
+        guard currentID == id, let panel, panel.isVisible else { return }
+        let previousFrame = panel.frame
+        let tipSize = layOut(content: content, in: panel)
+        if isPointerInCard {
+            let visibleFrame = Self.visibleFrame(for: anchorScreenRect)
+            panel.setFrameOrigin(CGPoint(
+                x: previousFrame.minX,
+                y: max(visibleFrame.minY, previousFrame.maxY - tipSize.height)
+            ))
+        } else {
+            panel.setFrameOrigin(Self.tipOrigin(
+                anchor: anchorScreenRect,
+                tipSize: tipSize,
+                visibleFrame: Self.visibleFrame(for: anchorScreenRect),
+                placement: placement
+            ))
+            currentAnchor = anchorScreenRect
+        }
+    }
+
     func hide(id: AnyHashable) {
         guard currentID == id else { return }
         hideAll()
+    }
+
+    /// Identifies the card on screen now, for work that should close only
+    /// that card, such as a copy button's delayed close.
+    var currentGeneration: Int { generation }
+
+    func hide(generation: Int) {
+        guard self.generation == generation else { return }
+        hideAll()
+    }
+
+    /// The row lost hover. Leaving toward the card keeps it up for the grace
+    /// period so the pointer can reach it; leaving any other way closes it.
+    func anchorHoverEnded(id: AnyHashable) {
+        guard currentID == id, let panel, panel.isVisible else { return }
+        let headingToCard = currentAnchor.map { anchor in
+            Self.isHeadingToCard(
+                pointer: Self.pointerLocation(),
+                anchor: anchor,
+                card: panel.frame
+            )
+        } ?? false
+        if headingToCard {
+            scheduleHandoffHide()
+        } else {
+            hideAll()
+        }
+    }
+
+    /// True while a card waits for the pointer to cross from its row. Another
+    /// row hovered meanwhile waits out the grace before taking over, so a
+    /// path to the card that clips a neighbor does not swap cards.
+    func isHandingOff(awayFrom id: AnyHashable) -> Bool {
+        pendingHide != nil && currentID != nil && currentID != id
+    }
+
+    func cardPointerChanged(inside: Bool) {
+        guard currentID != nil else { return }
+        isPointerInCard = inside
+        if inside {
+            cancelPendingHide()
+        } else {
+            scheduleHandoffHide()
+        }
+    }
+
+    /// Whether the pointer left `anchor` through the side facing `card`,
+    /// within the row's span on that side, and is still between the two.
+    nonisolated static func isHeadingToCard(pointer: CGPoint, anchor: CGRect, card: CGRect) -> Bool {
+        let tolerance: CGFloat = 2
+        guard anchor.union(card).insetBy(dx: -tolerance, dy: -tolerance).contains(pointer) else {
+            return false
+        }
+        let withinRowHeight = pointer.y >= anchor.minY - tolerance && pointer.y <= anchor.maxY + tolerance
+        let withinSharedWidth = pointer.x >= max(anchor.minX, card.minX) - tolerance
+            && pointer.x <= min(anchor.maxX, card.maxX) + tolerance
+        if card.minX >= anchor.maxX - tolerance {
+            return pointer.x >= anchor.maxX - tolerance && withinRowHeight
+        }
+        if card.maxY <= anchor.minY + tolerance {
+            return pointer.y <= anchor.minY + tolerance && withinSharedWidth
+        }
+        if card.minY >= anchor.maxY - tolerance {
+            return pointer.y >= anchor.maxY - tolerance && withinSharedWidth
+        }
+        return false
+    }
+
+    /// Which events close an open card. A left click on the card is its own
+    /// (a row or copy button, or blank space that closes it on mouse-up);
+    /// every other click, key, or scroll dismisses as before.
+    nonisolated static func eventDismissesCard(_ type: NSEvent.EventType, isInCard: Bool) -> Bool {
+        switch type {
+        case .leftMouseDown:
+            return isInCard == false
+        case .rightMouseDown, .keyDown, .scrollWheel:
+            return true
+        default:
+            return false
+        }
     }
 
     /// True while a card is open or just closed. A hover that lands inside
@@ -495,7 +704,11 @@ final class HoverTipPresenter {
         if panel?.isVisible == true {
             lastHiddenAt = Date()
         }
+        cancelPendingHide()
+        generation += 1
+        isPointerInCard = false
         currentID = nil
+        currentAnchor = nil
         panel?.alphaValue = 1
         panel?.orderOut(nil)
         removeEventMonitor()
@@ -563,6 +776,36 @@ final class HoverTipPresenter {
         return CGPoint(x: x.rounded(), y: y.rounded())
     }
 
+    private func layOut<Content: View>(content: Content, in panel: NSPanel) -> CGSize {
+        let rootView = AnyView(
+            content
+                .fixedSize(horizontal: false, vertical: true)
+                // A click on blank card space closes the card; buttons in
+                // the card take their own clicks first.
+                .contentShape(Rectangle())
+                .onTapGesture { HoverTipPresenter.shared.hideAll() }
+                // The hosting view is reused, so give each shown card fresh
+                // state (a copy check, a hovered row) rather than inheriting
+                // the last card's. Refreshes keep the same generation.
+                .id(generation)
+        )
+        let hostingView = resolvedHostingView(rootView: rootView)
+        hostingView.rootView = rootView
+        hostingView.layoutSubtreeIfNeeded()
+
+        var tipSize = hostingView.fittingSize
+        if tipSize.width <= 0 || tipSize.height <= 0 {
+            tipSize = CGSize(width: 320, height: 72)
+        }
+        let containerView = resolvedContainerView(hostingView: hostingView)
+        if panel.contentView !== containerView {
+            panel.contentView = containerView
+        }
+        panel.setContentSize(tipSize)
+        hostingView.frame = CGRect(origin: .zero, size: tipSize)
+        return tipSize
+    }
+
     private func resolvedHostingView(rootView: AnyView) -> NSHostingView<AnyView> {
         if let hostingView {
             return hostingView
@@ -573,6 +816,41 @@ final class HoverTipPresenter {
         hostingView.setAccessibilityElement(false)
         self.hostingView = hostingView
         return hostingView
+    }
+
+    /// The panel's content view for its whole life, so pointer tracking
+    /// survives the hosting view's content being replaced card to card.
+    private func resolvedContainerView(hostingView: NSHostingView<AnyView>) -> HoverTipContainerView {
+        if let containerView {
+            return containerView
+        }
+        let containerView = HoverTipContainerView()
+        containerView.wantsLayer = true
+        containerView.layer?.backgroundColor = NSColor.clear.cgColor
+        containerView.addSubview(hostingView)
+        containerView.onPointerInsideChanged = { [weak self] inside in
+            self?.cardPointerChanged(inside: inside)
+        }
+        self.containerView = containerView
+        return containerView
+    }
+
+    private func scheduleHandoffHide() {
+        cancelPendingHide()
+        let scheduledGeneration = generation
+        pendingHide = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.handoffGrace * 1_000_000_000))
+            guard let self, Task.isCancelled == false, self.generation == scheduledGeneration else { return }
+            self.pendingHide = nil
+            if self.isPointerInCard == false {
+                self.hideAll()
+            }
+        }
+    }
+
+    private func cancelPendingHide() {
+        pendingHide?.cancel()
+        pendingHide = nil
     }
 
     private func resolvedPanel() -> NSPanel {
@@ -592,11 +870,12 @@ final class HoverTipPresenter {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hidesOnDeactivate = false
-        panel.ignoresMouseEvents = true
+        // Cards take the pointer so their rows and copy buttons can be
+        // clicked. A borderless panel cannot become key, so clicking one never
+        // moves keyboard focus off the terminal.
+        panel.ignoresMouseEvents = false
         panel.animationBehavior = .none
         panel.collectionBehavior = [.moveToActiveSpace, .transient, .fullScreenAuxiliary]
-        panel.contentView?.wantsLayer = true
-        panel.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
         self.panel = panel
         return panel
     }
@@ -606,8 +885,12 @@ final class HoverTipPresenter {
         eventMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]
         ) { [weak self] event in
-            Task { @MainActor in
-                self?.hideAll()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let isInCard = event.window != nil && event.window === self.panel
+                if Self.eventDismissesCard(event.type, isInCard: isInCard) {
+                    self.hideAll()
+                }
             }
             return event
         }
@@ -723,7 +1006,6 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
     @State private var hoverTask: Task<Void, Never>?
     @State private var anchorScreenRect: CGRect?
     @State private var isHovering = false
-    @State private var isPresented = false
 
     func body(content: Content) -> some View {
         content
@@ -757,21 +1039,27 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
             scheduleShow()
         } else {
             cancelPendingShow()
-            hideTip()
+            HoverTipPresenter.shared.anchorHoverEnded(id: id)
         }
     }
 
     private func scheduleShow() {
         cancelPendingShow()
+        let presenter = HoverTipPresenter.shared
         // A card already open (or just closed) means the pointer is scanning
-        // the list, so swap immediately rather than re-running the warm-up.
-        if HoverTipPresenter.shared.isWarm, let anchorScreenRect {
+        // the list, so swap immediately rather than re-running the warm-up,
+        // unless the pointer may be on its way to the open card.
+        let isHandingOff = presenter.isHandingOff(awayFrom: id)
+        if presenter.isWarm, isHandingOff == false, let anchorScreenRect {
             showTip(anchorScreenRect: anchorScreenRect)
             return
         }
+        let delayNanoseconds = isHandingOff
+            ? UInt64(HoverTipPresenter.handoffGrace * 1_000_000_000)
+            : Self.warmUpDelayNanoseconds
         hoverTask = Task { @MainActor in
             do {
-                try await Task.sleep(nanoseconds: Self.warmUpDelayNanoseconds)
+                try await Task.sleep(nanoseconds: delayNanoseconds)
             } catch {
                 return
             }
@@ -797,25 +1085,26 @@ private struct HoverTipModifier<TipContent: View>: ViewModifier {
             anchorScreenRect: anchorScreenRect,
             placement: placement
         )
-        isPresented = true
     }
 
     private func hideTip() {
         HoverTipPresenter.shared.hide(id: id)
-        isPresented = false
     }
 
+    /// Keeps an open card current, including while the pointer is on the
+    /// card rather than its row.
     private func refreshVisibleTip() {
-        guard isHovering, isPresented else { return }
-        guard HoverTipPresenter.shared.isVisible(id: id) else {
-            isPresented = false
-            return
-        }
+        guard HoverTipPresenter.shared.isVisible(id: id) else { return }
         guard let anchorScreenRect else {
             hideTip()
             return
         }
-        showTip(anchorScreenRect: anchorScreenRect)
+        HoverTipPresenter.shared.update(
+            id: id,
+            content: tipContent(),
+            anchorScreenRect: anchorScreenRect,
+            placement: placement
+        )
     }
 }
 
@@ -857,6 +1146,38 @@ private struct HoverTipAnchor: NSViewRepresentable {
 }
 
 @MainActor
+/// Reports the pointer entering and leaving the card, through a tracking
+/// area that stays active while the app is frontmost but the card is not key.
+final class HoverTipContainerView: NSView {
+    var onPointerInsideChanged: ((Bool) -> Void)?
+    private var trackingArea: NSTrackingArea?
+
+    override var isFlipped: Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        self.trackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onPointerInsideChanged?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onPointerInsideChanged?(false)
+    }
+}
+
 private final class HoverTipAnchorView: NSView {
     var onScreenRectChange: (@MainActor (CGRect?) -> Void)?
     private var lastScreenRect: CGRect?

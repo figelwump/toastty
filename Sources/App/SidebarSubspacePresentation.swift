@@ -39,6 +39,7 @@ enum SidebarSubspacePresentation {
 
     struct SessionLine: Equatable, Sendable {
         let title: String
+        let panelID: UUID
         var agentLabel: String? = nil
         let statusKind: SessionStatusKind
         var showsUnreadSessionAccent = false
@@ -62,7 +63,8 @@ enum SidebarSubspacePresentation {
         /// Position in the window's workspace order, the tie-breaker so rows
         /// with the same status never swap.
         let creationIndex: Int
-        /// Where the subspace lives; see `path(sessionCWDs:workspace:)`.
+        /// Absolute path of where the subspace lives; see
+        /// `path(sessionCWDs:workspace:)`.
         var path: String? = nil
 
         /// The `github-pr` annotation, the only chip a subspace row shows.
@@ -311,6 +313,7 @@ enum SidebarSubspacePresentation {
             .map { _, session in
                 SubspaceHoverTipModel.Session(
                     title: session.title,
+                    panelID: session.panelID,
                     agentLabel: session.agentLabel,
                     statusKind: session.statusKind,
                     isUnread: session.statusKind == .ready && session.showsUnreadSessionAccent,
@@ -337,7 +340,8 @@ enum SidebarSubspacePresentation {
                     colorToken: annotationColorToken(key)
                 )
             },
-            path: row.path,
+            path: row.path.map(SidebarSessionPresentation.abbreviatedHomePathLabel),
+            absolutePath: row.path,
             spawnerName: row.spawnerName
         )
     }
@@ -352,8 +356,7 @@ enum SidebarSubspacePresentation {
         let sessionPath = sessionCWDs.lazy
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { $0.isEmpty == false }
-        return (sessionPath ?? firstTerminalDirectory(in: workspace))
-            .map(SidebarSessionPresentation.abbreviatedHomePathLabel)
+        return sessionPath ?? firstTerminalDirectory(in: workspace)
     }
 
     private static func firstTerminalDirectory(in workspace: WorkspaceState) -> String? {

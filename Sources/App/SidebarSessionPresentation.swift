@@ -750,7 +750,7 @@ enum SidebarSessionPresentation {
         var metaItems: [SessionRowHoverTipModel.MetaItem] = []
 
         if let path = normalizedSidebarHelperText(session.cwd) {
-            metaItems.append(.init(label: "path", value: abbreviatedHomePathLabel(path), wraps: false))
+            metaItems.append(.init(label: "path", value: abbreviatedHomePathLabel(path), wraps: false, copyValue: path))
         }
 
         if workspaceScopeNames.isEmpty == false {

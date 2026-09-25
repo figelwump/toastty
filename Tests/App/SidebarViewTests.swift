@@ -188,6 +188,10 @@ final class SidebarViewTests: XCTestCase {
             "Hovering a session row should open its hover card"
         )
 
+        // Leave upward, away from the card, so it closes at once.
+        let regionScreenRect = try XCTUnwrap(region.window).convertToScreen(region.convert(region.bounds, to: nil))
+        HoverTipPresenter.pointerLocation = { CGPoint(x: regionScreenRect.midX, y: regionScreenRect.maxY + 20) }
+        defer { HoverTipPresenter.pointerLocation = { NSEvent.mouseLocation } }
         let exitEvent = try XCTUnwrap(pointerMouseEvent(
             type: .mouseMoved,
             view: region,
@@ -208,6 +212,159 @@ final class SidebarViewTests: XCTestCase {
             0,
             "Leaving the row should drop the hover background"
         )
+    }
+
+    /// Leaving a row toward its card keeps the card up long enough to reach
+    /// it; the card then stays while the pointer is on it and closes after
+    /// the pointer leaves. Leaving any other way closes it at once.
+    func testHoverCardHandsOffFromItsRowToThePointer() throws {
+        let presenter = HoverTipPresenter.shared
+        defer {
+            presenter.hideAll()
+            HoverTipPresenter.pointerLocation = { NSEvent.mouseLocation }
+        }
+        let screen = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        let anchor = CGRect(x: screen.minX + 40, y: screen.midY, width: 240, height: 22)
+        let corridor = CGPoint(x: anchor.maxX + 2, y: anchor.midY)
+        func show(_ id: String) {
+            presenter.show(id: id, content: Text(id).frame(width: 200), anchorScreenRect: anchor, placement: .trailing(gap: 6))
+        }
+        let grace = HoverTipPresenter.handoffGrace + 0.2
+
+        // Toward the card, never arriving: closes after the grace.
+        show("a")
+        HoverTipPresenter.pointerLocation = { corridor }
+        presenter.anchorHoverEnded(id: "a")
+        XCTAssertTrue(presenter.isVisible(id: "a"))
+        pumpMainRunLoop(duration: grace)
+        XCTAssertFalse(presenter.isVisible(id: "a"))
+
+        // Arriving on the card holds it; leaving the card closes it.
+        show("a")
+        presenter.anchorHoverEnded(id: "a")
+        presenter.cardPointerChanged(inside: true)
+        pumpMainRunLoop(duration: grace)
+        XCTAssertTrue(presenter.isVisible(id: "a"))
+        presenter.cardPointerChanged(inside: false)
+        pumpMainRunLoop(duration: grace)
+        XCTAssertFalse(presenter.isVisible(id: "a"))
+
+        // Another row taking over mid-handoff is not closed by the old grace.
+        show("a")
+        presenter.anchorHoverEnded(id: "a")
+        XCTAssertTrue(presenter.isHandingOff(awayFrom: "b"))
+        show("b")
+        pumpMainRunLoop(duration: grace)
+        XCTAssertTrue(presenter.isVisible(id: "b"))
+
+        // Leaving upward closes at once.
+        HoverTipPresenter.pointerLocation = { CGPoint(x: anchor.midX, y: anchor.maxY + 20) }
+        show("c")
+        presenter.anchorHoverEnded(id: "c")
+        XCTAssertFalse(presenter.isVisible(id: "c"))
+
+        // Only an exit through the row's card-facing side, within its height,
+        // counts as heading to a trailing card; the corner above does not.
+        let card = CGRect(x: anchor.maxX + 6, y: anchor.maxY - 120, width: 320, height: 120)
+        XCTAssertTrue(HoverTipPresenter.isHeadingToCard(pointer: corridor, anchor: anchor, card: card))
+        XCTAssertFalse(HoverTipPresenter.isHeadingToCard(
+            pointer: CGPoint(x: anchor.maxX + 2, y: anchor.maxY + 6), anchor: anchor, card: card
+        ))
+        XCTAssertFalse(HoverTipPresenter.isHeadingToCard(
+            pointer: CGPoint(x: anchor.midX, y: anchor.minY - 4), anchor: anchor, card: card
+        ))
+
+        XCTAssertFalse(HoverTipPresenter.eventDismissesCard(.leftMouseDown, isInCard: true))
+        XCTAssertTrue(HoverTipPresenter.eventDismissesCard(.leftMouseDown, isInCard: false))
+        XCTAssertTrue(HoverTipPresenter.eventDismissesCard(.rightMouseDown, isInCard: true))
+        XCTAssertTrue(HoverTipPresenter.eventDismissesCard(.scrollWheel, isInCard: true))
+        XCTAssertTrue(HoverTipPresenter.eventDismissesCard(.keyDown, isInCard: true))
+    }
+
+    /// The card panel never becomes key, so the first click on a card row or
+    /// its copy button must reach the button directly and leave keyboard
+    /// focus where it was.
+    func testSubspaceHoverCardRowJumpsAndPathCopiesOnFirstClickWithoutTakingFocus() throws {
+        let presenter = HoverTipPresenter.shared
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 300, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            presenter.hideAll()
+            window.orderOut(nil)
+        }
+        pumpMainRunLoop()
+        let windowWasKey = window.isKeyWindow
+
+        let targetPanelID = UUID()
+        let path = NSHomeDirectory() + "/worktrees/hover-card-copy"
+        let model = SubspaceHoverTipModel(
+            name: "qa-mobile-navigation",
+            statusDotColorKind: .needsApproval,
+            sessions: [
+                .init(
+                    title: "Fix nav drawer focus", panelID: targetPanelID, agentLabel: "claude",
+                    statusKind: .needsApproval, isUnread: false, railState: .approvalDot,
+                    badgeKind: .needsApproval, turnStartedAt: nil, summary: "pnpm db:migrate"
+                ),
+            ],
+            hiddenSessionCount: 0,
+            annotations: [],
+            path: "~/worktrees/hover-card-copy",
+            absolutePath: path,
+            spawnerName: "Test EmptyOS beta experience"
+        )
+        var selectedPanelIDs: [UUID] = []
+        let screen = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        let anchor = CGRect(x: screen.minX + 40, y: screen.midY, width: 240, height: 22)
+        func showCard() throws -> NSView {
+            presenter.show(
+                id: "subspace-card",
+                content: SubspaceHoverTipCard(model: model) { selectedPanelIDs.append($0) },
+                anchorScreenRect: anchor,
+                placement: .trailing(gap: 6)
+            )
+            pumpMainRunLoop(duration: 0.2)
+            let cardView = try XCTUnwrap(renderedHoverCardView())
+            cardView.layoutSubtreeIfNeeded()
+            return cardView
+        }
+
+        var cardView = try showCard()
+        try clickSemanticText(prefix: "Go to Fix nav drawer focus", in: cardView)
+        pumpMainRunLoop(duration: 0.1)
+        XCTAssertEqual(selectedPanelIDs, [targetPanelID], "The first click on a card row should reach it")
+        XCTAssertFalse(presenter.isVisible(id: "subspace-card"), "Jumping to a session closes the card")
+        XCTAssertEqual(window.isKeyWindow, windowWasKey, "Clicking the card must not move keyboard focus")
+        XCTAssertFalse(try XCTUnwrap(cardView.window).isKeyWindow)
+
+        NSPasteboard.general.clearContents()
+        cardView = try showCard()
+        try clickSemanticText(prefix: "Copy path", in: cardView)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), path, "The copy button copies the full path")
+        XCTAssertTrue(presenter.isVisible(id: "subspace-card"), "The card stays up briefly to show the check")
+        XCTAssertNotNil(semanticTextField(in: cardView, prefix: "Copied path"))
+        pumpMainRunLoop(duration: 0.9)
+        XCTAssertFalse(presenter.isVisible(id: "subspace-card"))
+        XCTAssertEqual(window.isKeyWindow, windowWasKey)
+        XCTAssertEqual(selectedPanelIDs, [targetPanelID], "Copying must not also jump")
+
+        // The next card starts without the last one's copy check.
+        cardView = try showCard()
+        XCTAssertNotNil(semanticTextField(in: cardView, prefix: "Copy path"))
+        XCTAssertNil(semanticTextField(in: cardView, prefix: "Copied path"))
+    }
+
+    /// The presenter's panel content, found through the app's windows since
+    /// the presenter keeps its panel private.
+    private func renderedHoverCardView() -> NSView? {
+        NSApp.windows
+            .first { $0.isVisible && $0.contentView is HoverTipContainerView }?
+            .contentView
     }
 
     func testSessionRowBadgeRendersShortLabelWhileAccessibilityKeepsSpokenWording() throws {

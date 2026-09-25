@@ -3,7 +3,9 @@ import AppKit
 import CoreState
 import SwiftUI
 
-private struct SidebarSemanticTextBridge: NSViewRepresentable {
+/// Zero-size hidden text that AppKit inspectors and hosted tests can find;
+/// the remote test host has no accessibility tree.
+struct SidebarSemanticTextBridge: NSViewRepresentable {
     let text: String
 
     func makeNSView(context: Context) -> NSTextField {
@@ -3063,6 +3065,7 @@ struct SidebarView: View {
             let sessions = statuses.map { status in
                 SidebarSubspacePresentation.SessionLine(
                     title: status.displayTitle,
+                    panelID: status.panelID,
                     // An unnamed session's title is already the agent's name.
                     agentLabel: status.sessionName == nil ? nil : SidebarSessionPresentation.sessionAgentLabel(for: status.agent),
                     statusKind: status.status.kind,
@@ -3453,7 +3456,9 @@ struct SidebarView: View {
             refreshID: hoverTipModel,
             placement: .trailing(gap: Self.sessionHoverTipTrailingGap)
         ) {
-            SubspaceHoverTipCard(model: hoverTipModel)
+            SubspaceHoverTipCard(model: hoverTipModel) { panelID in
+                focusSessionPanel(workspaceID: row.id, panelID: panelID)
+            }
         }
         .background {
             SidebarSemanticTextBridge(text: accessibilityLabel)
