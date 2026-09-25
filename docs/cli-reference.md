@@ -579,6 +579,7 @@ focus actions are appropriate only for user-authorized navigation.
 Prefer `query list --json` to discover the current canonical IDs. Common queries include:
 
 - `annotation.keys`
+- `workspace.list`
 - `workspace.snapshot`
 - `terminal.state` (returns `windowID`, `workspaceID`, `panelID`, and terminal metadata)
 - `terminal.visible-text` (accepts `contains`, `tail`, and `includeScrollback`;
@@ -592,6 +593,14 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 caller can automate, not only the caller's own panel. Reads by another session
 are shown in the read panel's header, and a panel the user marked private
 returns `PANEL_READ_DENIED` to every session except its own.
+
+`workspace.list` returns `workspaces`, one entry per workspace in window
+order, without selecting or focusing anything. Each entry has `windowID`,
+`workspaceID`, 1-based `index` within its window, `title`, `isSelected`,
+`annotations` (the same shape as `workspace.snapshot`), and `terminalCwds`,
+the sorted working directories of the workspace's terminal panels across all
+tabs. `--window` limits the list to one window. A workspace-scoped caller sees
+only workspaces in its scope.
 
 `workspace.snapshot` describes the selected tab's main-area slots in
 `slotMappings`. Terminal entries carry `title`, `cwd`, `shell`, `profileID`,

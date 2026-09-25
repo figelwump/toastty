@@ -438,6 +438,7 @@ Queries preserve selection and focus, but can initialize runtime state:
 Common query IDs include:
 
 - `annotation.keys`
+- `workspace.list`
 - `workspace.snapshot`
 - `terminal.state`
 - `terminal.visible-text`

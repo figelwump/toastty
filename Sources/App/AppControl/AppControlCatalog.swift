@@ -410,6 +410,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
 
 enum AppControlQueryID: String, CaseIterable, Sendable {
     case annotationKeys = "annotation.keys"
+    case workspaceList = "workspace.list"
     case workspaceSnapshot = "workspace.snapshot"
     case terminalState = "terminal.state"
     case terminalVisibleText = "terminal.visible-text"
@@ -447,6 +448,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 kind: .query,
                 summary: "Return runtime-global workspace annotation keys previously registered in this Toastty instance.",
                 selectors: []
+            )
+        case .workspaceList:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "List workspaces in window order with titles, annotations, and terminal working directories, without selecting or focusing anything. Workspace-scoped callers see only workspaces in their scope.",
+                selectors: [.windowID]
             )
         case .workspaceSnapshot:
             return .init(id: rawValue, kind: .query, summary: "Return workspace structure and tab metadata without selecting the workspace or changing focus. Panel details cover its selected tab.", selectors: [.windowID, .workspaceID])
