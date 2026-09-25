@@ -2,26 +2,6 @@ import AppKit
 import CoreState
 import SwiftUI
 
-/// Temporary, opt-in evidence for sidebar rows that miss their hover state.
-@MainActor
-enum SidebarHoverDiagnostics {
-    static let enabled = ["1", "true", "yes", "on"].contains(
-        ProcessInfo.processInfo.environment["TOASTTY_SIDEBAR_HOVER_DIAGNOSTICS"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    )
-
-    static func log(_ phase: String, metadata: @autoclosure () -> [String: String]) {
-        guard enabled else { return }
-        var fields = metadata()
-        fields["phase"] = phase
-        ToasttyLog.info(
-            "sidebar hover diagnostic",
-            category: .input,
-            metadata: fields
-        )
-    }
-}
-
 struct PointerInteractionValue: Equatable {
     let startLocation: CGPoint
     let location: CGPoint
@@ -72,8 +52,6 @@ struct PointerInteractionRegion: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: PointerInteractionView, context _: Context) {
-        let hoverIdentityChanged = SidebarHoverDiagnostics.enabled
-            && (nsView.logName != name || nsView.logMetadata != metadata)
         nsView.logName = name
         nsView.logMetadata = metadata
         nsView.cursor = cursor
@@ -85,9 +63,6 @@ struct PointerInteractionRegion: NSViewRepresentable {
         nsView.onEnded = onEnded
         nsView.onCancelled = onCancelled
         nsView.onHoverChanged = onHoverChanged
-        if hoverIdentityChanged {
-            nsView.logSidebarHoverDiagnostic("row-configured")
-        }
     }
 
     static func dismantleNSView(_ nsView: PointerInteractionView, coordinator _: ()) {
@@ -138,8 +113,7 @@ final class PointerInteractionView: NSView {
     }
 
     private var hoverTrackingArea: NSTrackingArea?
-    private let hoverDiagnosticViewID = UUID()
-    private var hoverTrackingGeneration = 0
+    private var isHoverReconciliationScheduled = false
     private var sequenceWindowMovementSuppressionOwner = PointerWindowMovementSuppressionOwner()
     private var hoverWindowMovementSuppressionOwner = PointerWindowMovementSuppressionOwner()
     private var isPointerInside = false
@@ -204,7 +178,6 @@ final class PointerInteractionView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        logSidebarHoverDiagnostic("view-did-move-to-window")
         logCursorDiagnostic("view-did-move-to-window")
         if window == nil {
             cancelPointerSequence(reason: "removed-from-window", restoreTiming: .deferred)
@@ -212,35 +185,64 @@ final class PointerInteractionView: NSView {
         } else if suppressesWindowMovementWhileHovered, isPointerInside {
             suppressWindowMovementForHover()
         }
+        scheduleHoverExitReconciliation()
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
+
+        // SwiftUI hosting can report a visibleRect larger than this row. Track
+        // only the row's clipped bounds, and preserve AppKit's entry/exit state
+        // across layout passes that do not change the tracking rectangle.
+        let trackingRect = bounds.intersection(visibleRect)
+        if let hoverTrackingArea, hoverTrackingArea.rect == trackingRect,
+           trackingAreas.contains(where: { $0 === hoverTrackingArea }) {
+            scheduleHoverExitReconciliation()
+            return
+        }
         if let hoverTrackingArea {
             removeTrackingArea(hoverTrackingArea)
         }
+        hoverTrackingArea = nil
 
-        let trackingArea = NSTrackingArea(
-            rect: .zero,
-            options: [.activeAlways, .enabledDuringMouseDrag, .inVisibleRect, .mouseEnteredAndExited, .cursorUpdate],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-        hoverTrackingArea = trackingArea
-        hoverTrackingGeneration &+= 1
-        logSidebarHoverDiagnostic("tracking-area-updated")
+        if trackingRect.isEmpty == false {
+            let trackingArea = NSTrackingArea(
+                rect: trackingRect,
+                options: [.activeAlways, .enabledDuringMouseDrag, .mouseEnteredAndExited, .cursorUpdate],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(trackingArea)
+            hoverTrackingArea = trackingArea
+        }
         logCursorDiagnostic("tracking-area-updated")
+        scheduleHoverExitReconciliation()
+    }
+
+    private func scheduleHoverExitReconciliation() {
+        guard isPointerInside, isHoverReconciliationScheduled == false else { return }
+        isHoverReconciliationScheduled = true
+        // Updating tracking areas can happen inside SwiftUI layout. Defer the
+        // callback and sample live geometry, not the position from scheduling.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isHoverReconciliationScheduled = false
+            guard self.isPointerInside, let window = self.window else { return }
+            let point = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if self.isHiddenOrHasHiddenAncestor || self.bounds.intersection(self.visibleRect).contains(point) == false {
+                self.setPointerInside(false)
+            }
+        }
     }
 
     override func mouseEntered(with event: NSEvent) {
-        logSidebarHoverDiagnostic("mouse-entered", event: event)
         logCursorDiagnostic("mouse-entered", event: event)
-        setPointerInside(true)
+        // An entry is authoritative even if a missed exit left native state
+        // unchanged: another row may now own the sidebar hover.
+        setPointerInside(true, refreshUnchangedHover: true)
     }
 
     override func mouseExited(with event: NSEvent) {
-        logSidebarHoverDiagnostic("mouse-exited", event: event)
         logCursorDiagnostic("mouse-exited", event: event)
         setPointerInside(false)
     }
@@ -253,7 +255,6 @@ final class PointerInteractionView: NSView {
     }
 
     func invalidate() {
-        logSidebarHoverDiagnostic("invalidate")
         logLifecycleDiagnostic("invalidate")
         // SwiftUI calls dismantleNSView → invalidate while it is still walking
         // its view graph. Synchronously mutating window.isMovable /
@@ -270,9 +271,12 @@ final class PointerInteractionView: NSView {
         onHoverChanged = nil
     }
 
-    private func setPointerInside(_ isInside: Bool, notify: Bool = true) {
+    private func setPointerInside(_ isInside: Bool, notify: Bool = true, refreshUnchangedHover: Bool = false) {
         guard isPointerInside != isInside else {
-            logSidebarHoverDiagnostic("callback-suppressed-unchanged")
+            if notify, refreshUnchangedHover {
+                onHoverChanged?(isInside)
+                return
+            }
             return
         }
         isPointerInside = isInside
@@ -285,10 +289,7 @@ final class PointerInteractionView: NSView {
             }
         }
         if notify {
-            logSidebarHoverDiagnostic("callback-forwarded")
             onHoverChanged?(isInside)
-        } else {
-            logSidebarHoverDiagnostic("callback-not-requested")
         }
     }
 
@@ -542,11 +543,9 @@ final class PointerInteractionView: NSView {
     }
 
     private func clearPointerHoverForTeardown() {
-        logSidebarHoverDiagnostic("teardown-hover-check")
         guard isPointerInside else { return }
         isPointerInside = false
         logCursorDiagnostic("pointer-outside-set")
-        logSidebarHoverDiagnostic("teardown-callback-forwarded")
         onHoverChanged?(false)
         if suppressesWindowMovementWhileHovered {
             scheduleHoverWindowMovementRestore()
@@ -846,48 +845,6 @@ final class PointerInteractionView: NSView {
             )
         )
         ToasttyLog.debug("draggable pointer restored suppressed window frame", category: .input, metadata: metadata)
-    }
-
-    fileprivate func logSidebarHoverDiagnostic(_ phase: String, event: NSEvent? = nil) {
-        guard SidebarHoverDiagnostics.enabled, logName == "session-sidebar-row" else { return }
-        var metadata = logMetadata
-        metadata["viewID"] = hoverDiagnosticViewID.uuidString
-        metadata["trackingGeneration"] = String(hoverTrackingGeneration)
-        metadata["pointerInside"] = String(isPointerInside)
-        metadata["callbackInstalled"] = String(onHoverChanged != nil)
-        metadata["frame"] = DraggableInteractionLog.rectDescription(frame)
-        metadata["bounds"] = DraggableInteractionLog.rectDescription(bounds)
-        metadata["visibleRect"] = DraggableInteractionLog.rectDescription(visibleRect)
-        metadata["hiddenOrAncestorHidden"] = String(isHiddenOrHasHiddenAncestor)
-        metadata["windowNumber"] = window.map { String($0.windowNumber) } ?? "none"
-        if let area = hoverTrackingArea {
-            metadata["trackingAreaRect"] = DraggableInteractionLog.rectDescription(area.rect)
-            metadata["trackingAreaOptions"] = String(area.options.rawValue)
-            metadata["trackingAreaRegistered"] = String(trackingAreas.contains { $0 === area })
-        }
-        if let event {
-            metadata["eventTimestamp"] = String(event.timestamp)
-            metadata["eventWindowNumber"] = String(event.windowNumber)
-            // Some host tests call mouseEntered/Exited with synthetic mouse-move events.
-            if event.type == .mouseEntered || event.type == .mouseExited {
-                metadata["eventTrackingAreaMatches"] = String(event.trackingArea === hoverTrackingArea)
-            }
-            if event.windowNumber == window?.windowNumber {
-                metadata["eventLocalLocation"] = DraggableInteractionLog.pointDescription(
-                    convert(event.locationInWindow, from: nil)
-                )
-            }
-        }
-        if let window {
-            metadata["windowRect"] = DraggableInteractionLog.rectDescription(convert(bounds, to: nil))
-            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            metadata["localMouseLocation"] = DraggableInteractionLog.pointDescription(point)
-            metadata["mouseInsideBounds"] = String(bounds.contains(point))
-            metadata["mouseInsideVisibleRect"] = String(visibleRect.contains(point))
-            metadata["mouseInsideExcludedRect"] = String(excludedRects.contains { $0.contains(point) })
-            metadata["windowIsKey"] = String(window.isKeyWindow)
-        }
-        SidebarHoverDiagnostics.log(phase, metadata: metadata)
     }
 
     private func logCursorDiagnostic(

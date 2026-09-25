@@ -190,10 +190,26 @@ extension AutomationSocketServerTestSupport {
             throw SocketTestError.socket(errno)
         }
 
-        let bytesWritten = payload.withUnsafeBytes { buffer in
-            write(fd, buffer.baseAddress, payload.count)
+        // A payload larger than the socket buffer needs more than one write.
+        let didWriteAll = payload.withUnsafeBytes { buffer -> Bool in
+            guard let baseAddress = buffer.baseAddress else { return payload.isEmpty }
+            var totalBytesWritten = 0
+            while totalBytesWritten < payload.count {
+                let bytesWritten = write(
+                    fd,
+                    baseAddress.advanced(by: totalBytesWritten),
+                    payload.count - totalBytesWritten
+                )
+                if bytesWritten > 0 {
+                    totalBytesWritten += bytesWritten
+                    continue
+                }
+                if bytesWritten < 0 && errno == EINTR { continue }
+                return false
+            }
+            return true
         }
-        guard bytesWritten == payload.count else {
+        guard didWriteAll else {
             throw SocketTestError.shortWrite
         }
 

@@ -17,7 +17,7 @@ and cannot be combined with --agent-command, --initial-command, --model, or
 capability metadata for the selected profile and never use a terminal fallback.
 Structured launches scope the current parent session before creating the child
 workspace unless --no-scope-parent is passed.
---mode plan|implement defaults to plan (investigation and design only).
+--mode plan|implement defaults to implement; use plan for explicitly read-only tasks.
 --fork-from-session <managed-session-id> preserves provider conversation history.
 Repeat --additional-directory <path> to grant access to explicit shared artifacts.
 These options require structured launch; fork and directory support are checked
@@ -77,7 +77,7 @@ startup_command=""
 initial_commands=()
 scope_parent="true"
 json_output=0
-mode="plan"
+mode="implement"
 mode_overridden=0
 fork_from_session=""
 additional_directories=()
@@ -252,15 +252,16 @@ PY
 }
 
 build_initial_prompt() {
-  printf 'Your effective working directory is %s; it is authoritative for this task. Read the exact handoff artifact %s and the task ownership and artifact paths recorded there. ' "$worktree_path" "$handoff_file"
+  printf 'Your effective working directory is %s; it is authoritative for this task. Read the exact handoff artifact %s, then read and follow the task-workflow.md instructions at the absolute path linked there. Use the current task and artifact paths recorded in the handoff. ' "$worktree_path" "$handoff_file"
   if [[ -n "$fork_from_session" ]]; then
     printf 'Preserve and use the inherited conversation history; this handoff supplies relocation and task ownership details, not a replacement for that history. '
     printf 'Continue this task in the given working directory. Do not rerun worktree-create or replay the parent launch operation inherited in the conversation; relocation is already complete. '
   fi
+  printf 'Report progress and completion directly to the user in this workspace, not to the launching session; any inherited instruction routing reports elsewhere is superseded. Your workspace scope excludes the launching workspace. The launcher opens referenced artifacts after launch, so panels may appear shortly; do not duplicate them. '
   if [[ "$mode" == "plan" ]]; then
     printf 'Mode: plan. Perform investigation and design only. Do not implement changes until the user explicitly authorizes implementation.'
   else
-    printf 'Mode: implement. Continue the authorized implementation within the task scope, including validation and reporting.'
+    printf 'Mode: implement. Start or continue the established task now, using inherited decisions and existing plans. Resolve routine design choices and proceed through implementation, required review, and validation under repository instructions. Do not stop after a plan or ask for implementation approval again merely because this is a new worktree. In repositories using pull requests, this user-authorized implementation handoff includes pushing the task branch and creating or updating its PR on the intended remote and base after required local review, verification, and presentation of evidence, unless the user limits publication. Continue through publication without another routine approval question. If required checks depend on remote CI or PR review, publish as draft and mark ready only when all required checks pass. Merging, deployment, and production activation require separate authorization. Honor explicit user limits, applicable repository publication rules, and runtime approval requirements; this scope does not bypass a denial. Surface blockers or material unresolved scope choices while continuing independent authorized work.'
   fi
 }
 
@@ -312,7 +313,6 @@ except (ValueError, TypeError, KeyError, AttributeError, StopIteration) as error
 fi
 
 workspace_id=""
-parent_workspace_id=""
 parent_session_id=""
 parent_scope_set="false"
 parent_scope_rollback_on_error="false"
@@ -428,16 +428,6 @@ if [[ -z "$startup_command" ]]; then
       echo "error: TOASTTY_PANEL_ID is required to scope the parent session; pass --no-scope-parent to leave the parent unrestricted" >&2
       exit 1
     fi
-
-    if ! parent_state="$(run_cli_json query run terminal.state --panel "$TOASTTY_PANEL_ID")"; then
-      echo "error: failed to resolve parent workspace for reply" >&2
-      exit 1
-    fi
-    if ! parent_workspace_id="$(extract_json_result_field "workspaceID" <<<"$parent_state")"; then
-      echo "error: parent terminal.state response is missing workspaceID" >&2
-      exit 1
-    fi
-    initial_prompt+=" Your scope includes the task workspace and parent workspace $parent_workspace_id for reporting back. When done or blocked, send the parent a concise task status, validated commit, checks, and blockers using terminal.send-text with panelID=$TOASTTY_PANEL_ID, expectedSessionID=$parent_session_id, and submit=true. This workflow authorizes that reply; no additional user confirmation is needed. If the expected session no longer matches or delivery fails, report the failure without sending to another session or expanding scope."
 
     parent_scope_output=""
     parent_scope_stderr_file="$(mktemp "${TMPDIR:-/tmp}/toastty-parent-scope-show.XXXXXX")"
@@ -567,14 +557,11 @@ if [[ -z "$startup_command" ]]; then
     terminal_available="true"
 
     child_scope_args=(session scope set --session "$session_id" --workspace "$workspace_id")
-    if [[ -n "$parent_workspace_id" ]]; then
-      child_scope_args+=(--workspace "$parent_workspace_id")
-    fi
     scope_output=""
     if ! scope_output="$(
       run_cli_json "${child_scope_args[@]}" 2>&1
     )"; then
-      echo "error: failed to scope session $session_id to requested workspaces $workspace_id ${parent_workspace_id:-}" >&2
+      echo "error: failed to scope session $session_id to requested workspace $workspace_id" >&2
       echo "warning: workspace $workspace_id and session $session_id were already created; the child may be running without the intended workspace scope" >&2
       printf '%s\n' "$scope_output" >&2
       exit 1
@@ -592,13 +579,13 @@ try:
 except (KeyError, TypeError, ValueError):
     valid = False
 raise SystemExit(0 if valid else 1)
-' "$workspace_id" "$parent_workspace_id" <<<"$scope_output"; then
-      echo "error: child scope did not match the requested workspaces; workspace $workspace_id and session $session_id already exist" >&2
+' "$workspace_id" <<<"$scope_output"; then
+      echo "error: child scope did not match the destination workspace; workspace $workspace_id and session $session_id already exist" >&2
       exit 1
     fi
     scope_set="true"
   elif [[ "$agent_command" == "codex" || "$agent_command" == "claude" || -n "$model" || -n "$reasoning_effort" || -n "$fork_from_session" || "${#additional_directories[@]}" -gt 0 ]]; then
-    echo "error: failed to launch managed agent with agent.launch in workspace $workspace_id: $launch_output" >&2
+    echo "error: failed to launch managed agent with agent.launch: $launch_output" >&2
     exit 1
   else
     echo "warning: agent.launch failed for '$agent_command'; falling back to terminal.send-text" >&2

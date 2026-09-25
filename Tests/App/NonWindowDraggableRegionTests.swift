@@ -213,7 +213,8 @@ final class NonWindowDraggableRegionTests: XCTestCase {
             view.trackingAreas.first(where: { $0.options.contains(.cursorUpdate) })
         )
         XCTAssertTrue(trackingArea.options.contains(.mouseEnteredAndExited))
-        XCTAssertTrue(trackingArea.options.contains(.inVisibleRect))
+        XCTAssertFalse(trackingArea.options.contains(.inVisibleRect))
+        XCTAssertEqual(trackingArea.rect, view.bounds.intersection(view.visibleRect))
 
         view.cursor = .resizeLeftRight
         XCTAssertTrue(view.cursor === NSCursor.resizeLeftRight)
@@ -258,7 +259,135 @@ final class NonWindowDraggableRegionTests: XCTestCase {
             with: try pointerMouseEvent(type: .mouseExited, location: NSPoint(x: 180, y: 90), window: window)
         )
 
-        XCTAssertEqual(hoverStates, [true, false])
+        XCTAssertEqual(hoverStates, [true, true, false], "Re-entry must refresh hover even without an exit or layout update")
+    }
+
+    @MainActor
+    func testTrackingUpdateClearsStaleHoverBeforeReentry() throws {
+        let (window, view) = makeHoverTrackingFixture()
+        defer { window.orderOut(nil) }
+        var states: [Bool] = []
+        view.onHoverChanged = { states.append($0) }
+        let inside = NSPoint(x: 40, y: 50)
+        window.pointerLocation = inside
+        view.mouseEntered(with: try pointerMouseEvent(type: .mouseEntered, location: inside, window: window))
+
+        // AppKit can omit an exit when the tracking area is replaced during layout.
+        window.pointerLocation = NSPoint(x: 200, y: 100)
+        view.updateTrackingAreas()
+        XCTAssertEqual(states, [true], "Do not publish SwiftUI state while AppKit is updating layout")
+        pumpMainRunLoop()
+        XCTAssertEqual(states, [true, false])
+
+        window.pointerLocation = inside
+        view.mouseEntered(with: try pointerMouseEvent(type: .mouseEntered, location: inside, window: window))
+        XCTAssertEqual(states, [true, false, true], "A real re-entry must reach the sidebar")
+    }
+
+    @MainActor
+    func testTrackingUpdateUsesCurrentPointerPositionWhenDeferredWorkRuns() throws {
+        let (window, view) = makeHoverTrackingFixture()
+        defer { window.orderOut(nil) }
+        var states: [Bool] = []
+        view.onHoverChanged = { states.append($0) }
+        let inside = NSPoint(x: 40, y: 50)
+        window.pointerLocation = inside
+        view.mouseEntered(with: try pointerMouseEvent(type: .mouseEntered, location: inside, window: window))
+
+        window.pointerLocation = NSPoint(x: 200, y: 100)
+        view.updateTrackingAreas()
+        window.pointerLocation = inside
+        pumpMainRunLoop()
+        XCTAssertEqual(states, [true], "A queued outside sample must not clear a newer entry")
+    }
+
+    @MainActor
+    func testTrackingUpdateClearsHoverWhenRowMovesAwayFromStationaryPointer() throws {
+        let (window, view) = makeHoverTrackingFixture()
+        defer { window.orderOut(nil) }
+        var states: [Bool] = []
+        view.onHoverChanged = { states.append($0) }
+        window.pointerLocation = NSPoint(x: 40, y: 50)
+        view.mouseEntered(with: try pointerMouseEvent(
+            type: .mouseEntered, location: window.pointerLocation, window: window
+        ))
+
+        view.frame.origin.x = 150
+        view.updateTrackingAreas()
+        pumpMainRunLoop()
+        XCTAssertEqual(states, [true, false], "Layout movement must clear hover even without a mouse exit")
+    }
+
+    @MainActor
+    func testTrackingAreaSurvivesUnchangedLayoutAndDoesNotSynthesizeEntry() throws {
+        let (window, view) = makeHoverTrackingFixture()
+        defer { window.orderOut(nil) }
+        let originalArea = try XCTUnwrap(view.trackingAreas.first)
+        var states: [Bool] = []
+        view.onHoverChanged = { states.append($0) }
+        window.pointerLocation = NSPoint(x: 40, y: 50)
+        for _ in 0..<4 { view.updateTrackingAreas() }
+        pumpMainRunLoop()
+        XCTAssertTrue(view.trackingAreas.first === originalArea, "Preserve AppKit's entry/exit history")
+        XCTAssertTrue(states.isEmpty, "Geometry alone must not invent an entry in an obscured window")
+    }
+
+    @MainActor
+    func testTrackingUpdateClearsHoverWhenRowIsClippedOut() throws {
+        let (window, view) = makeHoverTrackingFixture()
+        defer { window.orderOut(nil) }
+        let clip = NSClipView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        let document = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 400))
+        window.contentView = clip
+        clip.documentView = document
+        document.addSubview(view)
+        clip.scroll(to: .zero)
+        view.updateTrackingAreas()
+        var states: [Bool] = []
+        view.onHoverChanged = { states.append($0) }
+        window.pointerLocation = view.convert(NSPoint(x: 20, y: 20), to: nil)
+        view.mouseEntered(with: try pointerMouseEvent(
+            type: .mouseEntered, location: window.pointerLocation, window: window
+        ))
+
+        clip.scroll(to: NSPoint(x: 0, y: 200))
+        view.updateTrackingAreas()
+        pumpMainRunLoop()
+        XCTAssertTrue(view.trackingAreas.isEmpty, "A fully clipped row must not track the viewport")
+        XCTAssertEqual(states, [true, false])
+    }
+
+    @MainActor
+    func testDeferredHoverExitDoesNotRepeatTeardownCallback() throws {
+        let (window, view) = makeHoverTrackingFixture()
+        defer { window.orderOut(nil) }
+        var states: [Bool] = []
+        view.onHoverChanged = { states.append($0) }
+        window.pointerLocation = NSPoint(x: 40, y: 50)
+        view.mouseEntered(with: try pointerMouseEvent(
+            type: .mouseEntered, location: window.pointerLocation, window: window
+        ))
+        window.pointerLocation = NSPoint(x: 200, y: 100)
+        view.updateTrackingAreas()
+        view.invalidate()
+        view.removeFromSuperview()
+        pumpMainRunLoop()
+        XCTAssertEqual(states, [true, false])
+    }
+
+    @MainActor
+    private func makeHoverTrackingFixture() -> (HoverTrackingWindow, PointerInteractionView) {
+        let window = HoverTrackingWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = container
+        container.addSubview(view)
+        view.updateTrackingAreas()
+        pumpMainRunLoop()
+        return (window, view)
     }
 
     @MainActor
@@ -610,7 +739,7 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     @MainActor
     func testPointerInteractionViewDeferredHoverRestoreDoesNotReleaseNewHover() throws {
         defer { WindowMovementSuppression.resetForTesting() }
-        let window = NSWindow(
+        let window = HoverTrackingWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
             styleMask: [.titled, .resizable],
             backing: .buffered,
@@ -623,6 +752,7 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         view.suppressesWindowMovementWhileHovered = true
         container.addSubview(view)
         window.contentView = container
+        window.pointerLocation = NSPoint(x: 56, y: 58)
         window.makeKeyAndOrderFront(nil)
 
         view.mouseEntered(
@@ -1074,3 +1204,9 @@ private struct WindowMovableProbeRepresentable: NSViewRepresentable {
 }
 
 private final class WindowMovableProbeView: NSView {}
+
+@MainActor
+private final class HoverTrackingWindow: NSWindow {
+    var pointerLocation = NSPoint(x: -100, y: -100)
+    override var mouseLocationOutsideOfEventStream: NSPoint { pointerLocation }
+}

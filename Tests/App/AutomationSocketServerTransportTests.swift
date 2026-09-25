@@ -215,4 +215,38 @@ struct AutomationSocketServerTransportTests: AutomationSocketServerTestSupport {
         #expect(probe.recoverySchedulesSnapshot().isEmpty)
         #expect(probe.listenerStartsSnapshot() == [nil])
     }
+
+    /// A request over the read buffer's cap is dropped without a response, so the
+    /// caller sees a closed socket rather than the command's own result. The cap
+    /// used to sit below the payloads app-control actions accept, which made a
+    /// Scratchpad document larger than ~256 KiB fail that way instead of being
+    /// stored or refused on its own terms.
+    @Test
+    func aRequestLargerThanTheOldBufferCapStillGetsAResponse() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "automation.command_that_does_not_exist",
+                payload: [
+                    "value": .string(String(repeating: "a", count: 512 * 1024)),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        // Reaching command dispatch at all is the point: a dropped request throws
+        // in `send` instead, and a truncated one fails to parse as JSON.
+        #expect(response.ok == false)
+        #expect(response.error?.code == "UNKNOWN_COMMAND")
+    }
 }

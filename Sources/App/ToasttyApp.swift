@@ -672,6 +672,7 @@ struct ToasttyApp: App {
     private let agentHookDispatcher: AgentHookDispatcher
     private let agentLaunchShimExecutablePath: String?
     private let codexProcessPathStore: CodexProcessPathStore
+    private let managedAgentResolutionContextStore: ManagedAgentResolutionContextStore
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let workspaceLayoutDisplayDiagnosticsObserver: WorkspaceLayoutDisplayDiagnosticsObserver?
@@ -845,6 +846,17 @@ struct ToasttyApp: App {
             ),
             refreshPath: codexProcessPathResolver
         )
+        // What `agent.profile.state` resolves against: the process environment plus
+        // the probed agent base path, matching what the shim sees at exec time. The
+        // store is refreshed on configuration reload, which recomputes both.
+        let managedAgentResolutionContextStore = ManagedAgentResolutionContextStore(
+            context: Self.makeManagedAgentResolutionContext(
+                processEnvironment: processEnvironment,
+                agentBasePath: resolvedAgentBasePath,
+                runtimePaths: runtimePaths,
+                installedShimDirectoryPath: shimDirectoryPath
+            )
+        )
         Self.configureBaseLaunchEnvironmentProvider(
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
@@ -1008,6 +1020,9 @@ struct ToasttyApp: App {
             socketPathProvider: { socketPath },
             codexProcessPathProvider: { codexProcessPathStore.currentPath() },
             codexProcessPathRefreshProvider: { codexProcessPathStore.refresh() },
+            managedAgentResolutionContextProvider: {
+                managedAgentResolutionContextStore.current()
+            },
             managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
         )
         terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
@@ -1039,6 +1054,7 @@ struct ToasttyApp: App {
                     agentLaunchCLIExecutablePath: cliExecutablePath,
                     agentLaunchShimExecutablePath: agentShimExecutablePath,
                     codexProcessPathStore: codexProcessPathStore,
+                    managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     agentHookDispatcher: agentHookDispatcher
                 )
@@ -1201,6 +1217,7 @@ struct ToasttyApp: App {
         agentLaunchShimExecutablePath = agentShimExecutablePath
         self.agentHookDispatcher = agentHookDispatcher
         self.codexProcessPathStore = codexProcessPathStore
+        self.managedAgentResolutionContextStore = managedAgentResolutionContextStore
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
@@ -1260,6 +1277,7 @@ struct ToasttyApp: App {
                         agentLaunchCLIExecutablePath: cliExecutablePath,
                         agentLaunchShimExecutablePath: agentShimExecutablePath,
                         codexProcessPathStore: codexProcessPathStore,
+                        managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         agentHookDispatcher: agentHookDispatcher
                     )
@@ -1337,6 +1355,28 @@ struct ToasttyApp: App {
                 ]
             )
         }
+    }
+
+    /// Excludes both shim directories: the installed one returned by shim
+    /// synchronization and the compatibility one, since either can shadow the real
+    /// binary on the launch PATH.
+    private static func makeManagedAgentResolutionContext(
+        processEnvironment: [String: String],
+        agentBasePath: String?,
+        runtimePaths: ToasttyRuntimePaths,
+        installedShimDirectoryPath: String?
+    ) -> ManagedAgentResolutionContext {
+        var environment = processEnvironment
+        if let agentBasePath {
+            environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = agentBasePath
+        }
+        return ManagedAgentResolutionContext(
+            environment: environment,
+            shimDirectoryPaths: [
+                installedShimDirectoryPath,
+                runtimePaths.agentShimDirectoryURL.path,
+            ]
+        )
     }
 
     private static func synchronizeManagedAgentCommandShims(
@@ -1626,6 +1666,7 @@ struct ToasttyApp: App {
             agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
             agentLaunchShimExecutablePath: agentLaunchShimExecutablePath,
             codexProcessPathStore: codexProcessPathStore,
+            managedAgentResolutionContextStore: managedAgentResolutionContextStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             agentHookDispatcher: agentHookDispatcher
         )
@@ -1641,6 +1682,7 @@ struct ToasttyApp: App {
         agentLaunchCLIExecutablePath: String?,
         agentLaunchShimExecutablePath: String?,
         codexProcessPathStore: CodexProcessPathStore,
+        managedAgentResolutionContextStore: ManagedAgentResolutionContextStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         agentHookDispatcher: AgentHookDispatcher
     ) {
@@ -1689,6 +1731,14 @@ struct ToasttyApp: App {
                 runtimePaths: runtimePaths,
                 agentProfiles: agentCatalogStore.catalog,
                 helperExecutablePath: agentLaunchShimExecutablePath
+            )
+            managedAgentResolutionContextStore.update(
+                Self.makeManagedAgentResolutionContext(
+                    processEnvironment: ProcessInfo.processInfo.environment,
+                    agentBasePath: resolvedAgentBasePath,
+                    runtimePaths: runtimePaths,
+                    installedShimDirectoryPath: shimDirectoryPath
+                )
             )
             Self.configureBaseLaunchEnvironmentProvider(
                 terminalRuntimeRegistry: terminalRuntimeRegistry,

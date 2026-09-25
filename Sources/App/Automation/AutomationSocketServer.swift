@@ -708,7 +708,13 @@ final class AutomationSocketServer: @unchecked Sendable {
 }
 
 private final class AutomationSocketClient: @unchecked Sendable {
-    private let maxBufferedBytes = 256 * 1024
+    /// A request must be able to carry the largest payload any app-control action
+    /// accepts, plus its JSON escaping and envelope. Otherwise the connection is
+    /// dropped here and the action never runs, so the caller sees a closed socket
+    /// instead of the action's own size error. The largest today is a Scratchpad
+    /// document at `ScratchpadDocumentStore.defaultMaxContentBytes` (1 MiB); this
+    /// leaves room above that while still bounding a runaway client.
+    private let maxBufferedBytes = 8 * 1024 * 1024
 
     private let fileDescriptor: Int32
     private let queue: DispatchQueue

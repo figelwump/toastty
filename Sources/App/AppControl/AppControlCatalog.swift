@@ -426,6 +426,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case panelBrowserState = "panel.browser.state"
     case panelScratchpadLookup = "panel.scratchpad.lookup"
     case panelScratchpadState = "panel.scratchpad.state"
+    case agentProfileState = "agent.profile.state"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -483,6 +484,14 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             )
         case .panelScratchpadState:
             return .init(id: rawValue, kind: .query, summary: "Return Scratchpad panel state.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
+        case .agentProfileState:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return the executable an agent profile would run, resolved in the launch environment and skipping Toastty's command shims. Launches no agent and starts no shell; omits the profile's arguments.",
+                selectors: [],
+                parameters: [.profileID(required: true)]
+            )
         }
     }
 }

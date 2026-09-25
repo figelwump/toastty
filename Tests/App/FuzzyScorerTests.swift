@@ -25,4 +25,12 @@ final class FuzzyScorerTests: XCTestCase {
 
         XCTAssertGreaterThan(boundaryMatch.score, internalMatch.score)
     }
+
+    func testWordBoundaryBonusWithEqualPrefixAndGap() throws {
+        // Only the separator differs: prefix and gap bonuses cannot decide the result.
+        let boundaryMatch = try XCTUnwrap(FuzzyScorer.match(query: "xb", candidate: "x b"))
+        let internalMatch = try XCTUnwrap(FuzzyScorer.match(query: "xb", candidate: "xab"))
+
+        XCTAssertGreaterThan(boundaryMatch.score, internalMatch.score)
+    }
 }

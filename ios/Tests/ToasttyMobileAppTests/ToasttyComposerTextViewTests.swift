@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 import XCTest
 @testable import ToasttyMobileApp
@@ -60,6 +61,47 @@ final class ToasttyComposerTextViewTests: XCTestCase {
         XCTAssertFalse(textView.isScrollEnabled)
         XCTAssertEqual(textView.contentOffset.y, 0, accuracy: 0.001)
         window.isHidden = true
+    }
+
+    func testBackspacingOverflowingAccessibilityDraftClearsBinding() async {
+        let (window, textView) = makeTextView()
+        defer { window.isHidden = true }
+        var draft = ""
+        let composer = ToasttyComposerTextView(
+            text: Binding(get: { draft }, set: { draft = $0 }),
+            isFocused: .constant(true),
+            placeholder: "Message Codex…",
+            isEnabled: true,
+            accessibilityLabel: "Message Codex",
+            accessibilityHint: "",
+            maximumVisibleLines: 2
+        )
+        let coordinator = composer.makeCoordinator()
+        textView.delegate = coordinator
+        textView.font = .preferredFont(
+            forTextStyle: .body,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        )
+        XCTAssertTrue(textView.becomeFirstResponder())
+        let longDraft = "Review these files\n3\n4\n5\n6\nFOX7"
+        textView.insertText(longDraft)
+        XCTAssertEqual(draft, longDraft)
+        fitTextViewToContent(textView, maximumVisibleLines: 2)
+        let deferredReveal = expectation(description: "overflow caret layout")
+        DispatchQueue.main.async { deferredReveal.fulfill() }
+        await fulfillment(of: [deferredReveal])
+        textView.requestSelectionVisibility()
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.isScrollEnabled)
+        XCTAssertGreaterThan(textView.contentOffset.y, 0)
+
+        for _ in longDraft {
+            textView.deleteBackward()
+        }
+
+        XCTAssertEqual(textView.text, "")
+        XCTAssertEqual(draft, "")
+        XCTAssertTrue(textView.isFirstResponder)
     }
 
     func testProgrammaticTextUpdateClampsSelectionWithoutMovingValidRange() {
