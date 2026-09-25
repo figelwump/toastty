@@ -3064,8 +3064,20 @@ struct SidebarView: View {
             parentSessionStatuses.map { ($0.sessionID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+        // `workspace.create` with an explicit parent lets a session in another
+        // workspace spawn a subspace here, so look past the parent's sessions
+        // for it, within this window.
+        func spawnerStatus(_ sessionID: String) -> WorkspaceSessionStatus? {
+            if let status = spawnersBySessionID[sessionID] { return status }
+            guard let workspaceID = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.workspaceID,
+                  windowWorkspaceIDs.contains(workspaceID) else {
+                return nil
+            }
+            return sidebarSessionStatuses(for: workspaceID).first { $0.sessionID == sessionID }
+        }
         return subspaceIDs.compactMap { subspaceID in
             guard let workspace = store.state.workspacesByID[subspaceID] else { return nil }
+            let spawner = workspace.spawningSessionID.flatMap(spawnerStatus)
             let statuses = sidebarSessionStatuses(for: subspaceID)
             let sessions = statuses.map { status in
                 SidebarSubspacePresentation.SessionLine(
@@ -3091,8 +3103,9 @@ struct SidebarView: View {
                 annotations: workspace.annotations,
                 summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
                 spawningSessionID: workspace.spawningSessionID,
-                spawnerName: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.displayTitle },
-                spawnerPanelID: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.panelID },
+                spawnerName: spawner?.displayTitle,
+                spawnerPanelID: spawner?.panelID,
+                spawnerWorkspaceID: spawner?.workspaceID,
                 sessions: sessions,
                 creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max,
                 path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace)
@@ -3158,7 +3171,15 @@ struct SidebarView: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(orderedRows) { row in
-                        subspaceRow(row, parentWorkspaceID: parentWorkspaceID, showsSpawnerTag: showsSpawnerTags)
+                        subspaceRow(
+                            row,
+                            parentWorkspaceID: parentWorkspaceID,
+                            showsSpawnerTag: SidebarSubspacePresentation.showsSpawnerTag(
+                                row,
+                                parentWorkspaceID: parentWorkspaceID,
+                                groupShowsSpawnerTags: showsSpawnerTags
+                            )
+                        )
                     }
                 }
                 .animation(
@@ -3314,17 +3335,17 @@ struct SidebarView: View {
     }
 
     /// The ↖ tag on a subspace row. While the spawning session runs it is a
-    /// button that focuses that session's panel in the parent workspace.
+    /// button that focuses that session's panel in whichever workspace holds it.
     @ViewBuilder
     private func spawnerTag(
         label: String,
         spawnerName: String,
-        parentWorkspaceID: UUID,
+        spawnerWorkspaceID: UUID,
         spawnerPanelID: UUID?
     ) -> some View {
         if let spawnerPanelID {
             Button {
-                focusSessionPanel(workspaceID: parentWorkspaceID, panelID: spawnerPanelID)
+                focusSessionPanel(workspaceID: spawnerWorkspaceID, panelID: spawnerPanelID)
             } label: {
                 sessionParentTag(label: label)
             }
@@ -3428,7 +3449,7 @@ struct SidebarView: View {
                             spawnerTag(
                                 label: SidebarSubspacePresentation.spawnerTagLabel(spawnerName),
                                 spawnerName: spawnerName,
-                                parentWorkspaceID: parentWorkspaceID,
+                                spawnerWorkspaceID: row.spawnerWorkspaceID ?? parentWorkspaceID,
                                 spawnerPanelID: row.spawnerPanelID
                             )
                             .frame(maxWidth: 110, alignment: .trailing)

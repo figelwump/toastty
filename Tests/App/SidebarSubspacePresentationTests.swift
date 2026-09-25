@@ -232,6 +232,19 @@ final class SidebarSubspacePresentationTests: XCTestCase {
 
         XCTAssertTrue(SidebarSubspacePresentation.showsSpawnerTags(rows))
         XCTAssertFalse(SidebarSubspacePresentation.showsSpawnerTags(Array(rows[0...1])))
+        // A single-spawner group still tags a row whose spawner lives in
+        // another workspace, since no chip in this card points to it.
+        let parentID = UUID()
+        var externallySpawned = rows[0]
+        externallySpawned.spawnerWorkspaceID = UUID()
+        var locallySpawned = rows[1]
+        locallySpawned.spawnerWorkspaceID = parentID
+        XCTAssertTrue(SidebarSubspacePresentation.showsSpawnerTag(
+            externallySpawned, parentWorkspaceID: parentID, groupShowsSpawnerTags: false
+        ))
+        XCTAssertFalse(SidebarSubspacePresentation.showsSpawnerTag(
+            locallySpawned, parentWorkspaceID: parentID, groupShowsSpawnerTags: false
+        ))
         XCTAssertEqual(
             SidebarSubspacePresentation.filteredRows(rows, spawningSessionID: "a").map(\.title),
             ["one", "two"]

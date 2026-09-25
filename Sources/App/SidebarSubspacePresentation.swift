@@ -60,6 +60,9 @@ enum SidebarSubspacePresentation {
         /// The spawning session's panel while it is still running, so the
         /// ↖ tag can jump to it.
         var spawnerPanelID: UUID? = nil
+        /// The workspace that panel is in: usually the parent, but a session
+        /// elsewhere can nest a subspace under it.
+        var spawnerWorkspaceID: UUID? = nil
         let sessions: [SessionLine]
         /// Position in the window's workspace order, the tie-breaker so rows
         /// with the same status never swap.
@@ -224,6 +227,12 @@ enum SidebarSubspacePresentation {
     /// Spawner tags only help when the group mixes more than one spawner.
     static func showsSpawnerTags(_ rows: [Row]) -> Bool {
         Set(rows.map { $0.spawningSessionID ?? "" }).count > 1
+    }
+
+    /// A spawner in another workspace has no ⑂ chip in this card, so its rows
+    /// carry the tag even when the group has only one spawner.
+    static func showsSpawnerTag(_ row: Row, parentWorkspaceID: UUID, groupShowsSpawnerTags: Bool) -> Bool {
+        groupShowsSpawnerTags || row.spawnerWorkspaceID.map { $0 != parentWorkspaceID } == true
     }
 
     static func spawnerTagLabel(_ name: String) -> String {

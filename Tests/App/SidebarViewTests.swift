@@ -2144,6 +2144,45 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(parent.focusedPanelID, assessor.panelID)
     }
 
+    func testSpawnerInAnotherWorkspaceIsNamedAndItsTagJumpsThere() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        // An orchestrator in the sibling card nests a subspace under the
+        // parent, as `workspace.create parent=<id>` does.
+        let sibling = try XCTUnwrap(harness.store.state.workspacesByID[ids.siblingID])
+        let orchestratorPanelID = try XCTUnwrap(sibling.focusedPanelID)
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "orchestrator",
+            agent: .claude,
+            panelID: orchestratorPanelID,
+            windowID: harness.windowID,
+            workspaceID: sibling.id,
+            displayTitleOverride: "Merge ready PRs",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "orchestrator",
+            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Waiting on subspaces"),
+            at: Date(timeIntervalSince1970: 1_700_000_001)
+        )
+        _ = harness.store.send(.setWorkspaceParent(
+            workspaceID: ids.workingID,
+            parentWorkspaceID: ids.parentID,
+            spawningSessionID: "orchestrator"
+        ))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        try clickSemanticText(prefix: "Go to Merge ready PRs", in: rootView)
+        pumpMainRunLoop(duration: 0.3)
+
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.siblingID)
+        XCTAssertEqual(harness.store.state.workspacesByID[ids.siblingID]?.focusedPanelID, orchestratorPanelID)
+    }
+
     private func semanticTextFrame(in rootView: NSView, prefix: String) throws -> CGRect {
         let field = try XCTUnwrap(
             semanticTextField(in: rootView, prefix: prefix),
