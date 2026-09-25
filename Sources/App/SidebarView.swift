@@ -533,9 +533,10 @@ struct SidebarView: View {
     /// baseline whether or not a row has a badge or disclosure pill.
     private static let sessionRowLineMinHeight: CGFloat = 17
     private static let sessionRowSecondaryLineMinHeight: CGFloat = 16
-    /// Rows sit 10pt inside the sidebar's trailing edge, so this clears that
-    /// inset and leaves a small gap over the terminal.
-    private static let sessionHoverTipTrailingGap: CGFloat = 16
+    /// Hover cards open this close to their row's trailing edge, over the
+    /// sidebar's 10pt inset, so the pointer has almost no gap to cross to
+    /// reach a card.
+    private static let hoverTipTrailingGap: CGFloat = 4
     private static let workspaceScopeFallbackHelpText = "Workspace-scoped automation is limited to assigned workspaces."
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
@@ -1482,7 +1483,7 @@ struct SidebarView: View {
                 .hoverTip(
                     id: sessionRowID,
                     refreshID: hoverTipRefreshKey,
-                    placement: .trailing(gap: Self.sessionHoverTipTrailingGap),
+                    placement: .trailing(gap: Self.hoverTipTrailingGap),
                     isHovering: isHovered
                 ) {
                     SessionRowHoverTipCard(
@@ -2874,7 +2875,11 @@ struct SidebarView: View {
             .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
-        .hoverTip(id: child.sidebarStableID, refreshID: hoverTipModel) {
+        .hoverTip(
+            id: child.sidebarStableID,
+            refreshID: hoverTipModel,
+            placement: .trailing(gap: Self.hoverTipTrailingGap)
+        ) {
             SessionChildHoverTipCard(model: hoverTipModel)
         }
         .accessibilityElement(children: .ignore)
@@ -3071,7 +3076,8 @@ struct SidebarView: View {
                     statusKind: status.status.kind,
                     showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace),
                     summary: normalizedSessionDetail(status.status.detail) ?? normalizedSessionDetail(status.status.summary),
-                    turnStartedAt: status.turnStartedAt
+                    turnStartedAt: status.turnStartedAt,
+                    statusUpdatedAt: status.statusUpdatedAt
                 )
             }
             return SidebarSubspacePresentation.Row(
@@ -3083,7 +3089,7 @@ struct SidebarView: View {
                     }
                 ),
                 annotations: workspace.annotations,
-                summary: sessions.first?.summary,
+                summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
                 spawningSessionID: workspace.spawningSessionID,
                 spawnerName: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.displayTitle },
                 spawnerPanelID: workspace.spawningSessionID.flatMap { spawnersBySessionID[$0]?.panelID },
@@ -3454,7 +3460,7 @@ struct SidebarView: View {
         .hoverTip(
             id: row.id,
             refreshID: hoverTipModel,
-            placement: .trailing(gap: Self.sessionHoverTipTrailingGap)
+            placement: .trailing(gap: Self.hoverTipTrailingGap)
         ) {
             SubspaceHoverTipCard(model: hoverTipModel) { panelID in
                 focusSessionPanel(workspaceID: row.id, panelID: panelID)

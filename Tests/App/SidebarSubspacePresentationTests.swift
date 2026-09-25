@@ -61,6 +61,69 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
     }
 
+    func testRowSummaryFollowsTheStatusSessionThenTheLatestReport() {
+        func line(
+            _ summary: String?,
+            _ kind: SessionStatusKind,
+            unread: Bool = false,
+            reportedAt seconds: TimeInterval?
+        ) -> SidebarSubspacePresentation.SessionLine {
+            SidebarSubspacePresentation.SessionLine(
+                title: "Agent",
+                panelID: UUID(),
+                statusKind: kind,
+                showsUnreadSessionAccent: unread,
+                summary: summary,
+                statusUpdatedAt: seconds.map { Date(timeIntervalSince1970: $0) }
+            )
+        }
+
+        // The approval sets the row's status, so its text wins over a newer working report.
+        XCTAssertEqual(
+            SidebarSubspacePresentation.rowSummary(sessions: [
+                line("Running tests", .working, reportedAt: 20),
+                line("Approve rm -rf build", .needsApproval, reportedAt: 10),
+            ]),
+            "Approve rm -rf build"
+        )
+        XCTAssertEqual(
+            SidebarSubspacePresentation.rowSummary(sessions: [
+                line("First agent's old step", .working, reportedAt: 10),
+                line("Second agent's new step", .working, reportedAt: 20),
+            ]),
+            "Second agent's new step"
+        )
+        XCTAssertEqual(
+            SidebarSubspacePresentation.rowSummary(sessions: [
+                line("Editing", .working, reportedAt: 30),
+                line("Finished", .ready, unread: true, reportedAt: 10),
+            ]),
+            "Finished"
+        )
+        // A read ready session ranks as idle, below one still working.
+        XCTAssertEqual(
+            SidebarSubspacePresentation.rowSummary(sessions: [
+                line("Finished", .ready, reportedAt: 30),
+                line("Editing", .working, reportedAt: 10),
+            ]),
+            "Editing"
+        )
+        XCTAssertEqual(
+            SidebarSubspacePresentation.rowSummary(sessions: [
+                line(nil, .needsApproval, reportedAt: 30),
+                line("Editing", .working, reportedAt: 10),
+            ]),
+            "Editing"
+        )
+        XCTAssertEqual(
+            SidebarSubspacePresentation.rowSummary(sessions: [
+                line("First", .idle, reportedAt: nil),
+                line("Second", .idle, reportedAt: nil),
+            ]),
+            "First"
+        )
+    }
+
     func testSortedRowsRankByStatusAndKeepCreationOrderWithinAStatus() {
         let rows = [
             row("a-working", status: .working, index: 0),

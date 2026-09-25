@@ -45,6 +45,7 @@ enum SidebarSubspacePresentation {
         var showsUnreadSessionAccent = false
         let summary: String?
         var turnStartedAt: Date? = nil
+        var statusUpdatedAt: Date? = nil
     }
 
     struct Row: Equatable, Identifiable, Sendable {
@@ -52,7 +53,7 @@ enum SidebarSubspacePresentation {
         let title: String
         let status: RowStatus
         let annotations: [String: WorkspaceAnnotation]
-        /// The first session's summary.
+        /// See `rowSummary(sessions:)`.
         let summary: String?
         let spawningSessionID: String?
         let spawnerName: String?
@@ -109,24 +110,41 @@ enum SidebarSubspacePresentation {
     ) -> RowStatus {
         var status = RowStatus.idle
         for session in sessionStatuses {
-            let candidate: RowStatus
-            switch session.kind {
-            case .needsApproval:
-                candidate = .needsApproval
-            case .error:
-                candidate = .error
-            case .ready:
-                candidate = session.showsUnreadSessionAccent ? .ready : .idle
-            case .working:
-                candidate = .working
-            case .idle:
-                candidate = .idle
-            }
+            let candidate = rowStatus(kind: session.kind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
             if candidate.precedence > status.precedence {
                 status = candidate
             }
         }
         return status
+    }
+
+    /// The row's summary comes from a session in the state that sets the
+    /// row's status, so the dot and the text describe the same session.
+    /// Among those, the one that reported most recently wins, and the text
+    /// follows whichever agent is making progress. Sessions without a
+    /// summary are skipped; ties keep panel order.
+    static func rowSummary(sessions: [SessionLine]) -> String? {
+        sessions
+            .filter { $0.summary != nil }
+            .max { lhs, rhs in
+                let lhsPrecedence = rowStatus(kind: lhs.statusKind, showsUnreadSessionAccent: lhs.showsUnreadSessionAccent).precedence
+                let rhsPrecedence = rowStatus(kind: rhs.statusKind, showsUnreadSessionAccent: rhs.showsUnreadSessionAccent).precedence
+                if lhsPrecedence != rhsPrecedence {
+                    return lhsPrecedence < rhsPrecedence
+                }
+                return (lhs.statusUpdatedAt ?? .distantPast) < (rhs.statusUpdatedAt ?? .distantPast)
+            }?
+            .summary
+    }
+
+    private static func rowStatus(kind: SessionStatusKind, showsUnreadSessionAccent: Bool) -> RowStatus {
+        switch kind {
+        case .needsApproval: return .needsApproval
+        case .error: return .error
+        case .ready: return showsUnreadSessionAccent ? .ready : .idle
+        case .working: return .working
+        case .idle: return .idle
+        }
     }
 
     static func sortedRows(_ rows: [Row]) -> [Row] {
@@ -299,7 +317,7 @@ enum SidebarSubspacePresentation {
 
     /// The hover card for a subspace row: its sessions as compact rows, then
     /// every annotation and where the subspace lives, since the row itself
-    /// only has room for the first session's summary and the PR chip.
+    /// only has room for one session's summary and the PR chip.
     static func hoverTipModel(
         _ row: Row,
         annotationColorToken: (String) -> AnnotationColorToken
