@@ -31,6 +31,7 @@ for (const [path, expected] of [
   ['Project.swift', ['macos']],
   ['scripts/dev/bootstrap-worktree.sh', ['macos']],
   ['scripts/remote/test.sh', ['ios', 'macos']],
+  ['examples/skills/worktree-create/scripts/open-toastty-worktree-session.sh', ['macos']],
   ['.github/workflows/mobile-ios.yml', ['ios', 'macos', 'web']],
   ['.github/ci-paths.yml', ['ios', 'macos', 'web']],
   ['Tests/CI/workflow.test.mjs', ['ios', 'macos', 'web']],
