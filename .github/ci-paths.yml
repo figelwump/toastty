@@ -26,6 +26,7 @@ macos:
   - 'Tuist.swift'
   - 'Tuist/**'
   - 'scripts/**'
+  - 'examples/**'
 web:
   - '.github/workflows/mobile-ios.yml'
   - '.github/ci-paths.yml'

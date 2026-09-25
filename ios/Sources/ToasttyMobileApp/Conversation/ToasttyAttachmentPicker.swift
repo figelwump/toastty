@@ -5,6 +5,9 @@ import RemoteProtocol
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The paperclip control that lives inside the composer field's trailing edge.
+/// It owns the import flow; `ToasttyAttachmentTray` renders the resulting
+/// previews and status above the field.
 struct ToasttyAttachmentPicker: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let attachments: [RemoteMessageAttachment]
@@ -12,7 +15,6 @@ struct ToasttyAttachmentPicker: View {
     let allowsInput: Bool
     @Binding var isLoading: Bool
     let addAttachments: ([RemoteMessageAttachment]) -> String?
-    let removeAttachment: (UUID) -> Void
 
     @State private var showsChooser = false
     @State private var showsPhotos = false
@@ -23,69 +25,25 @@ struct ToasttyAttachmentPicker: View {
     @State private var importID: UUID?
     @State private var isVisible = true
 
+    /// Matches the composer field's trailing inset so the icon never overlaps text.
+    static let buttonSize: CGFloat = 44
+
     private var canPick: Bool {
         allowsInput && supportsAttachments && !isLoading && attachments.count < RemoteAttachmentPolicy.maximumCount
     }
 
-    private var attachmentRowHeight: CGFloat { dynamicTypeSize.isAccessibilitySize ? 56 : 44 }
-
-    private var attachmentListHeight: CGFloat {
-        min(132, CGFloat(attachments.count) * attachmentRowHeight + CGFloat(max(0, attachments.count - 1)) * 8)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !attachments.isEmpty {
-                ScrollView(.vertical) {
-                    VStack(spacing: 8) {
-                        ForEach(attachments) { attachment in
-                            ToasttyAttachmentRow(attachment: attachment, canRemove: allowsInput && !isLoading) {
-                                removeAttachment(attachment.id)
-                            }
-                        }
-                    }
-                }
-                .frame(minHeight: dynamicTypeSize.isAccessibilitySize ? min(attachmentRowHeight, attachmentListHeight) : attachmentListHeight,
-                       idealHeight: attachmentListHeight,
-                       maxHeight: attachmentListHeight)
-                .layoutPriority(-1)
-                .scrollBounceBehavior(.basedOnSize)
-                .scrollDismissesKeyboard(.never)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("toastty-mobile-attachment-list")
-            }
-            HStack(spacing: 8) {
-                Button { showsChooser = true } label: {
-                    if dynamicTypeSize.isAccessibilitySize {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 24))
-                            .frame(width: 44, height: 44)
-                    } else {
-                        Label("Attach", systemImage: "paperclip")
-                            .font(.subheadline)
-                            .frame(minHeight: 32)
-                    }
-                }
-                .fixedSize(horizontal: true, vertical: true)
-                .disabled(!canPick)
-                .accessibilityLabel("Attach")
-                .accessibilityIdentifier("toastty-mobile-attachment-add")
-                if isLoading {
-                    ProgressView().controlSize(.small)
-                    Text("Preparing attachment…").font(.caption)
-                } else if !supportsAttachments && allowsInput {
-                    Text("Update Toastty on your Mac to attach files.")
-                        .font(.caption)
-                } else if attachments.isEmpty == false {
-                    Text(dynamicTypeSize.isAccessibilitySize
-                         ? "\(attachments.count)/4"
-                         : "\(attachments.count)/4 · Up to 8 MB total")
-                        .font(.caption)
-                        .accessibilityLabel("\(attachments.count) of 4 attachments. Up to 8 MB total.")
-                }
-            }
-            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+        Button { showsChooser = true } label: {
+            Image(systemName: "paperclip")
+                .font(.system(size: dynamicTypeSize.isAccessibilitySize ? 24 : 18))
+                .frame(width: ToasttyAttachmentPicker.buttonSize, height: ToasttyAttachmentPicker.buttonSize)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(canPick ? ToasttyDesignTokens.secondaryText : ToasttyDesignTokens.mutedText)
+        .disabled(!canPick)
+        .accessibilityLabel("Attach")
+        .accessibilityIdentifier("toastty-mobile-attachment-add")
         .confirmationDialog("Attach to message", isPresented: $showsChooser, titleVisibility: .visible) {
             Button("Photo Library", systemImage: "photo") { showsPhotos = true }
             Button("Take Photo", systemImage: "camera") { requestCamera() }
@@ -202,6 +160,73 @@ struct ToasttyAttachmentPicker: View {
             }.value
             finishImport(result, id: id)
         }
+    }
+}
+
+/// Attachment previews and import status, shown above the composer field while
+/// there is something to report.
+struct ToasttyAttachmentTray: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let attachments: [RemoteMessageAttachment]
+    let supportsAttachments: Bool
+    let allowsInput: Bool
+    let isLoading: Bool
+    let removeAttachment: (UUID) -> Void
+
+    static func isVisible(
+        attachments: [RemoteMessageAttachment],
+        supportsAttachments: Bool,
+        allowsInput: Bool,
+        isLoading: Bool
+    ) -> Bool {
+        isLoading || !attachments.isEmpty || (!supportsAttachments && allowsInput)
+    }
+
+    private var attachmentRowHeight: CGFloat { dynamicTypeSize.isAccessibilitySize ? 56 : 44 }
+
+    private var attachmentListHeight: CGFloat {
+        min(132, CGFloat(attachments.count) * attachmentRowHeight + CGFloat(max(0, attachments.count - 1)) * 8)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !attachments.isEmpty {
+                ScrollView(.vertical) {
+                    VStack(spacing: 8) {
+                        ForEach(attachments) { attachment in
+                            ToasttyAttachmentRow(attachment: attachment, canRemove: allowsInput && !isLoading) {
+                                removeAttachment(attachment.id)
+                            }
+                        }
+                    }
+                }
+                .frame(minHeight: dynamicTypeSize.isAccessibilitySize ? min(attachmentRowHeight, attachmentListHeight) : attachmentListHeight,
+                       idealHeight: attachmentListHeight,
+                       maxHeight: attachmentListHeight)
+                .layoutPriority(-1)
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollDismissesKeyboard(.never)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("toastty-mobile-attachment-list")
+            }
+            if isLoading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Preparing attachment…").font(.caption)
+                }
+            } else if !supportsAttachments && allowsInput {
+                Text("Update Toastty on your Mac to attach files.")
+                    .font(.caption)
+            } else if !attachments.isEmpty {
+                Text(dynamicTypeSize.isAccessibilitySize
+                     ? "\(attachments.count)/4"
+                     : "\(attachments.count)/4 · Up to 8 MB total")
+                    .font(.caption)
+                    .accessibilityLabel("\(attachments.count) of 4 attachments. Up to 8 MB total.")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .foregroundStyle(ToasttyDesignTokens.secondaryText)
     }
 }
 
