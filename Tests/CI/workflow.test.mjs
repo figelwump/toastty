@@ -46,7 +46,8 @@ for (const [path, expected] of [
 
 test('only PR runs cancel superseded runs', () => {
   assert.equal(workflow.concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}");
-  assert.ok(workflow.concurrency.group.includes("github.event_name == 'pull_request' && github.ref || github.sha"));
+  // run_id rather than sha: two runs of one commit must not replace each other while pending.
+  assert.ok(workflow.concurrency.group.includes("github.event_name == 'pull_request' && github.ref || github.run_id"));
 });
 
 test('every PR gets a gate; pushes target main and manual runs remain available', () => {
@@ -97,6 +98,11 @@ test('gate rejects failed selection and any failed or cancelled job', () => {
 
 test('main pushes and manual runs require every job to pass', () => {
   assert.notEqual(gate({ FULL_RUN: 'true' }).status, 0);
+  // Path selection is skipped outside PRs, so its outputs arrive empty.
+  const unselected = { IOS_SELECTED: '', MACOS_SELECTED: '', WEB_SELECTED: '' };
+  assert.notEqual(gate({ FULL_RUN: 'true', ...unselected, MACOS_RESULT: 'success' }).status, 0);
+  assert.equal(gate({ FULL_RUN: 'true', ...unselected, IOS_RESULT: 'success',
+    MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
   assert.equal(gate({ FULL_RUN: 'true', IOS_RESULT: 'success',
     MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
 });

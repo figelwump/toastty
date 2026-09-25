@@ -6,10 +6,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A newer PR push supersedes the older run. Pushes to main and manual runs group by
-# commit so each one runs to completion and every merged commit is tested.
+# Runs for the same PR supersede each other. Pushes to main and manual runs each get
+# their own group, so none is cancelled or replaced while pending and every merged
+# commit is tested.
 concurrency:
-  group: mobile-ios-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: mobile-ios-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
