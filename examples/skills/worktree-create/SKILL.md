@@ -56,18 +56,40 @@ resources. Older running apps need an updated app; no raw-terminal fallback
 bypasses missing launch support.
 
 Before creating a worktree or workspace for a fork, also verify the installed
-provider CLI supports the native fork arguments. Establish the actual executable
-used by the selected profile in the owning Toastty instance from its configured
-argv and resolved launch environment. Follow Toastty's existing `agents.toml`
-configuration conventions: a configured profile's argv wins; when the built-in
-profile has no override, its implicit command is `codex` or `claude`. Resolve
-that command in the owning instance's launch environment. A profile ID alone
-is not an executable path:
-custom profiles can override it, and the current terminal's `PATH` may contain
-Toastty shims or a different installation. Do not use a generic `command -v codex`
-or `command -v claude` result as proof. The current action descriptor does not
-expose the resolved executable; if it cannot be established reliably, stop
-before resource creation and report this preflight as blocked.
+provider CLI supports the native fork arguments. First resolve the executable the
+selected profile would run and assign it to `$PROVIDER_EXECUTABLE`. Do not use a
+bare `command -v claude` or `command -v codex` for this: inside a managed session
+Toastty's command shim comes first on `PATH`, so it returns the shim.
+
+- If the live query list includes `agent.profile.state`, run
+  `"$TOASTTY_CLI_PATH" --json query run agent.profile.state profileID=<profile>`
+  and use its `executablePath`. It resolves the binary a launch would exec, in
+  the owning instance's launch environment, skipping the shims. When it returns
+  `resolved: false`, the fork is blocked; report its `failure` value.
+- Otherwise the running Toastty predates that query, and nothing in it exposes
+  the executable, so fall back to a best-effort lookup. It reads `agents.toml`
+  from disk and this session's `PATH`, so it cannot see a profile edit awaiting
+  Reload Configuration. Limit it to the plain case: the profile's argv[0] in
+  `agents.toml` must be the bare provider name `claude` or `codex` (a built-in
+  profile with no override also uses that name). Any other argv[0], such as an
+  absolute path or a wrapper, is a blocked fork that needs the query. Set that
+  name as `profile_command` and resolve it with the shim directory removed and
+  the agent base path appended, as the shim itself does:
+
+  ```bash
+  shimless="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$TOASTTY_AGENT_SHIM_DIR" | paste -sd: -)"
+  candidate="$(PATH="$shimless${TOASTTY_AGENT_BASE_PATH:+:$TOASTTY_AGENT_BASE_PATH}" command -v "$profile_command")"
+  # A shell function or alias yields a bare name rather than a path, and a
+  # symlinked PATH entry can still reach the shim. Accept only a real file
+  # outside Toastty's shims; anything else leaves the fork blocked.
+  if [[ "$candidate" == /* ]] && resolved="$(realpath "$candidate" 2>/dev/null)" &&
+     [[ -x "$resolved" && "$(basename "$resolved")" != toastty-agent-shim &&
+        "$(dirname "$resolved")" != "$(realpath "$TOASTTY_AGENT_SHIM_DIR")" ]]; then
+    PROVIDER_EXECUTABLE="$candidate"
+  fi
+  ```
+
+  TODO: remove this fallback once every running Toastty provides the query.
 
 Toastty composes the provider's fork invocation itself; the helper only passes
 `forkFromSessionID`. These probes confirm the installed CLI accepts the flags
@@ -82,8 +104,10 @@ launching or authenticating an agent:
   `forkFromSessionID` descriptor states, rather than a floor pinned here.
 
 Missing or ambiguous evidence is a blocked fork, not permission to substitute a
-fresh session. Record the verified executable and capability evidence in the
-handoff. Run required setup separately; `--initial-command` cannot be combined
+fresh session. Record the verified executable, whether it came from the query or
+the fallback, and the capability evidence in the handoff. Label a fallback result
+as best-effort: it checks the CLI this session resolves, not proof of the exact
+binary the launch will run. Run required setup separately; `--initial-command` cannot be combined
 with `--fork-from-session`.
 
 Read [model and base selection](references/model-and-base.md). Choose an available
