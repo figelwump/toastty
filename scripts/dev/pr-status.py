@@ -26,7 +26,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-GATE_CHECK = "Mobile iOS gate"
+GATE_CHECK = "CI gate"
 PR_FIELDS = (
     "number,title,state,isDraft,headRefName,headRefOid,baseRefName,isCrossRepository,"
     "mergeable,mergeStateStatus,statusCheckRollup,url"
