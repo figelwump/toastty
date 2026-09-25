@@ -243,6 +243,8 @@ private enum AgentCommandShim {
         commandName: String,
         environment: [String: String]
     ) -> ResolvedBinaryPath? {
+        // This process is itself a shim on PATH, so exclude its own directory and
+        // executable or the lookup would resolve straight back to this binary.
         let excludedDirectoryPaths = Set(
             [
                 CommandLine.arguments.first.map {
@@ -259,131 +261,23 @@ private enum AgentCommandShim {
             ]
             .compactMap { canonicalPath(for: $0) }
         )
-        let configuredAgentBasePath = normalizedNonEmpty(
-            environment[ToasttyLaunchContextEnvironment.agentBasePathKey]
-        )
-        let basePathResolver = ManagedAgentBasePathResolver(
+
+        guard let resolution = ManagedAgentExecutableResolver.resolve(
+            commandName: commandName,
             environment: environment,
-            fallbackPath: configuredAgentBasePath ?? environment["PATH"]
-        )
-
-        if let realBinaryPath = ManagedAgentPathResolver.resolvedExecutablePath(
-            commandName: commandName,
-            currentPath: environment["PATH"],
-            basePath: configuredAgentBasePath,
             excludedDirectoryPaths: excludedDirectoryPaths,
             excludedExecutablePaths: currentExecutablePaths,
-            canonicalPathProvider: canonicalPath(for:),
-            isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
-        ) {
-            return ResolvedBinaryPath(
-                realBinaryPath: realBinaryPath,
-                agentBasePath: configuredAgentBasePath,
-                fallbackProbeUsed: false,
-                directExecutableProbeUsed: false
-            )
-        }
-
-        for alias in firstPartyCommandAliases(for: commandName) {
-            if let realBinaryPath = ManagedAgentPathResolver.resolvedExecutablePath(
-                commandName: alias,
-                currentPath: environment["PATH"],
-                basePath: configuredAgentBasePath,
-                excludedDirectoryPaths: excludedDirectoryPaths,
-                excludedExecutablePaths: currentExecutablePaths,
-                canonicalPathProvider: canonicalPath(for:),
-                isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
-            ) {
-                return ResolvedBinaryPath(
-                    realBinaryPath: realBinaryPath,
-                    agentBasePath: configuredAgentBasePath,
-                    fallbackProbeUsed: false,
-                    directExecutableProbeUsed: false
-                )
-            }
-        }
-
-        let probedAgentBasePath = basePathResolver.resolve()
-        let effectiveAgentBasePath = ManagedAgentPathResolver.mergedPath(
-            currentPath: configuredAgentBasePath,
-            basePath: probedAgentBasePath
-        )
-
-        if let realBinaryPath = ManagedAgentPathResolver.resolvedExecutablePath(
-            commandName: commandName,
-            currentPath: environment["PATH"],
-            basePath: effectiveAgentBasePath,
-            excludedDirectoryPaths: excludedDirectoryPaths,
-            excludedExecutablePaths: currentExecutablePaths,
-            canonicalPathProvider: canonicalPath(for:),
-            isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
-        ) {
-            return ResolvedBinaryPath(
-                realBinaryPath: realBinaryPath,
-                agentBasePath: effectiveAgentBasePath,
-                fallbackProbeUsed: true,
-                directExecutableProbeUsed: false
-            )
-        }
-
-        for alias in firstPartyCommandAliases(for: commandName) {
-            if let realBinaryPath = ManagedAgentPathResolver.resolvedExecutablePath(
-                commandName: alias,
-                currentPath: environment["PATH"],
-                basePath: effectiveAgentBasePath,
-                excludedDirectoryPaths: excludedDirectoryPaths,
-                excludedExecutablePaths: currentExecutablePaths,
-                canonicalPathProvider: canonicalPath(for:),
-                isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
-            ) {
-                return ResolvedBinaryPath(
-                    realBinaryPath: realBinaryPath,
-                    agentBasePath: effectiveAgentBasePath,
-                    fallbackProbeUsed: true,
-                    directExecutableProbeUsed: false
-                )
-            }
-        }
-
-        let executableResolution: ManagedAgentBasePathResolver.ExecutableResolution?
-        if let resolved = basePathResolver.resolveExecutable(commandName: commandName) {
-            executableResolution = resolved
-        } else {
-            executableResolution = firstPartyCommandAliases(for: commandName)
-                .compactMap { basePathResolver.resolveExecutable(commandName: $0) }
-                .first
-        }
-        guard let executableResolution,
-              ManagedAgentPathResolver.isExecutablePathAllowed(
-                  executableResolution.executablePath,
-                  excludedDirectoryPaths: excludedDirectoryPaths,
-                  excludedExecutablePaths: currentExecutablePaths,
-                  canonicalPathProvider: canonicalPath(for:),
-                  isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
-              ) else {
+            canonicalPathProvider: canonicalPath(for:)
+        ) else {
             return nil
         }
 
-        let executableProbeAgentBasePath = ManagedAgentPathResolver.mergedPath(
-            currentPath: effectiveAgentBasePath,
-            basePath: executableResolution.path
-        )
-
         return ResolvedBinaryPath(
-            realBinaryPath: executableResolution.executablePath,
-            agentBasePath: executableProbeAgentBasePath,
-            fallbackProbeUsed: true,
-            directExecutableProbeUsed: true
+            realBinaryPath: resolution.executablePath,
+            agentBasePath: resolution.agentBasePath,
+            fallbackProbeUsed: resolution.fallbackProbeUsed,
+            directExecutableProbeUsed: resolution.directExecutableProbeUsed
         )
-    }
-
-    private static func firstPartyCommandAliases(for commandName: String) -> [String] {
-        switch commandName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "mimocode":
-            return ["mimo"]
-        default:
-            return []
-        }
     }
 
     private static func environmentWithResolvedAgentPath(

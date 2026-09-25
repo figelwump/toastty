@@ -121,6 +121,9 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private let managedLaunchPlanner: any ManagedAgentLaunchPlanning
     private let codexProcessPathProvider: @Sendable () -> String?
     private let codexProcessPathRefreshProvider: @Sendable () -> String?
+    /// The environment managed agents launch into, plus the shim directory to skip
+    /// when resolving what a profile's command actually runs.
+    private let managedAgentResolutionContextProvider: @Sendable () -> ManagedAgentResolutionContext
     /// App-scoped skills managers. Production creates exactly one of each in
     /// `ToasttyApp` and injects them here; the skills-management sheet must use
     /// these same instances so Repair/Uninstall act on the state the launch
@@ -150,6 +153,9 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
         codexProcessPathProvider: @escaping @Sendable () -> String? = { nil },
         codexProcessPathRefreshProvider: @escaping @Sendable () -> String? = { nil },
+        managedAgentResolutionContextProvider: @escaping @Sendable () -> ManagedAgentResolutionContext = {
+            ManagedAgentResolutionContext(environment: ProcessInfo.processInfo.environment, shimDirectoryPaths: [])
+        },
         managedAgentLaunchArtifactStore: ManagedAgentLaunchArtifactStore? = nil
     ) {
         self.store = store
@@ -159,6 +165,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         self.fileManager = fileManager
         self.codexProcessPathProvider = codexProcessPathProvider
         self.codexProcessPathRefreshProvider = codexProcessPathRefreshProvider
+        self.managedAgentResolutionContextProvider = managedAgentResolutionContextProvider
         let resolvedCodexSkillsManager = codexSkillsManager
             ?? CodexSkillsManager(fileManager: fileManager)
         self.codexSkillsManager = resolvedCodexSkillsManager
@@ -498,6 +505,93 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     private func availableProfileIDs() -> [String] {
         agentCatalogProvider.catalog.profiles.map(\.id)
+    }
+
+    /// Reports the executable `profileID` would run, without launching anything.
+    ///
+    /// Uses the same profile resolution as `launch`, so a caller checking a provider
+    /// CLI verifies the binary a launch would actually exec rather than whatever its
+    /// own PATH resolves. Throws only when the profile itself is unknown; a command
+    /// that cannot be resolved is reported in the returned state.
+    func profileExecutableState(profileID: String) throws -> AgentProfileExecutableState {
+        guard let profile = resolvedLaunchProfile(profileID: profileID) else {
+            if agentCatalogProvider.catalog.profiles.isEmpty {
+                throw AgentLaunchError.noProfilesConfigured
+            }
+            throw AgentLaunchError.profileNotFound(
+                profileID: profileID,
+                availableProfileIDs: availableProfileIDs()
+            )
+        }
+        let source: AgentProfileSource = agentCatalogProvider.catalog.profile(id: profileID) == nil
+            ? .implicit
+            : .configured
+        let argumentCount = max(profile.argv.count - 1, 0)
+        func state(
+            command: String,
+            commandIsExplicitPath: Bool,
+            executablePath: String?,
+            failure: AgentProfileExecutableFailure?,
+            fallbackProbeUsed: Bool = false,
+            directExecutableProbeUsed: Bool = false
+        ) -> AgentProfileExecutableState {
+            AgentProfileExecutableState(
+                profileID: profile.id,
+                displayName: profile.displayName,
+                command: command,
+                argumentCount: argumentCount,
+                source: source,
+                commandIsExplicitPath: commandIsExplicitPath,
+                executablePath: executablePath,
+                failure: failure,
+                fallbackProbeUsed: fallbackProbeUsed,
+                directExecutableProbeUsed: directExecutableProbeUsed
+            )
+        }
+
+        guard let command = profile.argv.first, command.isEmpty == false else {
+            return state(command: "", commandIsExplicitPath: false, executablePath: nil, failure: .commandNotFound)
+        }
+
+        // An argv[0] containing a separator is run as-is, so no PATH lookup applies
+        // and no shim stands in front of it. Toastty quotes argv, so the shell never
+        // expands a tilde and a relative path depends on the launch directory; both
+        // are reported rather than resolved against this process.
+        if command.contains("/") {
+            guard command.hasPrefix("/") else {
+                return state(
+                    command: command,
+                    commandIsExplicitPath: true,
+                    executablePath: nil,
+                    failure: .explicitPathNotAbsolute
+                )
+            }
+            let isExecutable = fileManager.isExecutableFile(atPath: command)
+            return state(
+                command: command,
+                commandIsExplicitPath: true,
+                executablePath: isExecutable ? command : nil,
+                failure: isExecutable ? nil : .explicitPathNotExecutable
+            )
+        }
+
+        let context = managedAgentResolutionContextProvider()
+        // Runs on the main actor, so the login-shell probes are off: the app already
+        // probed the base path at startup and this context carries the result.
+        let resolution = ManagedAgentExecutableResolver.resolve(
+            commandName: command,
+            environment: context.environment,
+            excludedDirectoryPaths: context.excludedDirectoryPaths,
+            allowsLoginShellProbe: false
+        )
+        return state(
+            command: command,
+            commandIsExplicitPath: false,
+            executablePath: resolution?.executablePath,
+            failure: resolution == nil ? .commandNotFound : nil,
+            fallbackProbeUsed: resolution?.fallbackProbeUsed ?? false,
+            directExecutableProbeUsed: resolution?.directExecutableProbeUsed ?? false
+        )
     }
 
     private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {
