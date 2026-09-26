@@ -151,7 +151,7 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
-        case .setWorkspaceAnnotation(let workspaceID, let key, let annotation):
+        case .setWorkspaceAnnotation(let workspaceID, let key, let annotation, let primary):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard let canonicalKey = WorkspaceAnnotation.canonicalKey(key),
                   let validatedAnnotation = WorkspaceAnnotation.validated(
@@ -164,8 +164,21 @@ public struct AppReducer {
                workspace.annotations.count >= WorkspaceAnnotation.maximumAnnotationsPerWorkspace {
                 return false
             }
-            guard workspace.annotations[canonicalKey] != validatedAnnotation else { return false }
+            let primaryAnnotationKey: String?
+            switch primary {
+            case true?:
+                primaryAnnotationKey = canonicalKey
+            case false? where workspace.primaryAnnotationKey == canonicalKey:
+                primaryAnnotationKey = nil
+            default:
+                primaryAnnotationKey = workspace.primaryAnnotationKey
+            }
+            guard workspace.annotations[canonicalKey] != validatedAnnotation
+                || workspace.primaryAnnotationKey != primaryAnnotationKey else {
+                return false
+            }
             workspace.annotations[canonicalKey] = validatedAnnotation
+            workspace.primaryAnnotationKey = primaryAnnotationKey
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
@@ -176,6 +189,9 @@ public struct AppReducer {
                 return false
             }
             workspace.annotations.removeValue(forKey: canonicalKey)
+            if workspace.primaryAnnotationKey == canonicalKey {
+                workspace.primaryAnnotationKey = nil
+            }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 

@@ -398,7 +398,17 @@ was supplied or verified; do not guess one from the label. Validation rules:
   unchanged.
 - A workspace holds at most 12 annotations. Updating an existing key remains
   allowed at the limit.
-- Setting an identical annotation again reports `didMutateState=false`.
+- Setting an identical annotation again reports `didMutateState=false`, unless
+  `primary` changes which annotation is primary.
+
+A subspace's row in its parent's Subspaces group has room for one chip. It
+shows the workspace's primary annotation, or its `github-pr` annotation when
+none is marked primary. Pass `primary=true` to make an annotation primary; a
+workspace has at most one, so this replaces any earlier choice. `primary=false`
+removes the role only when this key holds it, and omitting `primary` leaves it
+unchanged. Clearing the primary annotation clears the role. The row chip
+truncates past about 12 characters, so keep primary text short, such as
+`#1234` or `ENG-512`; the chip's tooltip shows the full text.
 
 Prefer `action list --json` to discover the current canonical IDs. Common actions include:
 
@@ -639,10 +649,11 @@ rather than selecting a tab to discover it; report missing identity as a
 discovery limit when the supported queries cannot supply it.
 
 `workspace.snapshot` also returns `annotations` as an array of
-`{key, text, url, color}` objects sorted by key in bytewise order. `url` is
-null for text-only chips, and `color` is the effective token for the key —
+`{key, text, url, color, primary}` objects sorted by key in bytewise order. `url` is
+null for text-only chips, `color` is the effective token for the key —
 the explicit global color when one was set, otherwise the stable automatic
-`#RRGGBB` fallback.
+`#RRGGBB` fallback — and `primary` is true for the workspace's primary
+annotation.
 
 `annotation.keys` takes no selector and returns `keys`, the bytewise-sorted
 array of annotation keys previously registered in the current runtime. The

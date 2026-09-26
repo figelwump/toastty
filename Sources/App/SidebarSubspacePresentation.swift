@@ -53,6 +53,7 @@ enum SidebarSubspacePresentation {
         let title: String
         let status: RowStatus
         let annotations: [String: WorkspaceAnnotation]
+        var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
         let summary: String?
         let spawningSessionID: String?
@@ -71,9 +72,15 @@ enum SidebarSubspacePresentation {
         /// `path(sessionCWDs:workspace:)`.
         var path: String? = nil
 
-        /// The `github-pr` annotation, the only chip a subspace row shows.
-        var pullRequest: WorkspaceAnnotation? {
-            annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
+        /// The one chip the row shows: the workspace's primary annotation,
+        /// or its `github-pr` annotation when none is marked primary.
+        var rowAnnotation: (key: String, annotation: WorkspaceAnnotation)? {
+            for key in [primaryAnnotationKey, SidebarSubspacePresentation.annotationKeyPullRequest] {
+                if let key, let annotation = annotations[key] {
+                    return (key, annotation)
+                }
+            }
+            return nil
         }
     }
 
@@ -297,8 +304,8 @@ enum SidebarSubspacePresentation {
         case .working: components.append("working")
         case .idle: break
         }
-        if let pullRequest = row.pullRequest {
-            components.append(pullRequest.text)
+        if let rowAnnotation = row.rowAnnotation {
+            components.append(rowAnnotation.annotation.text)
         }
         if let summary = row.summary {
             components.append(summary)

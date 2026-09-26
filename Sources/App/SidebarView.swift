@@ -1138,7 +1138,11 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func workspaceAnnotationChip(key: String, annotation: WorkspaceAnnotation) -> some View {
+    private func workspaceAnnotationChip(
+        key: String,
+        annotation: WorkspaceAnnotation,
+        maximumWidth: CGFloat = SidebarView.workspaceAnnotationChipMaximumWidth
+    ) -> some View {
         let chipColors = ToastyTheme.annotationChipColors(
             for: annotationStyleStore.effectiveColorToken(forKey: key)
         )
@@ -1149,7 +1153,8 @@ struct SidebarView: View {
                 Self.workspaceAnnotationChipLabel(
                     annotation: annotation,
                     chipColors: chipColors,
-                    isLink: true
+                    isLink: true,
+                    maximumWidth: maximumWidth
                 )
             }
             .buttonStyle(.plain)
@@ -1166,7 +1171,8 @@ struct SidebarView: View {
             Self.workspaceAnnotationChipLabel(
                 annotation: annotation,
                 chipColors: chipColors,
-                isLink: false
+                isLink: false,
+                maximumWidth: maximumWidth
             )
                 .background {
                     SidebarTooltipBridge(text: annotation.text)
@@ -1176,12 +1182,18 @@ struct SidebarView: View {
         }
     }
 
+    static let workspaceAnnotationChipMaximumWidth: CGFloat = 160
+    /// Tighter than a card's chips: the chip shares one line with the row
+    /// title, which truncates first. The chip's tooltip shows the full text.
+    static let subspaceRowAnnotationChipMaximumWidth: CGFloat = 96
+
     static func workspaceAnnotationChipLabel(
         annotation: WorkspaceAnnotation,
         chipColors: ToastyTheme.AnnotationChipColors,
-        isLink: Bool
+        isLink: Bool,
+        maximumWidth: CGFloat = SidebarView.workspaceAnnotationChipMaximumWidth
     ) -> some View {
-        SidebarCappedIntrinsicWidthLayout(maximumWidth: 160) {
+        SidebarCappedIntrinsicWidthLayout(maximumWidth: maximumWidth) {
             HStack(spacing: 3) {
                 Text(annotation.text)
                     .font(ToastyTheme.fontWorkspaceSessionChip)
@@ -2996,6 +3008,7 @@ struct SidebarView: View {
                     }
                 ),
                 annotations: workspace.annotations,
+                primaryAnnotationKey: workspace.primaryAnnotationKey,
                 summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
                 spawningSessionID: workspace.spawningSessionID,
                 spawnerName: spawner?.displayTitle,
@@ -3301,7 +3314,7 @@ struct SidebarView: View {
             )
         }
 
-        // A tap on the row selects the workspace; the PR chip inside stays a
+        // A tap on the row selects the workspace; the annotation chip inside stays a
         // real link button, as it is on top-level cards.
         // Same rail and padding as a session row, so the title's left edge
         // lines up with the session titles above whatever the status is.
@@ -3322,11 +3335,12 @@ struct SidebarView: View {
                         sessionStatusChip(kind: chipKind)
                             .layoutPriority(2)
                     }
-                    if let pullRequest = row.pullRequest {
-                        // The chip keeps its width; the title truncates instead.
+                    if let rowAnnotation = row.rowAnnotation {
+                        // The chip keeps its capped width; the title truncates instead.
                         workspaceAnnotationChip(
-                            key: SidebarSubspacePresentation.annotationKeyPullRequest,
-                            annotation: pullRequest
+                            key: rowAnnotation.key,
+                            annotation: rowAnnotation.annotation,
+                            maximumWidth: Self.subspaceRowAnnotationChipMaximumWidth
                         )
                         .fixedSize(horizontal: true, vertical: false)
                         .layoutPriority(2)
@@ -3459,7 +3473,7 @@ struct SidebarView: View {
     }
 
     /// Ready gets no chip: the rail dot, the header tally, and the sort order
-    /// already show it, and the chip would squeeze the title next to a PR chip.
+    /// already show it, and the chip would squeeze the title next to an annotation chip.
     private static func subspaceStatusChipKind(
         _ status: SidebarSubspacePresentation.RowStatus
     ) -> SessionStatusKind? {
