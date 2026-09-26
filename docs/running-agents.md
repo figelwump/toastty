@@ -649,16 +649,20 @@ when idle. The slot underneath carries a standing mark — a violet flag when th
 session is flagged for later, or a bell when the row is a watched process. The
 two marks are mutually exclusive, because a watched process cannot be flagged.
 
-A named session reads as three lines: the name, the latest summary, then the tab
-title in a neutral pill beside the provider name. A session the provider has not
-named yet leads with the summary instead, then the same tab line.
+A named session reads as two lines. The first is the name, then the row's
+state: an approval or error badge, a waiting chip, and the elapsed time. The
+second is the latest summary, then a parent label and the subspace and
+sub-agent controls. A session the provider has not named yet puts its summary
+in the name's place, and has a second line only when it has those controls. In
+a narrow sidebar the waiting chip drops out before the name gets too short, and
+the row's tooltip names it instead.
 
-That tab line also carries everything trailing: the ready, approval or error
-badge, a waiting chip, the elapsed time, a parent label, and the sub-agent
-disclosure pill. Keeping them there rather than on the first line means status
-sits in one place whether or not a name has arrived, and a long name gets the
-row's full width. The badge labels are short; the spelled-out wording ("needs
-approval") stays in the row's accessibility label.
+A row that wants you — an unread reply, an approval request, or an error — gets
+a faint fill in its status color and a heavier name. Approval and error keep a
+short badge so the state is not carried by color alone; the spelled-out wording
+("needs approval") stays in the row's accessibility label. Every agent summary
+in the sidebar, on session rows, subspace rows, and sub-agent rows alike, uses
+the same small monospaced face.
 
 Working rows count up from the start of the current turn. A turn starts when the
 provider reports `working` and runs until the session comes to rest — idle,
@@ -668,14 +672,15 @@ approval, then resumes from the real start, and the recorded duration of the
 previous turn covers the pause too. Turn timing is runtime-only, so a restored
 session does not resume a stale count.
 
-Rows no longer show the working directory or a workspace-scope chip. Hovering a
-row opens a card beside the sidebar, level with the row, carrying the full path,
-the scoped workspaces, status, when the session last changed, the current or
-previous turn duration, the sub-agent count, the tab title, the parent session,
-and the flag state, plus the untruncated summary. The card appears after a short
-delay; moving to another row swaps it immediately, and clicking, typing, or
-scrolling hides it. Everything the card shows also remains in the row's
-accessibility label.
+Rows do not show the working directory, a workspace-scope chip, the tab title,
+or the provider. Hovering a row opens a card beside the sidebar, level with the
+row, carrying up to two lines of the summary, the full path, the scoped
+workspaces, status, when the session last changed, the current or previous turn
+duration, the sub-agent count, the parent session, and the flag state, and ending
+with the tab title and provider as pills. The card appears after a short delay;
+moving to another row swaps it immediately, and clicking, typing, or scrolling
+hides it. Everything the card shows also remains in the row's accessibility
+label.
 
 #### Generated session names
 

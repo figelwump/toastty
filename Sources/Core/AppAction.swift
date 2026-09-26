@@ -47,7 +47,9 @@ public enum AppAction: Equatable, Sendable {
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
-    case setWorkspaceAnnotation(workspaceID: UUID, key: String, annotation: WorkspaceAnnotation)
+    /// `primary` true makes this the workspace's primary annotation, false
+    /// clears that role if this key holds it, and nil leaves it unchanged.
+    case setWorkspaceAnnotation(workspaceID: UUID, key: String, annotation: WorkspaceAnnotation, primary: Bool? = nil)
     case clearWorkspaceAnnotation(workspaceID: UUID, key: String)
     /// Nests a workspace under `parentWorkspaceID` as a subspace, or detaches
     /// it when `parentWorkspaceID` is `nil`. `spawningSessionID` records the

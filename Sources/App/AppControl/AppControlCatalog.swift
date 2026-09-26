@@ -181,6 +181,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .annotationText(required: true),
                     .annotationURL(required: false),
                     .annotationColor(required: false),
+                    .annotationPrimary(required: false),
                 ]
             )
         case .workspaceClearAnnotation:
@@ -553,6 +554,15 @@ private extension AppControlParameterDescriptor {
             valueType: .string,
             required: required,
             allowedValues: AnnotationColorToken.NamedColor.allCases.map(\.rawValue) + ["#RRGGBB"]
+        )
+    }
+
+    static func annotationPrimary(required: Bool) -> Self {
+        .init(
+            name: "primary",
+            summary: "true makes this the workspace's one primary annotation, replacing any other; false removes that role from this key; omit to leave it unchanged. A subspace's row in its parent's Subspaces group shows its primary annotation, or its github-pr annotation when none is primary; the row truncates long text, so keep primary text short, such as #1234 or ENG-512.",
+            valueType: .boolean,
+            required: required
         )
     }
 

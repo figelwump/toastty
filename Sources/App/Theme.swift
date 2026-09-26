@@ -30,8 +30,15 @@ enum ToastyTheme {
     static let sidebarSessionActiveHoverBackground = Color(hex: 0x484848)
     static let sidebarSessionHoverBackground = Color(hex: 0x222222)
     static let sidebarSessionHoverBorder = Color(hex: 0x555555)
-    static let sidebarSessionUnreadBackground = Color(hex: 0x5BA08A, alpha: 0.35)
-    static let sidebarSessionUnreadBorder = Color(hex: 0x5BA08A, alpha: 0.6)
+    /// Row fills for the states that want the user, on session and subspace
+    /// rows alike. Faint on purpose: the rail mark and heavy name carry the
+    /// state, and approval and error rows also keep their word badge.
+    static let sidebarAttentionReadyTint = Color(hex: 0x5BA08A, alpha: 0.16)
+    static let sidebarAttentionApprovalTint = Color(hex: 0xE8A635, alpha: 0.13)
+    static let sidebarAttentionErrorTint = Color(hex: 0xE55C5C, alpha: 0.13)
+    /// Agent summaries wherever the sidebar shows one: session rows, subspace
+    /// rows, child-session rows, and the hover cards.
+    static let sidebarSummaryText = Color(hex: 0xB7AEA5)
     static let sidebarSessionWatchIcon = Color(hex: 0xD9604C)
     /// Violet because the flag is a mark the user set, not a status: amber is
     /// already the working spinner and the approval dot, green is ready, red
@@ -44,10 +51,8 @@ enum ToastyTheme {
     static let sidebarDisclosureBorder = Color(hex: 0x4E4841)
     static let sidebarDisclosureText = Color(hex: 0xE0D9D0)
     static let sidebarWorkspaceTagBackground = Color(hex: 0xB7AEA5, alpha: 0.12)
-    /// Neutral by design: workspace annotation chips already own color in the
-    /// sidebar, and an amber tab pill would collide with the approval badge.
-    static let sidebarSessionTabPillBackground = Color(hex: 0xB7AEA5, alpha: 0.12)
-    static let sidebarSessionTabPillBorder = Color(hex: 0xB7AEA5, alpha: 0.18)
+    /// A subspace row's idle mark and its go-to arrow.
+    static let sidebarSubspaceQuietMark = Color(hex: 0x6B645C)
     static let sidebarSessionRailApprovalHalo = Color(hex: 0xE8A635, alpha: 0.22)
     static let hoverTipBackground = Color(hex: 0x26231F)
     static let hoverTipBorder = Color(hex: 0x4E4841)
@@ -56,6 +61,14 @@ enum ToastyTheme {
     static let hoverTipMutedText = Color(hex: 0xA79D91)
     static let hoverTipDivider = Color(hex: 0x35312C)
     static let hoverTipTagBackground = Color(hex: 0xB7AEA5, alpha: 0.12)
+    /// The tab title at the foot of a session card. Blue so it reads apart
+    /// from the neutral agent pill next to it.
+    static let hoverTipTabPillText = Color(hex: 0xBCD0F5)
+    static let hoverTipTabPillBackground = Color(hex: 0x6E96E6, alpha: 0.2)
+    static let hoverTipTabPillBorder = Color(hex: 0xBCD0F5, alpha: 0.42)
+    static let hoverTipAgentPillText = Color(hex: 0xD9D1C7)
+    static let hoverTipAgentPillBackground = Color(hex: 0xB7AEA5, alpha: 0.16)
+    static let hoverTipAgentPillBorder = Color(hex: 0xB7AEA5, alpha: 0.3)
 
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
@@ -194,8 +207,16 @@ enum ToastyTheme {
         )
     }
 
-    static func workspaceSessionDetailFont(weight: Font.Weight) -> Font {
-        Font.system(size: 11, weight: weight, design: .default)
+    /// One face for every agent summary; see `sidebarSummaryText`.
+    static let fontSidebarSummary = Font.system(size: 10, weight: .regular, design: .monospaced)
+
+    static func sidebarAttentionTint(for kind: SessionStatusKind) -> Color? {
+        switch kind {
+        case .ready: return sidebarAttentionReadyTint
+        case .needsApproval: return sidebarAttentionApprovalTint
+        case .error: return sidebarAttentionErrorTint
+        case .idle, .working: return nil
+        }
     }
 
     static func sessionStatusTextColor(for kind: SessionStatusKind) -> Color {

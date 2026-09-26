@@ -23,6 +23,29 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
     }
 
+    func testRowChipPrefersPrimaryAnnotationAndFallsBackToPullRequest() {
+        let pullRequest = WorkspaceAnnotation(text: "#12")
+        let ticket = WorkspaceAnnotation(text: "ENG-5")
+        func chipKey(_ annotations: [String: WorkspaceAnnotation], primary: String?) -> String? {
+            SidebarSubspacePresentation.Row(
+                id: UUID(),
+                title: "task",
+                status: .idle,
+                annotations: annotations,
+                primaryAnnotationKey: primary,
+                summary: nil,
+                spawningSessionID: nil,
+                spawnerName: nil,
+                sessions: [],
+                creationIndex: 0
+            ).rowAnnotation?.key
+        }
+
+        XCTAssertEqual(chipKey(["github-pr": pullRequest, "linear": ticket], primary: "linear"), "linear")
+        XCTAssertEqual(chipKey(["github-pr": pullRequest, "linear": ticket], primary: nil), "github-pr")
+        XCTAssertNil(chipKey(["linear": ticket], primary: nil))
+    }
+
     func testRowStatusUsesSessionAttentionAndUnreadReadyState() {
         typealias Session = (kind: SessionStatusKind, showsUnreadSessionAccent: Bool)
         XCTAssertEqual(
@@ -289,7 +312,6 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             key == "github-pr" ? .named(.green) : .named(.blue)
         }
         XCTAssertEqual(model.name, "qa-mobile-navigation")
-        XCTAssertEqual(model.statusDotColorKind, .needsApproval)
 
         // Attention first, then unread, then working; the idle session is past
         // the three-row cap.

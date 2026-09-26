@@ -216,6 +216,15 @@ Include a URL only when the user supplied it or available context verified it;
 never construct one by guessing from the label. Multiple annotations of the
 same kind need distinct stable keys.
 
+A subspace's row under its parent workspace shows a single chip: the
+workspace's primary annotation, or its `github-pr` annotation when none is
+primary. When setting the annotation that best identifies the subspace's work,
+such as its ticket or pull request, pass `primary=true`. A workspace has one
+primary annotation, so this replaces any earlier choice. Keep primary text
+short, around 12 characters or fewer (`#1234`, `ENG-512`), because the row
+truncates longer text. Leave `primary` out for secondary annotations such as a
+branch name or agent label.
+
 ## Agent Model And Reasoning Selection
 
 Treat `model` and `reasoningEffort` on `agent.launch` as explicit, action-local

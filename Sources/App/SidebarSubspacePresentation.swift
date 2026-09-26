@@ -53,6 +53,7 @@ enum SidebarSubspacePresentation {
         let title: String
         let status: RowStatus
         let annotations: [String: WorkspaceAnnotation]
+        var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
         let summary: String?
         let spawningSessionID: String?
@@ -71,9 +72,15 @@ enum SidebarSubspacePresentation {
         /// `path(sessionCWDs:workspace:)`.
         var path: String? = nil
 
-        /// The `github-pr` annotation, the only chip a subspace row shows.
-        var pullRequest: WorkspaceAnnotation? {
-            annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
+        /// The one chip the row shows: the workspace's primary annotation,
+        /// or its `github-pr` annotation when none is marked primary.
+        var rowAnnotation: (key: String, annotation: WorkspaceAnnotation)? {
+            for key in [primaryAnnotationKey, SidebarSubspacePresentation.annotationKeyPullRequest] {
+                if let key, let annotation = annotations[key] {
+                    return (key, annotation)
+                }
+            }
+            return nil
         }
     }
 
@@ -297,8 +304,8 @@ enum SidebarSubspacePresentation {
         case .working: components.append("working")
         case .idle: break
         }
-        if let pullRequest = row.pullRequest {
-            components.append(pullRequest.text)
+        if let rowAnnotation = row.rowAnnotation {
+            components.append(rowAnnotation.annotation.text)
         }
         if let summary = row.summary {
             components.append(summary)
@@ -324,9 +331,9 @@ enum SidebarSubspacePresentation {
 
     static let hoverTipSessionLimit = 3
 
-    /// The hover card for a subspace row: its sessions as compact rows, then
-    /// every annotation and where the subspace lives, since the row itself
-    /// only has room for one session's summary and the PR chip.
+    /// The hover card for a subspace row: every annotation, its sessions as
+    /// compact rows, and where the subspace lives, since the row itself only
+    /// has room for one session's summary and the PR chip.
     static func hoverTipModel(
         _ row: Row,
         annotationColorToken: (String) -> AnnotationColorToken
@@ -342,7 +349,6 @@ enum SidebarSubspacePresentation {
                     title: session.title,
                     panelID: session.panelID,
                     agentLabel: session.agentLabel,
-                    statusKind: session.statusKind,
                     isUnread: session.statusKind == .ready && session.showsUnreadSessionAccent,
                     railState: SidebarSessionPresentation.sessionRailState(
                         for: session.statusKind,
@@ -357,7 +363,6 @@ enum SidebarSubspacePresentation {
             }
         return SubspaceHoverTipModel(
             name: row.title,
-            statusDotColorKind: statusDotColorKind(row.status),
             sessions: Array(sessions.prefix(hoverTipSessionLimit)),
             hiddenSessionCount: max(0, sessions.count - hoverTipSessionLimit),
             annotations: row.annotations.sorted { $0.key < $1.key }.map { key, annotation in
@@ -406,16 +411,6 @@ enum SidebarSubspacePresentation {
         case .ready: return session.showsUnreadSessionAccent ? 2 : 4
         case .working: return 3
         case .idle: return 4
-        }
-    }
-
-    private static func statusDotColorKind(_ status: RowStatus) -> SessionChildHoverTipModel.StatusDotColorKind {
-        switch status {
-        case .ready: return .ready
-        case .needsApproval: return .needsApproval
-        case .error: return .error
-        case .working: return .working
-        case .idle: return .idle
         }
     }
 }

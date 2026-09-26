@@ -2367,6 +2367,17 @@ private extension AppControlExecutor {
             colorToken = parsedToken
         }
 
+        var primary: Bool?
+        switch args["primary"] {
+        case nil, .null?:
+            break
+        default:
+            guard let parsedPrimary = args.boolValue("primary") else {
+                throw AutomationSocketError.invalidPayload("primary must be true or false")
+            }
+            primary = parsedPrimary
+        }
+
         let annotation = WorkspaceAnnotation(text: text, url: url)
         let isExistingKey = workspace.annotations[key] != nil
         if isExistingKey == false,
@@ -2444,7 +2455,7 @@ private extension AppControlExecutor {
         }
 
         let didChangeAnnotation = store.send(
-            .setWorkspaceAnnotation(workspaceID: workspaceID, key: key, annotation: annotation)
+            .setWorkspaceAnnotation(workspaceID: workspaceID, key: key, annotation: annotation, primary: primary)
         )
         return .init(
             didMutateState: didChangeStyle || didChangeAnnotation,
@@ -2675,6 +2686,7 @@ private extension AppControlExecutor {
                     "text": .string(annotation.text),
                     "url": annotation.url.map(AutomationJSONValue.string) ?? .null,
                     "color": .string(colorToken.storageValue),
+                    "primary": .bool(key == workspace.primaryAnnotationKey),
                 ])
             }
 
