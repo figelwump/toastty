@@ -617,6 +617,88 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherReportsTheErrorOfAFailedTurn() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let completionEvents = expectation(description: "Task complete events arrive")
+        completionEvents.expectedFulfillmentCount = 3
+        completionEvents.assertForOverFulfill = true
+        let failedAt = Date(timeIntervalSince1970: 1_800_000_020)
+        let completedAt = failedAt.addingTimeInterval(1)
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            completionEvents.fulfill()
+        }
+
+        watcher.start()
+        // Codex 0.157 records a rejected model request this way and fires no Stop hook.
+        try append(
+            #"{"timestamp":"\#(failedAt.ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-failed","last_agent_message":null,"error":{"message":"unexpected status 401 Unauthorized: Incorrect API key provided: sk-svcac****************fvMA. You can find your API key at https://platform.openai.com/account/api-keys., url: https://chatgpt.com/backend-api/codex/responses, cf-ray: 0000000000000000-SJC, request id: 00000000-0000-0000-0000-000000000000","codex_error_info":"other"}}}"# + "\n",
+            to: logURL
+        )
+        try append(
+            #"{"timestamp":"\#(completedAt.ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","last_agent_message":"Done","error":null}}"# + "\n",
+            to: logURL
+        )
+        // The session-log fallback stream wraps the same event in `codex_event`.
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-fallback","msg":{"type":"task_complete","last_agent_message":null,"error":{"message":"Selected model is at capacity. Please try a different model.","codex_error_info":"server_overloaded"}}}}"# + "\n",
+            to: logURL
+        )
+
+        await fulfillment(of: [completionEvents], timeout: 1)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: "Turn complete",
+                occurredAt: failedAt,
+                completionTurnID: "turn-failed",
+                turnError: "401 Unauthorized: Incorrect API key provided"
+            ),
+            CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: "Done",
+                occurredAt: completedAt,
+                completionTurnID: "turn-complete"
+            ),
+            CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: "Turn complete",
+                completionTurnID: "turn-fallback",
+                turnError: "Selected model is at capacity"
+            ),
+        ])
+    }
+
+    func testTurnErrorDetailKeepsTheFirstSentenceOfTheMessage() {
+        XCTAssertEqual(
+            CodexSessionLogWatcher.turnErrorDetail([
+                "message": "Selected model is at capacity. Please try a different model.",
+            ]),
+            "Selected model is at capacity"
+        )
+        XCTAssertEqual(
+            CodexSessionLogWatcher.turnErrorDetail([
+                "message": #"{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6' model is not supported when using Codex with a ChatGPT account."}}"#,
+            ]),
+            "The 'gpt-6' model is not supported when using Codex with a ChatGPT account"
+        )
+        XCTAssertEqual(
+            CodexSessionLogWatcher.turnErrorDetail(["message": "Rejected key 'sk-test****abcd' for the task-runner."]),
+            "Rejected key for the task-runner"
+        )
+        XCTAssertEqual(CodexSessionLogWatcher.turnErrorDetail(["codex_error_info": "other"]), "Turn failed")
+        XCTAssertNil(CodexSessionLogWatcher.turnErrorDetail(NSNull()))
+        XCTAssertNil(CodexSessionLogWatcher.turnErrorDetail(nil))
+    }
+
     func testTerminalOnlyWatcherSkipsUnrelatedRecordsAndDoesNotDecodeCompletionText() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
