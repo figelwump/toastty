@@ -16,7 +16,7 @@ this workspace, remove its worktree, or delete its branch from inside it.
 ## Verify the accepted version
 
 Work in this task's worktree (`git rev-parse --show-toplevel`). Find its PR with
-`gh pr view --json number,state,isDraft,headRefOid,baseRefName,url,mergeStateStatus,statusCheckRollup`.
+`gh pr view --json number,state,isDraft,headRefOid,baseRefName,url,mergeStateStatus,statusCheckRollup,body`.
 Stop and report, without merging, when:
 
 - there is no PR, or it is closed or already merged;
@@ -26,6 +26,11 @@ Stop and report, without merging, when:
   do not commit or push new work as part of this acceptance;
 - the PR's base is not the repository's default branch. Its base PR must merge
   first; GitHub then retargets this PR, and the user can run this again.
+- the PR description lists merge prerequisites: an "Activation order", "Merge
+  order", "Rollout", or "Depends on" section, or a link to a PR in another
+  repository. Name each prerequisite and ask the user to confirm it is done;
+  continue only after they confirm. Green CI or a linked PR having merged is not
+  confirmation. Links to PRs in this repository alone are not prerequisites.
 
 ## Merge when checks pass
 
