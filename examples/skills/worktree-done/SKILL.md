@@ -33,10 +33,16 @@ Stop and report, without merging, when:
 2. Run `gh pr merge <number> --auto --merge --match-head-commit <headRefOid>`. Use
    the repository's documented merge method instead of `--merge` when it has one.
    GitHub merges when the required checks pass, or at once if they already have.
-3. If the repository has auto-merge turned off, report that and stop. Do not wait
+3. If the command fails with `Pull request is in clean status`, GitHub refused to
+   queue a PR that is already mergeable; auto-merge is not turned off. Recheck with
+   `gh pr view <number> --json state,mergeable,mergeStateStatus,headRefOid,baseRefName`.
+   If the PR is still open, `MERGEABLE`, `CLEAN`, at the accepted head, and on the
+   same base, merge it directly with `gh pr merge <number> --merge --match-head-commit <headRefOid>`,
+   using the same merge method as step 2. Otherwise report its state and stop.
+4. If the repository has auto-merge turned off, report that and stop. Do not wait
    and merge manually; the user can merge through `worktree-cleanup` once checks
    pass.
-4. Confirm the result with `gh pr view <number> --json state,autoMergeRequest`.
+5. Confirm the result with `gh pr view <number> --json state,autoMergeRequest`.
 
 Report the PR, the accepted commit, and whether it merged or will merge when
 checks pass. Mention that `worktree-cleanup` removes the workspace and worktree

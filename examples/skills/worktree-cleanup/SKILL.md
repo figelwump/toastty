@@ -40,6 +40,12 @@ Merge only PRs the user names in this request, or that the user accepted with
 2. Run `gh pr merge <number> --auto --merge --match-head-commit <head>`. Use the
    repository's documented merge method instead of `--merge` when it has one.
    Auto-merge lands the PR when required checks pass, or at once if they have.
+   If it fails with `Pull request is in clean status`, GitHub refused to queue a
+   PR that is already mergeable. Recheck with
+   `gh pr view <number> --json state,mergeable,mergeStateStatus,headRefOid,baseRefName`.
+   If the PR is still open, `MERGEABLE`, `CLEAN`, and at the same head and base,
+   merge it directly with `gh pr merge <number> --merge --match-head-commit <head>`, using
+   the same merge method. Otherwise report its state and skip it.
 3. If a named PR is stacked on another unmerged PR, stop and ask whether to merge
    that base PR too. Merge nothing the user did not name. After the base merges
    and its branch is deleted, GitHub retargets the dependent PR.
