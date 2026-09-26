@@ -5,23 +5,29 @@ Install these three packages together:
 - [worktree-create](worktree-create/SKILL.md) creates a named task workspace and
   Git worktree. Start a fresh conversation for planning, or fork an existing
   Codex/Claude discussion into the worktree for continuation.
-- [worktree-done](worktree-done/SKILL.md) records the user's acceptance of an exact
-  reviewed version and queues it for integration and cleanup.
-- [coordinator](coordinator/SKILL.md) watches registered tasks, checks dependencies,
-  assesses accepted changes and merges, verifies and cleans each eligible task.
+- [worktree-done](worktree-done/SKILL.md) accepts the version the user reviewed
+  and turns on auto-merge for its PR, so GitHub merges it when required checks pass.
+- [worktree-cleanup](worktree-cleanup/SKILL.md) reports which task PRs are ready,
+  merges the ones the user names, and cleans up worktrees whose PR has merged.
 
 These are opt-in personal skills, not automatically loaded repository instructions.
-The coordinator contains the integration/cleanup procedure formerly provided by
-`finisher`; the separate `project-orchestrator` workflow is no longer needed.
 Release and deployment management are outside this workflow.
 
 ## Typical use
 
-Keep one coordinator workspace per repository. Invoke `worktree-create` there
-with a brief task description, do detailed design in the task workspace, and tell
-that same agent when to implement. After testing/reviewing the result, invoke
-`worktree-done`. The coordinator processes accepted tasks in dependency order
-and closes each task workspace/removes its worktree after verified integration.
+From a project workspace, invoke `worktree-create` with a brief task description.
+The task session designs, implements, verifies, and publishes a PR in its own
+workspace. After testing or reviewing the result there, invoke `worktree-done` in
+that workspace. It checks that the worktree matches the PR and enables auto-merge;
+it never closes its own workspace.
+
+Later, from the project workspace, invoke `worktree-cleanup`. It lists ready,
+merged, and blocked PRs, merges any you name, and for merged PRs closes the task
+workspace, removes the worktree, and deletes the branches. It skips a workspace
+that still has an agent session, a busy terminal, or unsaved documents and reports
+it instead. A workspace-scoped session sees only some workspaces, so cleanup
+refuses to run there; `worktree-create` scopes the session that launches a task.
+Clear that session's scope when asked, or run cleanup from a new session.
 
 When detailed planning already happened in another conversation, use the
 launcher's `--fork-from-session` option. This requires updated Toastty
@@ -31,56 +37,43 @@ explicit worktree cwd; it does not move the parent or transfer future messages.
 No summary-only fallback silently replaces a requested fork. Provider context
 limits and compaction still apply.
 
-New tasks default to planning. Explicit implementation requests retain their
-authorization and use implementation mode. Workspaces show task status and PR
-annotations; the launcher does not add a branch chip.
+New tasks start implementing unless the request limits them to planning.
+Workspaces show a PR chip; the launcher does not add task-status or branch chips.
 
-## Local queue and waiting
+## Repository settings
 
-The coordinator's `scripts/tasks.py` helper keeps private records under
-`~/.toastty/task-state/<repository-id>/queue.json`. Repository identity comes from the
-canonical shared Git directory, so worktrees in one clone share the queue.
-It is local to this machine, not a remote queue. Use `--state-root` consistently
-for disposable tests or isolated app instances.
-
-The helper records task identity, readiness, explicit acceptance, dependencies,
-integration intent and landed/verified/cleanup results. Atomic writes and locks
-protect records; a durable coordinator owner prevents cooperating sessions from
-starting competing integrations. GitHub and Git remain authoritative for PR
-heads, checks and actual merges. A new source head requires renewed acceptance.
-
-`tasks.py wait` is a bounded foreground command. It observes record and relevant
-PR/check changes and returns control to the coordinator; it never merges or
-deletes anything. Lost messages do not lose requests. An exited coordinator does
-not keep processing; restarting it reconciles unfinished records. No daemon,
-scheduler or deployment engine is installed.
+`worktree-done` relies on GitHub auto-merge. Turn on auto-merge for the repository
+and make the checks that must pass before merging required on the default branch;
+without a required check, auto-merge lands a PR as soon as it has no conflicts.
+Turning on automatic branch deletion lets GitHub retarget stacked PRs when their
+base merges.
 
 ## Install or migrate
 
-Copy `worktree-create/`, `worktree-done/`, and `coordinator/` from this directory
-to `~/.toastty/skills/`. Preserve any personal model preferences or repository
-customizations when replacing an existing package. Retire the old personal
-`finisher` and `project-orchestrator` packages from that discovery directory once
-their relevant custom rules have been carried into the coordinator reference.
+Copy `worktree-create/`, `worktree-done/`, and `worktree-cleanup/` from this
+directory to `~/.toastty/skills/`. Preserve any personal model preferences or
+repository customizations when replacing an existing package. The earlier
+`coordinator` package and its `~/.toastty/task-state/` queue are retired; remove
+them from the discovery directory.
 
 Use real directories; Toastty rejects symlinked user skill packages. Scripts
-resolve relative to their loaded package snapshot. The three packages must remain
-siblings because worktree skills use the coordinator's shared helper.
-`TOASTTY_SKILLS_ROOT` refers to the shipped plugin, not these personal skills.
+resolve relative to their loaded package snapshot. `TOASTTY_SKILLS_ROOT` refers to
+the shipped plugin, not these personal skills.
 
 Check discovery with `"$TOASTTY_CLI_PATH" setup skills list`. Updated packages load
 in newly launched managed sessions. Codex exposes them as
 `toastty-user:worktree-create`, `toastty-user:worktree-done`, and
-`toastty-user:coordinator`. Fork and additional-directory launch options require
-an app build that exposes those capabilities; skill installation does not update
-the running app.
+`toastty-user:worktree-cleanup`. Fork and additional-directory launch options, and
+the `workspace.list` query that cleanup uses, require an app build that exposes
+them; skill installation does not update the running app.
 
 ## Verification
 
-Run `python3 examples/skills/coordinator/scripts/test_tasks.py` locally against
-disposable Git repositories and mocked GitHub responses. Launcher and structured
-fork coverage lives in the app test suite. Follow the repository's verification
-guide for those checks. Validate all three skills with the skill validator.
+Run `python3 examples/skills/worktree-cleanup/scripts/test_worktree_status.py`
+locally. It uses disposable Git repositories with fake `gh` and Toastty commands.
+Launcher and structured fork coverage lives in the app test suite. Follow the
+repository's verification guide for those checks. Validate all three skills with
+the skill validator.
 
 See [User-created skills](../../docs/running-agents.md#user-created-skills) for
 discovery, immutable snapshots and management controls.

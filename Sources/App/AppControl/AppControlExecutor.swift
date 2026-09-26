@@ -2464,13 +2464,31 @@ private extension AppControlExecutor {
                       ) else {
                     continue
                 }
-                let terminalCwds = Set(workspace.allPanelsByID.values.compactMap { panel -> String? in
-                    guard case .terminal(let terminalState) = panel,
-                          terminalState.cwd.isEmpty == false else {
-                        return nil
+                var terminalCwds = Set<String>()
+                var activeSessions: [AutomationJSONValue] = []
+                var busyTerminalCount = 0
+                // Sorted panel order keeps the session listing deterministic.
+                for (panelID, panel) in workspace.allPanelsByID.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+                    guard case .terminal(let terminalState) = panel else { continue }
+                    if terminalState.cwd.isEmpty == false {
+                        terminalCwds.insert(terminalState.cwd)
                     }
-                    return terminalState.cwd
-                }).sorted()
+                    if terminalRuntimeRegistry.promptState(panelID: panelID) == .busy {
+                        busyTerminalCount += 1
+                    }
+                    if let session = sessionRuntimeStore.sessionRegistry.activeSession(for: panelID) {
+                        activeSessions.append(.object([
+                            "sessionID": .string(session.sessionID),
+                            "agent": .string(session.agent.rawValue),
+                            "panelID": .string(panelID.uuidString),
+                        ]))
+                    }
+                }
+                // Same counts the close-workspace confirmation uses; workspace.close
+                // itself does not ask, so callers check these first.
+                let documents = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
+                    panelIDs: workspace.allPanelsByID.keys
+                )
                 entries.append(.object([
                     "windowID": .string(window.id.uuidString),
                     "workspaceID": .string(workspaceID.uuidString),
@@ -2478,11 +2496,17 @@ private extension AppControlExecutor {
                     "title": .string(workspace.title),
                     "isSelected": .bool(store.state.selectedWorkspaceID(in: window.id) == workspaceID),
                     "annotations": .array(annotationsJSON(for: workspace)),
-                    "terminalCwds": .array(terminalCwds.map(AutomationJSONValue.string)),
+                    "terminalCwds": .array(terminalCwds.sorted().map(AutomationJSONValue.string)),
+                    "activeSessions": .array(activeSessions),
+                    "busyTerminalCount": .int(busyTerminalCount),
+                    "unsavedDocumentCount": .int(documents.dirtyDraftCount + documents.saveInProgressCount),
                 ]))
             }
         }
-        return ["workspaces": .array(entries)]
+        // A scoped caller's list omits workspaces outside its scope, so it cannot
+        // prove that no workspace uses a given directory.
+        let callerIsScoped = callerSessionID.map { sessionRuntimeStore.isWorkspaceScoped(sessionID: $0) } ?? false
+        return ["workspaces": .array(entries), "callerIsScoped": .bool(callerIsScoped)]
     }
 
     func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {

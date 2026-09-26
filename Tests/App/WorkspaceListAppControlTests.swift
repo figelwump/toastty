@@ -138,6 +138,37 @@ struct WorkspaceListAppControlTests {
         #expect(entry["terminalCwds"] == .array([.string("/tmp/wt/a"), .string("/tmp/wt/b")]))
     }
 
+    /// Cleanup tooling must see a workspace's live agent sessions before closing it.
+    @Test
+    func reportsActiveAgentSessions() throws {
+        let fixture = try WorkspaceListFixture()
+        let workspaceID = try fixture.createWorkspace(title: "agent")
+        let panelID = try #require(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "workspace-list-agent",
+            agent: .claude,
+            panelID: panelID,
+            windowID: fixture.windowID,
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let entries = try fixture.list()
+        let agentEntry = try #require(entries.first { $0["workspaceID"] == .string(workspaceID.uuidString) })
+        let idleEntry = try #require(entries.first { $0["workspaceID"] == .string(fixture.firstWorkspaceID.uuidString) })
+
+        #expect(agentEntry["activeSessions"] == .array([.object([
+            "sessionID": .string("workspace-list-agent"),
+            "agent": .string("claude"),
+            "panelID": .string(panelID.uuidString),
+        ])]))
+        #expect(idleEntry["activeSessions"] == .array([]))
+        #expect(idleEntry["busyTerminalCount"] == .int(0))
+        #expect(idleEntry["unsavedDocumentCount"] == .int(0))
+    }
+
     /// A scoped session must not learn about workspaces it cannot automate.
     @Test
     func scopedCallerSeesOnlyWorkspacesInScope() throws {
@@ -161,6 +192,18 @@ struct WorkspaceListAppControlTests {
 
         #expect(scoped.map { $0["workspaceID"] } == [.string(fixture.firstWorkspaceID.uuidString)])
         #expect(unscoped.contains { $0["workspaceID"] == .string(outsideWorkspaceID.uuidString) })
+        // Cleanup tooling relies on this flag to refuse acting on a partial list.
+        let scopedResult = try fixture.executor.runQuery(
+            id: AppControlQueryID.workspaceList.rawValue,
+            args: [:],
+            context: AutomationRequestContext(
+                callerSessionID: "workspace-list-scoped-caller",
+                commandName: "app_control.run_query"
+            )
+        )
+        let unscopedResult = try fixture.executor.runQuery(id: AppControlQueryID.workspaceList.rawValue, args: [:])
+        #expect(scopedResult["callerIsScoped"] == .bool(true))
+        #expect(unscopedResult["callerIsScoped"] == .bool(false))
     }
 
     @Test

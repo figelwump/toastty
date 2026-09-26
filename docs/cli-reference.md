@@ -499,8 +499,8 @@ Scratchpad actions are intended for agent and automation integrations:
 
   `additionalDirectories` grants Codex/Claude access to explicitly named existing
   directories using `--add-dir`. It does not change the primary cwd or Toastty
-  workspace scope. Pass only needed directories, such as a repository's private
-  coordinator queue directory. These options preserve selected model and effort.
+  workspace scope. Pass only needed directories, such as a shared artifact
+  directory the task reads. These options preserve selected model and effort.
 
 ```bash
 "$TOASTTY_CLI_PATH" action run agent.launch \
@@ -599,7 +599,12 @@ order, without selecting or focusing anything. Each entry has `windowID`,
 `workspaceID`, 1-based `index` within its window, `title`, `isSelected`,
 `annotations` (the same shape as `workspace.snapshot`), and `terminalCwds`,
 the sorted working directories of the workspace's terminal panels across all
-tabs. `--window` limits the list to one window. A workspace-scoped caller sees
+tabs. `activeSessions` lists each managed agent session in the workspace as
+`{sessionID, agent, panelID}`, `busyTerminalCount` counts terminals running a
+command, and `unsavedDocumentCount` counts local documents with unsaved or saving
+changes. `workspace.close` does not ask before discarding them, so tooling should
+check these fields first. The top-level `callerIsScoped` is true when the caller's
+workspace scope filtered the list. `--window` limits the list to one window. A workspace-scoped caller sees
 only workspaces in its scope.
 
 `workspace.snapshot` describes the selected tab's main-area slots in

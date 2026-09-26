@@ -453,7 +453,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "List workspaces in window order with titles, annotations, and terminal working directories, without selecting or focusing anything. Workspace-scoped callers see only workspaces in their scope.",
+                summary: "List workspaces in window order with titles, annotations, terminal working directories, active agent sessions, busy terminal and unsaved document counts, without selecting or focusing anything. Workspace-scoped callers see only workspaces in their scope.",
                 selectors: [.windowID]
             )
         case .workspaceSnapshot:
