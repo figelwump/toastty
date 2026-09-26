@@ -93,6 +93,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var stateObservation: AnyCancellable?
     private var observedWindowFontPointsByID: [UUID: Double] = [:]
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
+    /// Restored panes that type a notice instead of resuming their agent, with
+    /// when it was queued. The notice's own command-finished signal must not
+    /// clear the resume record the pane kept.
+    private var restoreNoticeQueuedAtByPanelID: [UUID: Date] = [:]
+    /// A shell without command-finished reporting never consumes the entry;
+    /// past this age a finish belongs to a real command.
+    private static let restoreNoticeFinishWindow: TimeInterval = 30
     private var restoredManagedLaunchesByPanelID: [UUID: RestoredManagedLaunch] = [:]
     private var restoredManagedLaunchSubmitTasksByPanelID: [UUID: Task<Void, Never>] = [:]
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
@@ -438,6 +445,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         let livePanelIDs = liveTerminalPanelIDs(in: state)
         launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
+        restoreNoticeQueuedAtByPanelID = restoreNoticeQueuedAtByPanelID.filter { livePanelIDs.contains($0.key) }
         for (panelID, launch) in restoredManagedLaunchesByPanelID where livePanelIDs.contains(panelID) == false {
             restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)?.cancel()
             restoredManagedLaunchPlanner?.discardManagedLaunch(sessionID: launch.sessionID)
@@ -1647,6 +1655,26 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 ]
             )
             _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
+        case .skipResume(let notice):
+            discardPendingRestoredManagedLaunch(for: panelID)
+            ToasttyLog.warning(
+                "Launching restored pane without managed agent resume because its working directory no longer exists",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "agent": terminalState.resumeRecord?.agent.rawValue ?? "none",
+                    "cwd": terminalState.resumeRecord?.cwd ?? "none",
+                ]
+            )
+            restoreNoticeQueuedAtByPanelID[panelID] = Date()
+            return Self.addingRestoreNotice(
+                notice,
+                to: profileLaunchConfiguration(
+                    panelID: panelID,
+                    terminalState: terminalState,
+                    baseEnvironmentVariables: baseEnvironmentVariables
+                )
+            )
         case .launch(let configuration):
             if let restoredManagedLaunch = restoredManagedLaunchConfiguration(
                 panelID: panelID,
@@ -1669,6 +1697,44 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
         }
 
+        return profileLaunchConfiguration(
+            panelID: panelID,
+            terminalState: terminalState,
+            baseEnvironmentVariables: baseEnvironmentVariables
+        )
+    }
+
+    /// Consumes the restore notice's command-finished signal for `panelID`,
+    /// returning true when that finish was the notice rather than the agent.
+    func consumeRestoreNoticeCommandFinish(panelID: UUID) -> Bool {
+        guard let queuedAt = restoreNoticeQueuedAtByPanelID.removeValue(forKey: panelID) else {
+            return false
+        }
+        return Date().timeIntervalSince(queuedAt) < Self.restoreNoticeFinishWindow
+    }
+
+    /// Prints the notice through the shell before any profile startup command.
+    /// Ghostty can only type into a terminal, so the typed command reads the
+    /// text from the environment to keep the visible line short. The leading
+    /// space keeps it out of history in shells that honor that.
+    static func addingRestoreNotice(
+        _ notice: String,
+        to configuration: TerminalSurfaceLaunchConfiguration
+    ) -> TerminalSurfaceLaunchConfiguration {
+        var configuration = configuration
+        configuration.environmentVariables[ToasttyLaunchContextEnvironment.restoreNoticeKey] = notice
+        let printNotice = " printf '%s\\n' \"$\(ToasttyLaunchContextEnvironment.restoreNoticeKey)\""
+        configuration.initialInput = [printNotice, configuration.normalizedInitialInput]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+        return configuration
+    }
+
+    private func profileLaunchConfiguration(
+        panelID: UUID,
+        terminalState: TerminalPanelState,
+        baseEnvironmentVariables: [String: String]
+    ) -> TerminalSurfaceLaunchConfiguration {
         let catalog = terminalProfileProvider?.catalog ?? .empty
         switch TerminalProfileLaunchResolver.resolve(
             panelID: panelID,

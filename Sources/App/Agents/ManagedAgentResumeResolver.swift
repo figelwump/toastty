@@ -5,13 +5,15 @@ import Foundation
 enum ManagedAgentResumeResolution: Equatable {
     case none
     case clearRecord(reason: ManagedAgentResumeResolver.ClearReason)
+    /// The session's directory is gone. The record stays, so a later restore
+    /// resumes if the directory comes back; this launch shows `notice` instead.
+    case skipResume(notice: String)
     case launch(TerminalSurfaceLaunchConfiguration)
 }
 
 enum ManagedAgentResumeResolver {
     enum ClearReason: String, Equatable {
         case missingSessionFile = "missing_session_file"
-        case missingWorkingDirectory = "missing_working_directory"
     }
 
     static func resolve(
@@ -36,7 +38,7 @@ enum ManagedAgentResumeResolver {
         }
 
         guard let cwd = normalizedExistingDirectory(record.cwd, fileManager: fileManager) else {
-            return .clearRecord(reason: .missingWorkingDirectory)
+            return .skipResume(notice: missingWorkingDirectoryNotice(record: record, resumeArgv: argv))
         }
 
         return .launch(
@@ -114,6 +116,15 @@ enum ManagedAgentResumeResolver {
 }
 
 private extension ManagedAgentResumeResolver {
+    static func missingWorkingDirectoryNotice(record: ManagedAgentResumeRecord, resumeArgv: [String]) -> String {
+        let path = record.cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        return """
+        Toastty: \(path) no longer exists.
+        \(record.agent.displayName) session \(record.nativeSessionID) was not resumed. \
+        To resume it: \(ShellCommandRenderer.render(argv: resumeArgv))
+        """
+    }
+
     static func defaultResumeExecutableName(for agent: AgentKind) -> String {
         if agent == .mimocode {
             return "mimo"
