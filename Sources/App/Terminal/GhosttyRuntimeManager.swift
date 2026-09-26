@@ -1479,6 +1479,21 @@ final class GhosttyRuntimeManager {
         hostViewBySurfaceHandle.removeValue(forKey: surfaceHandle)
     }
 
+    // The app test bundle links its own copy of libghostty whose global state
+    // is never initialized, so tests must reach libghostty through the app
+    // module. These wrappers exist only for that reason.
+    func setSurfaceSizeForTesting(_ surface: ghostty_surface_t, width: UInt32, height: UInt32) {
+        ghostty_surface_set_size(surface, width, height)
+    }
+
+    func surfaceSizeForTesting(_ surface: ghostty_surface_t) -> ghostty_surface_size_s {
+        ghostty_surface_size(surface)
+    }
+
+    func freeSurfaceForTesting(_ surface: ghostty_surface_t) {
+        ghostty_surface_free(surface)
+    }
+
     @discardableResult
     func dispatchScrollbarDirectHostViewActionForTesting(
         surfaceHandle: UInt,
