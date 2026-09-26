@@ -2221,6 +2221,93 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(harness.store.state.workspacesByID[ids.siblingID]?.focusedPanelID, orchestratorPanelID)
     }
 
+    /// An unnamed row is one line; its ⑂ chip would need a line to itself,
+    /// so the chip waits until the session has a name.
+    func testSpawnerChipWaitsForTheSessionToBeNamed() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let parentID = UUID()
+        let namedPanelID = UUID()
+        let unnamedPanelID = UUID()
+        let parent = WorkspaceState(
+            id: parentID,
+            title: "Workspace 2",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: namedPanelID),
+                second: .slot(slotID: UUID(), panelID: unnamedPanelID)
+            ),
+            panels: [
+                namedPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo")),
+                unnamedPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo")),
+            ],
+            focusedPanelID: namedPanelID
+        )
+        func subspace(_ title: String, spawner: String) -> WorkspaceState {
+            let panelID = UUID()
+            return WorkspaceState(
+                id: UUID(),
+                title: title,
+                layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo/\(title)"))],
+                focusedPanelID: panelID,
+                parentWorkspaceID: parentID,
+                spawningSessionID: spawner
+            )
+        }
+        let windowID = UUID()
+        let workspaces = [
+            parent,
+            subspace("open-pr-review", spawner: "named-spawner"),
+            subspace("docs-pass", spawner: "named-spawner"),
+            subspace("browser-check", spawner: "unnamed-spawner"),
+        ]
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: parentID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID)
+        defer { harness.window.orderOut(nil) }
+        for (sessionID, panelID, title) in [
+            ("named-spawner", namedPanelID, "Merge open PRs" as String?),
+            ("unnamed-spawner", unnamedPanelID, nil),
+        ] {
+            harness.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .claude,
+                panelID: panelID,
+                windowID: windowID,
+                workspaceID: parentID,
+                displayTitleOverride: title,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Preparing browser action"),
+                at: now.addingTimeInterval(1)
+            )
+        }
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("2 subspaces"), "The named spawner keeps its chip: \(textValues)")
+        XCTAssertFalse(textValues.contains("1 subspace"), "The unnamed spawner should not show a chip yet: \(textValues)")
+        let unnamedRow = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "unnamed-spawner")
+        XCTAssertLessThan(unnamedRow.bounds.height, 30, "The unnamed row should stay one line")
+    }
+
     private func semanticTextFrame(in rootView: NSView, prefix: String) throws -> CGRect {
         let field = try XCTUnwrap(
             semanticTextField(in: rootView, prefix: prefix),

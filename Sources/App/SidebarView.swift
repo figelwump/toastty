@@ -1417,6 +1417,14 @@ struct SidebarView: View {
             summary: normalizedSessionDetail(status.detail),
             agentFallbackName: workspaceSessionStatus.agent.displayName
         )
+        // A row the provider has not named is one line, so the ⑂ chip waits
+        // for the name rather than taking a line of its own. The Subspaces
+        // group still lists what the session spawned.
+        let visibleSpawnerChip: SidebarSubspacePresentation.SpawnerChip? = if case .named = rowShape {
+            spawnerChip
+        } else {
+            nil
+        }
         // Rows no longer show the scope tag or the working directory; the
         // accessibility label keeps both so VoiceOver loses nothing.
         let accessibilityLabel = SidebarSessionPresentation.sessionAccessibilityLabel(
@@ -1478,7 +1486,7 @@ struct SidebarView: View {
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
             parentSessionName: parentSessionName,
-            spawnerChip: spawnerChip,
+            spawnerChip: visibleSpawnerChip,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
             },
@@ -1538,7 +1546,7 @@ struct SidebarView: View {
                 action: {
                     toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
                 },
-                spawnerChip: spawnerChip,
+                spawnerChip: visibleSpawnerChip,
                 spawnerFilterAction: {
                     toggleSubspaceFilter(
                         parentWorkspaceID: workspace.id,
