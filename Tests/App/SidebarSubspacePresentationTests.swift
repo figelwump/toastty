@@ -289,7 +289,6 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             key == "github-pr" ? .named(.green) : .named(.blue)
         }
         XCTAssertEqual(model.name, "qa-mobile-navigation")
-        XCTAssertEqual(model.statusDotColorKind, .needsApproval)
 
         // Attention first, then unread, then working; the idle session is past
         // the three-row cap.

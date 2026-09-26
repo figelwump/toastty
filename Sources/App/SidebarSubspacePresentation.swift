@@ -324,9 +324,9 @@ enum SidebarSubspacePresentation {
 
     static let hoverTipSessionLimit = 3
 
-    /// The hover card for a subspace row: its sessions as compact rows, then
-    /// every annotation and where the subspace lives, since the row itself
-    /// only has room for one session's summary and the PR chip.
+    /// The hover card for a subspace row: every annotation, its sessions as
+    /// compact rows, and where the subspace lives, since the row itself only
+    /// has room for one session's summary and the PR chip.
     static func hoverTipModel(
         _ row: Row,
         annotationColorToken: (String) -> AnnotationColorToken
@@ -342,7 +342,6 @@ enum SidebarSubspacePresentation {
                     title: session.title,
                     panelID: session.panelID,
                     agentLabel: session.agentLabel,
-                    statusKind: session.statusKind,
                     isUnread: session.statusKind == .ready && session.showsUnreadSessionAccent,
                     railState: SidebarSessionPresentation.sessionRailState(
                         for: session.statusKind,
@@ -357,7 +356,6 @@ enum SidebarSubspacePresentation {
             }
         return SubspaceHoverTipModel(
             name: row.title,
-            statusDotColorKind: statusDotColorKind(row.status),
             sessions: Array(sessions.prefix(hoverTipSessionLimit)),
             hiddenSessionCount: max(0, sessions.count - hoverTipSessionLimit),
             annotations: row.annotations.sorted { $0.key < $1.key }.map { key, annotation in
@@ -406,16 +404,6 @@ enum SidebarSubspacePresentation {
         case .ready: return session.showsUnreadSessionAccent ? 2 : 4
         case .working: return 3
         case .idle: return 4
-        }
-    }
-
-    private static func statusDotColorKind(_ status: RowStatus) -> SessionChildHoverTipModel.StatusDotColorKind {
-        switch status {
-        case .ready: return .ready
-        case .needsApproval: return .needsApproval
-        case .error: return .error
-        case .working: return .working
-        case .idle: return .idle
         }
     }
 }
