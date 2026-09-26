@@ -385,7 +385,7 @@ worktree and background Toastty workspace. It preserves the plan and local task
 identity; the child uses its runtime's native persistent goal when available and
 permitted to implement, review, and verify the change. The child uses subagents
 and chooses available models and reasoning levels as appropriate to each task.
-Workspace chips show its branch, task status, and PR.
+The workspace shows a PR chip once the task publishes one.
 
 Before branching, the launcher honors an explicit base or continuation; otherwise
 it fetches the intended landing branch and compares it with the local branch. It
@@ -403,49 +403,39 @@ it does not silently fall back to defaults. Existing personal copies need the
 updated skill and helper to adopt this behavior.
 
 The personal task workflow uses three skills: `worktree-create`,
-`worktree-done`, and `coordinator`. Create a task workspace and worktree at the
-start of planning, then keep design, implementation and user testing in the same
-conversation. When planning already happened elsewhere, the launcher can fork a
-verified Codex/Claude conversation into the worktree through `agent.launch`.
+`worktree-done`, and `worktree-cleanup`. Create a task workspace and worktree at
+the start of the task, then keep design, implementation and user testing in the
+same conversation. When planning already happened elsewhere, the launcher can fork
+a verified Codex/Claude conversation into the worktree through `agent.launch`.
 It sets an explicit cwd and creates a distinct session; later parent messages
 do not transfer. Requested forks never silently fall back to a fresh summary.
 
-The child prepares one draft PR, completes required review and automated checks,
-records `ValidatedCommit`, and marks it ready for the user's testing. Its task
-record captures the exact validated SHA. A ready PR does not authorize merging.
-The workspace shows task status and PR chips, without a Git branch chip.
+The child completes required review and automated checks and publishes a PR for
+the user's testing. A ready PR does not authorize merging.
 
-The user's `worktree-done` request accepts an exact version and authorizes its
-integration and cleanup once the repository's gates and dependencies are
-satisfied. The helper persists acceptance before any optional notification.
-Changed source commits require renewed acceptance.
+The user's `worktree-done` request, made in the task workspace, accepts the
+reviewed version. The skill checks that the worktree is clean at exactly the PR
+head, then enables GitHub auto-merge so the PR lands when required checks pass.
+New commits need the user's review and a new `worktree-done` request.
 
-Run `coordinator` in an outside project workspace. It assesses accepted tasks
-against the destination and related pending changes, lands eligible tasks in
-dependency order, verifies the actual result and cleans each task immediately.
-It preserves user data, unsaved documents and unrelated resources. Its supporting
-integration reference replaces the separate finisher skill; releases and
-deployments are outside this workflow.
-
-Local queue state lives under `~/.toastty/task-state/<repository-id>/`, keyed by
-the canonical shared Git directory. All worktrees in a clone share that directory.
-Managed launches can grant narrow access through `additionalDirectories`.
-Use an explicit isolated state root for tests. The queue helper provides atomic
-records, cooperative coordinator ownership, safe state transitions and a bounded
-foreground `wait` command that detects record and relevant PR/check changes.
-It is not a daemon: processing stops when the coordinator exits. Resuming
-reconciles saved requests and partially completed integration/cleanup.
+Run `worktree-cleanup` from an outside project workspace. Its status script lists
+each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It
+merges only PRs the user names. With `--cleanup-merged`, it closes the task
+workspace, removes the worktree and deletes the branches for merged PRs, using the
+`workspace.list` query to find each workspace and skipping any with an active
+agent session, busy terminal, or unsaved documents. Releases and deployments are outside this
+workflow.
 
 ## User-created skills
 
 Alongside the five shipped skills, Toastty delivers your own skills to managed
 Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions.
 
-See [examples/skills/](../examples/skills/README.md) for complete worktree and project coordination
+See [examples/skills/](../examples/skills/README.md) for the complete worktree
 packages, installation instructions, and guidance on customizing
 their workflow. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
 it is no longer included in the shipped plugin. Existing custom copies are yours
-to keep and edit. `worktree-done` and `coordinator` are also personal examples.
+to keep and edit. `worktree-done` and `worktree-cleanup` are also personal examples.
 
 - **Authoring**: create `~/.toastty/skills/<name>/SKILL.md` with YAML
   frontmatter containing `name` and a non-empty `description`. The directory

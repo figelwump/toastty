@@ -775,6 +775,9 @@ final class AppControlExecutor {
             // workspace access boundary still protects annotation contents.
             return try annotationKeysSnapshot()
 
+        case .workspaceList:
+            return try workspaceListSnapshot(windowID: try optionalUUIDParameter("windowID", args: args))
+
         case .workspaceSnapshot:
             return try workspaceSnapshot(workspaceID: try resolveWorkspaceID(args: args))
 
@@ -2436,6 +2439,76 @@ private extension AppControlExecutor {
         return result
     }
 
+    /// Lists workspaces in window order. Scoped callers see only the workspaces
+    /// they may automate, so the list never reveals one they could not target.
+    func workspaceListSnapshot(windowID: UUID?) throws -> [String: AutomationJSONValue] {
+        let store = try requiredStore()
+        let windows: [WindowState]
+        if let windowID {
+            guard let window = store.state.windows.first(where: { $0.id == windowID }) else {
+                throw AutomationSocketError.invalidPayload("windowID does not exist")
+            }
+            windows = [window]
+        } else {
+            windows = store.state.windows
+        }
+
+        let callerSessionID = requestContext().callerSessionID
+        var entries: [AutomationJSONValue] = []
+        for window in windows {
+            for (offset, workspaceID) in window.workspaceIDs.enumerated() {
+                guard let workspace = store.state.workspacesByID[workspaceID],
+                      sessionRuntimeStore.allowsWorkspaceAutomation(
+                          callerSessionID: callerSessionID,
+                          of: workspaceID
+                      ) else {
+                    continue
+                }
+                var terminalCwds = Set<String>()
+                var activeSessions: [AutomationJSONValue] = []
+                var busyTerminalCount = 0
+                // Sorted panel order keeps the session listing deterministic.
+                for (panelID, panel) in workspace.allPanelsByID.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+                    guard case .terminal(let terminalState) = panel else { continue }
+                    if terminalState.cwd.isEmpty == false {
+                        terminalCwds.insert(terminalState.cwd)
+                    }
+                    if terminalRuntimeRegistry.promptState(panelID: panelID) == .busy {
+                        busyTerminalCount += 1
+                    }
+                    if let session = sessionRuntimeStore.sessionRegistry.activeSession(for: panelID) {
+                        activeSessions.append(.object([
+                            "sessionID": .string(session.sessionID),
+                            "agent": .string(session.agent.rawValue),
+                            "panelID": .string(panelID.uuidString),
+                        ]))
+                    }
+                }
+                // Same counts the close-workspace confirmation uses; workspace.close
+                // itself does not ask, so callers check these first.
+                let documents = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
+                    panelIDs: workspace.allPanelsByID.keys
+                )
+                entries.append(.object([
+                    "windowID": .string(window.id.uuidString),
+                    "workspaceID": .string(workspaceID.uuidString),
+                    "index": .int(offset + 1),
+                    "title": .string(workspace.title),
+                    "isSelected": .bool(store.state.selectedWorkspaceID(in: window.id) == workspaceID),
+                    "annotations": .array(annotationsJSON(for: workspace)),
+                    "terminalCwds": .array(terminalCwds.sorted().map(AutomationJSONValue.string)),
+                    "activeSessions": .array(activeSessions),
+                    "busyTerminalCount": .int(busyTerminalCount),
+                    "unsavedDocumentCount": .int(documents.dirtyDraftCount + documents.saveInProgressCount),
+                ]))
+            }
+        }
+        // A scoped caller's list omits workspaces outside its scope, so it cannot
+        // prove that no workspace uses a given directory.
+        let callerIsScoped = callerSessionID.map { sessionRuntimeStore.isWorkspaceScoped(sessionID: $0) } ?? false
+        return ["workspaces": .array(entries), "callerIsScoped": .bool(callerIsScoped)]
+    }
+
     func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {
         let store = try requiredStore()
         guard let workspace = store.state.workspacesByID[workspaceID] else {
@@ -2545,24 +2618,9 @@ private extension AppControlExecutor {
         case .slot:
             rootSplitRatio = .null
         }
-        // Bytewise key order keeps the annotation listing deterministic; the
-        // reported color is the effective explicit-or-fallback token.
-        let annotations = workspace.annotations
-            .sorted { $0.key < $1.key }
-            .map { key, annotation -> AutomationJSONValue in
-                let colorToken = annotationStyleStore?.effectiveColorToken(forKey: key)
-                    ?? AnnotationStyleStore.fallbackColorToken(forKey: key)
-                return .object([
-                    "key": .string(key),
-                    "text": .string(annotation.text),
-                    "url": annotation.url.map(AutomationJSONValue.string) ?? .null,
-                    "color": .string(colorToken.storageValue),
-                ])
-            }
-
         return [
             "workspaceID": .string(workspaceID.uuidString),
-            "annotations": .array(annotations),
+            "annotations": .array(annotationsJSON(for: workspace)),
             "tabCount": .int(workspace.tabIDs.count),
             "selectedTabID": selectedTabID.map { .string($0.uuidString) } ?? .null,
             "selectedTabIndex": selectedTabIndex.map { .int($0) } ?? .null,
@@ -2598,6 +2656,23 @@ private extension AppControlExecutor {
     func normalizedOptionalText(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Bytewise key order keeps the annotation listing deterministic; the
+    /// reported color is the effective explicit-or-fallback token.
+    func annotationsJSON(for workspace: WorkspaceState) -> [AutomationJSONValue] {
+        workspace.annotations
+            .sorted { $0.key < $1.key }
+            .map { key, annotation -> AutomationJSONValue in
+                let colorToken = annotationStyleStore?.effectiveColorToken(forKey: key)
+                    ?? AnnotationStyleStore.fallbackColorToken(forKey: key)
+                return .object([
+                    "key": .string(key),
+                    "text": .string(annotation.text),
+                    "url": annotation.url.map(AutomationJSONValue.string) ?? .null,
+                    "color": .string(colorToken.storageValue),
+                ])
+            }
     }
 
     func optionalUUIDParameter(
