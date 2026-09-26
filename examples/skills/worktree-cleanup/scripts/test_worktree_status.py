@@ -91,6 +91,7 @@ class CleanupTests(unittest.TestCase):
             "headRefOid": head, "baseRefName": "main", "isCrossRepository": False,
             "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "url": f"https://github.com/test/repo/pull/{number}",
             "statusCheckRollup": [{"name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            "body": "",
         })
         self.workspaces.append({
             "workspaceID": f"00000000-0000-0000-0000-{number:012d}", "title": branch,
@@ -218,6 +219,24 @@ class CleanupTests(unittest.TestCase):
         self.assertIn("still running: slow", rows[2]["reason"])
         self.assertIsNone(rows[1]["cleanup"])
         self.assertEqual(self.closed(), [])
+
+    def test_open_pr_with_merge_prerequisites_is_blocked(self):
+        self.task(1, state="OPEN")
+        self.prs[-1]["body"] = "## Summary\nFix.\n\n## Activation order\n1. Rebuild GhosttyKit.\n2. Merge this PR."
+        self.task(2, state="OPEN")
+        self.prs[-1]["body"] = "Needs https://github.com/other/fork/pull/1 merged first."
+        self.task(4, state="OPEN")
+        self.prs[-1]["body"] = "Depends on #1"
+        self.task(3, state="OPEN")
+        self.prs[-1]["body"] = "Follows #1 and https://github.com/test/repo/pull/2; see Test/Repo#2."
+        rows = self.status()
+        self.assertEqual(rows[1]["verdict"], "blocked")
+        self.assertIn("Activation order section", rows[1]["reason"])
+        self.assertEqual(rows[2]["verdict"], "blocked")
+        self.assertIn("other/fork#1", rows[2]["reason"])
+        self.assertIn("user confirms", rows[2]["reason"])
+        self.assertEqual(rows[3]["verdict"], "ready")
+        self.assertIn("Depends on section", rows[4]["reason"])
 
     def test_cleanup_refuses_without_toastty(self):
         _, path = self.task(1)
