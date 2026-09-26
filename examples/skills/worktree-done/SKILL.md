@@ -48,10 +48,14 @@ Stop and report, without merging, when:
    and merge manually; the user can merge through `worktree-cleanup` once checks
    pass.
 5. Confirm the result with `gh pr view <number> --json state,autoMergeRequest`.
+6. Once the PR has merged or auto-merge is on, mark this workspace done: set the
+   `task-status` annotation with text `DONE` and no URL, following the workspace
+   annotation rules in the toastty-capabilities skill. Skip this when an earlier
+   step stopped without merging or enabling auto-merge.
 
 Report the PR, the accepted commit, and whether it merged or will merge when
 checks pass. Mention that `worktree-cleanup` removes the workspace and worktree
-after the merge. Keep the `github-pr` workspace chip.
+after the merge. Keep the `github-pr` workspace chip alongside the `DONE` chip.
 
 `--match-head-commit` checks the head only when auto-merge is enabled. GitHub
 keeps auto-merge on if someone with write access pushes later, so a later commit
@@ -60,7 +64,8 @@ would merge unreviewed. Push nothing to this branch while auto-merge is on.
 ## More work after acceptance
 
 If the user asks for more changes before the PR merges, first run
-`gh pr merge <number> --disable-auto` so the new commits cannot merge unreviewed.
+`gh pr merge <number> --disable-auto` so the new commits cannot merge unreviewed,
+and clear this workspace's `task-status` annotation.
 Make the changes, verify them under repository rules, and ask the user to run
 `worktree-done` again after reviewing the new version. If the PR already merged,
 the follow-up work needs a new branch and PR.
