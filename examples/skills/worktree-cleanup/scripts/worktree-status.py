@@ -10,10 +10,13 @@ the `workspace.list` query; --cleanup-merged requires them.
 
 Verdicts:
   ready     open, not draft, GitHub reports it mergeable with required checks met,
-            no check failing or still running, and the worktree is clean at
-            exactly the PR head commit
+            no check failing or still running, the worktree is clean at exactly
+            the PR head commit, and the description lists no merge prerequisites
   cleanup   merged, and the worktree is clean at exactly the merged PR head
-  blocked   anything else; the reason says what is missing
+  blocked   anything else; the reason says what is missing. A description with an
+            "Activation order", "Merge order", "Rollout", or "Depends on" section,
+            or a link to a PR in another repository, blocks until the user
+            confirms those prerequisites are done
 Worktrees whose branch has no PR are listed separately and never touched.
 
 --cleanup-merged acts only on "cleanup" rows. For each, it closes the matching
@@ -39,11 +42,17 @@ from pathlib import Path
 
 PR_FIELDS = (
     "number,title,state,isDraft,headRefName,headRefOid,baseRefName,isCrossRepository,"
-    "mergeable,mergeStateStatus,statusCheckRollup,url"
+    "mergeable,mergeStateStatus,statusCheckRollup,url,body"
 )
 # GitHub computes these after branch protection: CLEAN means required checks are
 # met and nothing blocks the merge; HAS_HOOKS is CLEAN with pre-receive hooks.
 MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS")
+# A PR description section or label line that orders this merge after other work.
+PREREQUISITE_SECTION = re.compile(
+    r"^\s{0,3}(?:[-*]\s+)?(?:#{1,6}\s*|\*\*)?(activation order|merge order|rollout|depends on)\b(?:\*\*)?\s*(?::|$|\*\*|(?=#\d|https?://|[\w.-]+/[\w.-]+#\d))",
+    re.IGNORECASE | re.MULTILINE)
+PR_URL = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)", re.IGNORECASE)
+PR_REFERENCE = re.compile(r"(?<![\w./-])([\w.-]+/[\w.-]+)#(\d+)\b")
 
 
 def run(args: list[str], cwd: str | None = None, check: bool = True) -> str:
@@ -245,7 +254,30 @@ def refresh_merge_state(pr: dict, repo: str) -> None:
             return
 
 
-def verdict(row: Row, pr: dict, worktree: Worktree | None, dirty: bool, ambiguous: bool) -> None:
+def merge_prerequisites(body: str, repo_slug: str) -> str | None:
+    """Describes merge prerequisites the PR description lists, or None. Links to
+    PRs in this repository alone do not count; stacked PRs are handled by base."""
+    found: list[str] = []
+    for match in PREREQUISITE_SECTION.finditer(body):
+        name = match.group(1).capitalize()
+        if f"{name} section" not in found:
+            found.append(f"{name} section")
+    links: list[str] = []
+    for pattern in (PR_URL, PR_REFERENCE):
+        for slug, number in pattern.findall(body):
+            link = f"{slug}#{number}"
+            if slug.lower() != repo_slug.lower() and link not in links:
+                links.append(link)
+    if links:
+        found.append("links " + ", ".join(links))
+    if not found:
+        return None
+    return ("merge prerequisites in the PR description (" + "; ".join(found) +
+            "): merge only after the user confirms they are done")
+
+
+def verdict(row: Row, pr: dict, worktree: Worktree | None, dirty: bool, ambiguous: bool,
+            repo_slug: str) -> None:
     reasons = []
     if ambiguous:
         reasons.append("several PRs use this branch name")
@@ -276,6 +308,9 @@ def verdict(row: Row, pr: dict, worktree: Worktree | None, dirty: bool, ambiguou
         reasons.append("failing: " + ", ".join(row.failing_checks))
     if row.pending_checks:
         reasons.append("still running: " + ", ".join(row.pending_checks))
+    prerequisites = merge_prerequisites(pr.get("body") or "", repo_slug)
+    if prerequisites:
+        reasons.append(prerequisites)
     if reasons:
         row.reason = "; ".join(reasons)
     else:
@@ -421,7 +456,7 @@ def main() -> None:
         if matches:
             row.workspace = " | ".join(w.label for w in matches) + (" (ambiguous)" if len(matches) > 1 else "")
         row.workspace_ids = [w.workspace_id for w in matches]
-        verdict(row, pr, worktree, dirty, ambiguous)
+        verdict(row, pr, worktree, dirty, ambiguous, repo_slug)
         return row
 
     for worktree in worktrees:

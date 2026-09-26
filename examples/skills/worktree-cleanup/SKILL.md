@@ -23,10 +23,12 @@ do not clear it without their answer.
 Run `worktree-status.py` and summarize its verdicts:
 
 - **ready**: open, not draft, GitHub reports it mergeable with required checks
-  met, no check failing or still running, and the worktree is clean at exactly
-  the PR head.
+  met, no check failing or still running, the worktree is clean at exactly
+  the PR head, and the description lists no merge prerequisites.
 - **cleanup**: merged, and the worktree is clean at exactly the merged PR head.
-- **blocked**: anything else. Give the reason it prints.
+- **blocked**: anything else. Give the reason it prints. A description with an
+  "Activation order", "Merge order", "Rollout", or "Depends on" section, or a
+  link to a PR in another repository, blocks the PR even when CI is green.
 
 A ready verdict is not acceptance. Name the ready PRs and ask which to merge
 unless the user already named them.
@@ -37,6 +39,10 @@ Merge only PRs the user names in this request, or that the user accepted with
 `worktree-done`. For each:
 
 1. Rerun the status and confirm the PR is still ready at the head you report.
+   If its only blocked reason is merge prerequisites in its description, name
+   them and treat it as ready once the user confirms each one is done. Do not
+   infer completion from green CI or from a linked PR having merged; any other
+   blocked reason still stops the merge.
 2. Run `gh pr merge <number> --auto --merge --match-head-commit <head>`. Use the
    repository's documented merge method instead of `--merge` when it has one.
    Auto-merge lands the PR when required checks pass, or at once if they have.
