@@ -18,8 +18,8 @@ Release and deployment management are outside this workflow.
 From a project workspace, invoke `worktree-create` with a brief task description.
 The task session designs, implements, verifies, and publishes a PR in its own
 workspace. After testing or reviewing the result there, invoke `worktree-done` in
-that workspace. It checks that the worktree matches the PR and enables auto-merge;
-it never closes its own workspace.
+that workspace. It checks that the worktree matches the PR, enables auto-merge,
+and marks the workspace `DONE`; it never closes its own workspace.
 
 Later, from the project workspace, invoke `worktree-cleanup`. It lists ready,
 merged, and blocked PRs, merges any you name, and for merged PRs closes the task
@@ -39,6 +39,7 @@ limits and compaction still apply.
 
 New tasks start implementing unless the request limits them to planning.
 Workspaces show a PR chip; the launcher does not add task-status or branch chips.
+`worktree-done` adds the only task-status chip, `DONE`, once the user accepts the PR.
 
 ## Repository settings
 
