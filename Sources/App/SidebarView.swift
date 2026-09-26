@@ -543,6 +543,12 @@ struct SidebarView: View {
     private static let sessionRowTitleReservedWidth: CGFloat = 60
     private static let sessionParentTagMaximumWidth: CGFloat = 90
     private static let subspaceRowArrowWidth: CGFloat = 10
+
+    /// Space under a card's session list: room above the card's bottom edge,
+    /// or a short step down to a Subspaces group, whose header adds its own.
+    private static func sessionListBottomPadding(followedBySubspaces: Bool) -> CGFloat {
+        followedBySubspaces ? 6 : 14
+    }
     /// The status rail keeps this width whether or not it has an indicator, so
     /// row text stays aligned down the list.
     private static let sessionStatusRailWidth: CGFloat = 12
@@ -1050,7 +1056,7 @@ struct SidebarView: View {
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
                         .padding(.horizontal, 10)
-                        .padding(.bottom, 14)
+                        .padding(.bottom, Self.sessionListBottomPadding(followedBySubspaces: subspaceRows.isEmpty == false))
                 }
 
                 subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
@@ -1105,7 +1111,7 @@ struct SidebarView: View {
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
                         .padding(.horizontal, 10)
-                        .padding(.bottom, 14)
+                        .padding(.bottom, Self.sessionListBottomPadding(followedBySubspaces: subspaceRows.isEmpty == false))
                 }
                 subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
             }
