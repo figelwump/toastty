@@ -39,6 +39,7 @@ limits and compaction still apply.
 
 New tasks start implementing unless the request limits them to planning.
 Workspaces show a PR chip; the launcher does not add task-status or branch chips.
+`worktree-done` adds the only task-status chip, `DONE`, once the user accepts the PR.
 
 ## Repository settings
 
