@@ -1141,7 +1141,8 @@ struct SidebarView: View {
     private func workspaceAnnotationChip(
         key: String,
         annotation: WorkspaceAnnotation,
-        maximumWidth: CGFloat = SidebarView.workspaceAnnotationChipMaximumWidth
+        maximumWidth: CGFloat = SidebarView.workspaceAnnotationChipMaximumWidth,
+        showsLinkGlyph: Bool = true
     ) -> some View {
         let chipColors = ToastyTheme.annotationChipColors(
             for: annotationStyleStore.effectiveColorToken(forKey: key)
@@ -1153,7 +1154,7 @@ struct SidebarView: View {
                 Self.workspaceAnnotationChipLabel(
                     annotation: annotation,
                     chipColors: chipColors,
-                    isLink: true,
+                    isLink: showsLinkGlyph,
                     maximumWidth: maximumWidth
                 )
             }
@@ -1186,6 +1187,10 @@ struct SidebarView: View {
     /// Tighter than a card's chips: the chip shares one line with the row
     /// title, which truncates first. The chip's tooltip shows the full text.
     static let subspaceRowAnnotationChipMaximumWidth: CGFloat = 96
+    /// Room for the ↖ and a few characters of the spawner's name; the tag
+    /// only tells rows with different spawners apart, and its tooltip and the
+    /// hover card carry the full name.
+    static let subspaceSpawnerTagMaximumWidth: CGFloat = 60
 
     static func workspaceAnnotationChipLabel(
         annotation: WorkspaceAnnotation,
@@ -3270,6 +3275,45 @@ struct SidebarView: View {
         }
     }
 
+    private func subspaceRowTitleLine(
+        _ row: SidebarSubspacePresentation.Row,
+        isEmphasized: Bool,
+        showsAnnotation: Bool
+    ) -> some View {
+        HStack(spacing: 6) {
+            // The ideal width is what the fit check reserves for the title;
+            // in layout it takes whatever the chips leave.
+            Self.styledSessionNameText(row.title, isEmphasized: isEmphasized)
+                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(
+                    minWidth: 0,
+                    idealWidth: Self.sessionRowTitleReservedWidth,
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
+
+            HStack(spacing: 6) {
+                if let chipKind = Self.subspaceStatusChipKind(row.status) {
+                    sessionStatusChip(kind: chipKind)
+                }
+                if showsAnnotation, let rowAnnotation = row.rowAnnotation {
+                    // No ↗ glyph here to save width; the chip still opens
+                    // its link.
+                    workspaceAnnotationChip(
+                        key: rowAnnotation.key,
+                        annotation: rowAnnotation.annotation,
+                        maximumWidth: Self.subspaceRowAnnotationChipMaximumWidth,
+                        showsLinkGlyph: false
+                    )
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(1)
+        }
+    }
+
     private func subspaceRow(
         _ row: SidebarSubspacePresentation.Row,
         parentWorkspaceID: UUID,
@@ -3324,27 +3368,14 @@ struct SidebarView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Self.styledSessionNameText(row.title, isEmphasized: attentionKind != nil)
-                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .layoutPriority(1)
-                    Spacer(minLength: 0)
-                    if let chipKind = Self.subspaceStatusChipKind(row.status) {
-                        sessionStatusChip(kind: chipKind)
-                            .layoutPriority(2)
+                // Like a session row, a narrow sidebar drops the annotation
+                // chip before the title would get shorter than its reserved
+                // width; the hover card still lists every annotation.
+                ViewThatFits(in: .horizontal) {
+                    if row.rowAnnotation != nil {
+                        subspaceRowTitleLine(row, isEmphasized: attentionKind != nil, showsAnnotation: true)
                     }
-                    if let rowAnnotation = row.rowAnnotation {
-                        // The chip keeps its capped width; the title truncates instead.
-                        workspaceAnnotationChip(
-                            key: rowAnnotation.key,
-                            annotation: rowAnnotation.annotation,
-                            maximumWidth: Self.subspaceRowAnnotationChipMaximumWidth
-                        )
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(2)
-                    }
+                    subspaceRowTitleLine(row, isEmphasized: attentionKind != nil, showsAnnotation: false)
                 }
                 .frame(minHeight: Self.sessionRowLineMinHeight)
 
@@ -3358,15 +3389,17 @@ struct SidebarView: View {
                         }
                         Spacer(minLength: 0)
                         if showsSpawnerTag, let spawnerName = row.spawnerName {
-                            // Capped so the summary keeps most of the line; the
-                            // hover card carries the full spawner name.
-                            SidebarCappedIntrinsicWidthLayout(maximumWidth: 110) {
+                            SidebarCappedIntrinsicWidthLayout(maximumWidth: Self.subspaceSpawnerTagMaximumWidth) {
                                 spawnerTag(
                                     label: SidebarSubspacePresentation.spawnerTagLabel(spawnerName),
                                     spawnerName: spawnerName,
                                     spawnerWorkspaceID: row.spawnerWorkspaceID ?? parentWorkspaceID,
                                     spawnerPanelID: row.spawnerPanelID
                                 )
+                            }
+                            .background {
+                                SidebarTooltipBridge(text: spawnerName)
+                                    .allowsHitTesting(false)
                             }
                         }
                     }
