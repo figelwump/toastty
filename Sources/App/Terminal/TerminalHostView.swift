@@ -116,6 +116,11 @@ final class TerminalHostView: NSView {
         }
     }
     private var ghosttyMouseOverLinkURL: String?
+    #if DEBUG
+    var hoveredGhosttyLinkURLForTesting: String? {
+        ghosttyMouseOverLinkURL
+    }
+    #endif
     // Ghostty can briefly report no hovered link while a flagsChanged-driven
     // hover refresh is re-evaluating a stationary pointer. Keep a tiny
     // suppression window so Cmd-hover link opens survive transient nil clears.

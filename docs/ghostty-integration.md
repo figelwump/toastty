@@ -14,7 +14,22 @@ Toastty's full Ghostty integration currently uses the internal
 Ghostty, so the canonical source for Toastty builds is the
 [`toastty-downstream`](https://github.com/figelwump/ghostty/tree/toastty-downstream)
 branch of the Toastty maintainer's Ghostty fork. The branch contains upstream
-Ghostty plus the small downstream surface API addition.
+Ghostty plus these downstream changes:
+
+- the `ghostty_surface_is_at_prompt` embedder API used for prompt state
+- link hover detection stays active while Command is held even when the
+  running program has enabled mouse reporting (for example Claude Code in
+  fullscreen mode). A mouse report can encode Shift, Alt, and Ctrl but not
+  Command, so the program cannot distinguish a Command-click from a plain
+  click. Without this change Ghostty reports no hovered link, Toastty's
+  Command-click routing finds nothing to open, and the program receives a
+  plain click and opens the link in the system browser itself. With it,
+  Toastty reclaims the Command-click before Ghostty sees the press; a
+  standalone Ghostty built from the fork opens the link itself and does not
+  report that click to the program. The gate lives in `src/surface_mouse.zig`
+  (`linkHoverEnabled`) with a Zig unit test of the same name, and Toastty's
+  `GhosttyLinkHoverMouseReportingTests` checks it against the installed
+  artifact.
 
 The branch advances when Toastty intentionally updates its Ghostty dependency;
 it does not continuously follow upstream `main`. Updates merge upstream into the

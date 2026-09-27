@@ -966,7 +966,7 @@ final class GhosttyRuntimeManager {
         surfaceConfig.wait_after_command = false
 
         let requestedWorkingDirectory = Self.normalizedWorkingDirectoryValue(workingDirectory)
-        let resolvedWorkingDirectory: String
+        let candidateWorkingDirectory: String
         if let requestedWorkingDirectory {
             if let inheritedWorkingDirectory,
                requestedWorkingDirectory != inheritedWorkingDirectory {
@@ -979,11 +979,22 @@ final class GhosttyRuntimeManager {
                     ]
                 )
             }
-            resolvedWorkingDirectory = requestedWorkingDirectory
+            candidateWorkingDirectory = requestedWorkingDirectory
         } else if let inheritedWorkingDirectory {
-            resolvedWorkingDirectory = inheritedWorkingDirectory
+            candidateWorkingDirectory = inheritedWorkingDirectory
         } else {
-            resolvedWorkingDirectory = NSHomeDirectory()
+            candidateWorkingDirectory = NSHomeDirectory()
+        }
+        let resolvedWorkingDirectory = TerminalLaunchWorkingDirectory.existing(candidateWorkingDirectory)
+        if resolvedWorkingDirectory != candidateWorkingDirectory {
+            ToasttyLog.info(
+                "Terminal working directory no longer exists; starting in the nearest existing directory",
+                category: .terminal,
+                metadata: [
+                    "missing_cwd": candidateWorkingDirectory,
+                    "cwd": resolvedWorkingDirectory,
+                ]
+            )
         }
 
         let surface = Self.createGhosttySurface(
@@ -1466,6 +1477,21 @@ final class GhosttyRuntimeManager {
         let hostViewHandle = UInt(bitPattern: Unmanaged.passUnretained(hostView).toOpaque())
         surfaceHandleByHostViewHandle.removeValue(forKey: hostViewHandle)
         hostViewBySurfaceHandle.removeValue(forKey: surfaceHandle)
+    }
+
+    // The app test bundle links its own copy of libghostty whose global state
+    // is never initialized, so tests must reach libghostty through the app
+    // module. These wrappers exist only for that reason.
+    func setSurfaceSizeForTesting(_ surface: ghostty_surface_t, width: UInt32, height: UInt32) {
+        ghostty_surface_set_size(surface, width, height)
+    }
+
+    func surfaceSizeForTesting(_ surface: ghostty_surface_t) -> ghostty_surface_size_s {
+        ghostty_surface_size(surface)
+    }
+
+    func freeSurfaceForTesting(_ surface: ghostty_surface_t) {
+        ghostty_surface_free(surface)
     }
 
     @discardableResult

@@ -6,6 +6,8 @@ public enum ToasttyLaunchContextEnvironment {
     public static let sessionIDKey = "TOASTTY_SESSION_ID"
     public static let panelIDKey = "TOASTTY_PANEL_ID"
     public static let launchReasonKey = "TOASTTY_LAUNCH_REASON"
+    /// Why a restored pane did not resume its agent; the pane prints it once.
+    public static let restoreNoticeKey = "TOASTTY_RESTORE_NOTICE"
     public static let cwdKey = "TOASTTY_CWD"
     public static let repoRootKey = "TOASTTY_REPO_ROOT"
     public static let socketPathKey = "TOASTTY_SOCKET_PATH"

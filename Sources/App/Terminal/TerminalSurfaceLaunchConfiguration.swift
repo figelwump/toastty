@@ -5,6 +5,35 @@ enum TerminalLaunchReason: String, Equatable, Sendable {
     case restore
 }
 
+enum TerminalLaunchWorkingDirectory {
+    /// A shell given a directory that no longer exists starts in `/`. Start it
+    /// in the nearest parent that still exists instead, or in home when only
+    /// `/` is left. An existing directory is returned unchanged.
+    static func existing(
+        _ path: String,
+        homeDirectory: String = NSHomeDirectory(),
+        fileManager: FileManager = .default
+    ) -> String {
+        let expanded = (path as NSString).expandingTildeInPath
+        guard isDirectory(expanded, fileManager: fileManager) == false else {
+            return path
+        }
+        var candidate = (expanded as NSString).standardizingPath
+        while candidate.hasPrefix("/"), candidate != "/" {
+            candidate = (candidate as NSString).deletingLastPathComponent
+            if candidate != "/", isDirectory(candidate, fileManager: fileManager) {
+                return candidate
+            }
+        }
+        return homeDirectory
+    }
+
+    private static func isDirectory(_ path: String, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+}
+
 struct TerminalSurfaceLaunchConfiguration: Equatable, Sendable {
     var environmentVariables: [String: String]
     var initialInput: String?

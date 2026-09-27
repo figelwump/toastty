@@ -1,0 +1,4 @@
+interface:
+  display_name: "Worktree Cleanup"
+  short_description: "Merge named ready PRs and clean up merged task worktrees"
+  default_prompt: "Use $worktree-cleanup: show which task PRs are ready to merge, and clean up worktrees and workspaces whose PR has merged."

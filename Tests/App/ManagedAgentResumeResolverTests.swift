@@ -318,7 +318,7 @@ struct ManagedAgentResumeResolverTests {
     }
 
     @Test
-    func resolveClearsMissingWorkingDirectoryBeforeFallingBack() throws {
+    func resolveKeepsRecordAndExplainsWhenWorkingDirectoryIsMissing() throws {
         let fixture = try makeResumeFixture(createCWD: false)
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let record = ManagedAgentResumeRecord(
@@ -335,7 +335,11 @@ struct ManagedAgentResumeResolverTests {
             launchReason: .restore
         )
 
-        #expect(resolution == .clearRecord(reason: .missingWorkingDirectory))
+        #expect(resolution == .skipResume(notice: """
+        Toastty: \(fixture.cwdURL.path) no longer exists.
+        Codex session 019e2823-f520-7690-91b6-cd84eb52dd8a was not resumed. \
+        To resume it: codex resume 019e2823-f520-7690-91b6-cd84eb52dd8a
+        """))
     }
 
     @Test
