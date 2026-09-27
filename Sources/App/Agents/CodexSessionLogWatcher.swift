@@ -82,6 +82,9 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     let rootTurnID: String?
     let completionThreadID: String?
     let completionTurnID: String?
+    /// A shortened `task_complete.error` message. Codex records a failed turn,
+    /// such as a rejected model request, as a completion carrying this error.
+    let turnError: String?
     let nativeSessionID: String?
     let nativeSessionFilePath: String?
     let callID: String?
@@ -101,6 +104,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         rootTurnID: String? = nil,
         completionThreadID: String? = nil,
         completionTurnID: String? = nil,
+        turnError: String? = nil,
         nativeSessionID: String? = nil,
         nativeSessionFilePath: String? = nil,
         callID: String? = nil,
@@ -126,6 +130,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         self.rootTurnID = rootTurnID
         self.completionThreadID = completionThreadID
         self.completionTurnID = completionTurnID
+        self.turnError = turnError
         self.nativeSessionID = nativeSessionID
         self.nativeSessionFilePath = nativeSessionFilePath
         self.callID = callID
@@ -550,6 +555,54 @@ final class CodexSessionLogWatcher {
         _ = await currentTask.result
         task = nil
     }
+}
+
+extension CodexSessionLogWatcher {
+    /// Shortens a `task_complete.error` to its first sentence for the sidebar.
+    /// Codex's message carries an HTTP status prefix, a masked API key, the
+    /// request URL, and request IDs, for example:
+    /// `unexpected status 401 Unauthorized: Incorrect API key provided: sk-…. You
+    /// can find your API key at …, url: …, cf-ray: …, request id: …`, which
+    /// becomes `401 Unauthorized: Incorrect API key provided`.
+    static func turnErrorDetail(_ value: Any?) -> String? {
+        let rawMessage: Any?
+        if let error = value as? [String: Any] {
+            rawMessage = error["message"]
+        } else if let value, (value is NSNull) == false {
+            rawMessage = value
+        } else {
+            return nil
+        }
+        guard var message = normalizedString(rawMessage) else { return "Turn failed" }
+
+        if message.lowercased().hasPrefix(turnErrorStatusPrefix) {
+            message.removeFirst(turnErrorStatusPrefix.count)
+        }
+        // Some failures carry the raw API error body instead of prose.
+        if message.hasPrefix("{"),
+           let body = (try? JSONSerialization.jsonObject(with: Data(message.utf8))) as? [String: Any],
+           let bodyMessage = normalizedString((body["error"] as? [String: Any])?["message"] ?? body["message"]) {
+            message = bodyMessage
+        }
+        for marker in turnErrorTrailingFieldMarkers {
+            if let range = message.range(of: marker, options: .caseInsensitive) {
+                message = String(message[..<range.lowerBound])
+            }
+        }
+        if let sentenceEnd = message.range(of: ". ") {
+            message = String(message[..<sentenceEnd.lowerBound])
+        }
+        let trimmed = message
+            .replacingOccurrences(of: turnErrorAPIKeyPattern, with: "", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ":;,. ").union(.whitespacesAndNewlines))
+        return normalizedSummaryText(trimmed, limit: 160) ?? "Turn failed"
+    }
+
+    static let turnErrorStatusPrefix = "unexpected status "
+    /// An API key, even when quoted or attached as `key=sk-…`, but not the
+    /// `sk-` inside words such as `task-`.
+    static let turnErrorAPIKeyPattern = #"['"(]?(?<![A-Za-z0-9])sk-[A-Za-z0-9_*\-]+['")]?"#
+    static let turnErrorTrailingFieldMarkers = [", url:", ", cf-ray:", ", request id:"]
 }
 
 private extension CodexSessionLogWatcher {
@@ -1592,7 +1645,8 @@ private extension CodexSessionLogWatcher {
                 detail: normalizedSummaryText(message["last_agent_message"], limit: 240) ?? "Turn complete",
                 occurredAt: rolloutEntryDate(from: object),
                 completionThreadID: eventThreadID(payload: payload, message: message),
-                completionTurnID: eventTurnID(from: object, payload: payload, message: message)
+                completionTurnID: eventTurnID(from: object, payload: payload, message: message),
+                turnError: turnErrorDetail(message["error"])
             )
 
         case "turn_aborted":
@@ -1661,7 +1715,8 @@ private extension CodexSessionLogWatcher {
                 detail: normalizedSummaryText(payload["last_agent_message"], limit: 240) ?? "Turn complete",
                 occurredAt: rolloutEntryDate(from: object),
                 completionThreadID: normalizedString(payload["thread_id"]),
-                completionTurnID: normalizedString(payload["turn_id"])
+                completionTurnID: normalizedString(payload["turn_id"]),
+                turnError: turnErrorDetail(payload["error"])
             )
 
         case "turn_aborted":

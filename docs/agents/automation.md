@@ -4,14 +4,14 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 
 ## GitHub CI
 
-`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, pushes to `main`, and manual dispatch. Feature-branch pushes get automatic checks through their PR; manual dispatch can validate a branch before opening one. Job selection uses `.github/ci-paths.yml`:
+`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, pushes to `main`, and manual dispatch. Feature-branch pushes get automatic checks through their PR; manual dispatch can validate a branch before opening one. Pushes to `main` and manual dispatch run every job and are never cancelled, so each merged commit gets a full test run; a newer push to a PR cancels that PR's older run. PR job selection uses `.github/ci-paths.yml`:
 
 - Desktop sources, tests, scripts, and build inputs select the full macOS Debug test suite and an unsigned Release build.
 - Native iOS sources select Debug and Release simulator tests. Shared protocol changes select both platforms.
 - Web-panel sources and generated bundles select both apps, which embed the bundles, plus web-panel tests on Linux. `npm test` also checks generated bundle synchronization.
-- Documentation-only changes skip app jobs. Manual dispatch selects all jobs.
+- Documentation-only PR changes skip app jobs.
 
-The required check remains named **Mobile iOS gate** for compatibility with existing repository rules. It requires selection to succeed, all selected jobs to pass, and rejects failed or cancelled jobs. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` runs local selection and gate regression tests without launching either app; it installs test dependencies under `Tests/CI/node_modules`.
+Branch protection on `main` requires the **CI gate** check, so renaming the gate job also means updating that rule. The gate requires selection to succeed, all selected jobs to pass, and rejects failed or cancelled jobs. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` runs local selection and gate regression tests without launching either app; it installs test dependencies under `Tests/CI/node_modules`.
 
 GitHub jobs use disposable runners and no production host. The macOS commands build/test the `ToasttyApp` scheme with `TUIST_DISABLE_GHOSTTY=1`; Release uses `CODE_SIGNING_ALLOWED=NO` and does not archive or publish. This arm64 Release compile check is not release validation: it does not cover Intel compilation, signing, the embedded Ghostty runtime, or GUI smoke flows. Ghostty-backed pre-release validation still uses the existing remote workflows below with the required local artifact.
 

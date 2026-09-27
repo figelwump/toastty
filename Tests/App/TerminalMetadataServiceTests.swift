@@ -236,6 +236,57 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    /// A restore notice typed ahead of the startup command sets its own
+    /// title first; that must not end the startup-title suppression.
+    func testRestoreNoticeTitleKeepsStartupCommandTitleSuppressed() async throws {
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
+        // The registry holds its profile provider weakly.
+        let profileProvider = TestTerminalProfileProvider(profiles: [
+            TerminalProfile(id: "zmx", displayName: "ZMX", badgeLabel: "ZMX", startupCommand: startupCommand),
+        ])
+        registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [])
+        registry.bind(store: store)
+        _ = registry.surfaceLaunchConfiguration(for: panelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+
+        for title in [" printf '%s\\n' \"$TOASTTY_RESTORE_NOTICE\"", startupCommand] {
+            _ = service.handleRuntimeMetadataAction(
+                .setTerminalTitle(title),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        }
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(
+            registry.profileStartupCommandAwaitingTitleCleanup(
+                panelID: panelID,
+                terminalState: try terminalState(panelID: panelID, state: store.state)
+            ),
+            startupCommand,
+            "The notice title must not end the startup-title cleanup"
+        )
+        XCTAssertNotEqual(service.liveTitle(for: panelID), startupCommand)
+        XCTAssertNotEqual(try terminalState(panelID: panelID, state: store.state).title, startupCommand)
+    }
+
     func testLaunchedProfiledPaneDoesNotSuppressMeaningfulStartupCommandTitle() async throws {
         let state = makeRestoredProfiledPanelState(profileID: "dev")
         let store = AppStore(state: state, persistTerminalFontPreference: false)

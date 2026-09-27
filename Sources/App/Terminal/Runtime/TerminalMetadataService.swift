@@ -1489,7 +1489,10 @@ final class TerminalMetadataService {
         guard let normalizedTitle else { return false }
         guard let normalizedProfileStartupCommand else { return false }
         guard normalizedTitle != normalizedProfileStartupCommand else { return false }
+        // A command Toastty typed ahead of the startup command, such as a
+        // restore notice, is not the title the startup command waits for.
         return Self.titleLooksSemantic(normalizedTitle)
+            && TerminalRuntimeRegistry.shouldSuppressProfileStartupCommandTitle(normalizedTitle) == false
     }
 
     private func normalizedProfileStartupCommandAwaitingTitleCleanup(
@@ -1551,7 +1554,11 @@ final class TerminalMetadataService {
         // Ghostty's command-finished signal is emitted when the shell's
         // foreground command returns. For managed launches, that foreground
         // command is the agent process itself, not the agent's internal tools.
-        clearManagedAgentResumeRecordIfNeeded(panelID: panelID)
+        // A restored pane's typed notice is not the agent, so its finish keeps
+        // the record the pane held on to.
+        if registry?.consumeRestoreNoticeCommandFinish(panelID: panelID) != true {
+            clearManagedAgentResumeRecordIfNeeded(panelID: panelID)
+        }
 
         guard prefersNativeCWDSignal(panelID: panelID) == false else {
             return true

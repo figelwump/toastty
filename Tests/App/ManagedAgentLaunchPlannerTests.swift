@@ -1314,6 +1314,64 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testCodexRolloutTurnFailureMarksHookTrackedSessionAsError() async throws {
+        let fixture = try makePlannerFixture(
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+        let rolloutURL = temporaryJSONLURL()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+            removeRolloutFixture(rolloutURL)
+        }
+
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: codexResumeRecord(
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: rolloutURL.path
+                )
+            )
+        ))
+        _ = fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "go ahead"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "go ahead"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: rolloutURL.path,
+                cwd: nil
+            ),
+            at: Date()
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"2026-09-25T23:01:24.203Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-root","last_agent_message":null,"error":{"message":"unexpected status 401 Unauthorized: Incorrect API key provided: sk-test****abcd. You can find your API key at https://platform.openai.com/account/api-keys., url: https://chatgpt.com/backend-api/codex/responses","codex_error_info":"other"}}}
+            """,
+            to: rolloutURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind == .error
+        }
+        let status = fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status
+        XCTAssertEqual(status?.kind, .error)
+        XCTAssertEqual(status?.detail, "401 Unauthorized: Incorrect API key provided")
+    }
+
     func testCodexSessionLogApprovalDoesNotDriveStatusWhenHooksAreAvailable() async throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }

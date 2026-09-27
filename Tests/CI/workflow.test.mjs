@@ -44,12 +44,19 @@ for (const [path, expected] of [
   });
 }
 
+test('only PR runs cancel superseded runs', () => {
+  assert.equal(workflow.concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}");
+  // run_id rather than sha: two runs of one commit must not replace each other while pending.
+  assert.ok(workflow.concurrency.group.includes("github.event_name == 'pull_request' && github.ref || github.run_id"));
+});
+
 test('every PR gets a gate; pushes target main and manual runs remain available', () => {
   assert.ok(Object.hasOwn(workflow.on, 'pull_request'));
   assert.equal(workflow.on.pull_request, null);
   assert.deepEqual(workflow.on.push, { branches: ['main'] });
   assert.ok(Object.hasOwn(workflow.on, 'workflow_dispatch'));
-  assert.equal(workflow.jobs.gate.name, 'Mobile iOS gate');
+  // Branch protection on main requires this exact check name.
+  assert.equal(workflow.jobs.gate.name, 'CI gate');
   assert.equal(workflow.jobs.gate.if, 'always()');
   assert.deepEqual([...workflow.jobs.gate.needs].sort(), ['changes', 'ios', 'macos', 'web']);
 });
@@ -57,17 +64,17 @@ test('every PR gets a gate; pushes target main and manual runs remain available'
 test('selection outputs drive each job and use the tested filters', () => {
   const filter = workflow.jobs.changes.steps.find((step) => step.id === 'filter');
   assert.equal(filter.with.filters, '.github/ci-paths.yml');
-  assert.equal(filter.if, "github.event_name != 'workflow_dispatch'");
+  assert.equal(filter.if, "github.event_name == 'pull_request'");
   for (const name of ['ios', 'macos', 'web']) {
     assert.equal(workflow.jobs.changes.outputs[name], `\${{ steps.filter.outputs.${name} }}`);
     assert.equal(workflow.jobs[name].if,
-      `github.event_name == 'workflow_dispatch' || needs.changes.outputs.${name} == 'true'`);
+      `github.event_name != 'pull_request' || needs.changes.outputs.${name} == 'true'`);
   }
 });
 
 const gateStep = workflow.jobs.gate.steps[0];
 const gate = (overrides = {}) => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', gateStep.run], {
-  env: { ...process.env, CHANGES_RESULT: 'success', MANUAL_RUN: 'false',
+  env: { ...process.env, CHANGES_RESULT: 'success', FULL_RUN: 'false',
     IOS_SELECTED: 'false', MACOS_SELECTED: 'false', WEB_SELECTED: 'false',
     IOS_RESULT: 'skipped', MACOS_RESULT: 'skipped', WEB_RESULT: 'skipped', ...overrides },
   encoding: 'utf8',
@@ -90,9 +97,14 @@ test('gate rejects failed selection and any failed or cancelled job', () => {
   }
 });
 
-test('manual runs require every job to pass', () => {
-  assert.notEqual(gate({ MANUAL_RUN: 'true' }).status, 0);
-  assert.equal(gate({ MANUAL_RUN: 'true', IOS_RESULT: 'success',
+test('main pushes and manual runs require every job to pass', () => {
+  assert.notEqual(gate({ FULL_RUN: 'true' }).status, 0);
+  // Path selection is skipped outside PRs, so its outputs arrive empty.
+  const unselected = { IOS_SELECTED: '', MACOS_SELECTED: '', WEB_SELECTED: '' };
+  assert.notEqual(gate({ FULL_RUN: 'true', ...unselected, MACOS_RESULT: 'success' }).status, 0);
+  assert.equal(gate({ FULL_RUN: 'true', ...unselected, IOS_RESULT: 'success',
+    MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
+  assert.equal(gate({ FULL_RUN: 'true', IOS_RESULT: 'success',
     MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
 });
 

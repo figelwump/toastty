@@ -602,4 +602,137 @@ extension SessionRuntimeStoreTests {
         #expect(status?.detail == "Root finished")
     }
 
+    @Test
+    func codexRolloutTurnFailureMarksOnlyTheCurrentHookTurnAsAnError() {
+        let store = SessionRuntimeStore()
+        let sessionID = "sess-codex-rollout-failure"
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        func promptSubmit(turnID: String) -> CodexHookEvent {
+            CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: turnID,
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Evaluate approaches"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            )
+        }
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: promptSubmit(turnID: "turn-1"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let acceptedStale = store.handleCodexRolloutTurnFailure(
+            sessionID: sessionID,
+            turnID: "turn-0",
+            detail: "Stale failure",
+            at: startedAt.addingTimeInterval(2)
+        )
+        #expect(acceptedStale == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
+
+        let acceptedCurrent = store.handleCodexRolloutTurnFailure(
+            sessionID: sessionID,
+            turnID: "turn-1",
+            detail: "401 Unauthorized: Incorrect API key provided",
+            at: startedAt.addingTimeInterval(3)
+        )
+        #expect(acceptedCurrent)
+        let failedStatus = store.sessionRegistry.activeSession(sessionID: sessionID)?.status
+        #expect(failedStatus?.kind == .error)
+        #expect(failedStatus?.detail == "401 Unauthorized: Incorrect API key provided")
+
+        // An error already on the row, such as the visible-text usage-limit banner, keeps its text.
+        #expect(store.handleCodexRolloutTurnFailure(
+            sessionID: sessionID,
+            turnID: "turn-1",
+            detail: "Different failure text",
+            at: startedAt.addingTimeInterval(3.5)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.detail == "401 Unauthorized: Incorrect API key provided")
+
+        // The next prompt clears the error, and a replay of the old failure cannot restore it.
+        _ = store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: promptSubmit(turnID: "turn-2"),
+            at: startedAt.addingTimeInterval(4)
+        )
+        let acceptedReplay = store.handleCodexRolloutTurnFailure(
+            sessionID: sessionID,
+            turnID: "turn-1",
+            detail: "401 Unauthorized: Incorrect API key provided",
+            at: startedAt.addingTimeInterval(5)
+        )
+        #expect(acceptedReplay == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
+    }
+
+    @Test
+    func codexSessionLogFallbackReportsAFailedTurnAsAnError() {
+        let store = SessionRuntimeStore()
+        let sessionID = "sess-codex-fallback-failure"
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .sessionLogFallback(reason: "test"),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: sessionID,
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Fix sidebar"),
+            turnID: "turn-root"
+        )
+        store.updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Fix sidebar"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        // The fallback session log owns completion, so the rollout path stays out of it.
+        #expect(store.handleCodexRolloutTurnFailure(
+            sessionID: sessionID,
+            turnID: "turn-root",
+            detail: "Selected model is at capacity",
+            at: startedAt.addingTimeInterval(2)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
+
+        let accepted = store.handleCodexSessionLogCompletion(
+            sessionID: sessionID,
+            detail: "Turn complete",
+            threadID: nil,
+            turnID: "turn-root",
+            turnError: "Selected model is at capacity",
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(accepted)
+        let status = store.sessionRegistry.activeSession(sessionID: sessionID)?.status
+        #expect(status?.kind == .error)
+        #expect(status?.detail == "Selected model is at capacity")
+    }
 }

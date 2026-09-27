@@ -21,7 +21,8 @@ requirements take precedence; surface blockers and material unresolved scope
 choices while continuing independent authorized work.
 Follow the repository's review, testing, and commit instructions. Keep private
 handoffs and exported local artifacts out of product commits. Do not merge or
-remove the worktree without the user's authorization.
+remove the worktree without the user's authorization. The user accepts the result
+by invoking `worktree-done` in this workspace; cleanup runs from outside it.
 
 For implementation tasks, verify your work before reporting it ready. Run the
 repository's required checks and the smallest meaningful tests for the changed
