@@ -227,9 +227,11 @@ branch name or agent label.
 
 Mark a finished subspace task with `workspace.set-done`, not an annotation.
 With no workspace given it marks the calling agent's own workspace, and the
-subspace row shows a check; a top-level workspace is rejected. The mark clears
-when an agent in that workspace starts new work, so do not clear it yourself
-before continuing.
+subspace row shows a check. The mark clears when an agent in that workspace
+starts new work, so do not clear it yourself before continuing. A top-level
+workspace has no check and `workspace.set-done` rejects it; mark it with a
+`task-status` annotation with text `DONE` instead, and clear that annotation
+yourself if work resumes.
 
 ## Agent Model And Reasoning Selection
 
