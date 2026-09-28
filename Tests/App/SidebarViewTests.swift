@@ -108,11 +108,12 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(leftClampedOrigin, CGPoint(x: 0, y: 394))
     }
 
-    /// The badge belongs on the tab line in both row shapes, so a row with a
-    /// name and a row without one put status in the same place.
-    func testStatusBadgeSharesTheTabLineWhetherOrNotTheRowHasAName() throws {
+    /// State sits on the first line in both row shapes: beside the name, or
+    /// beside the summary heading a row the provider has not named. The tab
+    /// title no longer appears on the row; the hover card carries it.
+    func testStatusBadgeSharesTheFirstLineWhetherOrNotTheRowHasAName() throws {
         for name in ["Decommission the staging host", nil] as [String?] {
-            let hostingView = try makeSidebarHostingView(
+            let harness = try makeSidebarHarness(
                 sessionID: "badge-line-row",
                 sessionStatus: SessionStatus(
                     kind: .needsApproval,
@@ -122,20 +123,23 @@ final class SidebarViewTests: XCTestCase {
                 displayTitleOverride: name,
                 customTabTitle: "operator"
             )
+            defer { harness.window.orderOut(nil) }
 
             let shape = name == nil ? "an unnamed row" : "a named row"
-            let badge = try semanticTextFrame(in: hostingView, text: "approval", shape: shape)
-            let tabPill = try semanticTextFrame(in: hostingView, text: "operator", shape: shape)
-            XCTAssertEqual(
-                badge.midY,
-                tabPill.midY,
-                accuracy: 1.5,
-                "The badge should sit on the tab line in \(shape)"
+            let row = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "badge-line-row")
+            let rowFrame = row.convert(row.bounds, to: harness.hostingView)
+            let rowTop = harness.hostingView.isFlipped ? rowFrame.minY : rowFrame.maxY
+            let badge = try semanticTextFrame(in: harness.hostingView, text: "approval", shape: shape)
+            // The first line ends 21pt below the row's top edge: 4pt of
+            // padding and a 17pt line.
+            XCTAssertLessThan(
+                abs(badge.midY - rowTop),
+                21,
+                "The badge should sit on the first line in \(shape)"
             )
-            XCTAssertGreaterThan(
-                badge.minX,
-                tabPill.maxX,
-                "The badge should be right-aligned after the tab pill in \(shape)"
+            XCTAssertFalse(
+                renderedTextValues(in: harness.hostingView).contains("operator"),
+                "The tab title should not render on the row in \(shape)"
             )
         }
     }
@@ -304,11 +308,10 @@ final class SidebarViewTests: XCTestCase {
         let path = NSHomeDirectory() + "/worktrees/hover-card-copy"
         let model = SubspaceHoverTipModel(
             name: "qa-mobile-navigation",
-            statusDotColorKind: .needsApproval,
             sessions: [
                 .init(
                     title: "Fix nav drawer focus", panelID: targetPanelID, agentLabel: "claude",
-                    statusKind: .needsApproval, isUnread: false, railState: .approvalDot,
+                    isUnread: false, railState: .approvalDot,
                     badgeKind: .needsApproval, turnStartedAt: nil, summary: "pnpm db:migrate"
                 ),
             ],
@@ -504,51 +507,9 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testWorkingSessionDetailTextRendersDistinctItalicGlyphs() throws {
-        let normalBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionDetailText(
-                "Inspecting compile issues",
-                statusKind: .idle,
-                showsUnreadSessionAccent: false
-            )
-        )
-        let workingBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionDetailText(
-                "Inspecting compile issues",
-                statusKind: .working,
-                showsUnreadSessionAccent: false
-            )
-        )
-
-        XCTAssertGreaterThan(try differingPixelCount(between: normalBitmap, and: workingBitmap), 0)
-    }
-
-    func testWorkingSessionNameTextRendersDistinctItalicGlyphs() throws {
-        let normalBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionNameText(
-                "Codex",
-                statusKind: .idle,
-                showsUnreadSessionAccent: false
-            )
-        )
-        let workingBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionNameText(
-                "Codex",
-                statusKind: .working,
-                showsUnreadSessionAccent: false
-            )
-        )
-
-        XCTAssertGreaterThan(try differingPixelCount(between: normalBitmap, and: workingBitmap), 0)
-    }
-
     func testSessionNameTextUsesConfiguredSidebarFontSize() throws {
         let styledBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionNameText(
-                "Codex",
-                statusKind: .idle,
-                showsUnreadSessionAccent: false
-            )
+            for: SidebarView.styledSessionNameText("Codex", isEmphasized: false)
         )
         let expectedBitmap = try renderedBitmap(
             for: Text("Codex").font(Font.system(size: 11, weight: .medium, design: .default))
@@ -557,16 +518,12 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
     }
 
-    func testSessionDetailTextUsesConfiguredSidebarFontSize() throws {
+    func testSessionSummaryTextUsesTheMonospacedSummaryFace() throws {
         let styledBitmap = try renderedBitmap(
-            for: SidebarView.styledSessionDetailText(
-                "Inspecting compile issues",
-                statusKind: .idle,
-                showsUnreadSessionAccent: false
-            )
+            for: SidebarView.styledSessionSummaryText("Inspecting compile issues")
         )
         let expectedBitmap = try renderedBitmap(
-            for: Text("Inspecting compile issues").font(Font.system(size: 11, weight: .regular, design: .default))
+            for: Text("Inspecting compile issues").font(Font.system(size: 10, weight: .regular, design: .monospaced))
         )
 
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
@@ -897,7 +854,9 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testUnreadReadySessionRendersStatusChipLabel() throws {
+    /// An unread ready row shows its state through the tint, the heavy name
+    /// and the rail dot rather than a badge; the spoken label keeps "ready".
+    func testUnreadReadySessionShowsNoBadgeButKeepsReadyInAccessibilityLabel() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "sess-ready-unread",
             sessionStatus: SessionStatus(kind: .ready, summary: "Ready", detail: "Completed response"),
@@ -905,9 +864,13 @@ final class SidebarViewTests: XCTestCase {
         )
 
         let textValues = renderedTextValues(in: hostingView)
+        XCTAssertFalse(
+            textValues.contains("ready"),
+            "Unread ready rows should not render a ready badge: \(textValues)"
+        )
         XCTAssertTrue(
-            textValues.contains(where: { $0.localizedCaseInsensitiveContains("ready") }),
-            "Sidebar text values should include a ready chip label for unread ready rows: \(textValues)"
+            textValues.contains(where: { $0.contains(", ready,") }),
+            "The accessibility label should still say ready: \(textValues)"
         )
     }
 
@@ -1016,81 +979,109 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    /// A narrow sidebar drops the waiting chip to keep room for the name and
+    /// moves it to the row tooltip; at the default width the chip shows and
+    /// the tooltip stays empty. The chip has no text bridge of its own, so
+    /// the tooltip is how the test tells which layout the row chose.
     func testCrowdedNarrowSessionRowDropsWaitingChipAndMovesStatusToRowTooltip() throws {
-        let state = AppState.bootstrap()
-        let windowID = try XCTUnwrap(state.windows.first?.id)
-        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
-        let panelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.focusedPanelID)
-        let store = AppStore(state: state, persistTerminalFontPreference: false)
-        let registry = TerminalRuntimeRegistry()
-        let sessionRuntimeStore = SessionRuntimeStore()
-        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        sessionRuntimeStore.startSession(
-            sessionID: "waiting-row-narrow",
-            agent: .codex,
-            panelID: panelID,
-            windowID: windowID,
-            workspaceID: workspaceID,
-            displayTitleOverride: "Codex sidebar compact row review",
-            cwd: "/repo/sidebar",
-            repoRoot: "/repo",
-            at: now
-        )
-        sessionRuntimeStore.updateStatus(
-            sessionID: "waiting-row-narrow",
-            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Ready"),
-            at: now.addingTimeInterval(1)
-        )
-        XCTAssertTrue(sessionRuntimeStore.updateBackgroundActivity(
-            sessionID: "waiting-row-narrow",
-            activity: SessionBackgroundActivity(
-                id: "activity-1",
-                kind: .subagent,
-                displayName: "Explore",
-                startedAt: now.addingTimeInterval(2),
-                lastUpdatedAt: now.addingTimeInterval(2)
-            ),
-            at: now.addingTimeInterval(2)
-        ))
-        defer { sessionRuntimeStore.reset() }
+        for (sidebarWidth, showsChip) in [(CGFloat(WindowState.minSidebarWidth), false), (ToastyTheme.sidebarWidth, true)] {
+            let state = AppState.bootstrap()
+            let windowID = try XCTUnwrap(state.windows.first?.id)
+            let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+            let panelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.focusedPanelID)
+            let store = AppStore(state: state, persistTerminalFontPreference: false)
+            let registry = TerminalRuntimeRegistry()
+            let sessionRuntimeStore = SessionRuntimeStore()
+            let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+            let now = Date(timeIntervalSince1970: 1_700_000_000)
+            sessionRuntimeStore.startSession(
+                sessionID: "waiting-row-narrow",
+                agent: .codex,
+                panelID: panelID,
+                windowID: windowID,
+                workspaceID: workspaceID,
+                displayTitleOverride: "Codex sidebar compact row review",
+                cwd: "/repo/sidebar",
+                repoRoot: "/repo",
+                at: now
+            )
+            sessionRuntimeStore.updateStatus(
+                sessionID: "waiting-row-narrow",
+                status: SessionStatus(kind: .idle, summary: "Idle", detail: "Ready"),
+                at: now.addingTimeInterval(1)
+            )
+            XCTAssertTrue(sessionRuntimeStore.updateBackgroundActivity(
+                sessionID: "waiting-row-narrow",
+                activity: SessionBackgroundActivity(
+                    id: "activity-1",
+                    kind: .subagent,
+                    displayName: "Explore",
+                    startedAt: now.addingTimeInterval(2),
+                    lastUpdatedAt: now.addingTimeInterval(2)
+                ),
+                at: now.addingTimeInterval(2)
+            ))
+            defer { sessionRuntimeStore.reset() }
 
+            let sidebarView = SidebarView(
+                windowID: windowID,
+                store: store,
+                terminalRuntimeRegistry: registry,
+                sessionRuntimeStore: sessionRuntimeStore,
+                annotationStyleStore: makeTestAnnotationStyleStore(),
+                terminalRuntimeContext: runtimeContext
+            )
+            let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: sidebarWidth, height: 600),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            defer { window.orderOut(nil) }
+            window.contentView = hostingView
+            window.makeKeyAndOrderFront(nil)
+            pumpMainRunLoop()
+            hostingView.layoutSubtreeIfNeeded()
+
+            let textValues = renderedTextValues(in: hostingView)
+            let tooltipValues = renderedTooltipValues(in: hostingView)
+            XCTAssertTrue(
+                textValues.contains(where: { $0.contains("Codex sidebar compact row review, waiting") }),
+                "Accessibility label should report the waiting projection at \(sidebarWidth)pt: \(textValues)"
+            )
+            XCTAssertEqual(
+                tooltipValues.contains(where: { $0.contains("Status: waiting") }),
+                showsChip == false,
+                showsChip
+                    ? "A line with room keeps the chip and needs no tooltip: \(tooltipValues)"
+                    : "A crowded line should move the chip to the row tooltip: \(tooltipValues)"
+            )
+        }
+    }
+
+    /// At the narrowest sidebar the first line still fits: the name gives up
+    /// width, not the badge, and the row stays inside the sidebar.
+    func testApprovalRowFitsTheNarrowestSidebar() throws {
         let sidebarWidth = CGFloat(WindowState.minSidebarWidth)
-        let sidebarView = SidebarView(
-            windowID: windowID,
-            store: store,
-            terminalRuntimeRegistry: registry,
-            sessionRuntimeStore: sessionRuntimeStore,
-            annotationStyleStore: makeTestAnnotationStyleStore(),
-            terminalRuntimeContext: runtimeContext
+        let harness = try makeSidebarHarness(
+            sessionID: "narrow-badge-row",
+            sessionStatus: SessionStatus(
+                kind: .needsApproval,
+                summary: "Needs approval",
+                detail: "Approve the DNS record removal"
+            ),
+            displayTitleOverride: "Decommission the staging host",
+            sidebarWidth: sidebarWidth
         )
-        let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: sidebarWidth, height: 600),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        defer { window.orderOut(nil) }
-        window.contentView = hostingView
-        window.makeKeyAndOrderFront(nil)
-        pumpMainRunLoop()
-        hostingView.layoutSubtreeIfNeeded()
+        defer { harness.window.orderOut(nil) }
 
-        let textValues = renderedTextValues(in: hostingView)
-        XCTAssertFalse(
-            textValues.contains("waiting"),
-            "A header that does not fit should drop the waiting chip: \(textValues)"
-        )
-        XCTAssertTrue(
-            textValues.contains(where: { $0.contains("Codex sidebar compact row review, waiting") }),
-            "Accessibility label should still report the waiting projection: \(textValues)"
-        )
-        let tooltipValues = renderedTooltipValues(in: hostingView)
-        XCTAssertTrue(
-            tooltipValues.contains(where: { $0.contains("Status: waiting") }),
-            "Row tooltip should carry the dropped waiting chip's status: \(tooltipValues)"
-        )
+        let row = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "narrow-badge-row")
+        let rowFrame = row.convert(row.bounds, to: harness.hostingView)
+        let badge = try semanticTextFrame(in: harness.hostingView, text: "approval", shape: "a narrow row")
+        XCTAssertGreaterThanOrEqual(rowFrame.minX, 0, "The row should not spill past the sidebar: \(rowFrame)")
+        XCTAssertLessThanOrEqual(rowFrame.maxX, sidebarWidth, "The row should not spill past the sidebar: \(rowFrame)")
+        XCTAssertLessThan(badge.midX, rowFrame.maxX, "The badge should render inside its row")
     }
 
     func testWorkspaceScopedSessionAccessibilityLabelListsEffectiveWorkspaceNames() throws {
@@ -1120,18 +1111,23 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testSidebarUnreadBackgroundUsesReadyGreenTint() throws {
-        let unreadColor = try XCTUnwrap(
-            NSColor(ToastyTheme.sidebarSessionUnreadBackground).usingColorSpace(.deviceRGB)
-        )
-        let readyColor = try XCTUnwrap(
-            NSColor(ToastyTheme.sessionReadyText).usingColorSpace(.deviceRGB)
-        )
-
-        XCTAssertEqual(unreadColor.redComponent, readyColor.redComponent, accuracy: 0.001)
-        XCTAssertEqual(unreadColor.greenComponent, readyColor.greenComponent, accuracy: 0.001)
-        XCTAssertEqual(unreadColor.blueComponent, readyColor.blueComponent, accuracy: 0.001)
-        XCTAssertGreaterThan(unreadColor.alphaComponent, 0.2)
+    /// Each attention tint is a faint wash of its status color, so a tinted
+    /// row and its rail mark and badge agree.
+    func testAttentionTintsUseTheirStatusColors() throws {
+        for kind in [SessionStatusKind.ready, .needsApproval, .error] {
+            let tint = try XCTUnwrap(
+                ToastyTheme.sidebarAttentionTint(for: kind).flatMap { NSColor($0).usingColorSpace(.deviceRGB) }
+            )
+            let statusColor = try XCTUnwrap(
+                NSColor(ToastyTheme.sessionStatusTextColor(for: kind)).usingColorSpace(.deviceRGB)
+            )
+            XCTAssertEqual(tint.redComponent, statusColor.redComponent, accuracy: 0.001, "\(kind)")
+            XCTAssertEqual(tint.greenComponent, statusColor.greenComponent, accuracy: 0.001, "\(kind)")
+            XCTAssertEqual(tint.blueComponent, statusColor.blueComponent, accuracy: 0.001, "\(kind)")
+            XCTAssertLessThan(tint.alphaComponent, 0.2, "\(kind)")
+        }
+        XCTAssertNil(ToastyTheme.sidebarAttentionTint(for: .working))
+        XCTAssertNil(ToastyTheme.sidebarAttentionTint(for: .idle))
     }
 
     func testAttentionStatusChipColorsAreDistinct() throws {
@@ -2223,6 +2219,93 @@ final class SidebarViewTests: XCTestCase {
 
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.siblingID)
         XCTAssertEqual(harness.store.state.workspacesByID[ids.siblingID]?.focusedPanelID, orchestratorPanelID)
+    }
+
+    /// An unnamed row is one line; its ⑂ chip would need a line to itself,
+    /// so the chip waits until the session has a name.
+    func testSpawnerChipWaitsForTheSessionToBeNamed() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let parentID = UUID()
+        let namedPanelID = UUID()
+        let unnamedPanelID = UUID()
+        let parent = WorkspaceState(
+            id: parentID,
+            title: "Workspace 2",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: namedPanelID),
+                second: .slot(slotID: UUID(), panelID: unnamedPanelID)
+            ),
+            panels: [
+                namedPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo")),
+                unnamedPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo")),
+            ],
+            focusedPanelID: namedPanelID
+        )
+        func subspace(_ title: String, spawner: String) -> WorkspaceState {
+            let panelID = UUID()
+            return WorkspaceState(
+                id: UUID(),
+                title: title,
+                layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo/\(title)"))],
+                focusedPanelID: panelID,
+                parentWorkspaceID: parentID,
+                spawningSessionID: spawner
+            )
+        }
+        let windowID = UUID()
+        let workspaces = [
+            parent,
+            subspace("open-pr-review", spawner: "named-spawner"),
+            subspace("docs-pass", spawner: "named-spawner"),
+            subspace("browser-check", spawner: "unnamed-spawner"),
+        ]
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: parentID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID)
+        defer { harness.window.orderOut(nil) }
+        for (sessionID, panelID, title) in [
+            ("named-spawner", namedPanelID, "Merge open PRs" as String?),
+            ("unnamed-spawner", unnamedPanelID, nil),
+        ] {
+            harness.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .claude,
+                panelID: panelID,
+                windowID: windowID,
+                workspaceID: parentID,
+                displayTitleOverride: title,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Preparing browser action"),
+                at: now.addingTimeInterval(1)
+            )
+        }
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("2 subspaces"), "The named spawner keeps its chip: \(textValues)")
+        XCTAssertFalse(textValues.contains("1 subspace"), "The unnamed spawner should not show a chip yet: \(textValues)")
+        let unnamedRow = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "unnamed-spawner")
+        XCTAssertLessThan(unnamedRow.bounds.height, 30, "The unnamed row should stay one line")
     }
 
     private func semanticTextFrame(in rootView: NSView, prefix: String) throws -> CGRect {

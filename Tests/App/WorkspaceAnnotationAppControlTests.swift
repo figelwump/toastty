@@ -82,11 +82,16 @@ private final class WorkspaceAnnotationAppControlFixture {
         store.state.workspacesByID[workspaceID]?.annotations ?? [:]
     }
 
+    func primaryAnnotationKey() -> String? {
+        store.state.workspacesByID[workspaceID]?.primaryAnnotationKey
+    }
+
     func runSetAnnotation(
         key: String,
         text: String,
         url: String? = nil,
         color: String? = nil,
+        primary: AutomationJSONValue? = nil,
         workspaceID targetWorkspaceID: UUID? = nil
     ) throws -> AppControlActionOutcome {
         var args: [String: AutomationJSONValue] = [
@@ -99,6 +104,9 @@ private final class WorkspaceAnnotationAppControlFixture {
         }
         if let color {
             args["color"] = .string(color)
+        }
+        if let primary {
+            args["primary"] = primary
         }
         return try executor.runAction(id: "workspace.set-annotation", args: args)
     }
@@ -543,12 +551,46 @@ struct WorkspaceAnnotationAppControlTests {
     }
 
     @Test
+    func primaryRoleMovesBetweenKeysAndClearsWithItsAnnotation() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+
+        _ = try fixture.runSetAnnotation(key: "github-pr", text: "#12")
+        #expect(fixture.primaryAnnotationKey() == nil)
+
+        #expect(try fixture.runSetAnnotation(key: "linear", text: "ENG-5", primary: .bool(true)).didMutateState)
+        #expect(fixture.primaryAnnotationKey() == "linear")
+
+        // Omitting primary on an update keeps the role; string booleans from
+        // the CLI parse like JSON ones.
+        _ = try fixture.runSetAnnotation(key: "linear", text: "ENG-6")
+        #expect(fixture.primaryAnnotationKey() == "linear")
+        #expect(try fixture.runSetAnnotation(key: "github-pr", text: "#12", primary: .string("true")).didMutateState)
+        #expect(fixture.primaryAnnotationKey() == "github-pr")
+
+        // false only removes the role from the key that holds it.
+        #expect(try fixture.runSetAnnotation(key: "linear", text: "ENG-6", primary: .bool(false)).didMutateState == false)
+        #expect(fixture.primaryAnnotationKey() == "github-pr")
+        #expect(try fixture.runSetAnnotation(key: "github-pr", text: "#12", primary: .bool(false)).didMutateState)
+        #expect(fixture.primaryAnnotationKey() == nil)
+
+        _ = try fixture.runSetAnnotation(key: "linear", text: "ENG-6", primary: .bool(true))
+        _ = try fixture.runClearAnnotation(key: "linear")
+        #expect(fixture.primaryAnnotationKey() == nil)
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.runSetAnnotation(key: "linear", text: "ENG-6", primary: .string("maybe"))
+        }
+        #expect(fixture.annotations()["linear"] == nil)
+    }
+
+    @Test
     func workspaceSnapshotListsAnnotationsInBytewiseOrderWithEffectiveColors() throws {
         let fixture = try WorkspaceAnnotationAppControlFixture()
         defer { fixture.cleanup() }
         _ = try fixture.runSetAnnotation(key: "zeta", text: "last", color: "red")
         _ = try fixture.runSetAnnotation(key: "alpha", text: "first", url: "https://example.com/a")
-        _ = try fixture.runSetAnnotation(key: "beta.1", text: "middle")
+        _ = try fixture.runSetAnnotation(key: "beta.1", text: "middle", primary: .bool(true))
 
         let snapshot = try fixture.executor.runQuery(
             id: "workspace.snapshot",
@@ -576,5 +618,10 @@ struct WorkspaceAnnotationAppControlTests {
         #expect(alpha["color"] == .string(
             AnnotationStyleStore.fallbackColorToken(forKey: "alpha").storageValue
         ))
+        let primaryFlags: [AutomationJSONValue?] = annotations.map { entry in
+            guard case .object(let object) = entry else { return nil }
+            return object["primary"]
+        }
+        #expect(primaryFlags == [.bool(false), .bool(true), .bool(false)])
     }
 }

@@ -275,6 +275,32 @@ struct WorkspaceAnnotationPersistenceTests {
     }
 
     @Test
+    func primaryAnnotationKeyPersistsAndDropsWhenItsAnnotationIsMissing() throws {
+        var workspace = WorkspaceState.bootstrap(title: "Primary")
+        workspace.annotations = ["linear": WorkspaceAnnotation(text: "ENG-5", url: nil)]
+        workspace.primaryAnnotationKey = "linear"
+        var state = AppState.bootstrap()
+        state.workspacesByID = [workspace.id: workspace]
+        state.windows[0].workspaceIDs = [workspace.id]
+        state.windows[0].selectedWorkspaceID = workspace.id
+
+        let layoutData = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: state))
+        let restored = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: layoutData).makeAppState()
+        #expect(restored.workspacesByID[workspace.id]?.primaryAnnotationKey == "linear")
+        let stateData = try JSONEncoder().encode(workspace)
+        #expect(try JSONDecoder().decode(WorkspaceState.self, from: stateData).primaryAnnotationKey == "linear")
+
+        // A hand-edited file can name a key with no annotation behind it.
+        var object = try JSONSerialization.jsonObject(with: stateData) as! [String: Any]
+        object["primaryAnnotationKey"] = "github-pr"
+        let dangling = try JSONDecoder().decode(
+            WorkspaceState.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(dangling.primaryAnnotationKey == nil)
+    }
+
+    @Test
     func workspaceLayoutSnapshotDecodeDropsTamperedEntries() throws {
         var workspace = WorkspaceState.bootstrap(title: "Tampered")
         workspace.annotations = ["ok": WorkspaceAnnotation(text: "fine", url: nil)]

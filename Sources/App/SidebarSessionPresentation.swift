@@ -310,24 +310,9 @@ enum SidebarSessionPresentation {
         return .summaryFirst(summary: normalizedSummary ?? agentFallbackName)
     }
 
-    /// Lowercase provider identity, as the row's third line shows it.
+    /// Lowercase provider identity, as the hover card's agent pill shows it.
     static func sessionAgentLabel(for agent: AgentKind) -> String {
         agent.rawValue
-    }
-
-    /// The summary-first shape falls back to the agent's display name when
-    /// there is no summary yet; repeating the agent on the next line adds
-    /// nothing, so the label drops out in that case.
-    static func showsSessionAgentLabel(
-        shape: SessionRowShape,
-        agentFallbackName: String
-    ) -> Bool {
-        switch shape {
-        case .named:
-            return true
-        case .summaryFirst(let summary):
-            return summary != agentFallbackName
-        }
     }
 
     static func sessionStatusProjectionChipLabel(for projection: SessionStatusProjection) -> String? {
@@ -452,24 +437,10 @@ enum SidebarSessionPresentation {
         "↖ \(parentName)"
     }
 
-    /// Tooltip text for a session row whose parent tag, scope tag, or
-    /// waiting chip was dropped because the header did not fit.
-    static func sessionRowCompactHelpText(
-        parentSessionName: String?,
-        workspaceScopeHelpText: String?,
-        droppedWaitingChipLabel: String? = nil
-    ) -> String? {
-        var lines: [String] = []
-        if let droppedWaitingChipLabel {
-            lines.append("Status: \(droppedWaitingChipLabel)")
-        }
-        if let parentSessionName {
-            lines.append("Parent session: \(parentSessionName)")
-        }
-        if let workspaceScopeHelpText {
-            lines.append(workspaceScopeHelpText)
-        }
-        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    /// Tooltip text for a session row whose waiting chip was dropped because
+    /// the first line did not fit.
+    static func sessionRowCompactHelpText(droppedWaitingChipLabel: String?) -> String? {
+        droppedWaitingChipLabel.map { "Status: \($0)" }
     }
 
     static func childWorkspaceTagLabel(
@@ -644,16 +615,8 @@ enum SidebarSessionPresentation {
         workspace.panelState(for: panelID) != nil && workspace.slotID(containingPanelID: panelID) != nil
     }
 
-    static func sessionAgentFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
-        showsUnreadSessionAccent ? .heavy : .medium
-    }
-
-    static func sessionBodyFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
-        showsUnreadSessionAccent ? .bold : .regular
-    }
-
-    static func sessionTextUsesItalic(for kind: SessionStatusKind) -> Bool {
-        kind == .working
+    static func sessionNameFontWeight(isEmphasized: Bool) -> Font.Weight {
+        isEmphasized ? .heavy : .medium
     }
 
     static let workspaceNewBadgeLabel = "New"
@@ -737,7 +700,7 @@ enum SidebarSessionPresentation {
     }
 
     /// Everything the row stopped showing — the full path, the workspace
-    /// scopes, the tab title, times — plus the untruncated summary.
+    /// scopes, times, the tab title and agent — plus more of the summary.
     static func sessionRowHoverTipModel(
         session: WorkspaceSessionStatus,
         customTabTitle: String?,
@@ -781,9 +744,6 @@ enum SidebarSessionPresentation {
                 wraps: false
             ))
         }
-        if let customTabTitle = normalizedSidebarHelperText(customTabTitle) {
-            metaItems.append(.init(label: "tab", value: customTabTitle, wraps: false))
-        }
         if let parentSessionName = normalizedSidebarHelperText(parentSessionName) {
             metaItems.append(.init(label: "parent", value: parentSessionName, wraps: false))
         }
@@ -794,6 +754,7 @@ enum SidebarSessionPresentation {
         return SessionRowHoverTipModel(
             name: session.displayTitle,
             agentLabel: sessionAgentLabel(for: session.agent),
+            tabTitle: normalizedSidebarHelperText(customTabTitle),
             statusDotColorKind: SessionChildHoverTipModel.StatusDotColorKind(statusKind: statusKind),
             bodyText: normalizedSidebarHelperText(session.status.detail),
             turnStartedAt: session.turnStartedAt,

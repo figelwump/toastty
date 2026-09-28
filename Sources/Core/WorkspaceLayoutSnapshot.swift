@@ -169,6 +169,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
     public var sidebarSessionPanelOrder: [UUID]
     public var annotations: [String: WorkspaceAnnotation]
+    public var primaryAnnotationKey: String?
     public var parentWorkspaceID: UUID?
     public var spawningSessionID: String?
 
@@ -182,7 +183,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         annotations: [String: WorkspaceAnnotation] = [:],
         sidebarSessionPanelOrder: [UUID] = [],
         parentWorkspaceID: UUID? = nil,
-        spawningSessionID: String? = nil
+        spawningSessionID: String? = nil,
+        primaryAnnotationKey: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -191,6 +193,10 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         self.tabIDs = tabIDs
         self.tabsByID = tabsByID
         self.annotations = annotations
+        self.primaryAnnotationKey = WorkspaceState.resolvedPrimaryAnnotationKey(
+            primaryAnnotationKey,
+            annotations: annotations
+        )
         self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
         self.parentWorkspaceID = parentWorkspaceID
         self.spawningSessionID = spawningSessionID
@@ -207,6 +213,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             partialResult[entry.key] = WorkspaceLayoutTabSnapshot(tab: entry.value)
         }
         annotations = workspace.annotations
+        primaryAnnotationKey = workspace.primaryAnnotationKey
         sidebarSessionPanelOrder = workspace.sidebarSessionPanelOrder
         parentWorkspaceID = workspace.parentWorkspaceID
         spawningSessionID = workspace.spawningSessionID
@@ -263,7 +270,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             unreadWorkspaceNotificationCount: 0,
             sidebarSessionPanelOrder: sidebarSessionPanelOrder,
             parentWorkspaceID: parentWorkspaceID,
-            spawningSessionID: spawningSessionID
+            spawningSessionID: spawningSessionID,
+            primaryAnnotationKey: primaryAnnotationKey
         )
     }
 }
@@ -277,6 +285,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case tabIDs
         case tabsByID
         case annotations
+        case primaryAnnotationKey
         case sidebarSessionPanelOrder
         case parentWorkspaceID
         case spawningSessionID
@@ -296,6 +305,10 @@ extension WorkspaceLayoutWorkspaceSnapshot {
             from: container,
             forKey: .annotations,
             workspaceID: id
+        )
+        primaryAnnotationKey = WorkspaceState.resolvedPrimaryAnnotationKey(
+            (try? container.decodeIfPresent(String.self, forKey: .primaryAnnotationKey)) ?? nil,
+            annotations: annotations
         )
 
         let decodedSelectedTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTabID)
@@ -335,6 +348,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
         try container.encode(annotations, forKey: .annotations)
+        try container.encodeIfPresent(primaryAnnotationKey, forKey: .primaryAnnotationKey)
         try container.encode(sidebarSessionPanelOrder, forKey: .sidebarSessionPanelOrder)
         try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)

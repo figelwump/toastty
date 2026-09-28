@@ -242,6 +242,10 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var tabsByID: [UUID: WorkspaceTabState]
     public var sidebarSessionPanelOrder: [UUID]
     public var annotations: [String: WorkspaceAnnotation]
+    /// The one annotation that best identifies this workspace, shown on its
+    /// Subspaces row. Always names a key in `annotations` or is `nil`; the
+    /// reducer clears it with that annotation.
+    public var primaryAnnotationKey: String?
     /// The top-level workspace this one is nested under as a subspace, or
     /// `nil` for a top-level workspace. Nesting stays one level deep: the
     /// reducer resolves a requested parent to its root.
@@ -274,7 +278,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         unreadWorkspaceNotificationCount: Int = 0,
         sidebarSessionPanelOrder: [UUID] = [],
         parentWorkspaceID: UUID? = nil,
-        spawningSessionID: String? = nil
+        spawningSessionID: String? = nil,
+        primaryAnnotationKey: String? = nil
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
             preferredSelectedTabID: selectedTabID,
@@ -294,6 +299,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.tabIDs = sanitizedTabs.tabIDs
         self.tabsByID = seededTabsByID
         self.annotations = annotations
+        self.primaryAnnotationKey = Self.resolvedPrimaryAnnotationKey(primaryAnnotationKey, annotations: annotations)
         self.parentWorkspaceID = parentWorkspaceID
         self.spawningSessionID = spawningSessionID
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
@@ -318,7 +324,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         annotations: [String: WorkspaceAnnotation] = [:],
         sidebarSessionPanelOrder: [UUID] = [],
         parentWorkspaceID: UUID? = nil,
-        spawningSessionID: String? = nil
+        spawningSessionID: String? = nil,
+        primaryAnnotationKey: String? = nil
     ) {
         let tab = WorkspaceTabState(
             id: UUID(),
@@ -343,8 +350,19 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             unreadWorkspaceNotificationCount: unreadWorkspaceNotificationCount,
             sidebarSessionPanelOrder: sidebarSessionPanelOrder,
             parentWorkspaceID: parentWorkspaceID,
-            spawningSessionID: spawningSessionID
+            spawningSessionID: spawningSessionID,
+            primaryAnnotationKey: primaryAnnotationKey
         )
+    }
+
+    /// Drops a primary key whose annotation is missing, so a hand-edited or
+    /// stale file cannot point the row at nothing.
+    static func resolvedPrimaryAnnotationKey(
+        _ key: String?,
+        annotations: [String: WorkspaceAnnotation]
+    ) -> String? {
+        guard let key, annotations[key] != nil else { return nil }
+        return key
     }
 
     public static func bootstrap(
@@ -612,6 +630,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case tabIDs
         case tabsByID
         case annotations
+        case primaryAnnotationKey
         case sidebarSessionPanelOrder
         case layoutTree
         case panels
@@ -667,6 +686,10 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             forKey: .annotations,
             workspaceID: id
         )
+        primaryAnnotationKey = Self.resolvedPrimaryAnnotationKey(
+            (try? container.decodeIfPresent(String.self, forKey: .primaryAnnotationKey)) ?? nil,
+            annotations: annotations
+        )
         let decodedWorkspaceUnread = try container.decodeIfPresent(Int.self, forKey: .unreadWorkspaceNotificationCount)
         let legacyUnreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadNotificationCount)
         unreadWorkspaceNotificationCount = max(0, decodedWorkspaceUnread ?? legacyUnreadCount ?? 0)
@@ -687,6 +710,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
         try container.encode(annotations, forKey: .annotations)
+        try container.encodeIfPresent(primaryAnnotationKey, forKey: .primaryAnnotationKey)
         try container.encode(sidebarSessionPanelOrder, forKey: .sidebarSessionPanelOrder)
         try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)

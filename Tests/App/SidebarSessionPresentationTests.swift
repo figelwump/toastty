@@ -298,35 +298,12 @@ final class SidebarSessionPresentationTests: XCTestCase {
         )
     }
 
-    func testSessionRowCompactHelpTextCarriesHiddenParentAndScopeInfo() {
+    func testSessionRowCompactHelpTextCarriesADroppedWaitingChip() {
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowCompactHelpText(
-                parentSessionName: "Claude",
-                workspaceScopeHelpText: "Scoped to Review."
-            ),
-            "Parent session: Claude\nScoped to Review."
-        )
-        XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowCompactHelpText(
-                parentSessionName: "Claude",
-                workspaceScopeHelpText: nil
-            ),
-            "Parent session: Claude"
-        )
-        XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowCompactHelpText(
-                parentSessionName: nil,
-                workspaceScopeHelpText: nil,
-                droppedWaitingChipLabel: "waiting"
-            ),
+            SidebarSessionPresentation.sessionRowCompactHelpText(droppedWaitingChipLabel: "waiting"),
             "Status: waiting"
         )
-        XCTAssertNil(
-            SidebarSessionPresentation.sessionRowCompactHelpText(
-                parentSessionName: nil,
-                workspaceScopeHelpText: nil
-            )
-        )
+        XCTAssertNil(SidebarSessionPresentation.sessionRowCompactHelpText(droppedWaitingChipLabel: nil))
         XCTAssertEqual(SidebarSessionPresentation.parentSessionTagLabel(parentName: "Claude"), "↖ Claude")
     }
 
@@ -784,35 +761,6 @@ final class SidebarSessionPresentationTests: XCTestCase {
         )
     }
 
-    func testShowsSessionAgentLabelDropsOnlyWhenPrimaryLineIsAlreadyTheAgentName() {
-        XCTAssertTrue(
-            SidebarSessionPresentation.showsSessionAgentLabel(
-                shape: .named(name: "Sidebar row rebuild", summary: nil),
-                agentFallbackName: "Codex"
-            )
-        )
-        // Even a row named exactly after its agent keeps the label, because a
-        // named row's own name line is not the summary fallback.
-        XCTAssertTrue(
-            SidebarSessionPresentation.showsSessionAgentLabel(
-                shape: .named(name: "Codex", summary: nil),
-                agentFallbackName: "Codex"
-            )
-        )
-        XCTAssertTrue(
-            SidebarSessionPresentation.showsSessionAgentLabel(
-                shape: .summaryFirst(summary: "Reviewing changes"),
-                agentFallbackName: "Codex"
-            )
-        )
-        XCTAssertFalse(
-            SidebarSessionPresentation.showsSessionAgentLabel(
-                shape: .summaryFirst(summary: "Codex"),
-                agentFallbackName: "Codex"
-            )
-        )
-    }
-
     func testSessionStatusBadgeLabelShortensApprovalWhileSpokenWordingKeepsIt() {
         XCTAssertEqual(SidebarSessionPresentation.sessionStatusBadgeLabel(for: .needsApproval), "approval")
         XCTAssertEqual(SidebarSessionPresentation.sessionStatusChipLabel(for: .needsApproval), "needs approval")
@@ -897,8 +845,10 @@ final class SidebarSessionPresentationTests: XCTestCase {
 
         XCTAssertEqual(model.name, "Sidebar row rebuild")
         XCTAssertEqual(model.agentLabel, "codex")
+        // The row no longer shows the tab title; the card's footer does.
+        XCTAssertEqual(model.tabTitle, "orchestrator")
         XCTAssertEqual(model.statusDotColorKind, .working)
-        // The row truncates the summary to one line; the card keeps all of it.
+        // The row truncates the summary to one line; the card shows more of it.
         XCTAssertEqual(
             model.bodyText,
             "Rebuilding the sidebar session rows so the summary no longer truncates"
@@ -906,7 +856,7 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertNil(model.turnStartedAt)
         XCTAssertEqual(
             model.metaItems.map(\.label),
-            ["path", "scoped", "status", "updated", "last turn", "tab", "parent", "flagged"]
+            ["path", "scoped", "status", "updated", "last turn", "parent", "flagged"]
         )
         let valuesByLabel = Dictionary(
             uniqueKeysWithValues: model.metaItems.map { ($0.label, $0.value) }
@@ -922,7 +872,6 @@ final class SidebarSessionPresentationTests: XCTestCase {
             )
         )
         XCTAssertEqual(valuesByLabel["last turn"], "4m 12s")
-        XCTAssertEqual(valuesByLabel["tab"], "orchestrator")
         XCTAssertEqual(valuesByLabel["parent"], "Claude Code")
         XCTAssertEqual(valuesByLabel["flagged"], "for later")
         // A long scope list is the one value allowed to wrap.
@@ -1011,21 +960,6 @@ final class SidebarSessionPresentationTests: XCTestCase {
             ),
             "Draft New, 0 active, 2 running"
         )
-    }
-
-    func testUnreadSessionTypographyUsesEmphasizedWeights() {
-        XCTAssertEqual(SidebarSessionPresentation.sessionAgentFontWeight(showsUnreadSessionAccent: false), .medium)
-        XCTAssertEqual(SidebarSessionPresentation.sessionAgentFontWeight(showsUnreadSessionAccent: true), .heavy)
-        XCTAssertEqual(SidebarSessionPresentation.sessionBodyFontWeight(showsUnreadSessionAccent: false), .regular)
-        XCTAssertEqual(SidebarSessionPresentation.sessionBodyFontWeight(showsUnreadSessionAccent: true), .bold)
-    }
-
-    func testWorkingSessionTextUsesItalicOnlyWhileWorking() {
-        XCTAssertTrue(SidebarSessionPresentation.sessionTextUsesItalic(for: .working))
-        XCTAssertFalse(SidebarSessionPresentation.sessionTextUsesItalic(for: .idle))
-        XCTAssertFalse(SidebarSessionPresentation.sessionTextUsesItalic(for: .needsApproval))
-        XCTAssertFalse(SidebarSessionPresentation.sessionTextUsesItalic(for: .ready))
-        XCTAssertFalse(SidebarSessionPresentation.sessionTextUsesItalic(for: .error))
     }
 
     func testUnvisitedWorkspaceTitleUsesEmphasizedWeight() {
