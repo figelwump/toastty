@@ -416,8 +416,9 @@ the user's testing. A ready PR does not authorize merging.
 The user's `worktree-done` request, made in the task workspace, accepts the
 reviewed version. The skill checks that the worktree is clean at exactly the PR
 head, then enables GitHub auto-merge so the PR lands when required checks pass,
-and marks the workspace with a `DONE` `task-status` annotation. New commits need
-the user's review and a new `worktree-done` request.
+and marks the workspace done with `workspace.set-done`, which shows as a check
+on its subspace row. New work in the workspace clears the check; new commits
+need the user's review and a new `worktree-done` request.
 
 Run `worktree-cleanup` from an outside project workspace. Its status script lists
 each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It

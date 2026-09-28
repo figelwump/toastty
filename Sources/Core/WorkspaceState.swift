@@ -254,6 +254,13 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     /// and labels the row under the parent; it is not an ownership reference
     /// and may point at a session that has since stopped.
     public var spawningSessionID: String?
+    /// When the user or an agent marked this subspace's task done, usually
+    /// once its pull request merged; `nil` while it is open. Only subspaces
+    /// hold one: the sidebar shows it as a check on the subspace row, the
+    /// reducer drops it when the workspace moves to top level, and the
+    /// session runtime clears it when an agent in the workspace starts new
+    /// work.
+    public var doneAt: Date?
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -279,7 +286,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         sidebarSessionPanelOrder: [UUID] = [],
         parentWorkspaceID: UUID? = nil,
         spawningSessionID: String? = nil,
-        primaryAnnotationKey: String? = nil
+        primaryAnnotationKey: String? = nil,
+        doneAt: Date? = nil
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
             preferredSelectedTabID: selectedTabID,
@@ -302,6 +310,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.primaryAnnotationKey = Self.resolvedPrimaryAnnotationKey(primaryAnnotationKey, annotations: annotations)
         self.parentWorkspaceID = parentWorkspaceID
         self.spawningSessionID = spawningSessionID
+        self.doneAt = doneAt
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
         self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
         normalizeSidebarSessionPanelOrder()
@@ -641,6 +650,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case recentlyClosedPanels
         case parentWorkspaceID
         case spawningSessionID
+        case doneAt
     }
 
     public init(from decoder: any Decoder) throws {
@@ -698,6 +708,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         // rather than failing the whole workspace.
         parentWorkspaceID = (try? container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)) ?? nil
         spawningSessionID = (try? container.decodeIfPresent(String.self, forKey: .spawningSessionID)) ?? nil
+        doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -714,6 +725,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(sidebarSessionPanelOrder, forKey: .sidebarSessionPanelOrder)
         try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)
+        try container.encodeIfPresent(doneAt, forKey: .doneAt)
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

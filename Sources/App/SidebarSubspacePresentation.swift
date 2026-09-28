@@ -7,13 +7,16 @@ import Foundation
 @MainActor
 enum SidebarSubspacePresentation {
     /// Row status, in the order rows sort. Agent approval and error states
-    /// always win; `ready` covers an unread finished turn.
+    /// always win; `ready` covers an unread finished turn. `done` is the
+    /// workspace's done mark rather than a session state, so finished tasks
+    /// sink to the bottom.
     enum RowStatus: Int, Comparable, Sendable {
         case ready = 0
         case needsApproval
         case error
         case working
         case idle
+        case done
 
         static func < (lhs: RowStatus, rhs: RowStatus) -> Bool {
             lhs.rawValue < rhs.rawValue
@@ -32,7 +35,7 @@ enum SidebarSubspacePresentation {
             case .error: return 3
             case .ready: return 2
             case .working: return 1
-            case .idle: return 0
+            case .idle, .done: return 0
             }
         }
     }
@@ -52,6 +55,9 @@ enum SidebarSubspacePresentation {
         let id: UUID
         let title: String
         let status: RowStatus
+        /// The workspace's done mark, which `status` shows only while its
+        /// sessions are quiet.
+        var isDone = false
         let annotations: [String: WorkspaceAnnotation]
         var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
@@ -113,6 +119,17 @@ enum SidebarSubspacePresentation {
 
     nonisolated static let annotationKeyPullRequest = "github-pr"
     static let groupTitle = "Subspaces"
+
+    /// The done mark replaces a quiet status (idle, or a finished turn not
+    /// yet read, such as the one that set the mark). A session that is
+    /// working or wants the user still shows, since the user may need to act.
+    static func rowStatus(sessionStatus: RowStatus, isDone: Bool) -> RowStatus {
+        guard isDone else { return sessionStatus }
+        switch sessionStatus {
+        case .idle, .ready, .done: return .done
+        case .needsApproval, .error, .working: return sessionStatus
+        }
+    }
 
     /// Combines a subspace's live sessions into one status.
     static func rowStatus(
@@ -222,7 +239,7 @@ enum SidebarSubspacePresentation {
             case .ready: tally.ready += 1
             case .needsApproval: tally.needsApproval += 1
             case .error: tally.error += 1
-            case .working, .idle: break
+            case .working, .idle, .done: break
             }
         }
     }
@@ -278,6 +295,20 @@ enum SidebarSubspacePresentation {
         shownCount == totalCount ? "\(totalCount)" : "\(shownCount)/\(totalCount)"
     }
 
+    /// The rail mark toggles the done mark only while it is a box: idle,
+    /// done, or a ready turn the user can wave off. A working, approval, or
+    /// error mark is about the agent, not the task.
+    static func showsDoneToggle(_ row: Row) -> Bool {
+        switch row.status {
+        case .idle, .ready, .done: return true
+        case .needsApproval, .error, .working: return false
+        }
+    }
+
+    static func doneToggleActionTitle(isDone: Bool) -> String {
+        isDone ? "Mark as not done" : "Mark as done"
+    }
+
     static func spawnerFilterActionTitle(isFilterActive: Bool) -> String {
         isFilterActive ? "Show all subspaces" : "Show only its subspaces"
     }
@@ -302,6 +333,7 @@ enum SidebarSubspacePresentation {
         case .needsApproval: components.append("needs approval")
         case .error: components.append("error")
         case .working: components.append("working")
+        case .done: components.append("done")
         case .idle: break
         }
         if let rowAnnotation = row.rowAnnotation {

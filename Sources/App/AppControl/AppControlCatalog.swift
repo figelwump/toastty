@@ -11,6 +11,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceSetAnnotation = "workspace.set-annotation"
     case workspaceClearAnnotation = "workspace.clear-annotation"
     case workspaceSetParent = "workspace.set-parent"
+    case workspaceSetDone = "workspace.set-done"
+    case workspaceClearDone = "workspace.clear-done"
     case workspaceClose = "workspace.close"
     case workspaceTabCreate = "workspace.tab.create"
     case workspaceTabSelect = "workspace.tab.select"
@@ -199,6 +201,20 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Nest a workspace under a top-level workspace in the same window as a subspace, or detach it with parent=none. Nesting stays one level deep, so a parent that is itself a subspace resolves to its root.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.workspaceParent(required: true)]
+            )
+        case .workspaceSetDone:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Mark a subspace's task done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected. An agent in the workspace starting new work clears the mark.",
+                selectors: [.windowID, .workspaceID]
+            )
+        case .workspaceClearDone:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Clear a workspace's done mark. Targets the calling agent's own workspace when no workspace is given.",
+                selectors: [.windowID, .workspaceID]
             )
         case .workspaceClose:
             return .init(id: rawValue, kind: .action, summary: "Close a workspace. Its subspaces stay open as top-level workspaces.", selectors: [.windowID, .workspaceID])
@@ -463,11 +479,11 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "List workspaces in window order with titles, annotations, terminal working directories, active agent sessions, busy terminal and unsaved document counts, without selecting or focusing anything. Workspace-scoped callers see only workspaces in their scope.",
+                summary: "List workspaces in window order with titles, annotations, done marks, terminal working directories, active agent sessions, busy terminal and unsaved document counts, without selecting or focusing anything. Workspace-scoped callers see only workspaces in their scope.",
                 selectors: [.windowID]
             )
         case .workspaceSnapshot:
-            return .init(id: rawValue, kind: .query, summary: "Return workspace structure and tab metadata without selecting the workspace or changing focus. Panel details cover its selected tab.", selectors: [.windowID, .workspaceID])
+            return .init(id: rawValue, kind: .query, summary: "Return workspace structure, subspace links, done mark, and tab metadata without selecting the workspace or changing focus. Panel details cover its selected tab.", selectors: [.windowID, .workspaceID])
         case .terminalState:
             return .init(id: rawValue, kind: .query, summary: "Return terminal state metadata.", selectors: [.windowID, .workspaceID, .panelID])
         case .terminalVisibleText:

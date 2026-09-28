@@ -314,6 +314,23 @@ sidebar offers the same detach through "Move to top level" on a subspace row.
 `subspaceWorkspaceIDs`; related workspaces outside the caller's scope are
 omitted (`null` or left out of the array).
 
+`workspace.set-done` marks a subspace's task done, and `workspace.clear-done`
+clears the mark. With no `workspaceID` or `windowID`, a managed agent's call
+targets its own workspace rather than the selected one; a caller whose session
+Toastty no longer runs must name the workspace. Only subspaces hold the mark:
+`workspace.set-done` rejects a top-level workspace, and moving a subspace to top
+level drops it. The sidebar shows a done subspace with a check in place of its
+idle box and sorts it last; the box also toggles the mark by click. The mark
+clears itself when an agent in the workspace starts new work: a newly launched
+agent, or a turn that begins from idle, ready, or error. The rest of the turn
+that set the mark, including its end, keeps it, and restored sessions and
+process watches do not count. `workspace.list` and `workspace.snapshot` report
+it as `done`.
+
+```bash
+"$TOASTTY_CLI_PATH" action run workspace.set-done
+```
+
 `workspace.select` accepts a `workspaceID` selector or a 1-based `index`
 argument. The index counts every workspace in the window's order, including
 subspaces; the sidebar's numbered shortcuts count only top-level cards, so
@@ -421,6 +438,8 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `workspace.set-annotation`
 - `workspace.clear-annotation`
 - `workspace.set-parent`
+- `workspace.set-done`
+- `workspace.clear-done`
 - `workspace.close`
 - `workspace.tab.create`
 - `workspace.tab.select`
@@ -637,7 +656,8 @@ returns `PANEL_READ_DENIED` to every session except its own.
 `workspace.list` returns `workspaces`, one entry per workspace in window
 order, without selecting or focusing anything. Each entry has `windowID`,
 `workspaceID`, 1-based `index` within its window, `title`, `isSelected`,
-`annotations` (the same shape as `workspace.snapshot`), and `terminalCwds`,
+`annotations` (the same shape as `workspace.snapshot`), `done` (the subspace
+done mark), and `terminalCwds`,
 the sorted working directories of the workspace's terminal panels across all
 tabs. `activeSessions` lists each managed agent session in the workspace as
 `{sessionID, agent, panelID}`, `busyTerminalCount` counts terminals running a

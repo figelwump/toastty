@@ -104,6 +104,9 @@ struct SessionRowHoverTipModel: Hashable {
         let value: String
         /// Long values such as a scope list wrap instead of truncating.
         let wraps: Bool
+        /// Where a value that does not wrap loses characters. A path cuts
+        /// from the front so its last directories stay.
+        var truncationMode: Text.TruncationMode = .middle
         /// Set for values worth copying, such as a path; the row then shows a
         /// copy button.
         var copyValue: String? = nil
@@ -158,7 +161,13 @@ struct SessionRowHoverTipCard: View {
                     }
 
                     ForEach(Array(model.metaItems.enumerated()), id: \.offset) { _, item in
-                        HoverTipMetaRow(label: item.label, value: item.value, wraps: item.wraps, copyValue: item.copyValue)
+                        HoverTipMetaRow(
+                            label: item.label,
+                            value: item.value,
+                            wraps: item.wraps,
+                            truncationMode: item.truncationMode,
+                            copyValue: item.copyValue
+                        )
                     }
                 }
                 .padding(.top, 6)

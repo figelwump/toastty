@@ -408,21 +408,35 @@ struct SessionRailStatusIcon: View {
 
 /// A subspace row's status mark: square where a session's is round, so a
 /// workspace reads apart from an agent, and hollow when idle so an idle
-/// subspace still has one.
+/// subspace still has one. The hollow box doubles as the done checkbox: it
+/// previews the check under the pointer and fills with one when done.
 private struct SubspaceRailStatusIcon: View {
     private static let markSize: CGFloat = 7
+    private static let doneMarkSize: CGFloat = 10
     private static let cornerRadius: CGFloat = 1.5
 
     let status: SidebarSubspacePresentation.RowStatus
+    var isDoneTogglePreviewed = false
 
     var body: some View {
         switch status {
         case .working:
             SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
+        case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed:
+            RoundedRectangle(cornerRadius: 2)
+                .strokeBorder(ToastyTheme.sidebarSubspaceDoneMark, lineWidth: 1.2)
+                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
+                .overlay { checkGlyph(ToastyTheme.sidebarSubspaceDoneMark) }
         case .idle:
             RoundedRectangle(cornerRadius: Self.cornerRadius)
                 .strokeBorder(ToastyTheme.sidebarSubspaceQuietMark, lineWidth: 1.2)
                 .frame(width: Self.markSize, height: Self.markSize)
+        case .done:
+            RoundedRectangle(cornerRadius: 2)
+                .fill(ToastyTheme.sidebarSubspaceDoneMarkBackground)
+                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
+                .overlay { checkGlyph(ToastyTheme.sidebarSubspaceDoneMark) }
+                .opacity(isDoneTogglePreviewed ? 0.6 : 1)
         case .ready:
             filledMark(ToastyTheme.sessionReadyText)
         case .needsApproval:
@@ -440,6 +454,12 @@ private struct SubspaceRailStatusIcon: View {
         RoundedRectangle(cornerRadius: Self.cornerRadius)
             .fill(color)
             .frame(width: Self.markSize, height: Self.markSize)
+    }
+
+    private func checkGlyph(_ color: Color) -> some View {
+        Image(systemName: "checkmark")
+            .font(.system(size: 6.5, weight: .black))
+            .foregroundStyle(color)
     }
 }
 
@@ -532,6 +552,7 @@ struct SidebarView: View {
     @State private var subspaceOrderMemory = SubspaceOrderMemory()
     @State private var hoveredSpawnerSessionID: String?
     @State private var hoveredSubspaceID: UUID?
+    @State private var hoveredSubspaceDoneToggleID: UUID?
     @State private var optionKeyPressed = false
 
     private static let sessionStatusesTopSpacing: CGFloat = 0
@@ -552,6 +573,8 @@ struct SidebarView: View {
     /// The status rail keeps this width whether or not it has an indicator, so
     /// row text stays aligned down the list.
     private static let sessionStatusRailWidth: CGFloat = 12
+    /// How far a subspace's done checkbox takes clicks past its rail.
+    private static let subspaceDoneToggleHitOutset: CGFloat = 4
     private static let sessionStatusRailGap: CGFloat = 6
     /// The rail's second slot, under the status one, for a standing mark on the
     /// session: the later flag or the watch bell. Short enough that a two-line
@@ -1721,6 +1744,7 @@ struct SidebarView: View {
             showsUnreadSessionAccent: showsUnreadSessionAccent
         )
         let isEmphasized = attentionKind != nil
+        let isItalic = SidebarSessionPresentation.sessionTextUsesItalic(for: status.kind)
         let isResuming = projection == .resuming
         let flashOpacity = isFlashing ? flashingSessionOverlayOpacity : 0
 
@@ -1755,19 +1779,19 @@ struct SidebarView: View {
                 switch rowShape {
                 case .named(let name, let summary):
                     sessionRowStateLine(accessories) {
-                        Self.styledSessionNameText(name, isEmphasized: isEmphasized)
+                        Self.styledSessionNameText(name, isEmphasized: isEmphasized, isItalic: isItalic)
                             .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                     }
                     // Reserved even without a summary yet, so named rows keep
                     // one height and the list does not reflow as summaries
                     // arrive.
                     sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
-                        sessionSummaryLabel(summary ?? " ", isResuming: isResuming)
+                        sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
                     }
 
                 case .summaryFirst(let summary):
                     sessionRowStateLine(accessories) {
-                        Self.styledSessionPrimaryText(summary, isEmphasized: isEmphasized)
+                        Self.styledSessionPrimaryText(summary, isEmphasized: isEmphasized, isItalic: isItalic)
                             .foregroundStyle(
                                 isResuming ? ToastyTheme.sessionResumingDetailText : ToastyTheme.sidebarSessionAgentText
                             )
@@ -2936,8 +2960,8 @@ struct SidebarView: View {
         }
     }
 
-    private func sessionSummaryLabel(_ text: String, isResuming: Bool) -> some View {
-        Self.styledSessionSummaryText(text)
+    private func sessionSummaryLabel(_ text: String, isResuming: Bool, isItalic: Bool) -> some View {
+        Self.styledSessionSummaryText(text, isItalic: isItalic)
             .foregroundStyle(isResuming ? ToastyTheme.sessionResumingDetailText : ToastyTheme.sidebarSummaryText)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -3008,10 +3032,14 @@ struct SidebarView: View {
                 id: subspaceID,
                 title: workspace.title,
                 status: SidebarSubspacePresentation.rowStatus(
-                    sessionStatuses: sessions.map { session in
-                        (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
-                    }
+                    sessionStatus: SidebarSubspacePresentation.rowStatus(
+                        sessionStatuses: sessions.map { session in
+                            (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
+                        }
+                    ),
+                    isDone: workspace.doneAt != nil
                 ),
+                isDone: workspace.doneAt != nil,
                 annotations: workspace.annotations,
                 primaryAnnotationKey: workspace.primaryAnnotationKey,
                 summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
@@ -3283,8 +3311,10 @@ struct SidebarView: View {
         HStack(spacing: 6) {
             // The ideal width is what the fit check reserves for the title;
             // in layout it takes whatever the chips leave.
-            Self.styledSessionNameText(row.title, isEmphasized: isEmphasized)
-                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+            Self.styledSessionNameText(row.title, isEmphasized: isEmphasized, isItalic: row.status == .working)
+                .foregroundStyle(
+                    row.status == .done ? ToastyTheme.sidebarSubspaceDoneTitleText : ToastyTheme.sidebarSessionAgentText
+                )
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(
@@ -3363,9 +3393,7 @@ struct SidebarView: View {
         // Same rail and padding as a session row, so the title's left edge
         // lines up with the session titles above whatever the status is.
         return HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
-            SubspaceRailStatusIcon(status: row.status)
-                .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
-                .accessibilityHidden(true)
+            subspaceRailMark(row)
 
             VStack(alignment: .leading, spacing: 1) {
                 // Like a session row, a narrow sidebar drops the annotation
@@ -3382,7 +3410,7 @@ struct SidebarView: View {
                 if row.summary != nil || (showsSpawnerTag && row.spawnerName != nil) {
                     HStack(spacing: 6) {
                         if let summary = row.summary {
-                            Self.styledSessionSummaryText(summary)
+                            Self.styledSessionSummaryText(summary, isItalic: row.status == .working)
                                 .foregroundStyle(ToastyTheme.sidebarSummaryText)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -3457,6 +3485,9 @@ struct SidebarView: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, select)
+        .accessibilityAction(named: Text(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone))) {
+            toggleSubspaceDone(row)
+        }
         .accessibilityAction(named: Text("Move to top level")) {
             _ = store.send(
                 .setWorkspaceParent(workspaceID: row.id, parentWorkspaceID: nil, spawningSessionID: nil),
@@ -3466,6 +3497,9 @@ struct SidebarView: View {
         .accessibilityIdentifier("sidebar.workspace.subspace.\(row.id.uuidString)")
         .id(row.id)
         .contextMenu {
+            Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
+                toggleSubspaceDone(row)
+            }
             Button("Move to top level") {
                 _ = store.send(
                     .setWorkspaceParent(workspaceID: row.id, parentWorkspaceID: nil, spawningSessionID: nil),
@@ -3476,6 +3510,60 @@ struct SidebarView: View {
                 requestWorkspaceClose(workspaceID: row.id)
             }
         }
+    }
+
+    /// The rail mark, which is also the done checkbox while it is a box. A
+    /// click on it toggles the mark instead of selecting the row.
+    @ViewBuilder
+    private func subspaceRailMark(_ row: SidebarSubspacePresentation.Row) -> some View {
+        if SidebarSubspacePresentation.showsDoneToggle(row) {
+            let isPreviewed = hoveredSubspaceDoneToggleID == row.id
+            Button {
+                toggleSubspaceDone(row)
+            } label: {
+                // The glyph stays in the rail, but the click target reaches
+                // into the row's padding and the gap beside the rail, so a
+                // near miss does not fall through and open the workspace.
+                SubspaceRailStatusIcon(status: row.status, isDoneTogglePreviewed: isPreviewed)
+                    .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
+                    .padding(Self.subspaceDoneToggleHitOutset)
+                    .contentShape(Rectangle())
+                    .padding(-Self.subspaceDoneToggleHitOutset)
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovering in
+                if isHovering {
+                    hoveredSubspaceDoneToggleID = row.id
+                } else if hoveredSubspaceDoneToggleID == row.id {
+                    hoveredSubspaceDoneToggleID = nil
+                }
+            }
+            .background {
+                SidebarTooltipBridge(text: SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone))
+                    .allowsHitTesting(false)
+            }
+            .accessibilityHidden(true)
+            .accessibilityIdentifier("sidebar.workspace.subspace.doneToggle.\(row.id.uuidString)")
+        } else {
+            SubspaceRailStatusIcon(status: row.status)
+                .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
+                .accessibilityHidden(true)
+                .onAppear {
+                    // The box can turn into a spinner under the pointer; do
+                    // not let the preview come back when it turns into a box.
+                    if hoveredSubspaceDoneToggleID == row.id {
+                        hoveredSubspaceDoneToggleID = nil
+                    }
+                }
+        }
+    }
+
+    private func toggleSubspaceDone(_ row: SidebarSubspacePresentation.Row) {
+        let isDone = store.state.workspacesByID[row.id]?.doneAt != nil
+        _ = store.send(
+            .setWorkspaceDone(workspaceID: row.id, doneAt: isDone ? nil : Date()),
+            source: .ui("sidebar_subspace_toggle_done")
+        )
     }
 
     /// Selecting a subspace whose row is collapsed or filtered away would
@@ -3501,7 +3589,7 @@ struct SidebarView: View {
         case .ready: return .ready
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .working, .idle: return nil
+        case .working, .idle, .done: return nil
         }
     }
 
@@ -3513,7 +3601,7 @@ struct SidebarView: View {
         switch status {
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .ready, .working, .idle: return nil
+        case .ready, .working, .idle, .done: return nil
         }
     }
 
@@ -3890,26 +3978,34 @@ struct SidebarView: View {
         )
     }
 
-    /// Rows that want the user (ready, approval, error) set the name heavy.
-    static func styledSessionNameText(_ text: String, isEmphasized: Bool) -> Text {
-        Text(text).font(ToastyTheme.workspaceSessionNameFont(
+    // Weight stays inside the Font rather than a `.fontWeight(...)` chained
+    // after `.italic()`: for these small labels SwiftUI can otherwise drop
+    // the italic back to the upright face.
+
+    /// Rows that want the user (ready, approval, error) set the name heavy;
+    /// working rows set it italic.
+    static func styledSessionNameText(_ text: String, isEmphasized: Bool, isItalic: Bool = false) -> Text {
+        let base = Text(text).font(ToastyTheme.workspaceSessionNameFont(
             weight: SidebarSessionPresentation.sessionNameFontWeight(isEmphasized: isEmphasized)
         ))
+        return isItalic ? base.italic() : base
     }
 
     /// The summary heading a row the provider has not named yet. It reads as
     /// the row's title, so it takes the title's weight rather than the
     /// summary face.
-    static func styledSessionPrimaryText(_ text: String, isEmphasized: Bool) -> Text {
-        Text(SidebarSessionPresentation.sessionSummaryAttributedText(text)).font(ToastyTheme.workspaceSessionPrimaryFont(
+    static func styledSessionPrimaryText(_ text: String, isEmphasized: Bool, isItalic: Bool = false) -> Text {
+        let base = Text(SidebarSessionPresentation.sessionSummaryAttributedText(text)).font(ToastyTheme.workspaceSessionPrimaryFont(
             weight: SidebarSessionPresentation.sessionNameFontWeight(isEmphasized: isEmphasized)
         ))
+        return isItalic ? base.italic() : base
     }
 
     /// Every agent summary in the sidebar and its hover cards uses this face.
     /// Summaries carry provider Markdown; names and titles do not.
-    static func styledSessionSummaryText(_ text: String) -> Text {
-        Text(SidebarSessionPresentation.sessionSummaryAttributedText(text)).font(ToastyTheme.fontSidebarSummary)
+    static func styledSessionSummaryText(_ text: String, isItalic: Bool = false) -> Text {
+        let base = Text(SidebarSessionPresentation.sessionSummaryAttributedText(text)).font(ToastyTheme.fontSidebarSummary)
+        return isItalic ? base.italic() : base
     }
 
     private func shortcutBadge(_ label: String, highlighted: Bool) -> some View {

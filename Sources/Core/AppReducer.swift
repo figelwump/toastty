@@ -195,6 +195,17 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .setWorkspaceDone(let workspaceID, let doneAt):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            // Only a subspace row shows the mark, so a top-level workspace
+            // cannot hold one.
+            guard doneAt == nil || workspace.parentWorkspaceID != nil else { return false }
+            // Marking an already-done workspace keeps its original time.
+            guard (workspace.doneAt == nil) != (doneAt == nil) else { return false }
+            workspace.doneAt = doneAt
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
         case .setWorkspaceParent(let workspaceID, let parentWorkspaceID, let spawningSessionID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let resolvedParentID: UUID?
@@ -222,6 +233,9 @@ public struct AppReducer {
             let nestedWorkspaceIDs = resolvedParentID == nil ? [] : state.subspaceWorkspaceIDs(of: workspaceID)
             workspace.parentWorkspaceID = resolvedParentID
             workspace.spawningSessionID = resolvedSpawningSessionID
+            if resolvedParentID == nil {
+                workspace.doneAt = nil
+            }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             for nestedWorkspaceID in nestedWorkspaceIDs {
                 state.workspacesByID[nestedWorkspaceID]?.parentWorkspaceID = resolvedParentID
@@ -2039,6 +2053,7 @@ public struct AppReducer {
         for subspaceID in state.subspaceWorkspaceIDs(of: workspaceID) {
             state.workspacesByID[subspaceID]?.parentWorkspaceID = nil
             state.workspacesByID[subspaceID]?.spawningSessionID = nil
+            state.workspacesByID[subspaceID]?.doneAt = nil
         }
         state.workspacesByID.removeValue(forKey: workspaceID)
         window.workspaceIDs.remove(at: workspaceIndex)

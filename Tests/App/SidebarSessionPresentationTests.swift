@@ -862,6 +862,8 @@ final class SidebarSessionPresentationTests: XCTestCase {
             uniqueKeysWithValues: model.metaItems.map { ($0.label, $0.value) }
         )
         XCTAssertEqual(valuesByLabel["path"], "~/GiantThings/repos/toastty")
+        // A long path keeps its last directories, which name the worktree.
+        XCTAssertEqual(model.metaItems.first { $0.label == "path" }?.truncationMode, .head)
         XCTAssertEqual(valuesByLabel["scoped"], "Workspace 1, wt-sessions")
         XCTAssertEqual(valuesByLabel["status"], "working")
         XCTAssertEqual(

@@ -298,6 +298,164 @@ struct WorkspaceSubspaceAppControlTests {
         #expect(childSnapshot["subspaceWorkspaceIDs"] == .array([]))
     }
 
+    /// `worktree-done` marks the task's own subspace done in the middle of
+    /// its turn. That turn ending must not reopen it; the next turn does.
+    @Test
+    func agentMarksItsOwnSubspaceDoneUntilItsNextTurn() throws {
+        let fixture = try WorkspaceSubspaceAppControlFixture()
+        fixture.startCaller(sessionID: "spawner")
+        let task = try fixture.createWorkspace(callerSessionID: "spawner")
+        let taskPanelID = try #require(fixture.workspace(task.workspaceID)?.focusedPanelID)
+        let start = Date(timeIntervalSince1970: 1_700_000_100)
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "task-agent",
+            agent: .claude,
+            panelID: taskPanelID,
+            windowID: fixture.windowID,
+            workspaceID: task.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: start
+        )
+        func report(_ kind: SessionStatusKind, at offset: TimeInterval) {
+            fixture.sessionRuntimeStore.updateStatus(
+                sessionID: "task-agent",
+                status: SessionStatus(kind: kind, summary: "\(kind)", detail: nil),
+                at: start.addingTimeInterval(offset)
+            )
+        }
+        func isDone() throws -> Bool {
+            let snapshot = try fixture.executor.runQuery(
+                id: AppControlQueryID.workspaceSnapshot.rawValue,
+                args: ["workspaceID": .string(task.workspaceID.uuidString)]
+            )
+            return snapshot["done"] == .bool(true)
+        }
+        report(.working, at: 1)
+
+        // The agent names no workspace, so the action means its own, not
+        // the parent the user has selected.
+        let marked = try fixture.executor.runAction(
+            id: AppControlActionID.workspaceSetDone.rawValue,
+            args: [:],
+            context: AutomationRequestContext(callerSessionID: "task-agent", commandName: "app_control.run_action")
+        )
+        #expect(marked.didMutateState)
+        #expect(try isDone())
+        #expect(fixture.workspace(fixture.workspaceID)?.doneAt == nil)
+
+        // The rest of that turn: another tool call, an approval, the end.
+        report(.working, at: 2)
+        report(.needsApproval, at: 3)
+        report(.working, at: 4)
+        report(.ready, at: 5)
+        #expect(try isDone())
+
+        // The user sends another prompt.
+        report(.working, at: 6)
+        #expect(try isDone() == false)
+
+        // Marking again, then clearing by hand, both through the CLI.
+        report(.ready, at: 7)
+        _ = try fixture.executor.runAction(
+            id: AppControlActionID.workspaceSetDone.rawValue,
+            args: ["workspaceID": .string(task.workspaceID.uuidString)]
+        )
+        #expect(try isDone())
+        let cleared = try fixture.executor.runAction(
+            id: AppControlActionID.workspaceClearDone.rawValue,
+            args: ["workspaceID": .string(task.workspaceID.uuidString)]
+        )
+        #expect(cleared.didMutateState)
+        #expect(try isDone() == false)
+    }
+
+    @Test
+    func newSessionReopensADoneSubspaceButARestoredOneDoesNot() throws {
+        let fixture = try WorkspaceSubspaceAppControlFixture()
+        fixture.startCaller(sessionID: "spawner")
+        let task = try fixture.createWorkspace(callerSessionID: "spawner")
+        let taskPanelID = try #require(fixture.workspace(task.workspaceID)?.focusedPanelID)
+        let now = Date(timeIntervalSince1970: 1_700_000_200)
+        #expect(fixture.store.send(.setWorkspaceDone(workspaceID: task.workspaceID, doneAt: now)))
+
+        func launch(_ sessionID: String, reason: AgentHookLaunchReason) {
+            fixture.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: taskPanelID,
+                windowID: fixture.windowID,
+                workspaceID: task.workspaceID,
+                cwd: nil,
+                repoRoot: nil,
+                launchReason: reason,
+                at: now
+            )
+        }
+        launch("restored", reason: .restore)
+        #expect(fixture.workspace(task.workspaceID)?.doneAt == now)
+
+        // Watching a build in the finished worktree is not new agent work.
+        fixture.sessionRuntimeStore.startProcessWatch(
+            panelID: taskPanelID,
+            windowID: fixture.windowID,
+            workspaceID: task.workspaceID,
+            displayTitleOverride: "make build",
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        #expect(fixture.workspace(task.workspaceID)?.doneAt == now)
+
+        launch("fresh", reason: .managed)
+        #expect(fixture.workspace(task.workspaceID)?.doneAt == nil)
+    }
+
+    @Test
+    func setDoneRejectsTopLevelWorkspacesAndStaleCallers() throws {
+        let fixture = try WorkspaceSubspaceAppControlFixture()
+        fixture.startCaller(sessionID: "spawner")
+        let task = try fixture.createWorkspace(callerSessionID: "spawner")
+
+        // The spawner's own workspace is top-level, so its row has no box.
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runAction(
+                id: AppControlActionID.workspaceSetDone.rawValue,
+                args: [:],
+                context: AutomationRequestContext(callerSessionID: "spawner", commandName: "app_control.run_action")
+            )
+        }
+        #expect(fixture.workspace(fixture.workspaceID)?.doneAt == nil)
+
+        // A session Toastty no longer runs must name its workspace rather
+        // than fall through to whichever one is selected.
+        #expect(fixture.store.send(.selectWorkspace(windowID: fixture.windowID, workspaceID: task.workspaceID)))
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runAction(
+                id: AppControlActionID.workspaceSetDone.rawValue,
+                args: [:],
+                context: AutomationRequestContext(callerSessionID: "stopped-agent", commandName: "app_control.run_action")
+            )
+        }
+        #expect(fixture.workspace(task.workspaceID)?.doneAt == nil)
+    }
+
+    @Test
+    func scopedCallerCannotMarkAWorkspaceOutsideItsScopeDone() throws {
+        let fixture = try WorkspaceSubspaceAppControlFixture()
+        fixture.startCaller(sessionID: "scoped", scopedWorkspaceIDs: [fixture.workspaceID])
+        let outside = try fixture.createWorkspace()
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runAction(
+                id: AppControlActionID.workspaceSetDone.rawValue,
+                args: ["workspaceID": .string(outside.workspaceID.uuidString)],
+                context: AutomationRequestContext(callerSessionID: "scoped", commandName: "app_control.run_action")
+            )
+        }
+        #expect(fixture.workspace(outside.workspaceID)?.doneAt == nil)
+    }
+
     @Test
     func createDescriptorAdvertisesParentParameter() throws {
         let fixture = try WorkspaceSubspaceAppControlFixture()
