@@ -162,6 +162,28 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
     }
 
+    func testDoneMarkReplacesQuietStatusesAndSortsLast() {
+        func shown(_ status: SidebarSubspacePresentation.RowStatus) -> SidebarSubspacePresentation.RowStatus {
+            SidebarSubspacePresentation.rowStatus(sessionStatus: status, isDone: true)
+        }
+        // The turn that marked the task done ends ready; the check still shows.
+        XCTAssertEqual(shown(.idle), .done)
+        XCTAssertEqual(shown(.ready), .done)
+        // Anything the user may need to act on stays visible.
+        XCTAssertEqual(shown(.working), .working)
+        XCTAssertEqual(shown(.needsApproval), .needsApproval)
+        XCTAssertEqual(shown(.error), .error)
+        XCTAssertEqual(SidebarSubspacePresentation.rowStatus(sessionStatus: .ready, isDone: false), .ready)
+
+        let rows = [
+            row("a-done", status: .done, index: 0),
+            row("b-idle", status: .idle, index: 1),
+            row("c-ready", status: .ready, index: 2),
+        ]
+        XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows).map(\.title), ["c-ready", "b-idle", "a-done"])
+        XCTAssertTrue(SidebarSubspacePresentation.tally(rows).ready == 1)
+    }
+
     func testFrozenOrderHoldsExistingRowsAndAppendsNewOnes() {
         let first = row("first", status: .working, index: 0)
         let second = row("second", status: .working, index: 1)

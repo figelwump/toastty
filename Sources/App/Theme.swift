@@ -53,6 +53,12 @@ enum ToastyTheme {
     static let sidebarWorkspaceTagBackground = Color(hex: 0xB7AEA5, alpha: 0.12)
     /// A subspace row's idle mark and its go-to arrow.
     static let sidebarSubspaceQuietMark = Color(hex: 0x6B645C)
+    /// The check on a done subspace. A leafier green than ready's teal, so a
+    /// finished task does not read as an unread turn.
+    static let sidebarSubspaceDoneMark = Color(hex: 0x7CC47F)
+    static let sidebarSubspaceDoneMarkBackground = Color(hex: 0x7CC47F, alpha: 0.2)
+    /// A done subspace's title recedes next to open work.
+    static let sidebarSubspaceDoneTitleText = Color(hex: 0x9A9189)
     static let sidebarSessionRailApprovalHalo = Color(hex: 0xE8A635, alpha: 0.22)
     static let hoverTipBackground = Color(hex: 0x26231F)
     static let hoverTipBorder = Color(hex: 0x4E4841)

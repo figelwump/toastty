@@ -207,6 +207,57 @@ struct WorkspaceSubspacesTests {
         #expect(malformed.parentWorkspaceID == nil)
     }
 
+    /// A done mark must survive relaunch, and marking an already-done
+    /// workspace keeps the time it was first marked.
+    @Test
+    func doneMarkSurvivesALayoutRoundTripAndKeepsItsFirstTime() throws {
+        var fixture = Fixture(workspaceCount: 2)
+        let didNest = fixture.nest(1, under: 0)
+        #expect(didNest)
+        let subspaceID = fixture.workspaceIDs[1]
+        let markedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: subspaceID, doneAt: markedAt), state: &fixture.state))
+        #expect(AppReducer.reduce(
+            action: .setWorkspaceDone(workspaceID: subspaceID, doneAt: markedAt.addingTimeInterval(60)),
+            state: &fixture.state
+        ) == false)
+
+        let encoded = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: fixture.state))
+        let restored = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: encoded).makeAppState()
+        #expect(restored.workspacesByID[subspaceID]?.doneAt == markedAt)
+        #expect(restored.workspacesByID[fixture.workspaceIDs[0]]?.doneAt == nil)
+
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: subspaceID, doneAt: nil), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[subspaceID]?.doneAt == nil)
+    }
+
+    /// Only a subspace row shows the mark, so a top-level workspace never
+    /// holds a hidden one.
+    @Test
+    func doneMarkBelongsToSubspacesAndDropsWhenOneMovesToTopLevel() {
+        var fixture = Fixture(workspaceCount: 3)
+        let markedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let ids = fixture.workspaceIDs
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[0], doneAt: markedAt), state: &fixture.state) == false)
+
+        let didNestFirst = fixture.nest(1, under: 0)
+        let didNestSecond = fixture.nest(2, under: 0)
+        #expect(didNestFirst && didNestSecond)
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[1], doneAt: markedAt), state: &fixture.state))
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[2], doneAt: markedAt), state: &fixture.state))
+
+        // Moved to top level by hand.
+        #expect(AppReducer.reduce(
+            action: .setWorkspaceParent(workspaceID: ids[1], parentWorkspaceID: nil, spawningSessionID: nil),
+            state: &fixture.state
+        ))
+        #expect(fixture.state.workspacesByID[ids[1]]?.doneAt == nil)
+
+        // Promoted when its parent closes.
+        #expect(AppReducer.reduce(action: .closeWorkspace(workspaceID: ids[0]), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[ids[2]]?.doneAt == nil)
+    }
+
     @Test
     func normalizationClearsSpawnerOnTopLevelWorkspaces() {
         var fixture = Fixture(workspaceCount: 1)
@@ -224,6 +275,7 @@ struct WorkspaceSubspacesTests {
         // a top-level workspace must not depend on them being present.
         #expect(json.contains("parentWorkspaceID") == false)
         #expect(json.contains("spawningSessionID") == false)
+        #expect(json.contains("doneAt") == false)
 
         let restored = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: encoded).makeAppState()
         #expect(restored.workspacesByID[fixture.workspaceIDs[0]]?.parentWorkspaceID == nil)

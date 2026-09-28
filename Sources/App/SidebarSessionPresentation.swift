@@ -619,6 +619,12 @@ enum SidebarSessionPresentation {
         isEmphasized ? .heavy : .medium
     }
 
+    /// A working row sets its name and summary in italics, so a busy agent
+    /// reads apart from an idle one without looking at the rail.
+    static func sessionTextUsesItalic(for kind: SessionStatusKind) -> Bool {
+        kind == .working
+    }
+
     static let workspaceNewBadgeLabel = "New"
 
     static func workspaceAccessibilityLabel(
@@ -713,7 +719,13 @@ enum SidebarSessionPresentation {
         var metaItems: [SessionRowHoverTipModel.MetaItem] = []
 
         if let path = normalizedSidebarHelperText(session.cwd) {
-            metaItems.append(.init(label: "path", value: abbreviatedHomePathLabel(path), wraps: false, copyValue: path))
+            metaItems.append(.init(
+                label: "path",
+                value: abbreviatedHomePathLabel(path),
+                wraps: false,
+                truncationMode: .head,
+                copyValue: path
+            ))
         }
 
         if workspaceScopeNames.isEmpty == false {

@@ -90,17 +90,21 @@ extension AppState {
                     workspacesByID[workspaceID]?.parentWorkspaceID = resolvedParentID
                     if resolvedParentID == nil {
                         workspacesByID[workspaceID]?.spawningSessionID = nil
+                        workspacesByID[workspaceID]?.doneAt = nil
                     }
                 }
             }
         }
         // Links whose parent was dropped above (or lives in a window that
         // no longer exists) must not survive as dangling references, and a
-        // spawner only means something for a nested workspace.
+        // spawner or done mark only means something for a nested workspace.
         for (workspaceID, workspace) in workspacesByID {
             guard let parentID = workspace.parentWorkspaceID else {
                 if workspace.spawningSessionID != nil {
                     workspacesByID[workspaceID]?.spawningSessionID = nil
+                }
+                if workspace.doneAt != nil {
+                    workspacesByID[workspaceID]?.doneAt = nil
                 }
                 continue
             }
@@ -112,6 +116,7 @@ extension AppState {
             if isValid == false {
                 workspacesByID[workspaceID]?.parentWorkspaceID = nil
                 workspacesByID[workspaceID]?.spawningSessionID = nil
+                workspacesByID[workspaceID]?.doneAt = nil
             }
         }
     }

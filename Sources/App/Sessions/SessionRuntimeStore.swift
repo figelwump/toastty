@@ -563,6 +563,11 @@ final class SessionRuntimeStore: ObservableObject {
             )
         )
         publish(nextRegistry, reason: "start_session", at: now)
+        // Only a newly launched agent is new work: not a session restored
+        // after relaunch, and not a process watch on a terminal command.
+        if launchReason == .managed {
+            reopenDoneWorkspaceIfNeeded(workspaceID: workspaceID, sessionID: sessionID, trigger: "session_start")
+        }
         synchronizePersistedResumeRecordScope(sessionID: sessionID, in: nextRegistry)
         if let startedRecord = nextRegistry.sessionsByID[sessionID] {
             enqueueHookEvent(
@@ -712,6 +717,15 @@ final class SessionRuntimeStore: ObservableObject {
             )
         }
         publish(nextRegistry, reason: "update_status", at: now)
+        // Read the status the registry accepted: it ignores updates for a
+        // stopped session.
+        if isUIOnlyReadyCollapse == false,
+           let acceptedRecord = nextRegistry.activeSession(sessionID: sessionID),
+           acceptedRecord.agent != .processWatch,
+           let acceptedKind = acceptedRecord.status?.kind,
+           Self.statusStartsNewWork(previousKind: previousRecord?.status?.kind, nextKind: acceptedKind) {
+            reopenDoneWorkspaceIfNeeded(workspaceID: acceptedRecord.workspaceID, sessionID: sessionID, trigger: "turn_start")
+        }
         // Both providers rewrite their generated name as a session progresses,
         // and both report a status change on the same hooks that produce it
         // (`UserPromptSubmit`, `Stop`), so a turn boundary is the refresh
@@ -4744,6 +4758,34 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func isActionableStatusKind(_ kind: SessionStatusKind) -> Bool {
         kind == .needsApproval || kind == .ready || kind == .error
+    }
+
+    /// A turn that starts from rest: working or waiting on approval after
+    /// being idle, ready, errored, or new. Approval inside a turn and the
+    /// ready at its end do not count, so the turn that marks a workspace done
+    /// (`worktree-done`, which is already working when it sets the mark)
+    /// does not reopen it.
+    static func statusStartsNewWork(previousKind: SessionStatusKind?, nextKind: SessionStatusKind) -> Bool {
+        func isBusy(_ kind: SessionStatusKind?) -> Bool {
+            kind == .working || kind == .needsApproval
+        }
+        return isBusy(nextKind) && isBusy(previousKind) == false
+    }
+
+    /// A workspace marked done reopens when an agent in it starts new work,
+    /// so a merged task that picks up more work stops reading as finished.
+    private func reopenDoneWorkspaceIfNeeded(workspaceID: UUID, sessionID: String, trigger: String) {
+        guard let store, store.state.workspacesByID[workspaceID]?.doneAt != nil else { return }
+        guard store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil)) else { return }
+        ToasttyLog.info(
+            "Cleared workspace done mark for new work",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "session_id": sessionID,
+                "trigger": trigger,
+            ]
+        )
     }
 
     private func shouldClearLaterFlag(

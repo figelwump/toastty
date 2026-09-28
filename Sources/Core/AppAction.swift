@@ -55,6 +55,8 @@ public enum AppAction: Equatable, Sendable {
     /// it when `parentWorkspaceID` is `nil`. `spawningSessionID` records the
     /// managed session that spawned it, when known.
     case setWorkspaceParent(workspaceID: UUID, parentWorkspaceID: UUID?, spawningSessionID: String?)
+    /// Marks a workspace done at `doneAt`, or clears the mark when it is `nil`.
+    case setWorkspaceDone(workspaceID: UUID, doneAt: Date?)
     case setWorkspaceTabCustomTitle(workspaceID: UUID, tabID: UUID, title: String?)
     case closeWorkspace(workspaceID: UUID)
     case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
@@ -159,6 +161,8 @@ public extension AppAction {
             return "clearWorkspaceAnnotation"
         case .setWorkspaceParent:
             return "setWorkspaceParent"
+        case .setWorkspaceDone:
+            return "setWorkspaceDone"
         case .setWorkspaceTabCustomTitle:
             return "setWorkspaceTabCustomTitle"
         case .closeWorkspace:

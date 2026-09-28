@@ -172,6 +172,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var primaryAnnotationKey: String?
     public var parentWorkspaceID: UUID?
     public var spawningSessionID: String?
+    public var doneAt: Date?
 
     public init(
         id: UUID,
@@ -184,7 +185,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         sidebarSessionPanelOrder: [UUID] = [],
         parentWorkspaceID: UUID? = nil,
         spawningSessionID: String? = nil,
-        primaryAnnotationKey: String? = nil
+        primaryAnnotationKey: String? = nil,
+        doneAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -200,6 +202,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
         self.parentWorkspaceID = parentWorkspaceID
         self.spawningSessionID = spawningSessionID
+        self.doneAt = doneAt
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -217,6 +220,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         sidebarSessionPanelOrder = workspace.sidebarSessionPanelOrder
         parentWorkspaceID = workspace.parentWorkspaceID
         spawningSessionID = workspace.spawningSessionID
+        doneAt = workspace.doneAt
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -271,7 +275,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             sidebarSessionPanelOrder: sidebarSessionPanelOrder,
             parentWorkspaceID: parentWorkspaceID,
             spawningSessionID: spawningSessionID,
-            primaryAnnotationKey: primaryAnnotationKey
+            primaryAnnotationKey: primaryAnnotationKey,
+            doneAt: doneAt
         )
     }
 }
@@ -289,6 +294,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case sidebarSessionPanelOrder
         case parentWorkspaceID
         case spawningSessionID
+        case doneAt
         case layoutTree
         case panels
         case focusedPanelID
@@ -336,6 +342,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         // are known.
         parentWorkspaceID = (try? container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)) ?? nil
         spawningSessionID = (try? container.decodeIfPresent(String.self, forKey: .spawningSessionID)) ?? nil
+        doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -352,6 +359,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encode(sidebarSessionPanelOrder, forKey: .sidebarSessionPanelOrder)
         try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)
+        try container.encodeIfPresent(doneAt, forKey: .doneAt)
         // Preserve a selected-tab legacy mirror while older layout snapshots
         // are still on disk in the field.
         let legacyTab = selectedTabID.flatMap { tabsByID[$0] } ?? tabIDs.first.flatMap { tabsByID[$0] }

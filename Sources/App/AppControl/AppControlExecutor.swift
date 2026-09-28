@@ -239,6 +239,20 @@ final class AppControlExecutor {
                 result: nil
             )
 
+        case .workspaceSetDone, .workspaceClearDone:
+            let workspaceID = try resolveWorkspaceIDDefaultingToCallerSession(args: args)
+            if action == .workspaceSetDone,
+               try requiredStore().state.workspacesByID[workspaceID]?.parentWorkspaceID == nil {
+                throw AutomationSocketError.invalidPayload(
+                    "workspace.set-done applies to subspaces; this workspace is top-level"
+                )
+            }
+            let doneAt: Date? = action == .workspaceSetDone ? Date() : nil
+            return .init(
+                didMutateState: try requiredStore().send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: doneAt)),
+                result: nil
+            )
+
         case .workspaceSetParent:
             let store = try requiredStore()
             let workspaceID = try resolveWorkspaceID(args: args)
@@ -1701,6 +1715,28 @@ private extension AppControlExecutor {
         return workspaceID
     }
 
+    /// Like `resolveWorkspaceID(args:)`, but a managed agent that names no
+    /// workspace or window means its own workspace rather than whichever one
+    /// the user has selected. A caller that identifies a session Toastty no
+    /// longer runs must name the workspace, so it cannot land on the
+    /// selection by accident.
+    func resolveWorkspaceIDDefaultingToCallerSession(args: [String: AutomationJSONValue]) throws -> UUID {
+        guard args.stringValue("workspaceID") == nil, args.stringValue("windowID") == nil else {
+            return try resolveWorkspaceID(args: args)
+        }
+        if let callerWorkspaceID = callerManagedSession()?.workspaceID,
+           try requiredStore().state.workspacesByID[callerWorkspaceID] != nil {
+            try enforceWorkspaceAutomationAccess(callerWorkspaceID)
+            return callerWorkspaceID
+        }
+        if requestContext().callerSessionID != nil {
+            throw AutomationSocketError.invalidPayload(
+                "workspaceID is required: the calling session is not an active managed agent"
+            )
+        }
+        return try resolveWorkspaceID(args: args)
+    }
+
     func resolveWorkspaceTabID(
         args: [String: AutomationJSONValue],
         workspaceID: UUID,
@@ -2625,6 +2661,7 @@ private extension AppControlExecutor {
                     "title": .string(workspace.title),
                     "isSelected": .bool(store.state.selectedWorkspaceID(in: window.id) == workspaceID),
                     "annotations": .array(annotationsJSON(for: workspace)),
+                    "done": .bool(workspace.doneAt != nil),
                     "terminalCwds": .array(terminalCwds.sorted().map(AutomationJSONValue.string)),
                     "activeSessions": .array(activeSessions),
                     "busyTerminalCount": .int(busyTerminalCount),
@@ -2750,6 +2787,7 @@ private extension AppControlExecutor {
         return [
             "workspaceID": .string(workspaceID.uuidString),
             "annotations": .array(annotationsJSON(for: workspace)),
+            "done": .bool(workspace.doneAt != nil),
             // Related workspaces outside the caller's scope stay hidden, as
             // they are everywhere else in the automation surface.
             "parentWorkspaceID": workspace.parentWorkspaceID

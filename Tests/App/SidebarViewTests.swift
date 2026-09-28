@@ -2096,6 +2096,84 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testDoneCheckboxSinksASubspaceUntilItsAgentStartsNewWork() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        let rootView = harness.hostingView
+        // The runtime clears the mark through the store, as it does in the app.
+        harness.sessionRuntimeStore.bind(store: harness.store)
+
+        // The unread ready row sorts first; its rail box marks it done.
+        try clickDoneToggle(forRowTitled: "launch-checklist", in: rootView)
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertNotNil(harness.store.state.workspacesByID[ids.readyUnreadID]?.doneAt)
+        XCTAssertEqual(
+            harness.store.selectedWorkspaceID(in: harness.windowID),
+            ids.parentID,
+            "The box toggles the mark without selecting the row"
+        )
+        var textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace, done") }, "\(textValues)")
+        XCTAssertTrue(
+            textValues.contains { $0.hasPrefix("4 subspaces, expanded") && $0.contains("ready") == false },
+            "A done row leaves the ready tally: \(textValues)"
+        )
+        XCTAssertEqual(
+            try subspaceRowOrder(in: rootView),
+            ["qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification", "launch-checklist"]
+        )
+        try writeSidebarEvidence(rootView, name: "sidebar-subspace-done")
+
+        // The user prompts the subspace's agent again.
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "ready-agent",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Adding the billing checks"),
+            at: Date()
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.store.state.workspacesByID[ids.readyUnreadID]?.doneAt)
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace, working") }, "\(textValues)")
+        try writeSidebarEvidence(rootView, name: "sidebar-subspace-reopened")
+    }
+
+    /// Clicks the rail box of the subspace row titled `title`. The box
+    /// carries a click-through tooltip view, which is how the test finds it.
+    private func clickDoneToggle(forRowTitled title: String, in rootView: NSView) throws {
+        let rowFrame = try semanticTextFrame(in: rootView, prefix: "\(title), subspace")
+        let toggles = toolTipViews(in: rootView, toolTip: SidebarSubspacePresentation.doneToggleActionTitle(isDone: false))
+            .map { $0.convert($0.bounds, to: rootView) }
+        let toggleFrame = try XCTUnwrap(
+            toggles.min { abs($0.midY - rowFrame.midY) < abs($1.midY - rowFrame.midY) },
+            "No done toggle rendered"
+        )
+        XCTAssertLessThan(abs(toggleFrame.midY - rowFrame.midY), 20, "The nearest toggle belongs to another row")
+        let window = try XCTUnwrap(rootView.window)
+        let windowPoint = rootView.convert(CGPoint(x: toggleFrame.midX, y: toggleFrame.midY), to: nil)
+        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: windowPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: eventNumber,
+                clickCount: 1,
+                pressure: pressure
+            ))
+            window.sendEvent(event)
+            pumpMainRunLoop(duration: 0.05)
+        }
+    }
+
+    private func toolTipViews(in view: NSView, toolTip: String) -> [NSView] {
+        (view.toolTip == toolTip ? [view] : []) + view.subviews.flatMap { toolTipViews(in: $0, toolTip: toolTip) }
+    }
+
     /// The harness's subspace row titles in on-screen order, top first.
     private func subspaceRowOrder(in rootView: NSView) throws -> [String] {
         let titles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
