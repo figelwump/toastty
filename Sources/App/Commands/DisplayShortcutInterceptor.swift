@@ -1039,9 +1039,11 @@ final class DisplayShortcutInterceptor {
         guard let window = store.commandSelection(preferredWindowID: preferredWindowID)?.window else {
             return false
         }
+        // Numbered shortcuts follow the sidebar's cards, which skip subspaces.
         let index = shortcutNumber - 1
-        guard window.workspaceIDs.indices.contains(index) else { return false }
-        let workspaceID = window.workspaceIDs[index]
+        let workspaceIDs = store.state.topLevelWorkspaceIDs(in: window.id)
+        guard workspaceIDs.indices.contains(index) else { return false }
+        let workspaceID = workspaceIDs[index]
         guard store.state.workspacesByID[workspaceID] != nil else { return false }
         return store.sendNavigation(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
     }
@@ -1082,7 +1084,8 @@ final class DisplayShortcutInterceptor {
     private func cycleWorkspace(direction: Int) -> Bool {
         guard let store else { return false }
         guard let window = store.selectedWindow else { return false }
-        let workspaceIDs = window.workspaceIDs
+        // Cycle in the order the sidebar shows: each card, then its subspaces.
+        let workspaceIDs = store.state.sidebarOrderedWorkspaceIDs(in: window.id)
         guard workspaceIDs.count > 1 else { return false }
         guard let currentID = store.selectedWorkspaceID(in: window.id),
               let currentIndex = workspaceIDs.firstIndex(of: currentID) else {

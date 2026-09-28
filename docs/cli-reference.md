@@ -282,14 +282,43 @@ printf '%s' "$patch" | "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.pa
   sessionID="$TOASTTY_SESSION_ID"
 ```
 
-`workspace.create` accepts optional `title` and `activate` arguments. When
-`activate=false`, Toastty appends the workspace without changing the currently
-visible selection, returns the created `workspaceID` and `windowID`, and marks
-the background workspace as `New` in the sidebar until the user visits it once.
+`workspace.create` accepts optional `title`, `activate`, and `parent`
+arguments. When `activate=false`, Toastty appends the workspace without
+changing the currently visible selection, returns the created `workspaceID`,
+`windowID`, and `parentWorkspaceID`, and marks the background workspace as
+`New` in the sidebar until the user visits it once.
+
+When a managed agent session calls `workspace.create`, the new workspace nests
+under the caller's workspace as a **subspace** and records the caller as its
+spawning session. Pass `parent=none` for a top-level workspace, or
+`parent=<workspaceID>` to nest under a specific workspace in the same window.
+Subspaces do not appear as their own sidebar cards; they render as compact rows
+in a Subspaces group inside the parent card, sorted ready, needs approval,
+error, working, then idle, and the spawning session's row shows a ⑂ chip that
+filters the group to its subspaces. Nesting stays one level deep, so a parent
+that is itself a subspace resolves to its root. Closing a parent keeps its
+subspaces open as top-level workspaces.
+
+An explicit `parent` that is not a workspace in the target window is rejected
+before anything is created. A scoped caller needs automation access to the
+requested parent and to the root it resolves to.
+
+`workspace.set-parent` nests an existing workspace under a top-level workspace
+in the same window (`parent=<workspaceID>`) or detaches it (`parent=none`);
+`parent` is required. The caller needs automation access to the workspace, the
+requested parent, and the root it resolves to. Reparenting keeps the workspace's
+original spawning session; a workspace that had none records the caller. The
+sidebar offers the same detach through "Move to top level" on a subspace row.
+
+`workspace.snapshot` reports `parentWorkspaceID`, `spawningSessionID`, and
+`subspaceWorkspaceIDs`; related workspaces outside the caller's scope are
+omitted (`null` or left out of the array).
 
 `workspace.select` accepts a `workspaceID` selector or a 1-based `index`
-argument. By default it changes only the selected workspace and preserves that
-workspace's selected tab and focused panel. Set `focusUnreadSessionPanel=true`
+argument. The index counts every workspace in the window's order, including
+subspaces; the sidebar's numbered shortcuts count only top-level cards, so
+prefer `workspaceID` for subspaces. By default it changes only the selected
+workspace and preserves that workspace's selected tab and focused panel. Set `focusUnreadSessionPanel=true`
 when foreground navigation should also focus the newest unread managed-session
 panel visible in the selected workspace tab.
 
@@ -381,6 +410,7 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `workspace.rename`
 - `workspace.set-annotation`
 - `workspace.clear-annotation`
+- `workspace.set-parent`
 - `workspace.close`
 - `workspace.tab.create`
 - `workspace.tab.select`

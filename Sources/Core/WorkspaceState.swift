@@ -242,6 +242,14 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var tabsByID: [UUID: WorkspaceTabState]
     public var sidebarSessionPanelOrder: [UUID]
     public var annotations: [String: WorkspaceAnnotation]
+    /// The top-level workspace this one is nested under as a subspace, or
+    /// `nil` for a top-level workspace. Nesting stays one level deep: the
+    /// reducer resolves a requested parent to its root.
+    public var parentWorkspaceID: UUID?
+    /// The managed session that spawned this subspace, when known. It groups
+    /// and labels the row under the parent; it is not an ownership reference
+    /// and may point at a session that has since stopped.
+    public var spawningSessionID: String?
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -264,7 +272,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         rightAuxPanel: RightAuxPanelState? = nil,
         annotations: [String: WorkspaceAnnotation] = [:],
         unreadWorkspaceNotificationCount: Int = 0,
-        sidebarSessionPanelOrder: [UUID] = []
+        sidebarSessionPanelOrder: [UUID] = [],
+        parentWorkspaceID: UUID? = nil,
+        spawningSessionID: String? = nil
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
             preferredSelectedTabID: selectedTabID,
@@ -284,6 +294,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.tabIDs = sanitizedTabs.tabIDs
         self.tabsByID = seededTabsByID
         self.annotations = annotations
+        self.parentWorkspaceID = parentWorkspaceID
+        self.spawningSessionID = spawningSessionID
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
         self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
         normalizeSidebarSessionPanelOrder()
@@ -304,7 +316,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         recentlyClosedPanels: [ClosedPanelRecord] = [],
         rightAuxPanel: RightAuxPanelState? = nil,
         annotations: [String: WorkspaceAnnotation] = [:],
-        sidebarSessionPanelOrder: [UUID] = []
+        sidebarSessionPanelOrder: [UUID] = [],
+        parentWorkspaceID: UUID? = nil,
+        spawningSessionID: String? = nil
     ) {
         let tab = WorkspaceTabState(
             id: UUID(),
@@ -327,7 +341,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             tabsByID: [tab.id: tab],
             annotations: annotations,
             unreadWorkspaceNotificationCount: unreadWorkspaceNotificationCount,
-            sidebarSessionPanelOrder: sidebarSessionPanelOrder
+            sidebarSessionPanelOrder: sidebarSessionPanelOrder,
+            parentWorkspaceID: parentWorkspaceID,
+            spawningSessionID: spawningSessionID
         )
     }
 
@@ -604,6 +620,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case unreadWorkspaceNotificationCount
         case unreadNotificationCount
         case recentlyClosedPanels
+        case parentWorkspaceID
+        case spawningSessionID
     }
 
     public init(from decoder: any Decoder) throws {
@@ -653,6 +671,10 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         let legacyUnreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadNotificationCount)
         unreadWorkspaceNotificationCount = max(0, decodedWorkspaceUnread ?? legacyUnreadCount ?? 0)
         sidebarSessionPanelOrder = try container.decodeIfPresent([UUID].self, forKey: .sidebarSessionPanelOrder) ?? []
+        // Lossy on purpose: a malformed link in a user-edited file drops
+        // rather than failing the whole workspace.
+        parentWorkspaceID = (try? container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)) ?? nil
+        spawningSessionID = (try? container.decodeIfPresent(String.self, forKey: .spawningSessionID)) ?? nil
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -666,6 +688,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(tabsByID, forKey: .tabsByID)
         try container.encode(annotations, forKey: .annotations)
         try container.encode(sidebarSessionPanelOrder, forKey: .sidebarSessionPanelOrder)
+        try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
+        try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

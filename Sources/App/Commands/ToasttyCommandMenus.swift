@@ -695,7 +695,11 @@ struct ToasttyCommandMenus: Commands {
 
             if let window = commandWindow {
                 ForEach(
-                    Array(window.workspaceIDs.prefix(DisplayShortcutConfig.maxWorkspaceShortcutCount).enumerated()),
+                    Array(
+                        store.state.topLevelWorkspaceIDs(in: window.id)
+                            .prefix(DisplayShortcutConfig.maxWorkspaceShortcutCount)
+                            .enumerated()
+                    ),
                     id: \.element
                 ) { index, workspaceID in
                     let workspace = store.state.workspacesByID[workspaceID]

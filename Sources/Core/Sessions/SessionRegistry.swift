@@ -574,6 +574,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             providerSessionName: record.providerSessionName,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
+            statusUpdatedAt: record.statusUpdatedAt,
             turnStartedAt: projected.status.kind == .working ? record.turnStartedAt : nil,
             lastTurnDuration: record.lastTurnDuration,
             isActive: record.isActive,

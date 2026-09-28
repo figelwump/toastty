@@ -49,6 +49,10 @@ public enum AppAction: Equatable, Sendable {
     case renameWorkspace(workspaceID: UUID, title: String)
     case setWorkspaceAnnotation(workspaceID: UUID, key: String, annotation: WorkspaceAnnotation)
     case clearWorkspaceAnnotation(workspaceID: UUID, key: String)
+    /// Nests a workspace under `parentWorkspaceID` as a subspace, or detaches
+    /// it when `parentWorkspaceID` is `nil`. `spawningSessionID` records the
+    /// managed session that spawned it, when known.
+    case setWorkspaceParent(workspaceID: UUID, parentWorkspaceID: UUID?, spawningSessionID: String?)
     case setWorkspaceTabCustomTitle(workspaceID: UUID, tabID: UUID, title: String?)
     case closeWorkspace(workspaceID: UUID)
     case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
@@ -151,6 +155,8 @@ public extension AppAction {
             return "setWorkspaceAnnotation"
         case .clearWorkspaceAnnotation:
             return "clearWorkspaceAnnotation"
+        case .setWorkspaceParent:
+            return "setWorkspaceParent"
         case .setWorkspaceTabCustomTitle:
             return "setWorkspaceTabCustomTitle"
         case .closeWorkspace:
