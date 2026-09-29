@@ -192,7 +192,8 @@ exists, omit color or repeat the claim; attempting to replace it fails. Examples
 - Linear issue: `key=linear`, `text=LIN-030`, and
   `url=<verified canonical Linear issue URL>` when available.
 - GitHub pull request: `key=github-pr`, `text="PR #1931"`, and
-  `url=<verified GitHub pull URL>` when available.
+  `url=<verified GitHub pull URL>` when available. Use `PR #<number>` for all
+  pull request chips, including primary annotations in subspace rows.
 - GitHub issue: `key=github-issue`, `text="Issue #482"`, and
   `url=<verified GitHub issue URL>` when available.
 - Git branch: `key=git-branch`, `text=feat/hooks-chips`; omit `url` unless a
@@ -221,7 +222,7 @@ workspace's primary annotation, or its `github-pr` annotation when none is
 primary. When setting the annotation that best identifies the subspace's work,
 such as its ticket or pull request, pass `primary=true`. A workspace has one
 primary annotation, so this replaces any earlier choice. Keep primary text
-short, around 12 characters or fewer (`#1234`, `ENG-512`), because the row
+short, around 12 characters or fewer (`PR #1234`, `ENG-512`), because the row
 truncates longer text. Leave `primary` out for secondary annotations such as a
 branch name or agent label.
 

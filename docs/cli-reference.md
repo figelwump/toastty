@@ -354,7 +354,8 @@ example:
 - Linear issue: `key=linear`, `text=LIN-030`, plus its verified canonical URL
   when available.
 - GitHub pull request: `key=github-pr`, `text="PR #1931"`, plus its verified pull
-  URL when available.
+  URL when available. Use `PR #<number>` for all pull request chips, including
+  primary annotations in subspace rows.
 - GitHub issue: `key=github-issue`, `text="Issue #482"`, plus its verified issue
   URL when available.
 - Git branch: `key=git-branch`, `text=feat/hooks-chips`; a URL is usually
@@ -425,7 +426,7 @@ workspace has at most one, so this replaces any earlier choice. `primary=false`
 removes the role only when this key holds it, and omitting `primary` leaves it
 unchanged. Clearing the primary annotation clears the role. The row chip
 truncates past about 12 characters, so keep primary text short, such as
-`#1234` or `ENG-512`; the chip's tooltip shows the full text.
+`PR #1234` or `ENG-512`; the chip's tooltip shows the full text.
 
 Prefer `action list --json` to discover the current canonical IDs. Common actions include:
 
