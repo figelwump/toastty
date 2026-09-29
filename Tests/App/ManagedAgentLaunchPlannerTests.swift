@@ -748,14 +748,15 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
-    func testCodexLaunchPlanDisablesEnhancedKeyboardReporting() throws {
+    func testCodexLaunchPlanEnablesEnhancedKeyboardReportingDespiteInheritedDisable() throws {
         let fixture = try makePlannerFixture()
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
                 agent: .codex,
                 panelID: fixture.panelID,
                 argv: ["codex"],
-                cwd: "/tmp/repo"
+                cwd: "/tmp/repo",
+                environment: ["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT": "1"]
             )
         )
         let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
@@ -763,7 +764,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
         }
 
-        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
+        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "0")
         XCTAssertEqual(plan.environment["CODEX_TUI_RECORD_SESSION"], "1")
         XCTAssertEqual(
             plan.environment["TOASTTY_PANEL_ID"],
@@ -1130,7 +1131,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         }
 
         XCTAssertEqual(plan.argv, ["codex", "--model", "gpt-5.4"])
-        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
+        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "0")
         XCTAssertEqual(plan.environment["TOASTTY_PANEL_ID"], fixture.panelID.uuidString)
         XCTAssertEqual(plan.environment["CODEX_TUI_RECORD_SESSION"], "1")
         XCTAssertEqual(plan.environment["CODEX_TUI_SESSION_LOG_PATH"], logURL.path)
@@ -2978,7 +2979,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         }
     }
 
-    func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
+    func testCodexLaunchPlanEnablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let plan = try fixture.planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -2990,7 +2991,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
 
         XCTAssertEqual(plan.argv, ["codex"])
-        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
+        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "0")
         XCTAssertNil(plan.environment["CODEX_TUI_RECORD_SESSION"])
         XCTAssertEqual(
             plan.environment["TOASTTY_PANEL_ID"],

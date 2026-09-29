@@ -1035,6 +1035,25 @@ final class TerminalHostView: NSView {
         return openSearchSelectionURL?(url) ?? false
     }
 
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              window?.isKeyWindow == true,
+              window?.firstResponder === self,
+              ghosttySurface != nil,
+              !hasMarkedText(),
+              event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+              event.charactersIgnoringModifiers?.lowercased() == "c" else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // AppKit's Copy action always consumes Cmd+C, even when a fullscreen
+        // program owns the selection. Let Ghostty apply its configured binding:
+        // the default copies a terminal selection, or forwards the original key
+        // using its keyboard protocol when there is none. Keep other shortcuts in AppKit.
+        keyDown(with: event)
+        return true
+    }
+
     override func keyDown(with event: NSEvent) {
         let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
         notifyLocalInterruptIfNeeded(event, action: action)
