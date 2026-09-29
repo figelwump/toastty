@@ -234,13 +234,33 @@ final class ToasttyPreviewTests: XCTestCase {
         let loaded = expectation(description: "Local HTML loaded")
         let probe = PreviewNavigationProbe(loaded: loaded)
         webView.navigationDelegate = probe
+        // Exercise WebKit in the same visible scene lifecycle as the preview UI.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let host = UIViewController()
+        host.view = webView
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.layoutIfNeeded()
         defer {
+            webView.navigationDelegate = nil
             webView.stopLoading()
             loader.cancelAll()
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
             withExtendedLifetime(probe) {}
         }
         webView.load(URLRequest(url: loader.entryURL))
-        await fulfillment(of: [loaded], timeout: 15)
+        let loadResult = await XCTWaiter.fulfillment(of: [loaded], timeout: 15)
+        guard loadResult == .completed else {
+            XCTFail("Local HTML load wait ended with \(loadResult): \(probe.diagnostics(for: webView))")
+            return
+        }
+        // A terminal navigation error has already recorded its failure. Do not
+        // turn an unavailable document into a cascade of policy assertion errors.
+        guard probe.didFinishLoading else { return }
         // Navigation completion does not wait for fetch rejection or queued
         // CSP events. Bound the wait, then inspect even a partial result so a
         // missing policy violation remains a specific assertion failure.
@@ -304,14 +324,59 @@ final class ToasttyPreviewTests: XCTestCase {
 @MainActor
 private final class PreviewNavigationProbe: NSObject, WKNavigationDelegate {
     let loaded: XCTestExpectation
+    private(set) var didFinishLoading = false
+    private var didResolveLoad = false
+    private let startedAt = ProcessInfo.processInfo.systemUptime
+    private var events: [String] = []
+
     init(loaded: XCTestExpectation) { self.loaded = loaded }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded.fulfill() }
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        record("provisional navigation started")
+    }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        record("navigation committed")
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        record("navigation finished")
+        guard !didResolveLoad else { return }
+        didFinishLoading = true
+        resolveLoad()
+    }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
         decisionHandler(navigationAction.request.url?.scheme == ToasttyHTMLPreviewPolicy.scheme ? .allow : .cancel)
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
-        XCTFail("HTML preview failed: \(error)")
+        fail("provisional navigation failed: \(error as NSError)", webView: webView)
+    }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        fail("committed navigation failed: \(error as NSError)", webView: webView)
+    }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        fail("web content process terminated", webView: webView)
+    }
+
+    func diagnostics(for webView: WKWebView) -> String {
+        "events=\(events), url=\(webView.url?.absoluteString ?? "nil"), " +
+            "isLoading=\(webView.isLoading), progress=\(webView.estimatedProgress), " +
+            "hasWindow=\(webView.window != nil)"
+    }
+
+    private func record(_ event: String) {
+        let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+        events.append(String(format: "%.3fs %@", elapsed, event))
+    }
+
+    private func fail(_ message: String, webView: WKWebView) {
+        record(message)
+        didFinishLoading = false
+        XCTFail("HTML preview failed: \(diagnostics(for: webView))")
+        resolveLoad()
+    }
+
+    private func resolveLoad() {
+        guard !didResolveLoad else { return }
+        didResolveLoad = true
         loaded.fulfill()
     }
 }

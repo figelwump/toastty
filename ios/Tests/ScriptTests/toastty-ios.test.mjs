@@ -10,6 +10,12 @@ const testPath = fileURLToPath(import.meta.url);
 const iosRoot = path.resolve(path.dirname(testPath), "../..");
 const dispatcherPath = path.join(iosRoot, "scripts", "toastty-ios.mjs");
 const projectManifestPath = path.join(iosRoot, "Project.swift");
+const smokeTests = [
+  "-only-testing:ToasttyMobileAppTests",
+  "-only-testing:ToasttyMobileDomainTests",
+  "-only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction",
+  "-only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble",
+];
 
 function runDispatcher(args, environment = {}) {
   const childEnvironment = { ...process.env };
@@ -438,5 +444,66 @@ test("Release tests exercise app and domain branches without Debug fixture UI la
         "-only-testing:ToasttyMobileDomainTests",
       ] : []);
     assert.ok(!args.some((arg) => arg.includes("SWIFT_ACTIVE_COMPILATION_CONDITIONS")));
+  }
+});
+
+test("Debug smoke runs app/domain tests and exactly two fixture UI methods", () => {
+  const toolchain = createStubToolchain();
+  const result = runDispatcher(["test", "--ui-tests", "smoke"], {
+    ...toolchain.environment,
+    TOASTTY_IOS_DESTINATION: "platform=iOS Simulator,id=STUB-DEVICE",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const commands = readLog(toolchain.logPath);
+  assert.deepEqual(commands.map(({ tool }) => tool), ["tuist", "tuist", "xcodebuild"]);
+  const args = commands.at(-1).args;
+  assert.deepEqual(args.filter((arg) => arg.startsWith("-only-testing:")), smokeTests);
+  // xcodebuild selectors are strings: catch a renamed Swift method before a
+  // smoke run can silently lose its intended UI coverage.
+  const fixtureSource = readFileSync(path.join(iosRoot,
+    "Tests/ToasttyMobileUITests/ToasttyMobileFixtureUITests.swift"), "utf8");
+  for (const selector of args.filter((arg) => arg.startsWith("-only-testing:ToasttyMobileUITests/"))) {
+    const method = selector.split("/").at(-1);
+    assert.match(fixtureSource, new RegExp(`func\\s+${method}\\s*\\(`), selector);
+  }
+  assert.deepEqual(args.slice(args.indexOf("-parallel-testing-enabled"), -1), [
+    "-parallel-testing-enabled", "NO", ...smokeTests,
+  ]);
+  assert.equal(args.at(-1), "test");
+
+  const plan = runDispatcher(["test", "--ui-tests", "smoke", "--dry-run"], {
+    PATH: "",
+    TOASTTY_IOS_DESTINATION: "platform=iOS Simulator,id=STUB-DEVICE",
+  });
+  assert.equal(plan.status, 0, plan.stderr);
+  assert.deepEqual(JSON.parse(plan.stdout).steps.at(-1).args.filter((arg) => arg.startsWith("-only-testing:")), smokeTests);
+});
+
+test("explicit all UI tests keeps the full Debug suite", () => {
+  const toolchain = createStubToolchain();
+  const result = runDispatcher(["test", "--ui-tests", "all"], {
+    ...toolchain.environment,
+    TOASTTY_IOS_DESTINATION: "platform=iOS Simulator,id=STUB-DEVICE",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const args = readLog(toolchain.logPath).at(-1).args;
+  assert.equal(args.at(-1), "test");
+  assert.deepEqual(args.filter((arg) => arg.startsWith("-only-testing:")), []);
+});
+
+test("invalid UI selectors fail before starting Tuist or a simulator", () => {
+  for (const [args, environment, expectedError] of [
+    [["test", "--ui-tests"], {}, /--ui-tests requires smoke or all/],
+    [["test", "--ui-tests", "none"], {}, /--ui-tests requires smoke or all/],
+    [["test", "--ui-tests", "smoke", "--ui-tests", "all"], {}, /unexpected test argument: --ui-tests/],
+    [["build", "--ui-tests", "smoke"], {}, /unexpected build argument: --ui-tests/],
+    [["test", "--ui-tests", "smoke"], { TOASTTY_IOS_CONFIGURATION: "Release" }, /--ui-tests requires Debug configuration/],
+    [["test", "--ui-tests", "all"], { TOASTTY_IOS_CONFIGURATION: "Release" }, /--ui-tests requires Debug configuration/],
+  ]) {
+    const toolchain = createStubToolchain();
+    const result = runDispatcher(args, { ...toolchain.environment, ...environment });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, expectedError);
+    assert.deepEqual(readLog(toolchain.logPath), []);
   }
 });

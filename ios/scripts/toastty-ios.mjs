@@ -71,6 +71,7 @@ function parseArguments(argv) {
     preflightOnly: false,
     buildOnly: false,
     device: undefined,
+    uiTests: undefined,
   };
 
   const argumentsForCommand = argv.slice(1);
@@ -78,6 +79,15 @@ function parseArguments(argv) {
     const argument = argumentsForCommand[index];
     if (argument === "--dry-run" && !options.dryRun) {
       options.dryRun = true;
+      continue;
+    }
+    if (command === "test" && argument === "--ui-tests" && options.uiTests === undefined) {
+      const value = argumentsForCommand[index + 1];
+      if (value !== "smoke" && value !== "all") {
+        fail("--ui-tests requires smoke or all");
+      }
+      options.uiTests = value;
+      index += 1;
       continue;
     }
     if (command === "native-device") {
@@ -315,7 +325,7 @@ function performGeneration(environment) {
   }
 }
 
-function xcodebuildArguments(command, context, destination) {
+function xcodebuildArguments(command, context, destination, uiTests) {
   const configuration = process.env.TOASTTY_IOS_CONFIGURATION?.trim() || "Debug";
   if (configuration !== "Debug" && configuration !== "Release") {
     fail("TOASTTY_IOS_CONFIGURATION must be Debug or Release");
@@ -346,13 +356,20 @@ function xcodebuildArguments(command, context, destination) {
         "-only-testing:ToasttyMobileAppTests",
         "-only-testing:ToasttyMobileDomainTests",
       );
+    } else if (uiTests === "smoke") {
+      args.push(
+        "-only-testing:ToasttyMobileAppTests",
+        "-only-testing:ToasttyMobileDomainTests",
+        "-only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction",
+        "-only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble",
+      );
     }
   }
   args.push(command);
   return args;
 }
 
-function dryRunPlan(command, context) {
+function dryRunPlan(command, context, uiTests) {
   const steps = generationSteps();
   if (command !== "generate") {
     const destinationOverride = process.env.TOASTTY_IOS_DESTINATION?.trim();
@@ -369,7 +386,7 @@ function dryRunPlan(command, context) {
     }
     steps.push({
       executable: "xcodebuild",
-      args: xcodebuildArguments(command, context, destination),
+      args: xcodebuildArguments(command, context, destination, uiTests),
     });
   }
 
@@ -458,12 +475,12 @@ function nativeDeviceSpec(options, context) {
 }
 
 function printHelp() {
-  process.stdout.write(`Usage: node ios/scripts/toastty-ios.mjs <command> [options]\n\nCommands:\n  generate       Install Tuist packages and generate the Xcode workspace\n  build          Generate, select an iOS 18+ simulator, and build the app\n  test           Generate, select an iOS 18+ simulator, and run all app tests\n  native-device  Build Debug for the fixed development identity, then install and launch it\n\nAll commands:\n  --dry-run          Print a deterministic plan without invoking tools\n\nNative device options:\n  --preflight-only   Check the toolchain and selected physical iPhone, then stop\n  --build-only       Build and validate the signed app without install or launch\n  --device <value>   Select an exact CoreDevice identifier, UDID, hostname, or unique name\n\nEnvironment:\n  TOASTTY_IOS_CONFIGURATION             Debug or Release (default: Debug)\n  TOASTTY_IOS_DESTINATION               Explicit simulator xcodebuild destination\n  TOASTTY_IOS_SIMULATOR_DEVICE_NAMES    Preferred iPhone names, comma-separated\n  TOASTTY_IOS_RUN_ID                    Simulator run label\n  TOASTTY_IOS_RUN_ROOT                  Simulator run directory override\n  TOASTTY_IOS_DERIVED_DATA_PATH         Simulator DerivedData override\n  TOASTTY_IOS_WORKTREE_ID               Worktree identity override\n  TOASTTY_IOS_DEVELOPMENT_TEAM          Override the repository Apple development team\n  TOASTTY_NATIVE_DEVICE_RUN_ID          Physical-device run label override\n  TOASTTY_NATIVE_DEVICE_RUN_ROOT        Physical-device evidence directory override\n  TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH Physical-device DerivedData override\n`);
+  process.stdout.write(`Usage: node ios/scripts/toastty-ios.mjs <command> [options]\n\nCommands:\n  generate       Install Tuist packages and generate the Xcode workspace\n  build          Generate, select an iOS 18+ simulator, and build the app\n  test           Generate, select an iOS 18+ simulator, and test the native client\n  native-device  Build Debug for the fixed development identity, then install and launch it\n\nAll commands:\n  --dry-run          Print a deterministic plan without invoking tools\n\nTest options (Debug only):\n  --ui-tests smoke   Run app/domain tests and the two CI fixture UI tests\n  --ui-tests all     Run all app, domain, and UI tests (Debug default)\n                   Release runs app/domain tests without UI tests\n\nNative device options:\n  --preflight-only   Check the toolchain and selected physical iPhone, then stop\n  --build-only       Build and validate the signed app without install or launch\n  --device <value>   Select an exact CoreDevice identifier, UDID, hostname, or unique name\n\nEnvironment:\n  TOASTTY_IOS_CONFIGURATION             Debug or Release (default: Debug)\n  TOASTTY_IOS_DESTINATION               Explicit simulator xcodebuild destination\n  TOASTTY_IOS_SIMULATOR_DEVICE_NAMES    Preferred iPhone names, comma-separated\n  TOASTTY_IOS_RUN_ID                    Simulator run label\n  TOASTTY_IOS_RUN_ROOT                  Simulator run directory override\n  TOASTTY_IOS_DERIVED_DATA_PATH         Simulator DerivedData override\n  TOASTTY_IOS_WORKTREE_ID               Worktree identity override\n  TOASTTY_IOS_DEVELOPMENT_TEAM          Override the repository Apple development team\n  TOASTTY_NATIVE_DEVICE_RUN_ID          Physical-device run label override\n  TOASTTY_NATIVE_DEVICE_RUN_ROOT        Physical-device evidence directory override\n  TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH Physical-device DerivedData override\n`);
 }
 
 function main() {
   const options = parseArguments(process.argv.slice(2));
-  const { command, dryRun } = options;
+  const { command, dryRun, uiTests } = options;
   if (command === "help") {
     if (dryRun) fail("help does not accept --dry-run");
     printHelp();
@@ -472,6 +489,11 @@ function main() {
   if (!["generate", "build", "test", "native-device"].includes(command)) {
     printHelp();
     throw new CommandFailure(`unknown command: ${command}`);
+  }
+
+  if (command === "test" && uiTests !== undefined
+    && (process.env.TOASTTY_IOS_CONFIGURATION?.trim() || "Debug") === "Release") {
+    fail("--ui-tests requires Debug configuration");
   }
 
   const context = commandContext(command, dryRun);
@@ -485,7 +507,7 @@ function main() {
     return;
   }
   if (dryRun) {
-    process.stdout.write(`${JSON.stringify(dryRunPlan(command, context), null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(dryRunPlan(command, context, uiTests), null, 2)}\n`);
     return;
   }
 
@@ -500,7 +522,7 @@ function main() {
     || `platform=iOS Simulator,id=${simulator.udid}`;
   runChecked(
     "xcodebuild",
-    xcodebuildArguments(command, context, destination),
+    xcodebuildArguments(command, context, destination, uiTests),
     { env: context.environment },
   );
 }
