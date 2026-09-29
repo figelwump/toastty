@@ -98,6 +98,12 @@ final class SessionRuntimeStore: ObservableObject {
     /// Bumped per read so a stale continuation cannot clear or overwrite the
     /// state of a newer one after a teardown and restart under the same ID.
     private var providerSessionNameRefreshGenerationBySessionID: [String: Int] = [:]
+    private var providerSessionNamePollTaskBySessionID: [String: Task<Void, Never>] = [:]
+    /// Remains after the task stops: each bound conversation gets one short
+    /// retry window, even if it stays unnamed across later turns.
+    private var providerSessionNamePolledSourceBySessionID: [String: ProviderSessionNameSource] = [:]
+    private let providerSessionNamePollIntervalNanoseconds: UInt64
+    private static let maximumProviderSessionNamePolls = 15
     private var pendingPanelParentSessionIDs: [UUID: PendingPanelParentSessionID] = [:]
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
@@ -199,7 +205,8 @@ final class SessionRuntimeStore: ObservableObject {
         codexHookApprovalDeferralNanoseconds: UInt64 = 1_000_000_000,
         backgroundActivityReapIntervalNanoseconds: UInt64 = 10_000_000_000,
         maximumBackgroundActivityAge: TimeInterval = 8 * 60 * 60,
-        providerSessionNameEnvironment: [String: String] = ProcessInfo.processInfo.environment
+        providerSessionNameEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+        providerSessionNamePollIntervalNanoseconds: UInt64 = 2_000_000_000
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
         self.isApplicationActive = isApplicationActive
@@ -208,6 +215,7 @@ final class SessionRuntimeStore: ObservableObject {
         self.backgroundActivityReapIntervalNanoseconds = backgroundActivityReapIntervalNanoseconds
         self.maximumBackgroundActivityAge = maximumBackgroundActivityAge
         self.providerSessionNameEnvironment = providerSessionNameEnvironment
+        self.providerSessionNamePollIntervalNanoseconds = providerSessionNamePollIntervalNanoseconds
     }
 
     func bind(store: AppStore) {
@@ -262,6 +270,11 @@ final class SessionRuntimeStore: ObservableObject {
         providerSessionNameRefreshTaskBySessionID = [:]
         providerSessionNameRefreshPendingSessionIDs = []
         providerSessionNameRefreshGenerationBySessionID = [:]
+        for task in providerSessionNamePollTaskBySessionID.values {
+            task.cancel()
+        }
+        providerSessionNamePollTaskBySessionID = [:]
+        providerSessionNamePolledSourceBySessionID = [:]
         removeAllPendingCodexHookApprovals()
         backgroundActivityReaperTask?.cancel()
         backgroundActivityReaperTask = nil
@@ -331,6 +344,8 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID[managedSessionID] = candidate
         if boundToADifferentConversation {
             cancelProviderSessionNameRefresh(sessionID: managedSessionID)
+            cancelProviderSessionNamePolling(sessionID: managedSessionID)
+            providerSessionNamePolledSourceBySessionID.removeValue(forKey: managedSessionID)
             clearProviderSessionName(sessionID: managedSessionID)
         }
         // A binding can be confirmed after the session's first turns, so read
@@ -726,10 +741,8 @@ final class SessionRuntimeStore: ObservableObject {
            Self.statusStartsNewWork(previousKind: previousRecord?.status?.kind, nextKind: acceptedKind) {
             reopenDoneWorkspaceIfNeeded(workspaceID: acceptedRecord.workspaceID, sessionID: sessionID, trigger: "turn_start")
         }
-        // Both providers rewrite their generated name as a session progresses,
-        // and both report a status change on the same hooks that produce it
-        // (`UserPromptSubmit`, `Stop`), so a turn boundary is the refresh
-        // trigger. Nothing polls.
+        // Turn boundaries also catch later title changes after the short
+        // first-turn polling window has ended.
         if previousRecord?.status?.kind != storedStatus.kind {
             refreshProviderSessionNameIfNeeded(sessionID: sessionID)
         }
@@ -765,6 +778,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// transient read failure should not blank a row that already has one.
     private func refreshProviderSessionNameIfNeeded(sessionID: String) {
         guard let source = providerSessionNameSource(sessionID: sessionID) else { return }
+        updateProviderSessionNamePolling(sessionID: sessionID, source: source)
 
         // One read in flight per session. A turn boundary arriving mid-read
         // is remembered rather than dropped, because that boundary is exactly
@@ -800,6 +814,45 @@ final class SessionRuntimeStore: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Codex and Claude can write their first title while a turn is still
+    /// working. Retry for at most 30 seconds per bound conversation, then let
+    /// the existing turn-boundary reads handle any later title changes.
+    private func updateProviderSessionNamePolling(sessionID: String, source: ProviderSessionNameSource) {
+        let record = sessionRegistry.activeSession(sessionID: sessionID)
+        let isBusy = record?.status?.kind == .working || record?.status?.kind == .needsApproval
+        guard (record?.agent == .codex || record?.agent == .claude),
+              record?.providerSessionName == nil,
+              isBusy else {
+            cancelProviderSessionNamePolling(sessionID: sessionID)
+            return
+        }
+        guard providerSessionNamePolledSourceBySessionID[sessionID] != source else { return }
+        providerSessionNamePolledSourceBySessionID[sessionID] = source
+        let interval = providerSessionNamePollIntervalNanoseconds
+        providerSessionNamePollTaskBySessionID[sessionID] = Task { @MainActor [weak self] in
+            for _ in 0 ..< Self.maximumProviderSessionNamePolls {
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
+                guard let self, self.providerSessionNameSource(sessionID: sessionID) == source,
+                      let record = self.sessionRegistry.activeSession(sessionID: sessionID),
+                      record.providerSessionName == nil,
+                      record.status?.kind == .working || record.status?.kind == .needsApproval else {
+                    return
+                }
+                self.refreshProviderSessionNameIfNeeded(sessionID: sessionID)
+            }
+            guard let self, Task.isCancelled == false else { return }
+            self.providerSessionNamePollTaskBySessionID.removeValue(forKey: sessionID)
+        }
+    }
+
+    private func cancelProviderSessionNamePolling(sessionID: String) {
+        providerSessionNamePollTaskBySessionID.removeValue(forKey: sessionID)?.cancel()
     }
 
     private func cancelProviderSessionNameRefresh(sessionID: String) {
@@ -888,6 +941,9 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func setProviderSessionName(sessionID: String, providerSessionName: String?) {
+        if providerSessionName != nil {
+            cancelProviderSessionNamePolling(sessionID: sessionID)
+        }
         let now = Date()
         var nextRegistry = sessionRegistry
         nextRegistry.updateProviderSessionName(
@@ -2485,6 +2541,8 @@ final class SessionRuntimeStore: ObservableObject {
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         cancelProviderSessionNameRefresh(sessionID: sessionID)
+        cancelProviderSessionNamePolling(sessionID: sessionID)
+        providerSessionNamePolledSourceBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
     }
 
