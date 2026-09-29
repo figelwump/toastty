@@ -2308,12 +2308,14 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(parent.focusedPanelID, assessor.panelID)
     }
 
-    func testSpawnerInAnotherWorkspaceIsNamedAndItsTagJumpsThere() throws {
-        let (harness, ids) = try makeSubspacesHarness()
-        defer { harness.window.orderOut(nil) }
-        let rootView = harness.hostingView
-        // An orchestrator in the sibling card nests a subspace under the
-        // parent, as `workspace.create parent=<id>` does.
+    /// An orchestrator in the sibling card nests the working subspace under
+    /// the parent, as `workspace.create parent=<id>` does, and the subspace's
+    /// agent is its sub-agent. Returns the orchestrator's panel.
+    @discardableResult
+    private func startOrchestratorNestingWorkingSubspace(
+        in harness: SidebarHarness,
+        ids: SubspacesHarnessIDs
+    ) throws -> UUID {
         let sibling = try XCTUnwrap(harness.store.state.workspacesByID[ids.siblingID])
         let orchestratorPanelID = try XCTUnwrap(sibling.focusedPanelID)
         harness.sessionRuntimeStore.startSession(
@@ -2332,19 +2334,114 @@ final class SidebarViewTests: XCTestCase {
             status: SessionStatus(kind: .idle, summary: "Idle", detail: "Waiting on subspaces"),
             at: Date(timeIntervalSince1970: 1_700_000_001)
         )
+        let working = try XCTUnwrap(harness.store.state.workspacesByID[ids.workingID])
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "working-agent",
+            agent: .codex,
+            panelID: try XCTUnwrap(working.focusedPanelID),
+            windowID: harness.windowID,
+            workspaceID: working.id,
+            parentSessionID: "orchestrator",
+            displayTitleOverride: "Rebase fixture",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_002)
+        )
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "working-agent",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Rebasing onto main"),
+            at: Date(timeIntervalSince1970: 1_700_000_003)
+        )
         _ = harness.store.send(.setWorkspaceParent(
             workspaceID: ids.workingID,
             parentWorkspaceID: ids.parentID,
             spawningSessionID: "orchestrator"
         ))
         pumpMainRunLoop(duration: 0.6)
-        rootView.layoutSubtreeIfNeeded()
+        harness.hostingView.layoutSubtreeIfNeeded()
+        return orchestratorPanelID
+    }
+
+    func testSpawnerInAnotherWorkspaceIsNamedAndItsTagJumpsThere() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        let orchestratorPanelID = try startOrchestratorNestingWorkingSubspace(in: harness, ids: ids)
 
         try clickSemanticText(prefix: "Go to Merge ready PRs", in: rootView)
         pumpMainRunLoop(duration: 0.3)
 
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.siblingID)
         XCTAssertEqual(harness.store.state.workspacesByID[ids.siblingID]?.focusedPanelID, orchestratorPanelID)
+    }
+
+    /// The orchestrator's row gets the ⑂ chip rather than a ↗ sub-agent row,
+    /// and the chip takes the user to the parent card's group, filtered.
+    func testSpawnerChipForAnotherCardsSubspaceSelectsThatCardAndFiltersItsGroup() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        // Short enough that the parent's group scrolls out of view while
+        // the orchestrator's card is on screen.
+        harness.window.setContentSize(NSSize(width: ToastyTheme.sidebarWidth, height: 260))
+        try startOrchestratorNestingWorkingSubspace(in: harness, ids: ids)
+        harness.store.selectWorkspace(
+            windowID: harness.windowID,
+            workspaceID: ids.siblingID,
+            preferringUnreadSessionPanelIn: harness.sessionRuntimeStore
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        var textValues = renderedTextValues(in: rootView)
+        let orchestratorRow = try XCTUnwrap(textValues.first { $0.hasPrefix("Merge ready PRs") }, "\(textValues)")
+        XCTAssertFalse(orchestratorRow.contains("sub-agent"), "The chip replaces the ↗ row: \(orchestratorRow)")
+        XCTAssertTrue(textValues.contains("1 subspace in emptyos-computer"), "\(textValues)")
+        XCTAssertFalse(
+            try isInSidebarViewport(prefix: "4 subspaces, expanded", in: rootView),
+            "The parent's group should start out of view"
+        )
+        try writeSidebarEvidence(rootView, name: "sidebar-other-card-spawner-chip")
+
+        try clickSemanticText(prefix: "1 subspace in emptyos-computer", in: rootView)
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.parentID)
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains("Only subspaces from Merge ready PRs"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-update-visitor-fixture, subspace") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, subspace") }, "\(textValues)")
+        XCTAssertTrue(
+            textValues.contains("1 subspace in emptyos-computer, filtering the Subspaces list"),
+            "\(textValues)"
+        )
+        XCTAssertTrue(
+            try isInSidebarViewport(prefix: "4 subspaces, expanded", in: rootView),
+            "The chip should scroll the parent's group into view"
+        )
+        try writeSidebarEvidence(rootView, name: "sidebar-other-card-spawner-chip-filtered")
+
+        // A second press clears the filter and leaves the selection alone.
+        try clickSemanticText(prefix: "1 subspace in emptyos-computer, filtering", in: rootView)
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertFalse(textValues.contains("Only subspaces from Merge ready PRs"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace") }, "\(textValues)")
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.parentID)
+    }
+
+    /// Whether the semantic text starting with `prefix` sits inside the
+    /// sidebar scroll view's visible area.
+    private func isInSidebarViewport(prefix: String, in rootView: NSView) throws -> Bool {
+        let field = try XCTUnwrap(
+            semanticTextField(in: rootView, prefix: prefix),
+            "No rendered text starting with \"\(prefix)\": \(renderedTextValues(in: rootView))"
+        )
+        let scrollView = try XCTUnwrap(field.enclosingScrollView, "No sidebar scroll view")
+        let point = field.convert(CGPoint(x: field.bounds.midX, y: field.bounds.midY), to: scrollView.contentView)
+        return scrollView.contentView.bounds.contains(point)
     }
 
     /// Every row is two lines whether or not the provider has named it, so an
