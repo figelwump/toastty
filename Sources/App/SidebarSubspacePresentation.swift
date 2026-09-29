@@ -115,6 +115,9 @@ enum SidebarSubspacePresentation {
         let count: Int
         let tone: ChipTone
         let isFilterActive: Bool
+        /// The card whose group the chip filters, when the session nested
+        /// its subspaces under another card rather than its own.
+        var targetWorkspaceTitle: String? = nil
     }
 
     nonisolated static let annotationKeyPullRequest = "github-pr"
@@ -266,7 +269,8 @@ enum SidebarSubspacePresentation {
     static func spawnerChip(
         sessionID: String,
         rows: [Row],
-        activeFilterSessionID: String?
+        activeFilterSessionID: String?,
+        targetWorkspaceTitle: String? = nil
     ) -> SpawnerChip? {
         let spawned = rows.filter { $0.spawningSessionID == sessionID }
         guard spawned.isEmpty == false else { return nil }
@@ -280,7 +284,8 @@ enum SidebarSubspacePresentation {
         return SpawnerChip(
             count: spawned.count,
             tone: tone,
-            isFilterActive: activeFilterSessionID == sessionID
+            isFilterActive: activeFilterSessionID == sessionID,
+            targetWorkspaceTitle: targetWorkspaceTitle
         )
     }
 
@@ -309,8 +314,13 @@ enum SidebarSubspacePresentation {
         isDone ? "Mark as not done" : "Mark as done"
     }
 
-    static func spawnerFilterActionTitle(isFilterActive: Bool) -> String {
-        isFilterActive ? "Show all subspaces" : "Show only its subspaces"
+    static func spawnerFilterActionTitle(_ chip: SpawnerChip) -> String {
+        switch (chip.isFilterActive, chip.targetWorkspaceTitle) {
+        case (true, nil): return "Show all subspaces"
+        case let (true, title?): return "Show all subspaces in \(title)"
+        case (false, nil): return "Show only its subspaces"
+        case let (false, title?): return "Show its subspaces in \(title)"
+        }
     }
 
     static func filterBarLabel(spawnerName: String) -> String {
@@ -350,6 +360,9 @@ enum SidebarSubspacePresentation {
 
     static func spawnerChipAccessibilityLabel(_ chip: SpawnerChip) -> String {
         var label = chip.count == 1 ? "1 subspace" : "\(chip.count) subspaces"
+        if let targetWorkspaceTitle = chip.targetWorkspaceTitle {
+            label += " in \(targetWorkspaceTitle)"
+        }
         switch chip.tone {
         case .needsApproval: label += ", one needs approval"
         case .error: label += ", one has an error"

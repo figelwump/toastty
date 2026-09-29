@@ -493,6 +493,20 @@ private final class SubspaceOrderMemory {
     var pinByParentID: [UUID: SidebarSubspacePresentation.Pin] = [:]
 }
 
+/// Scroll target for a card's Subspaces group.
+private struct SubspaceGroupScrollID: Hashable {
+    let parentWorkspaceID: UUID
+}
+
+/// A ⑂ chip in another card asked to bring this card's Subspaces group into
+/// view. When the chip also selects the card, the selection change performs
+/// the scroll, so the usual scroll to the card's top does not compete with it.
+private struct SubspaceGroupScrollRequest: Equatable {
+    let id = UUID()
+    let parentWorkspaceID: UUID
+    let awaitsSelection: Bool
+}
+
 struct SidebarView: View {
     struct WorkspaceDragState: Equatable {
         let workspaceID: UUID
@@ -550,6 +564,7 @@ struct SidebarView: View {
     /// still under the pointer; released on exit.
     @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     @State private var subspaceOrderMemory = SubspaceOrderMemory()
+    @State private var subspaceGroupScrollRequest: SubspaceGroupScrollRequest?
     @State private var hoveredSpawnerSessionID: String?
     @State private var hoveredSubspaceID: UUID?
     @State private var hoveredSubspaceDoneToggleID: UUID?
@@ -792,7 +807,20 @@ struct SidebarView: View {
                 }
                 .onChange(of: selectedWorkspaceID) { _, _ in
                     revealSelectedSubspaceIfNeeded()
+                    if let request = subspaceGroupScrollRequest {
+                        subspaceGroupScrollRequest = nil
+                        if request.awaitsSelection,
+                           workspaceCardContainsSelection(request.parentWorkspaceID) {
+                            scrollToSubspaceGroup(parentWorkspaceID: request.parentWorkspaceID, using: proxy)
+                            return
+                        }
+                    }
                     scrollToSelectedWorkspace(using: proxy, animated: true)
+                }
+                .onChange(of: subspaceGroupScrollRequest) { _, request in
+                    guard let request, request.awaitsSelection == false else { return }
+                    subspaceGroupScrollRequest = nil
+                    scrollToSubspaceGroup(parentWorkspaceID: request.parentWorkspaceID, using: proxy)
                 }
             }
 
@@ -1383,17 +1411,36 @@ struct SidebarView: View {
         workspace: WorkspaceState,
         subspaceRows: [SidebarSubspacePresentation.Row] = []
     ) -> some View {
+        let otherCardSpawns = otherCardSubspaceSpawns(
+            cardWorkspaceID: workspace.id,
+            sessionStatuses: workspaceSessionStatuses
+        )
         VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
             ForEach(workspaceSessionStatuses, id: \.sessionID) { workspaceSessionStatus in
+                let sessionID = workspaceSessionStatus.sessionID
+                let ownChip = SidebarSubspacePresentation.spawnerChip(
+                    sessionID: sessionID,
+                    rows: subspaceRows,
+                    activeFilterSessionID: subspaceFilterSessionIDByParentID[workspace.id]
+                )
+                // The card's own group wins; a session that nested its
+                // subspaces only under other cards points at that card's group.
+                let otherCardSpawn = ownChip == nil ? otherCardSpawns[sessionID] : nil
+                let hiddenChildWorkspaceIDs = Set(subspaceRows.map(\.id))
+                    .union(otherCardSpawn?.spawnedRows.map(\.id) ?? [])
                 sessionStatusContent(
-                    hidingSubspaceChildren(workspaceSessionStatus, subspaceRows: subspaceRows),
+                    hidingSubspaceChildren(workspaceSessionStatus, subspaceIDs: hiddenChildWorkspaceIDs),
                     workspace: workspace,
                     isHovered: hoveredPanelID == workspaceSessionStatus.panelID,
-                    spawnerChip: SidebarSubspacePresentation.spawnerChip(
-                        sessionID: workspaceSessionStatus.sessionID,
-                        rows: subspaceRows,
-                        activeFilterSessionID: subspaceFilterSessionIDByParentID[workspace.id]
-                    )
+                    spawnerChip: ownChip ?? otherCardSpawn.flatMap { spawn in
+                        SidebarSubspacePresentation.spawnerChip(
+                            sessionID: sessionID,
+                            rows: spawn.spawnedRows,
+                            activeFilterSessionID: subspaceFilterSessionIDByParentID[spawn.parentWorkspaceID],
+                            targetWorkspaceTitle: spawn.parentWorkspaceTitle
+                        )
+                    },
+                    spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id
                 )
             }
         }
@@ -1411,7 +1458,8 @@ struct SidebarView: View {
         _ workspaceSessionStatus: WorkspaceSessionStatus,
         workspace: WorkspaceState,
         isHovered: Bool,
-        spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil
+        spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil,
+        spawnerChipParentWorkspaceID: UUID
     ) -> some View {
         let sessionRowID = SidebarSessionPresentation.SidebarSessionRowID(
             workspaceID: workspace.id,
@@ -1539,8 +1587,9 @@ struct SidebarView: View {
             },
             onToggleSpawnerFilter: {
                 toggleSubspaceFilter(
-                    parentWorkspaceID: workspace.id,
-                    spawningSessionID: workspaceSessionStatus.sessionID
+                    parentWorkspaceID: spawnerChipParentWorkspaceID,
+                    spawningSessionID: workspaceSessionStatus.sessionID,
+                    fromCardWorkspaceID: workspace.id
                 )
             },
             onHoverSpawnerChip: { isHovering in
@@ -1596,8 +1645,9 @@ struct SidebarView: View {
                 spawnerChip: spawnerChip,
                 spawnerFilterAction: {
                     toggleSubspaceFilter(
-                        parentWorkspaceID: workspace.id,
-                        spawningSessionID: workspaceSessionStatus.sessionID
+                        parentWorkspaceID: spawnerChipParentWorkspaceID,
+                        spawningSessionID: workspaceSessionStatus.sessionID,
+                        fromCardWorkspaceID: workspace.id
                     )
                 }
             )
@@ -1708,7 +1758,7 @@ struct SidebarView: View {
         if let spawnerChip {
             withChildAction
                 .accessibilityAction(
-                    named: Text(SidebarSubspacePresentation.spawnerFilterActionTitle(isFilterActive: spawnerChip.isFilterActive)),
+                    named: Text(SidebarSubspacePresentation.spawnerFilterActionTitle(spawnerChip)),
                     spawnerFilterAction
                 )
         } else {
@@ -2960,19 +3010,78 @@ struct SidebarView: View {
 
     // MARK: - Subspaces
 
-    /// Sub-agent rows that live in one of this workspace's subspaces are
-    /// represented by the ⑂ chip and the group instead of a ↗ row.
+    /// Sub-agent rows that live in a subspace the ⑂ chip and a Subspaces
+    /// group already represent are left out instead of drawn as ↗ rows.
     private func hidingSubspaceChildren(
         _ status: WorkspaceSessionStatus,
-        subspaceRows: [SidebarSubspacePresentation.Row]
+        subspaceIDs: Set<UUID>
     ) -> WorkspaceSessionStatus {
-        guard subspaceRows.isEmpty == false else { return status }
-        let subspaceIDs = Set(subspaceRows.map(\.id))
+        guard subspaceIDs.isEmpty == false else { return status }
         var status = status
         status.children.removeAll { child in
             child.source == .session && child.workspaceID.map(subspaceIDs.contains) == true
         }
         return status
+    }
+
+    /// Subspaces a session in this card nested under another card, as
+    /// `workspace.create parent=<id>` does.
+    private struct OtherCardSubspaceSpawn {
+        let parentWorkspaceID: UUID
+        let parentWorkspaceTitle: String
+        /// That card's rows this session spawned.
+        let spawnedRows: [SidebarSubspacePresentation.Row]
+    }
+
+    /// For each session in this card that spawned subspaces under other
+    /// cards, the first such card as the sidebar lists them. Its ⑂ chip
+    /// filters that card's group; subspaces under any further card keep
+    /// their ↗ rows.
+    private func otherCardSubspaceSpawns(
+        cardWorkspaceID: UUID,
+        sessionStatuses: [WorkspaceSessionStatus]
+    ) -> [String: OtherCardSubspaceSpawn] {
+        let sessionIDs = Set(sessionStatuses.map(\.sessionID))
+        guard sessionIDs.isEmpty == false,
+              let windowWorkspaceIDs = store.window(id: windowID)?.workspaceIDs else {
+            return [:]
+        }
+        var parentIDsBySessionID: [String: Set<UUID>] = [:]
+        for workspaceID in windowWorkspaceIDs {
+            guard let workspace = store.state.workspacesByID[workspaceID],
+                  let parentID = workspace.parentWorkspaceID,
+                  parentID != cardWorkspaceID,
+                  let spawningSessionID = workspace.spawningSessionID,
+                  sessionIDs.contains(spawningSessionID) else {
+                continue
+            }
+            parentIDsBySessionID[spawningSessionID, default: []].insert(parentID)
+        }
+        guard parentIDsBySessionID.isEmpty == false else { return [:] }
+        let cardOrder = store.state.topLevelWorkspaceIDs(in: windowID)
+        let parentIDBySessionID = parentIDsBySessionID.compactMapValues { parentIDs in
+            cardOrder.first(where: parentIDs.contains)
+        }
+
+        var rowsByParentID: [UUID: [SidebarSubspacePresentation.Row]] = [:]
+        var spawns: [String: OtherCardSubspaceSpawn] = [:]
+        for (sessionID, parentID) in parentIDBySessionID {
+            guard let parent = store.state.workspacesByID[parentID] else { continue }
+            let rows = rowsByParentID[parentID] ?? subspaceRows(
+                for: parentID,
+                parentSessionStatuses: sidebarSessionStatuses(for: parentID)
+            )
+            rowsByParentID[parentID] = rows
+            // Rows only exist for valid links, so a stale parent drops out here.
+            let spawnedRows = rows.filter { $0.spawningSessionID == sessionID }
+            guard spawnedRows.isEmpty == false else { continue }
+            spawns[sessionID] = OtherCardSubspaceSpawn(
+                parentWorkspaceID: parentID,
+                parentWorkspaceTitle: parent.title,
+                spawnedRows: spawnedRows
+            )
+        }
+        return spawns
     }
 
     private func subspaceRows(
@@ -3124,6 +3233,7 @@ struct SidebarView: View {
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 12)
+        .id(SubspaceGroupScrollID(parentWorkspaceID: parentWorkspaceID))
         .accessibilityIdentifier("sidebar.workspace.subspaces.\(parentWorkspaceID.uuidString)")
         .onAppear {
             if needsAttention {
@@ -3649,12 +3759,37 @@ struct SidebarView: View {
         }
     }
 
-    private func toggleSubspaceFilter(parentWorkspaceID: UUID, spawningSessionID: String) {
+    /// A chip whose subspaces live under another card also takes the user
+    /// there: it selects that card, unless the selection is already in it,
+    /// and scrolls its Subspaces group into view.
+    private func toggleSubspaceFilter(
+        parentWorkspaceID: UUID,
+        spawningSessionID: String,
+        fromCardWorkspaceID: UUID
+    ) {
         if subspaceFilterSessionIDByParentID[parentWorkspaceID] == spawningSessionID {
             subspaceFilterSessionIDByParentID.removeValue(forKey: parentWorkspaceID)
-        } else {
-            subspaceFilterSessionIDByParentID[parentWorkspaceID] = spawningSessionID
-            collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
+            return
+        }
+        subspaceFilterSessionIDByParentID[parentWorkspaceID] = spawningSessionID
+        collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
+        guard parentWorkspaceID != fromCardWorkspaceID else { return }
+
+        let awaitsSelection = workspaceCardContainsSelection(parentWorkspaceID) == false
+        subspaceGroupScrollRequest = SubspaceGroupScrollRequest(
+            parentWorkspaceID: parentWorkspaceID,
+            awaitsSelection: awaitsSelection
+        )
+        guard awaitsSelection else { return }
+        cancelWorkspaceRename()
+        store.selectWorkspace(
+            windowID: windowID,
+            workspaceID: parentWorkspaceID,
+            preferringUnreadSessionPanelIn: sessionRuntimeStore
+        )
+        // No selection change means no handler will consume the request.
+        if workspaceCardContainsSelection(parentWorkspaceID) == false {
+            subspaceGroupScrollRequest = nil
         }
     }
 
@@ -3801,6 +3936,19 @@ struct SidebarView: View {
                 }
             } else {
                 proxy.scrollTo(selectedWorkspaceID)
+            }
+        }
+    }
+
+    private func scrollToSubspaceGroup(parentWorkspaceID: UUID, using proxy: ScrollViewProxy) {
+        let target = SubspaceGroupScrollID(parentWorkspaceID: parentWorkspaceID)
+        Task { @MainActor in
+            if accessibilityReduceMotion {
+                proxy.scrollTo(target)
+            } else {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    proxy.scrollTo(target)
+                }
             }
         }
     }
