@@ -63,16 +63,19 @@ merged commit. A green run that skipped jobs does not test the merged code.
 
 Run `worktree-status.py --cleanup-merged`. For each cleanup row it closes the
 matching Toastty workspace, removes the worktree, and deletes the local and remote
-branch. It skips a row, leaving everything in place, when the workspace match is
-ambiguous; when the workspace is this session's own, holds another worktree or
-another PR's chip, or has an agent session, a busy terminal, or unsaved documents;
-or when the worktree is locked. It rechecks the worktree just before removing it
-and deletes each branch only while it still points at the merged commit. It never
-touches blocked rows or worktrees without a PR, and repeated runs are harmless.
+branch. Closing the workspace ends any agent sessions and running terminal
+commands in it; the row's cleanup report names what was ended. It skips a row,
+leaving everything in place, when the workspace match is ambiguous; when the
+workspace is this session's own, holds another worktree or another PR's chip, or
+has unsaved documents; or when the worktree is locked. It rereads the workspaces
+just before closing each one, rechecks the worktree just before removing it, and
+deletes each branch only while it still points at the merged commit. It never touches blocked rows or worktrees without a PR, and
+repeated runs are harmless.
 
-Report what was cleaned up and every skipped row with its reason. Do not work
-around a skip with manual `workspace.close`, `git worktree remove --force`, or
-branch deletion; the user closes the session or workspace and asks again.
+Report what was cleaned up, including any sessions or busy terminals that closing
+a workspace ended, and every skipped row with its reason. Do not work around a
+skip with manual `workspace.close`, `git worktree remove --force`, or branch
+deletion.
 
 ## Changes to this workflow
 

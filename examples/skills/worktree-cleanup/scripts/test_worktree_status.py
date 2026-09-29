@@ -31,14 +31,23 @@ FAKE_TOASTTY = r'''#!/usr/bin/env python3
 import json, os, sys
 state = json.load(open(os.environ["FAKE_STATE"]))
 args = sys.argv[1:]
-with open(os.environ["FAKE_TOASTTY_LOG"], "a") as log:
+with open(os.environ["FAKE_TOASTTY_LOG"], "a+") as log:
+    log.seek(0)
+    earlier_lists = log.read().count("workspace.list")
     log.write(" ".join(args) + "\n")
 if "workspace.list" in args:
-    print(json.dumps({"ok": True, "result": {"workspaces": state["workspaces"],
+    # "later_workspaces" replaces the list after the first read, as if the user
+    # changed a workspace while the script was running.
+    workspaces = state.get("later_workspaces") if earlier_lists else None
+    print(json.dumps({"ok": True, "result": {"workspaces": workspaces or state["workspaces"],
                                              "callerIsScoped": state.get("scoped", False)}}))
 elif "terminal.state" in args:
     print(json.dumps({"ok": True, "result": {"workspaceID": state["own"]}}))
 elif "workspace.close" in args:
+    # "dirty_on_close" maps a workspace to a path its dying command writes into.
+    target = state.get("dirty_on_close", {}).get(args[args.index("--workspace") + 1])
+    if target:
+        open(os.path.join(target, "last-write.txt"), "w").write("written while closing\n")
     print(json.dumps({"ok": True, "result": {}}))
 else:
     sys.exit(f"unexpected toastty call: {args}")
@@ -69,6 +78,7 @@ class CleanupTests(unittest.TestCase):
                         FAKE_TOASTTY_LOG=str(self.log), TOASTTY_CLI_PATH=str(bin_dir / "toastty"),
                         TOASTTY_PANEL_ID="own-panel")
         self.prs, self.workspaces, self.scoped = [], [], False
+        self.extra_state = {}
 
     def git(self, *args, cwd=None):
         return subprocess.run(["git", *args], cwd=cwd or self.repo, check=True,
@@ -103,7 +113,8 @@ class CleanupTests(unittest.TestCase):
 
     def status(self, *args, env=None):
         self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces,
-                                               "own": OWN_WORKSPACE, "scoped": self.scoped}))
+                                               "own": OWN_WORKSPACE, "scoped": self.scoped,
+                                               **self.extra_state}))
         result = subprocess.run([sys.executable, str(SCRIPT), "--json", "--repo", str(self.repo), *args],
                                 env=env or self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -137,16 +148,43 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(dirty.exists() and ahead.exists())
         self.assertEqual(self.closed(), [])
 
-    def test_skips_workspace_with_live_work_or_the_callers_own(self):
-        _, with_session = self.task(1, session=True)
+    def test_closes_workspace_with_live_sessions_and_reports_what_ended(self):
+        branch, with_sessions = self.task(1, session=True, busy=True)
+        self.workspaces[-1]["activeSessions"].append({"sessionID": "s2", "agent": "codex", "panelID": "p2"})
         _, busy = self.task(2, busy=True)
-        _, own = self.task(3)
-        self.workspaces[-1]["workspaceID"] = OWN_WORKSPACE
         rows = self.status("--cleanup-merged")
-        self.assertIn("active agent session", rows[1]["cleanup"])
-        self.assertIn("running a command", rows[2]["cleanup"])
-        self.assertIn("own workspace", rows[3]["cleanup"])
-        self.assertTrue(with_session.exists() and busy.exists() and own.exists())
+        self.assertIn("closed task-1", rows[1]["cleanup"])
+        self.assertIn("ending 2 agent sessions (1 claude, 1 codex) and 1 terminal running a command, counting agent terminals",
+                      rows[1]["cleanup"])
+        self.assertIn("ending 1 terminal running a command", rows[2]["cleanup"])
+        self.assertFalse(with_sessions.exists() or busy.exists())
+        self.assertFalse(self.remote_has(branch))
+        self.assertEqual(len(self.closed()), 2)
+
+    def test_keeps_worktree_a_closed_session_dirtied(self):
+        branch, path = self.task(1, session=True)
+        self.extra_state["dirty_on_close"] = {self.workspaces[-1]["workspaceID"]: str(path)}
+        row = self.status("--cleanup-merged")[1]
+        self.assertTrue(row["cleanup"].startswith("partial: closed task-1"), row["cleanup"])
+        self.assertIn("worktree kept", row["cleanup"])
+        self.assertTrue((path / "last-write.txt").exists())
+        self.assertNotEqual(self.git("branch", "--list", branch), "")
+        self.assertTrue(self.remote_has(branch))
+
+    def test_rereads_workspaces_before_closing(self):
+        _, path = self.task(1)
+        self.extra_state["later_workspaces"] = [dict(self.workspaces[-1], unsavedDocumentCount=1)]
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("unsaved document", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_skips_the_callers_own_workspace(self):
+        _, own = self.task(1, session=True)
+        self.workspaces[-1]["workspaceID"] = OWN_WORKSPACE
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("own workspace", row["cleanup"])
+        self.assertTrue(own.exists())
         self.assertEqual(self.closed(), [])
 
     def test_skips_unsaved_documents_other_worktrees_and_other_pr_chips(self):

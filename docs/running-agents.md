@@ -424,8 +424,9 @@ Run `worktree-cleanup` from an outside project workspace. Its status script list
 each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It
 merges only PRs the user names. With `--cleanup-merged`, it closes the task
 workspace, removes the worktree and deletes the branches for merged PRs, using the
-`workspace.list` query to find each workspace and skipping any with an active
-agent session, busy terminal, or unsaved documents. Releases and deployments are outside this
+`workspace.list` query to find each workspace. Closing a workspace ends its agent
+sessions and running terminal commands, and the cleanup report names what it
+ended; a workspace with unsaved documents is skipped. Releases and deployments are outside this
 workflow.
 
 ## User-created skills

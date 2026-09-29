@@ -21,12 +21,14 @@ Worktrees whose branch has no PR are listed separately and never touched.
 
 --cleanup-merged acts only on "cleanup" rows. For each, it closes the matching
 Toastty workspace, removes the worktree, and deletes the local and remote branch.
+Closing the workspace ends its agent sessions and terminal commands; the row's
+cleanup report names the sessions and busy terminals it ended.
 It refuses to run from a workspace-scoped session, whose workspace list is partial.
 It skips a row, changing nothing, when the workspace match is ambiguous; when the
 workspace is the caller's own, holds another worktree or another PR's chip, or has
-an agent session, a busy terminal, or unsaved documents; or when the worktree is
-locked. It rechecks the worktree just before removing it, and deletes each branch
-only while it still points at the merged commit.
+unsaved documents; or when the worktree is locked. It rereads the workspace list
+just before closing each workspace, rechecks the worktree just before removing it,
+and deletes each branch only while it still points at the merged commit.
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -47,6 +51,10 @@ PR_FIELDS = (
 # GitHub computes these after branch protection: CLEAN means required checks are
 # met and nothing blocks the merge; HAS_HOOKS is CLEAN with pre-receive hooks.
 MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS")
+# Closing a workspace sends SIGHUP to its terminals without waiting for them to
+# exit. When it ended live work, wait this long before rechecking the worktree so
+# a final write from a dying command shows up as uncommitted changes.
+CLOSE_GRACE_SECONDS = 2.0
 # A PR description section or label line that orders this merge after other work.
 PREREQUISITE_SECTION = re.compile(
     r"^\s{0,3}(?:[-*]\s+)?(?:#{1,6}\s*|\*\*)?(activation order|merge order|rollout|depends on)\b(?:\*\*)?\s*(?::|$|\*\*|(?=#\d|https?://|[\w.-]+/[\w.-]+#\d))",
@@ -81,13 +89,26 @@ class Workspace:
     title: str
     cwds: list[str]
     chips: list[dict]
-    active_sessions: int
+    session_agents: list[str]
     busy_terminals: int
     unsaved_documents: int
 
     @property
     def label(self) -> str:
         return f"{self.title} ({self.workspace_id[:8]})"
+
+    def ended_by_close(self) -> str | None:
+        """Describes the agent sessions and busy terminals that closing ends. An
+        agent's own terminal usually counts as busy too, so the counts overlap."""
+        parts: list[str] = []
+        if self.session_agents:
+            count = len(self.session_agents)
+            kinds = ", ".join(f"{n} {agent}" for agent, n in sorted(Counter(self.session_agents).items()))
+            parts.append(f"{count} agent session{'s' if count > 1 else ''} ({kinds})")
+        if self.busy_terminals:
+            busy = f"{self.busy_terminals} terminal{'s' if self.busy_terminals > 1 else ''} running a command"
+            parts.append(busy + (", counting agent terminals" if self.session_agents else ""))
+        return " and ".join(parts) or None
 
 
 @dataclass
@@ -234,7 +255,8 @@ def match_workspaces(workspaces: list[dict] | None, path: str | None, pr: int | 
     for matches in levels:
         found = [
             Workspace(w["workspaceID"], w.get("title", ""), [real(c) for c in w.get("terminalCwds", [])],
-                      chips(w), len(w.get("activeSessions", [])), w.get("busyTerminalCount", 0),
+                      chips(w), [s.get("agent") or "unknown" for s in w.get("activeSessions", [])],
+                      w.get("busyTerminalCount", 0),
                       w.get("unsavedDocumentCount", 0))
             for w in workspaces if matches(w)
         ]
@@ -346,10 +368,6 @@ def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_worksp
     if workspace:
         if workspace.workspace_id == own_workspace:
             return "skipped: that is this session's own workspace"
-        if workspace.active_sessions:
-            return f"skipped: {workspace.label} has an active agent session"
-        if workspace.busy_terminals:
-            return f"skipped: {workspace.label} has a terminal running a command"
         if workspace.unsaved_documents:
             return f"skipped: {workspace.label} has unsaved document changes"
         if any(inside(cwd, other) for cwd in workspace.cwds for other in other_worktrees):
@@ -376,7 +394,10 @@ def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_worksp
             ok = False
         if not ok:
             return stop(f"could not close {workspace.label}: {output}")
-        done.append(f"closed {workspace.label}")
+        ended = workspace.ended_by_close()
+        done.append(f"closed {workspace.label}" + (f", ending {ended}" if ended else ""))
+        if ended:
+            time.sleep(CLOSE_GRACE_SECONDS)
     problem = recheck(worktree, row.head)
     if problem:
         return stop(f"{problem}; worktree kept")
@@ -438,7 +459,6 @@ def main() -> None:
     worktree_by_path = {worktree.path: worktree for worktree in worktrees}
     rows: list[Row] = []
     without_pr: list[Row] = []
-    matches_by_pr: dict[int, list[Workspace]] = {}
     seen_prs: set[int] = set()
 
     def pr_row(pr: dict, worktree: Worktree | None, ambiguous: bool = False) -> Row:
@@ -452,7 +472,6 @@ def main() -> None:
                   pr=pr["number"], pr_state=pr["state"], head=pr["headRefOid"], title=pr["title"])
         summarize_checks(row, pr)
         matches = match_workspaces(workspace_list, row.worktree, row.pr, repo_slug)
-        matches_by_pr[pr["number"]] = matches
         if matches:
             row.workspace = " | ".join(w.label for w in matches) + (" (ambiguous)" if len(matches) > 1 else "")
         row.workspace_ids = [w.workspace_id for w in matches]
@@ -479,9 +498,15 @@ def main() -> None:
         own_workspace = caller_workspace_id()
         for row in rows:
             if row.verdict == "cleanup" and row.worktree:
+                # Reread the workspaces: sessions, documents, and terminals may have
+                # changed while the PRs were queried or earlier rows were cleaned up.
+                current, complete = toastty_workspaces()
+                if current is None or not complete:
+                    row.cleanup = "skipped: could not reread the full Toastty workspace list"
+                    continue
                 others = [w.path for w in worktrees if w.path != row.worktree]
                 row.cleanup = clean_up(row, worktree_by_path[row.worktree], repo, repo_slug, own_workspace,
-                                       matches_by_pr[row.pr], others)
+                                       match_workspaces(current, row.worktree, row.pr, repo_slug), others)
 
     order = {"ready": 0, "cleanup": 1, "blocked": 2}
     rows.sort(key=lambda row: (order[row.verdict], row.pr or 0))
