@@ -164,15 +164,15 @@ final class ToasttyPreviewTests: XCTestCase {
         XCTAssertTrue(updated.requiresBootstrap(comparedTo: first))
     }
 
-    func testPanelOnlyWorkspaceSurvivesRankingAndEverySessionFilter() throws {
+    func testPanelOnlyWorkspaceSurvivesRankingUnderAllButNotActive() throws {
         let source = try XCTUnwrap(ToasttyMobileFixture.home.workspaces.first { !$0.panels.isEmpty && $0.conversations.isEmpty })
         let snapshot = MobileHomeSnapshot(hostName: "Mac", workspaces: [source])
-        for filter in ToasttyWorkspaceSessionFilter.allCases {
-            let result = filter.workspaces(from: snapshot.rankedWorkspaces)
-            XCTAssertEqual(result.first?.id, source.id)
-            XCTAssertEqual(result.first?.panels, source.panels)
-            XCTAssertEqual(result.first?.conversations.count, 0)
-        }
+        let all = ToasttyWorkspaceSessionFilter.all.workspaces(from: snapshot.rankedWorkspaces)
+        XCTAssertEqual(all.first?.id, source.id)
+        XCTAssertEqual(all.first?.panels, source.panels)
+        XCTAssertEqual(all.first?.conversations.count, 0)
+        // Active lists only workspaces with something happening.
+        XCTAssertTrue(ToasttyWorkspaceSessionFilter.active.workspaces(from: snapshot.rankedWorkspaces).isEmpty)
     }
 
     func testHTMLResourcePathsStayInThisPreviewAndDecodeExactlyOnce() throws {

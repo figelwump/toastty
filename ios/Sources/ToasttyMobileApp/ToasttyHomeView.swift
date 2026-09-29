@@ -25,7 +25,11 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
     func workspaces(from workspaces: [MobileWorkspace]) -> [MobileWorkspace] {
         workspaces.compactMap { workspace in
             let conversations = conversations(in: workspace)
-            guard !conversations.isEmpty || !workspace.panels.isEmpty else { return nil }
+            // All keeps panel-only workspaces so their panels stay reachable.
+            // Active lists only workspaces with something happening, so open
+            // panels alone no longer keep an idle workspace's header.
+            let keepsPanelOnlyWorkspace = self == .all && !workspace.panels.isEmpty
+            guard !conversations.isEmpty || keepsPanelOnlyWorkspace else { return nil }
             return MobileWorkspace(
                 id: workspace.id,
                 title: workspace.title,
@@ -34,6 +38,19 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
                 annotations: workspace.annotations
             )
         }
+    }
+
+    /// How many sessions this filter leaves out, so a short Active list says
+    /// what it hides instead of looking like a partial snapshot.
+    func hiddenSessionCount(in workspaces: [MobileWorkspace]) -> Int {
+        guard self == .active else { return 0 }
+        return workspaces.reduce(0) { count, workspace in
+            count + workspace.conversations.count - conversations(in: workspace).count
+        }
+    }
+
+    static func hiddenSessionsLabel(count: Int) -> String {
+        "\(count) idle \(count == 1 ? "session" : "sessions") hidden"
     }
 }
 
@@ -64,11 +81,11 @@ struct ToasttyHomeView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 10) {
+            LazyVStack(spacing: 2) {
                 workspaceContent
             }
             // Reorders now happen only on status-bucket transitions, so
-            // animating them keeps a moving card trackable instead of
+            // animating them keeps a moving row trackable instead of
             // teleporting.
             .animation(reduceMotion ? nil : .default, value: orderedRowIDs)
             .padding(.horizontal, 14)
@@ -147,10 +164,9 @@ struct ToasttyHomeView: View {
             ForEach(visibleWorkspaces) { workspace in
                 Section {
                     ForEach(workspace.conversations) { conversation in
-                        ToasttySessionCard(
+                        ToasttySessionRow(
                             conversation: conversation,
                             freshness: controller.freshness,
-                            showsWorkspace: false,
                             accessibilityIdentifier:
                                 "toastty-mobile-grouped-card-\(conversation.id.uuidString)",
                             onOpen: controller.open
@@ -158,8 +174,27 @@ struct ToasttyHomeView: View {
                     }
                 } header: {
                     workspaceHeader(workspace)
+                        .padding(.top, 12)
                 }
             }
+        }
+        // Shown under the empty state too, so an all-idle Mac still says how
+        // much Active is hiding.
+        hiddenSessionsFooter
+    }
+
+    @ViewBuilder
+    private var hiddenSessionsFooter: some View {
+        let count = selectedWorkspaceSessionFilter.hiddenSessionCount(
+            in: controller.snapshot.rankedWorkspaces
+        )
+        if count > 0 {
+            Text(ToasttyWorkspaceSessionFilter.hiddenSessionsLabel(count: count))
+                .font(.caption2.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 18)
+                .accessibilityIdentifier("toastty-mobile-hidden-sessions")
         }
     }
 
@@ -349,235 +384,5 @@ struct ToasttyHomeView: View {
         .foregroundStyle(ToasttyDesignTokens.mutedText)
         .accessibilityLabel("Settings")
         .accessibilityIdentifier("toastty-mobile-settings-button")
-    }
-}
-
-struct ToasttySessionCard: View {
-    let conversation: MobileConversation
-    let freshness: LiveProjectionFreshness
-    let showsWorkspace: Bool
-    let accessibilityIdentifier: String
-    let onOpen: (MobileConversation) -> Void
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    var body: some View {
-        Button {
-            onOpen(conversation)
-        } label: {
-            VStack(alignment: .leading, spacing: isIdle ? 6 : 8) {
-                Text(conversation.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.primaryText)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                    .fixedSize(horizontal: false, vertical: true)
-                if isIdle {
-                    idleContent
-                } else {
-                    statusHeader
-                    activityBody
-                }
-                metadata
-            }
-            .padding(.horizontal, 13)
-            .padding(.vertical, isIdle ? 10 : 13)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(cardBackground)
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: ToasttyDesignTokens.cardCornerRadius,
-                    style: .continuous
-                )
-                .stroke(cardBorder, lineWidth: 1)
-            }
-            .clipShape(RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.cardCornerRadius,
-                style: .continuous
-            ))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(statusPresentation.accessibilitySummary(for: conversation))
-        .accessibilityHint("Opens the conversation")
-        .accessibilityIdentifier(accessibilityIdentifier)
-    }
-
-    private var isIdle: Bool {
-        conversation.state.bucket == .idle
-    }
-
-    @ViewBuilder
-    private var idleContent: some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            if let workspaceLabel { workspaceChip(workspaceLabel) }
-            idleActivityText
-        } else if let workspaceLabel {
-            HStack(spacing: 8) {
-                workspaceChip(workspaceLabel)
-                Spacer(minLength: 8)
-                activityDestination
-            }
-            idleActivityText
-        } else {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                idleActivityText
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                activityDestination
-            }
-        }
-    }
-
-    private var idleActivityText: some View {
-        Text(conversation.lastActivity)
-            .font(.subheadline)
-            .foregroundStyle(ToasttyDesignTokens.secondaryText)
-            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-            .truncationMode(.tail)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    @ViewBuilder
-    private var statusHeader: some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: 6) {
-                if let workspaceLabel { workspaceChip(workspaceLabel) }
-                statusLabel
-            }
-        } else {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if let workspaceLabel {
-                    workspaceChip(workspaceLabel)
-                    Spacer(minLength: 8)
-                    statusLabel
-                        .fixedSize()
-                        .layoutPriority(1)
-                } else {
-                    statusLabel
-                    Spacer(minLength: 8)
-                }
-                activityDestination
-            }
-        }
-    }
-
-    private func workspaceChip(_ title: String) -> some View {
-        Text(title)
-            .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.primaryText)
-            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(ToasttyDesignTokens.chipSurface, in: RoundedRectangle(
-                cornerRadius: ToasttyDesignTokens.chipCornerRadius,
-                style: .continuous
-            ))
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: ToasttyDesignTokens.chipCornerRadius,
-                    style: .continuous
-                )
-                .stroke(ToasttyDesignTokens.chipBorder, lineWidth: 1)
-            }
-    }
-
-    private var statusLabel: some View {
-        ToasttySessionStatusLabel(
-            bucket: conversation.state.bucket,
-            freshness: freshness
-        )
-    }
-
-    private var statusPresentation: ToasttySessionStatusPresentation {
-        ToasttySessionStatusPresentation(
-            bucket: conversation.state.bucket,
-            freshness: freshness
-        )
-    }
-
-    private var activityDestination: some View {
-        Image(systemName: "chevron.right")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(ToasttyDesignTokens.mutedText)
-            .accessibilityHidden(true)
-    }
-
-    private var activityBody: some View {
-        Text(conversation.lastActivity)
-            .font(bodyFont)
-            .foregroundStyle(bodyForegroundStyle)
-            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-            .truncationMode(.tail)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var bodyFont: Font {
-        conversation.state.bucket == .working ? .subheadline.italic() : .subheadline
-    }
-
-    private var bodyForegroundStyle: Color {
-        conversation.state.bucket == .working
-            ? ToasttyDesignTokens.secondaryText
-            : ToasttyDesignTokens.primaryText
-    }
-
-    private var metadata: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { _ in
-            let label = trailingMetadataLabel
-            if !label.isEmpty {
-                Text(label)
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                    .truncationMode(.middle)
-                    .font(.caption2.monospaced())
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private var workspaceLabel: String? {
-        guard showsWorkspace else { return nil }
-        let title = conversation.workspaceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? nil : title
-    }
-
-    private var trailingMetadataLabel: String {
-        [
-            conversation.abbreviatedCWD,
-            conversation.agent.displayName,
-            conversation.displayAge,
-        ]
-        .compactMap { value in
-            guard let value, value.isEmpty == false else { return nil }
-            return value
-        }
-        .joined(separator: " · ")
-    }
-
-    // Tint strength tracks urgency: needs-approval reads loudest, error next,
-    // and ready stays calm so finished sessions don't compete for attention.
-    private var cardBackground: Color {
-        switch conversation.state.bucket {
-        case .needsApproval:
-            ToasttyDesignTokens.color(for: .needsApproval).opacity(0.16)
-        case .error:
-            ToasttyDesignTokens.color(for: .error).opacity(0.14)
-        case .ready:
-            ToasttyDesignTokens.color(for: .ready).opacity(0.07)
-        case .working, .idle:
-            ToasttyDesignTokens.raisedSurface
-        }
-    }
-
-    private var cardBorder: Color {
-        switch conversation.state.bucket {
-        case .needsApproval:
-            ToasttyDesignTokens.color(for: .needsApproval).opacity(0.55)
-        case .error:
-            ToasttyDesignTokens.color(for: .error).opacity(0.50)
-        case .ready:
-            ToasttyDesignTokens.color(for: .ready).opacity(0.28)
-        case .working, .idle:
-            ToasttyDesignTokens.border
-        }
     }
 }

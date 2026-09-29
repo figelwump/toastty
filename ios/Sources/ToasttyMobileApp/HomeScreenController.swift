@@ -77,6 +77,17 @@ final class HomeScreenController {
             .first { $0.id == id }
     }
 
+    /// Sessions other than `conversationID` that want the user, for the
+    /// conversation screen's Next button. Approvals come first because they
+    /// block an agent, then errors, then unread finished turns; within a
+    /// status, Home's recency order applies.
+    func sessionsNeedingAttention(excluding conversationID: UUID) -> [MobileConversation] {
+        let others = snapshot.activitySessions.filter { $0.id != conversationID }
+        return [MobileSessionBucket.needsApproval, .error, .ready].flatMap { bucket in
+            others.filter { $0.state.bucket == bucket }
+        }
+    }
+
     var selectedConversation: MobileConversation? {
         selectedConversationID.flatMap(conversation(id:))
     }

@@ -121,8 +121,11 @@ struct ToasttyConversationScreen: View {
                     navigationBarHeader(conversation)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            // Next sits rightmost, with Scratchpad just inside it. Each shows
+            // only when it has somewhere to go.
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 scratchpadButton
+                nextSessionButton
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -155,6 +158,61 @@ struct ToasttyConversationScreen: View {
         }
     }
 
+    /// Tap opens the most urgent other session; touch and hold lists them
+    /// all. Opening one replaces this conversation, so Back still returns to
+    /// the list it came from.
+    @ViewBuilder
+    private var nextSessionButton: some View {
+        let queue = controller.sessionsNeedingAttention(excluding: conversationID)
+        if let first = queue.first {
+            Menu {
+                Section("Need you") {
+                    ForEach(queue) { conversation in
+                        Button {
+                            openNextSession(conversation)
+                        } label: {
+                            Text(ToasttySessionRowPresentation.title(for: conversation))
+                            Text(nextSessionSubtitle(conversation))
+                        }
+                        .accessibilityIdentifier("toastty-conversation-next-\(conversation.id.uuidString)")
+                    }
+                }
+            } label: {
+                HStack(spacing: 2) {
+                    Text("\(queue.count)")
+                        .monospacedDigit()
+                    Image(systemName: "chevron.forward")
+                        .imageScale(.small)
+                }
+                .font(.subheadline.weight(.bold))
+                // Last-known status while disconnected reads muted, like the
+                // rows it came from.
+                .foregroundStyle(controller.freshness == .live
+                    ? ToasttyDesignTokens.color(for: first.state.bucket)
+                    : ToasttyDesignTokens.mutedText)
+            } primaryAction: {
+                openNextSession(first)
+            }
+            .accessibilityLabel("Next session")
+            .accessibilityValue("\(queue.count) \(queue.count == 1 ? "needs" : "need") you")
+            .accessibilityHint(
+                "Opens \(ToasttySessionRowPresentation.title(for: first)). Touch and hold to choose another."
+            )
+            .accessibilityIdentifier("toastty-conversation-next")
+        }
+    }
+
+    private func nextSessionSubtitle(_ conversation: MobileConversation) -> String {
+        [conversation.workspaceTitle, conversation.state.bucket.rawValue]
+            .filter { $0.isEmpty == false }
+            .joined(separator: " · ")
+    }
+
+    private func openNextSession(_ conversation: MobileConversation) {
+        isComposerFocused = false
+        controller.open(conversation)
+    }
+
     private func openScratchpad(_ panel: ToasttySessionScratchpad) {
         guard selectedPreview == nil,
               let current = ToasttySessionScratchpads.panels(in: controller.snapshot, for: conversationID)
@@ -179,28 +237,36 @@ struct ToasttyConversationScreen: View {
                 .truncationMode(.middle)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("toastty-mobile-conversation-title")
-            HStack(spacing: 5) {
-                ToasttySessionStatusLabel(
-                    bucket: conversation.state.bucket,
-                    freshness: controller.freshness
-                )
-                .accessibilityIdentifier("toastty-mobile-conversation-status")
-                let metadata = headerMetadata(conversation)
-                if metadata.isEmpty == false {
-                    Text("·")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    Text(metadata)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+            // The trailing Scratchpad and Next buttons narrow the title area;
+            // the agent name goes first when the full line no longer fits.
+            ViewThatFits(in: .horizontal) {
+                headerStatusLine(conversation, metadata: headerMetadata(conversation))
+                headerStatusLine(conversation, metadata: conversation.workspaceTitle)
             }
         }
         // The inline navigation bar cannot grow with accessibility type
         // sizes, so cap the header scale to keep both lines legible.
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    }
+
+    private func headerStatusLine(_ conversation: MobileConversation, metadata: String) -> some View {
+        HStack(spacing: 5) {
+            ToasttySessionStatusLabel(
+                bucket: conversation.state.bucket,
+                freshness: controller.freshness
+            )
+            .accessibilityIdentifier("toastty-mobile-conversation-status")
+            if metadata.isEmpty == false {
+                Text("·")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                Text(metadata)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
     }
 
     private func headerMetadata(_ conversation: MobileConversation) -> String {
