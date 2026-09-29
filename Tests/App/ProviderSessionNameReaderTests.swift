@@ -110,7 +110,7 @@ final class ProviderSessionNameReaderTests: XCTestCase {
                 nativeSessionID: Self.claudeSessionID
             )
         )
-        // A name lands in a one-line row and a persisted record, so an
+        // A name lands in a single-line row title and a persisted record, so an
         // embedded control character counts as malformed, not as something to
         // sanitize into a plausible-looking name.
         XCTAssertNil(

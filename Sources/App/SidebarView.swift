@@ -578,8 +578,7 @@ struct SidebarView: View {
     private static let sessionStatusRailGap: CGFloat = 6
     /// The rail's second slot, under the status one, for a standing mark on the
     /// session: the later flag or the watch bell. Short enough that a two-line
-    /// row is still taller than the rail. An unnamed row with no controls is a
-    /// single line, so a flag there makes the row as tall as a two-line one.
+    /// row is still taller than the rail.
     private static let sessionStatusRailMarkerSlotHeight: CGFloat = 13
     private static let sessionStatusRailSlotSpacing: CGFloat = 2
     private static let sessionRailFlagFontSize: CGFloat = 9
@@ -589,7 +588,8 @@ struct SidebarView: View {
     /// Elapsed time sits among the accessories `ViewThatFits` measures, and its
     /// text changes every second. A floor wide enough for `00m 00s` keeps each
     /// candidate line's measured width constant, so a tick cannot re-measure
-    /// the row or flip a chip in and out at a width boundary.
+    /// the row or flip a chip in and out at a width boundary. Rows without a
+    /// waiting chip have one candidate and skip the floor.
     private static let sessionElapsedMinimumWidth: CGFloat = {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         return ceil((Self.sessionElapsedWidestTemplate as NSString)
@@ -1466,19 +1466,11 @@ struct SidebarView: View {
             effectiveScopedWorkspaceIDs: workspaceSessionStatus.effectiveScopedWorkspaceIDs,
             sessionName: workspaceSessionStatus.sessionName
         )
-        let rowShape = SidebarSessionPresentation.sessionRowShape(
+        let rowTitle = SidebarSessionPresentation.sessionRowTitle(
             sessionName: workspaceSessionStatus.sessionName,
-            summary: normalizedSessionDetail(status.detail),
             agentFallbackName: workspaceSessionStatus.agent.displayName
         )
-        // A row the provider has not named is one line, so the ⑂ chip waits
-        // for the name rather than taking a line of its own. The Subspaces
-        // group still lists what the session spawned.
-        let visibleSpawnerChip: SidebarSubspacePresentation.SpawnerChip? = if case .named = rowShape {
-            spawnerChip
-        } else {
-            nil
-        }
+        let rowSummary = normalizedSessionDetail(status.detail)
         // Rows no longer show the scope tag or the working directory; the
         // accessibility label keeps both so VoiceOver loses nothing.
         let accessibilityLabel = SidebarSessionPresentation.sessionAccessibilityLabel(
@@ -1530,7 +1522,8 @@ struct SidebarView: View {
             workspaceSessionStatus,
             status: status,
             projection: workspaceSessionStatus.projection,
-            rowShape: rowShape,
+            title: rowTitle,
+            summary: rowSummary,
             isLaterFlagged: isLaterFlagged,
             showsUnreadSessionAccent: showsUnreadSessionAccent,
             isActivePanel: isActivePanel,
@@ -1540,7 +1533,7 @@ struct SidebarView: View {
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
             parentSessionName: parentSessionName,
-            spawnerChip: visibleSpawnerChip,
+            spawnerChip: spawnerChip,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
             },
@@ -1600,7 +1593,7 @@ struct SidebarView: View {
                 action: {
                     toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
                 },
-                spawnerChip: visibleSpawnerChip,
+                spawnerChip: spawnerChip,
                 spawnerFilterAction: {
                     toggleSubspaceFilter(
                         parentWorkspaceID: workspace.id,
@@ -1727,7 +1720,8 @@ struct SidebarView: View {
         _ workspaceSessionStatus: WorkspaceSessionStatus,
         status: SessionStatus,
         projection: SessionStatusProjection,
-        rowShape: SidebarSessionPresentation.SessionRowShape,
+        title: String,
+        summary: String?,
         isLaterFlagged: Bool,
         showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
@@ -1784,33 +1778,15 @@ struct SidebarView: View {
             sessionStatusRail(railState, marker: railMarker)
 
             VStack(alignment: .leading, spacing: 1) {
-                switch rowShape {
-                case .named(let name, let summary):
-                    sessionRowStateLine(accessories) {
-                        Self.styledSessionNameText(name, isEmphasized: isEmphasized, isItalic: isItalic)
-                            .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                    }
-                    // Reserved even without a summary yet, so named rows keep
-                    // one height and the list does not reflow as summaries
-                    // arrive.
-                    sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
-                        sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
-                    }
-
-                case .summaryFirst(let summary):
-                    sessionRowStateLine(accessories) {
-                        Self.styledSessionPrimaryText(summary, isEmphasized: isEmphasized, isItalic: isItalic)
-                            .foregroundStyle(
-                                isResuming ? ToastyTheme.sessionResumingDetailText : ToastyTheme.sidebarSessionAgentText
-                            )
-                    }
-                    // The summary already heads the row, so a second line
-                    // exists only for the controls.
-                    if accessories.hasSummaryLineControls {
-                        sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
-                            Spacer(minLength: 0)
-                        }
-                    }
+                sessionRowStateLine(accessories) {
+                    Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
+                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                }
+                // Reserved even without a summary yet, so every row keeps one
+                // height and the list does not reflow as summaries or names
+                // arrive.
+                sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
+                    sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
                 }
             }
         }
@@ -1863,10 +1839,6 @@ struct SidebarView: View {
         var spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil
         var onToggleSpawnerFilter: () -> Void = {}
         var onHoverSpawnerChip: (Bool) -> Void = { _ in }
-
-        var hasSummaryLineControls: Bool {
-            parentTagLabel != nil || spawnerChip != nil || childCount > 0
-        }
     }
 
     /// A standing mark on the session, as opposed to its current status. The
@@ -1919,7 +1891,7 @@ struct SidebarView: View {
         .frame(width: Self.sessionStatusRailWidth, height: Self.sessionStatusRailMarkerSlotHeight)
     }
 
-    /// The name, or the summary standing in for it, then the row's state:
+    /// The name, or the agent's name standing in for it, then the row's state:
     /// the approval or error badge, the waiting chip, and elapsed time.
     private func sessionRowStateLine<Title: View>(
         _ accessories: SessionRowAccessoryModel,
@@ -1988,7 +1960,13 @@ struct SidebarView: View {
                         .monospacedDigit()
                         .lineLimit(1)
                         .fixedSize()
-                        .frame(minWidth: Self.sessionElapsedMinimumWidth, alignment: .trailing)
+                        // Only a row with a waiting chip gives `ViewThatFits`
+                        // two candidates to choose between; without one, the
+                        // floor would only take width from the title.
+                        .frame(
+                            minWidth: model.waitingChipLabel == nil ? nil : Self.sessionElapsedMinimumWidth,
+                            alignment: .trailing
+                        )
                 }
                 .accessibilityHidden(true)
             }
@@ -2002,7 +1980,7 @@ struct SidebarView: View {
     }
 
     /// The summary, then the parent tag and the subspace and sub-agent
-    /// controls. Both row shapes put their controls on this line.
+    /// controls.
     private func sessionRowSummaryLine<Summary: View>(
         _ model: SessionRowAccessoryModel,
         onToggleChildRows: @escaping () -> Void,
@@ -3994,16 +3972,6 @@ struct SidebarView: View {
     /// working rows set it italic.
     static func styledSessionNameText(_ text: String, isEmphasized: Bool, isItalic: Bool = false) -> Text {
         let base = Text(text).font(ToastyTheme.workspaceSessionNameFont(
-            weight: SidebarSessionPresentation.sessionNameFontWeight(isEmphasized: isEmphasized)
-        ))
-        return isItalic ? base.italic() : base
-    }
-
-    /// The summary heading a row the provider has not named yet. It reads as
-    /// the row's title, so it takes the title's weight rather than the
-    /// summary face.
-    static func styledSessionPrimaryText(_ text: String, isEmphasized: Bool, isItalic: Bool = false) -> Text {
-        let base = Text(SidebarSessionPresentation.sessionSummaryAttributedText(text)).font(ToastyTheme.workspaceSessionPrimaryFont(
             weight: SidebarSessionPresentation.sessionNameFontWeight(isEmphasized: isEmphasized)
         ))
         return isItalic ? base.italic() : base

@@ -201,11 +201,6 @@ enum ToastyTheme {
         Font.system(size: 11, weight: weight, design: .default)
     }
 
-    /// The summary promoted to the first line of an unnamed row.
-    static func workspaceSessionPrimaryFont(weight: Font.Weight) -> Font {
-        Font.system(size: 11.5, weight: weight, design: .default)
-    }
-
     static func sidebarWorkspaceNameNSFont(isSelected: Bool) -> NSFont {
         .systemFont(
             ofSize: sidebarWorkspaceNameFontSize,

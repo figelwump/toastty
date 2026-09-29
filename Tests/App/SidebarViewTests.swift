@@ -108,9 +108,9 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(leftClampedOrigin, CGPoint(x: 0, y: 394))
     }
 
-    /// State sits on the first line in both row shapes: beside the name, or
-    /// beside the summary heading a row the provider has not named. The tab
-    /// title no longer appears on the row; the hover card carries it.
+    /// State sits on the first line beside the title, whether that is the
+    /// session's name or the agent's name standing in for it. The tab title
+    /// no longer appears on the row; the hover card carries it.
     func testStatusBadgeSharesTheFirstLineWhetherOrNotTheRowHasAName() throws {
         for name in ["Decommission the staging host", nil] as [String?] {
             let harness = try makeSidebarHarness(
@@ -2347,9 +2347,10 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(harness.store.state.workspacesByID[ids.siblingID]?.focusedPanelID, orchestratorPanelID)
     }
 
-    /// An unnamed row is one line; its ⑂ chip would need a line to itself,
-    /// so the chip waits until the session has a name.
-    func testSpawnerChipWaitsForTheSessionToBeNamed() throws {
+    /// Every row is two lines whether or not the provider has named it, so an
+    /// unnamed spawner shows its ⑂ chip and naming a session does not change
+    /// the row's height.
+    func testNamedAndUnnamedRowsShareTwoLineHeightAndShowSpawnerChips() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentID = UUID()
         let namedPanelID = UUID()
@@ -2428,10 +2429,12 @@ final class SidebarViewTests: XCTestCase {
         harness.hostingView.layoutSubtreeIfNeeded()
 
         let textValues = renderedTextValues(in: harness.hostingView)
-        XCTAssertTrue(textValues.contains("2 subspaces"), "The named spawner keeps its chip: \(textValues)")
-        XCTAssertFalse(textValues.contains("1 subspace"), "The unnamed spawner should not show a chip yet: \(textValues)")
+        XCTAssertTrue(textValues.contains("2 subspaces"), "The named spawner shows its chip: \(textValues)")
+        XCTAssertTrue(textValues.contains("1 subspace"), "The unnamed spawner shows its chip: \(textValues)")
+        let namedRow = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "named-spawner")
         let unnamedRow = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "unnamed-spawner")
-        XCTAssertLessThan(unnamedRow.bounds.height, 30, "The unnamed row should stay one line")
+        XCTAssertGreaterThan(unnamedRow.bounds.height, 30, "The unnamed row should be two lines")
+        XCTAssertEqual(unnamedRow.bounds.height, namedRow.bounds.height, accuracy: 0.5)
     }
 
     private func semanticTextFrame(in rootView: NSView, prefix: String) throws -> CGRect {
