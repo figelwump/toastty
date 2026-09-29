@@ -2096,6 +2096,54 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testSelectingASubspaceHighlightsItsParentCard() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        let rootView = harness.hostingView
+
+        func select(_ workspaceID: UUID) {
+            harness.store.selectWorkspace(
+                windowID: harness.windowID,
+                workspaceID: workspaceID,
+                preferringUnreadSessionPanelIn: harness.sessionRuntimeStore
+            )
+            pumpMainRunLoop(duration: 0.6)
+            rootView.layoutSubtreeIfNeeded()
+        }
+
+        // The harness starts with the parent itself selected.
+        let parentSelectedEdge = try parentCardLeadingEdgePixels(in: rootView)
+
+        select(ids.approvalID)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.approvalID)
+        XCTAssertEqual(
+            try parentCardLeadingEdgePixels(in: rootView),
+            parentSelectedEdge,
+            "Selecting a subspace should highlight its parent card as if the parent were selected"
+        )
+        try writeSidebarEvidence(rootView, name: "sidebar-subspace-selected-parent-highlight")
+
+        select(ids.siblingID)
+        XCTAssertNotEqual(
+            try parentCardLeadingEdgePixels(in: rootView),
+            parentSelectedEdge,
+            "The parent card should not look selected while another workspace is"
+        )
+    }
+
+    /// Raw pixels across the leading 20 pt of the `emptyos-computer` card,
+    /// level with its title, where the selection bar and fill are drawn.
+    private func parentCardLeadingEdgePixels(in rootView: NSView) throws -> [UInt8] {
+        let titleFrame = try semanticTextFrame(in: rootView, prefix: "emptyos-computer")
+        let bitmap = try renderedBitmap(for: rootView)
+        let scale = CGFloat(bitmap.pixelsWide) / rootView.bounds.width
+        let yPoints = rootView.isFlipped ? titleFrame.midY : rootView.bounds.height - titleFrame.midY
+        let row = Int(yPoints * scale)
+        let bytesPerPixel = max(1, bitmap.bitsPerPixel / 8)
+        let data = try XCTUnwrap(bitmap.bitmapData)
+        let rowStart = row * bitmap.bytesPerRow
+        return Array(UnsafeBufferPointer(start: data + rowStart, count: Int(20 * scale) * bytesPerPixel))
+    }
+
     func testDoneCheckboxSinksASubspaceUntilItsAgentStartsNewWork() throws {
         let (harness, ids) = try makeSubspacesHarness()
         let rootView = harness.hostingView

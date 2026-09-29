@@ -697,6 +697,14 @@ struct SidebarView: View {
         store.selectedWorkspaceID(in: windowID)
     }
 
+    /// A subspace renders inside its parent's card, so selecting it highlights
+    /// that card the same way focusing one of the card's own sessions does.
+    private func workspaceCardContainsSelection(_ workspaceID: UUID) -> Bool {
+        guard let selectedWorkspaceID else { return false }
+        return selectedWorkspaceID == workspaceID
+            || store.state.workspacesByID[selectedWorkspaceID]?.parentWorkspaceID == workspaceID
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ScrollViewReader { proxy in
@@ -713,7 +721,7 @@ struct SidebarView: View {
                                         workspaceID: workspaceID,
                                         workspace: workspace,
                                         shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
-                                        isSelected: selectedWorkspaceID == workspaceID,
+                                        isSelected: workspaceCardContainsSelection(workspaceID),
                                         index: index + 1,
                                         orderedWorkspaceIDs: topLevelWorkspaceIDs
                                     )
