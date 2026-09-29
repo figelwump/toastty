@@ -2629,8 +2629,10 @@ extension AgentLaunchInstrumentation {
             return [:]
         }
 
+        // Cmd+C needs Codex's enhanced keyboard protocol. Set an explicit value
+        // so children of older managed sessions do not inherit the old disable.
         return [
-            "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT": "1",
+            "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT": "0",
         ]
     }
 

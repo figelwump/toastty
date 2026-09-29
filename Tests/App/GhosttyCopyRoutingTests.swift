@@ -16,6 +16,19 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let inputFile = directory.appendingPathComponent("input")
         let script = directory.appendingPathComponent("fixture.py")
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: ["codex"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "copy-test-\(UUID().uuidString)",
+            workingDirectory: directory.path,
+            fileManager: .default
+        )
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? FileManager.default.removeItem(at: artifacts.directoryURL)
+            }
+        }
         // Match the keyboard and mouse protocols used by fullscreen TUIs. Retain
         // every received byte so duplicate dispatch and accidental Ctrl+C are visible.
         try """
@@ -25,7 +38,10 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
         try:
             tty.setraw(0)
             output.write_bytes(b'')
-            os.write(1, b'\u{1b}[2J\u{1b}[HCopy routing fixture\u{1b}[>5u\u{1b}[?1000h\u{1b}[?1006h')
+            os.write(1, b'\u{1b}[2J\u{1b}[HCopy routing fixture')
+            if os.environ.get('CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT') != '1':
+                os.write(1, b'\u{1b}[>5u')
+            os.write(1, b'\u{1b}[?1000h\u{1b}[?1006h')
             while select.select([0], [], [], 60)[0]:
                 data = os.read(0, 4096)
                 if not data: break
@@ -43,6 +59,7 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
         let created = try XCTUnwrap(manager.makeSurface(
             hostView: host, workingDirectory: directory.path, fontPoints: 12,
             launchConfiguration: TerminalSurfaceLaunchConfiguration(
+                environmentVariables: preparedLaunch.environment,
                 initialInput: "/usr/bin/python3 \(quotedScript)\n"
             )
         ))
@@ -62,8 +79,10 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
         )
         XCTAssertTrue(host.performKeyEquivalent(with: copy))
         let encodedCopy = Data("\u{1b}[99;9u".utf8)
-        XCTAssertTrue(waitUntil { (try? Data(contentsOf: inputFile)) == encodedCopy },
-                      "Cmd+C must reach the PTY once as Super+C, not Ctrl+C or plain text")
+        guard waitUntil({ (try? Data(contentsOf: inputFile)) == encodedCopy }) else {
+            XCTFail("Managed Codex launch must enable Super+C delivery, not Ctrl+C or plain text")
+            return
+        }
 
         // Shift-drag creates Ghostty's own selection despite mouse capture.
         let size = manager.surfaceSizeForTesting(created.surface)
@@ -107,6 +126,22 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
         XCTAssertTrue(waitUntil { (try? Data(contentsOf: inputFile))?.last == UInt8(ascii: "x") })
         XCTAssertEqual(try Data(contentsOf: inputFile), expectedInput,
                        "Copying a terminal selection must not also send Cmd+C to the program")
+
+        // Ctrl+C and Escape must remain distinct from the copy shortcut.
+        for (keyCode, modifiers, characters): (UInt16, NSEvent.ModifierFlags, String) in [
+            (8, [.control], "c"), (53, [], "\u{1b}"), (6, [], "z"),
+        ] {
+            host.keyDown(with: try makeKeyEvent(
+                type: .keyDown, keyCode: keyCode, modifierFlags: modifiers,
+                characters: characters, charactersIgnoringModifiers: characters
+            ))
+        }
+        XCTAssertTrue(waitUntil { (try? Data(contentsOf: inputFile))?.last == UInt8(ascii: "z") })
+        XCTAssertEqual(
+            try Data(contentsOf: inputFile).map { String(format: "%02x", $0) }.joined(),
+            (expectedInput + Data("\u{1b}[99;5u\u{1b}[27uz".utf8))
+                .map { String(format: "%02x", $0) }.joined()
+        )
     }
 
     private func waitUntil(_ condition: () -> Bool) -> Bool {

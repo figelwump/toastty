@@ -64,6 +64,7 @@ Use `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtim
 - First identify the target being debugged. Production/installed Toastty logs differ from worktree/Xcode/dev/smoke runtime-isolated logs.
 - For worktree, Xcode, dev, or smoke runs, resolve `instance.json` and read its `logFilePath`; do not default to production logs.
 - If the target is ambiguous, default to the current worktree's runtime-isolated instance before inspecting broad process lists.
+- For agent-specific terminal input bugs, validate the managed launch environment as well as AppKit/Ghostty routing. A fixture that enables terminal protocols itself can hide launch overrides that disable them in the real agent.
 
 ## Specialized References
 

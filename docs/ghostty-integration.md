@@ -190,9 +190,12 @@ explicit copy actions still target the system clipboard.
 With a terminal focused, `Cmd+C` goes through Ghostty's configured key binding.
 The default binding copies a terminal selection; without one, Ghostty forwards
 the key using the running program's keyboard protocol. This lets fullscreen
-programs such as Codex handle their own selections. With the default mouse
-settings, Shift-drag selects terminal text even while the program captures the
-mouse. The native Edit > Copy action still copies only terminal selections;
+programs such as Codex handle their own selections. Managed Codex launches must
+also allow enhanced keyboard reporting; Toastty sets
+`CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=0` for new launches. Restart existing
+Codex sessions after updating Toastty to pick up this environment change.
+With the default mouse settings, Shift-drag selects terminal text even while
+the program captures the mouse. The native Edit > Copy action still copies only terminal selections;
 Toastty cannot read a program's internal selection through that menu action.
 
 By default Toastty does not ask Ghostty to parse Toastty's own CLI args. To re-enable that behavior:
