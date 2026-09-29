@@ -115,7 +115,7 @@ enum ProviderSessionNameParser {
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
-    /// A name lands in a persisted record and a one-line row, so a value with
+    /// A name lands in a persisted record and a single-line row title, so a value with
     /// embedded newlines or control characters is treated as malformed rather
     /// than sanitized into something that looks deliberate.
     private static func normalized(_ value: String?) -> String? {

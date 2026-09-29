@@ -291,23 +291,11 @@ enum SidebarSessionPresentation {
         }
     }
 
-    /// Named sessions lead with their own name and push the summary to a second
-    /// line; sessions the provider has not named yet lead with the summary.
-    enum SessionRowShape: Equatable {
-        case named(name: String, summary: String?)
-        case summaryFirst(summary: String)
-    }
-
-    static func sessionRowShape(
-        sessionName: String?,
-        summary: String?,
-        agentFallbackName: String
-    ) -> SessionRowShape {
-        let normalizedSummary = normalizedSidebarHelperText(summary)
-        if let name = normalizedSidebarHelperText(sessionName) {
-            return .named(name: name, summary: normalizedSummary)
-        }
-        return .summaryFirst(summary: normalizedSummary ?? agentFallbackName)
+    /// Every row is two lines: this title, then the summary. Until the
+    /// provider names the session, the agent's name holds the title line, so
+    /// naming a session changes that text without moving the summary.
+    static func sessionRowTitle(sessionName: String?, agentFallbackName: String) -> String {
+        normalizedSidebarHelperText(sessionName) ?? agentFallbackName
     }
 
     /// Lowercase provider identity, as the hover card's agent pill shows it.

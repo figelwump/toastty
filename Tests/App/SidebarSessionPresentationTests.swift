@@ -707,57 +707,22 @@ final class SidebarSessionPresentationTests: XCTestCase {
         )
     }
 
-    func testSessionRowShapeLeadsWithNameAndFallsBackThroughSummaryToAgentName() {
+    func testSessionRowTitleIsTheNameOrTheAgentUntilTheSessionIsNamed() {
         XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowShape(
-                sessionName: "Sidebar row rebuild",
-                summary: "Reviewing changes",
-                agentFallbackName: "Codex"
-            ),
-            .named(name: "Sidebar row rebuild", summary: "Reviewing changes")
-        )
-        // A named session keeps its name on the first line even before the
-        // provider reports any summary.
-        XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowShape(
-                sessionName: "Sidebar row rebuild",
-                summary: nil,
-                agentFallbackName: "Codex"
-            ),
-            .named(name: "Sidebar row rebuild", summary: nil)
-        )
-        XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowShape(
-                sessionName: nil,
-                summary: "Reviewing changes",
-                agentFallbackName: "Codex"
-            ),
-            .summaryFirst(summary: "Reviewing changes")
-        )
-        XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowShape(
-                sessionName: nil,
-                summary: nil,
-                agentFallbackName: "Codex"
-            ),
-            .summaryFirst(summary: "Codex")
-        )
-        // Whitespace-only provider values count as absent in both slots.
-        XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowShape(
-                sessionName: "  \n ",
-                summary: "\t",
-                agentFallbackName: "Claude Code"
-            ),
-            .summaryFirst(summary: "Claude Code")
-        )
-        XCTAssertEqual(
-            SidebarSessionPresentation.sessionRowShape(
+            SidebarSessionPresentation.sessionRowTitle(
                 sessionName: " Sidebar row rebuild ",
-                summary: " Reviewing changes ",
                 agentFallbackName: "Codex"
             ),
-            .named(name: "Sidebar row rebuild", summary: "Reviewing changes")
+            "Sidebar row rebuild"
+        )
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowTitle(sessionName: nil, agentFallbackName: "Codex"),
+            "Codex"
+        )
+        // A whitespace-only provider name counts as no name.
+        XCTAssertEqual(
+            SidebarSessionPresentation.sessionRowTitle(sessionName: "  \n ", agentFallbackName: "Claude Code"),
+            "Claude Code"
         )
     }
 

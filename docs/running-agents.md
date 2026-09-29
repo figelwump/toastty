@@ -641,13 +641,13 @@ when idle. The slot underneath carries a standing mark — a violet flag when th
 session is flagged for later, or a bell when the row is a watched process. The
 two marks are mutually exclusive, because a watched process cannot be flagged.
 
-A named session reads as two lines. The first is the name, then the row's
+Every session row reads as two lines. The first is the name, then the row's
 state: an approval or error badge, a waiting chip, and the elapsed time. The
 second is the latest summary, then a parent label and the subspace and
-sub-agent controls. A session the provider has not named yet puts its summary
-in the name's place, and has a second line only when it has those controls. In
-a narrow sidebar the waiting chip drops out before the name gets too short, and
-the row's tooltip names it instead.
+sub-agent controls. Until the provider names a session, the agent's name (such
+as "Claude Code" or "Codex") stands in as the title, so naming a session changes
+only the first line's text. In a narrow sidebar the waiting chip drops out
+before the name gets too short, and the row's tooltip names it instead.
 
 A row that wants you — an unread reply, an approval request, or an error — gets
 a faint fill in its status color and a heavier name. Approval and error keep a
@@ -664,8 +664,8 @@ approval, then resumes from the real start, and the recorded duration of the
 previous turn covers the pause too. Turn timing is runtime-only, so a restored
 session does not resume a stale count.
 
-Rows do not show the working directory, a workspace-scope chip, the tab title,
-or the provider. Hovering a row opens a card beside the sidebar, level with the
+Rows do not show the working directory, a workspace-scope chip, or the tab
+title, and show the provider only as an unnamed session's title. Hovering a row opens a card beside the sidebar, level with the
 row, carrying up to two lines of the summary, the full path, the scoped
 workspaces, status, when the session last changed, the current or previous turn
 duration, the sub-agent count, the parent session, and the flag state, and ending
@@ -714,7 +714,7 @@ Like `CODEX_HOME`, Cursor's directory overrides are read from Toastty's own
 environment, not the launched shell's.
 
 Sub-agent threads, guardian-review threads, and `codex exec` runs are never
-named by their provider and use the unnamed row shape. A name supplied at launch
+named by their provider and keep the agent's name as their title. A name supplied at launch
 or by automation still wins over the generated one.
 
 ### Sidebar session order
