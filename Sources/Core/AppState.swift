@@ -481,7 +481,8 @@ public struct AppState: Codable, Equatable, Sendable {
         fromWindowID: UUID,
         workspaceID: UUID,
         tabID: UUID,
-        focusedPanelID: UUID?
+        focusedPanelID: UUID?,
+        isEligible: (_ workspace: WorkspaceState, _ panelID: UUID) -> Bool = { _, _ in true }
     ) -> PanelNavigationTarget? {
         guard let currentWindow = window(id: fromWindowID),
               currentWindow.workspaceIDs.contains(workspaceID),
@@ -497,7 +498,7 @@ public struct AppState: Codable, Equatable, Sendable {
             startingTabID: tabID,
             focusedPanelID: focusedPanelID,
             matches: { tab, panelID in
-                tab.unreadPanelIDs.contains(panelID)
+                tab.unreadPanelIDs.contains(panelID) && isEligible(currentWorkspace, panelID)
             }
         ) {
             return target
@@ -509,7 +510,7 @@ public struct AppState: Codable, Equatable, Sendable {
                 in: workspace,
                 windowID: fromWindowID,
                 matches: { tab, panelID in
-                    tab.unreadPanelIDs.contains(panelID)
+                    tab.unreadPanelIDs.contains(panelID) && isEligible(workspace, panelID)
                 }
             ) {
                 return target
@@ -529,7 +530,7 @@ public struct AppState: Codable, Equatable, Sendable {
                     in: workspace,
                     windowID: windowID,
                     matches: { tab, panelID in
-                        tab.unreadPanelIDs.contains(panelID)
+                        tab.unreadPanelIDs.contains(panelID) && isEligible(workspace, panelID)
                     }
                 ) {
                     return target

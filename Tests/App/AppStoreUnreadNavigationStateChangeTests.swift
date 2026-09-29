@@ -4,6 +4,146 @@ import XCTest
 
 @MainActor
 final class AppStoreUnreadNavigationStateChangeTests: AppStoreCommandTestCase {
+    func testJumpFromDoneSubspaceSkipsItsQuietUnreadPanelAcrossWindows() throws {
+        let parentTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [])
+        let doneTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [1])
+        let otherTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [1])
+        let parent = makeUnreadCommandWorkspace(title: "Parent", tabs: [parentTab], selectedTabIndex: 0)
+        let done = makeUnreadCommandWorkspace(title: "Done", tabs: [doneTab], selectedTabIndex: 0)
+        let other = makeUnreadCommandWorkspace(title: "Other", tabs: [otherTab], selectedTabIndex: 0)
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: firstWindowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                        workspaceIDs: [parent.id, done.id],
+                        selectedWorkspaceID: done.id
+                    ),
+                    WindowState(
+                        id: secondWindowID,
+                        frame: CGRectCodable(x: 40, y: 40, width: 800, height: 600),
+                        workspaceIDs: [other.id],
+                        selectedWorkspaceID: other.id
+                    ),
+                ],
+                workspacesByID: [parent.id: parent, done.id: done, other.id: other],
+                selectedWindowID: firstWindowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        XCTAssertTrue(store.send(.setWorkspaceParent(
+            workspaceID: done.id,
+            parentWorkspaceID: parent.id,
+            spawningSessionID: nil
+        )))
+        XCTAssertTrue(store.send(.setWorkspaceDone(workspaceID: done.id, doneAt: Date())))
+
+        XCTAssertTrue(store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: firstWindowID,
+            sessionRuntimeStore: nil
+        ))
+        XCTAssertEqual(store.state.selectedWindowID, secondWindowID)
+        XCTAssertEqual(store.state.workspacesByID[other.id]?.focusedPanelID, otherTab.panelIDs[1])
+        XCTAssertTrue(store.state.workspacesByID[done.id]?.unreadPanelIDs.contains(doneTab.panelIDs[1]) == true)
+    }
+
+    func testJumpSkipsUnreadReadySessionInDoneSubspaceButReachesItsError() throws {
+        let parentTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [])
+        let doneTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [])
+        let otherTab = makeUnreadCommandTab(focusedPanelIndex: 0, unreadPanelIndices: [])
+        let parent = makeUnreadCommandWorkspace(title: "Parent", tabs: [parentTab], selectedTabIndex: 0)
+        let done = makeUnreadCommandWorkspace(title: "Done", tabs: [doneTab], selectedTabIndex: 0)
+        let other = makeUnreadCommandWorkspace(title: "Other", tabs: [otherTab], selectedTabIndex: 0)
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [parent.id, done.id, other.id],
+                    selectedWorkspaceID: parent.id
+                )],
+                workspacesByID: [parent.id: parent, done.id: done, other.id: other],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_300)
+        let donePanelID = doneTab.panelIDs[1]
+        let otherPanelID = otherTab.panelIDs[1]
+
+        XCTAssertTrue(store.send(.setWorkspaceParent(
+            workspaceID: done.id,
+            parentWorkspaceID: parent.id,
+            spawningSessionID: nil
+        )))
+        sessionStore.startSession(
+            sessionID: "done-agent",
+            agent: .codex,
+            panelID: donePanelID,
+            windowID: windowID,
+            workspaceID: done.id,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "done-agent",
+            status: SessionStatus(kind: .working, summary: "Finishing", detail: nil),
+            at: startedAt.addingTimeInterval(1)
+        )
+        XCTAssertTrue(store.send(.setWorkspaceDone(workspaceID: done.id, doneAt: startedAt.addingTimeInterval(2))))
+        sessionStore.updateStatus(
+            sessionID: "done-agent",
+            status: SessionStatus(kind: .ready, summary: "Finished", detail: nil),
+            at: startedAt.addingTimeInterval(3)
+        )
+        XCTAssertTrue(store.state.workspacesByID[done.id]?.unreadPanelIDs.contains(donePanelID) == true)
+        XCTAssertFalse(store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID,
+            sessionRuntimeStore: sessionStore
+        ))
+        XCTAssertFalse(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+            state: store.state,
+            commandSelection: store.commandSelection(preferredWindowID: windowID),
+            activePanelIDs: []
+        ))
+        XCTAssertTrue(store.send(.recordDesktopNotification(workspaceID: other.id, panelID: otherPanelID)))
+
+        XCTAssertTrue(store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID,
+            sessionRuntimeStore: sessionStore
+        ))
+        XCTAssertEqual(store.state.selectedWorkspaceID(in: windowID), other.id)
+        XCTAssertEqual(store.state.workspacesByID[other.id]?.focusedPanelID, otherPanelID)
+        XCTAssertTrue(store.state.workspacesByID[done.id]?.unreadPanelIDs.contains(donePanelID) == true)
+
+        sessionStore.updateStatus(
+            sessionID: "done-agent",
+            status: SessionStatus(kind: .error, summary: "Failed", detail: nil),
+            at: startedAt.addingTimeInterval(4)
+        )
+        XCTAssertNotNil(store.state.workspacesByID[done.id]?.doneAt)
+        XCTAssertTrue(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+            state: store.state,
+            commandSelection: store.commandSelection(preferredWindowID: windowID),
+            activePanelIDs: [donePanelID],
+            unreadPriorityPanelIDs: [donePanelID]
+        ))
+        XCTAssertTrue(store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID,
+            sessionRuntimeStore: sessionStore
+        ))
+        XCTAssertEqual(store.state.selectedWorkspaceID(in: windowID), done.id)
+        XCTAssertEqual(store.state.workspacesByID[done.id]?.focusedPanelID, donePanelID)
+        XCTAssertNotNil(store.state.workspacesByID[done.id]?.doneAt)
+    }
+
     func testFocusNextUnreadOrActivePanelFromCommandKeepsFreshErrorUnreadPreemptionDuringActiveCycle() throws {
         let currentTab = makeUnreadCommandTab(
             focusedPanelIndex: 0,

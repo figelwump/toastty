@@ -1906,11 +1906,18 @@ final class AppStore: ObservableObject {
             return nil
         }
 
+        let livePanelIDs = sessionRuntimeStore?.activePanelIDs(
+            matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
+                .union(Self.nextUnreadOrWorkingFallbackStatusKinds)
+        ) ?? []
         if let unreadTarget = state.nextUnreadPanel(
             fromWindowID: selection.windowID,
             workspaceID: selection.workspace.id,
             tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID
+            focusedPanelID: selection.workspace.focusedPanelID,
+            isEligible: { workspace, panelID in
+                workspace.doneAt == nil || livePanelIDs.contains(panelID)
+            }
         ) {
             if updatingCycleState {
                 nextActiveCycleState = nil

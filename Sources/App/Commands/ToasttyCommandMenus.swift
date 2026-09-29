@@ -230,14 +230,15 @@ struct ToasttyCommandMenus: Commands {
     }
 
     private var canFocusNextUnreadOrActivePanel: Bool {
-        Self.canFocusNextUnreadOrActivePanel(
+        let livePanelIDs = sessionRuntimeStore.activePanelIDs(
+            matching: AppStore.nextUnreadOrActionRequiredFallbackStatusKinds
+                .union(AppStore.nextUnreadOrWorkingFallbackStatusKinds)
+        )
+        return Self.canFocusNextUnreadOrActivePanel(
             state: store.state,
             commandSelection: commandSelection,
-            activePanelIDs: sessionRuntimeStore.activePanelIDs(
-                matching: AppStore.nextUnreadOrActionRequiredFallbackStatusKinds
-                    .union(AppStore.nextUnreadOrWorkingFallbackStatusKinds)
-            )
-            .union(sessionRuntimeStore.activeLaterPanelIDs())
+            activePanelIDs: livePanelIDs.union(sessionRuntimeStore.activeLaterPanelIDs()),
+            unreadPriorityPanelIDs: livePanelIDs
         )
     }
 
@@ -1071,7 +1072,8 @@ struct ToasttyCommandMenus: Commands {
     static func canFocusNextUnreadOrActivePanel(
         state: AppState,
         commandSelection: WindowCommandSelection?,
-        activePanelIDs: Set<UUID>
+        activePanelIDs: Set<UUID>,
+        unreadPriorityPanelIDs: Set<UUID> = []
     ) -> Bool {
         guard let selection = commandSelection,
               let selectedTabID = selection.workspace.resolvedSelectedTabID else {
@@ -1082,7 +1084,10 @@ struct ToasttyCommandMenus: Commands {
             fromWindowID: selection.windowID,
             workspaceID: selection.workspace.id,
             tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID
+            focusedPanelID: selection.workspace.focusedPanelID,
+            isEligible: { workspace, panelID in
+                workspace.doneAt == nil || unreadPriorityPanelIDs.contains(panelID)
+            }
         ) != nil {
             return true
         }
