@@ -7,6 +7,115 @@ import Testing
 
 @MainActor
 struct SessionRuntimeStoreTests {
+    /// Both providers save their generated title before the first turn ends.
+    /// The row should update while the status remains working.
+    @Test(arguments: [AgentKind.claude, .codex])
+    func generatedNameAppearsDuringFirstTurn(agent: AgentKind) async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("provider-name-first-turn-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let sessionID = "sess-first-turn"
+        let nativeSessionID = "native-first-turn"
+        let panelID = UUID()
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+        let transcript = directory.appendingPathComponent("session.jsonl")
+        let index = directory.appendingPathComponent("session_index.jsonl")
+        try "".write(to: transcript, atomically: true, encoding: .utf8)
+        try "".write(to: index, atomically: true, encoding: .utf8)
+        let store = SessionRuntimeStore(
+            providerSessionNameEnvironment: ["CODEX_HOME": directory.path],
+            providerSessionNamePollIntervalNanoseconds: 20_000_000
+        )
+        store.startSession(
+            sessionID: sessionID, agent: agent, panelID: panelID,
+            windowID: UUID(), workspaceID: UUID(), cwd: "/repo", repoRoot: "/repo", at: date
+        )
+        #expect(store.confirmNativeSessionBinding(
+            managedSessionID: sessionID,
+            panelID: panelID,
+            record: ManagedAgentResumeRecord(
+                agent: agent, nativeSessionID: nativeSessionID,
+                sessionFilePath: transcript.path, cwd: "/repo", capturedAt: date
+            )
+        ))
+        store.updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: date.addingTimeInterval(1)
+        )
+        // Let the initial status-triggered read finish before the provider
+        // writes its title, so this exercises the retry during the turn.
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName == nil)
+
+        let title = "First turn title"
+        let line = if agent == .claude {
+            #"{"type":"ai-title","aiTitle":"\#(title)","sessionId":"\#(nativeSessionID)"}"#
+        } else {
+            #"{"id":"\#(nativeSessionID)","thread_name":"\#(title)"}"#
+        }
+        try (line + "\n").write(
+            to: agent == .claude ? transcript : index,
+            atomically: true,
+            encoding: .utf8
+        )
+        try await waitForProviderSessionName(title, sessionID: sessionID, store: store)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status?.kind == .working)
+    }
+
+    @Test
+    func firstTurnNamePollingStopsOnRebindAndSessionStop() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("provider-name-poll-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SessionRuntimeStore(providerSessionNamePollIntervalNanoseconds: 20_000_000)
+        let sessionID = "sess-poll-lifecycle"
+        let panelID = UUID()
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+
+        func bind(_ nativeSessionID: String) throws -> URL {
+            let transcript = directory.appendingPathComponent("\(nativeSessionID).jsonl")
+            try "".write(to: transcript, atomically: true, encoding: .utf8)
+            #expect(store.confirmNativeSessionBinding(
+                managedSessionID: sessionID,
+                panelID: panelID,
+                record: ManagedAgentResumeRecord(
+                    agent: .claude, nativeSessionID: nativeSessionID,
+                    sessionFilePath: transcript.path, cwd: "/repo", capturedAt: date
+                )
+            ))
+            return transcript
+        }
+        func writeTitle(_ title: String, for nativeSessionID: String, to transcript: URL) throws {
+            try (#"{"type":"ai-title","aiTitle":"\#(title)","sessionId":"\#(nativeSessionID)"}"# + "\n")
+                .write(to: transcript, atomically: true, encoding: .utf8)
+        }
+
+        store.startSession(
+            sessionID: sessionID, agent: .claude, panelID: panelID,
+            windowID: UUID(), workspaceID: UUID(), cwd: "/repo", repoRoot: "/repo", at: date
+        )
+        let first = try bind("first")
+        store.updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .working, summary: "Working"), at: date.addingTimeInterval(1)
+        )
+        let second = try bind("second")
+        try writeTitle("Old conversation", for: "first", to: first)
+        try writeTitle("New conversation", for: "second", to: second)
+        try await waitForProviderSessionName("New conversation", sessionID: sessionID, store: store)
+
+        let third = try bind("third")
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName == nil)
+        store.stopSession(sessionID: sessionID, at: date.addingTimeInterval(2))
+        try writeTitle("After stop", for: "third", to: third)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName == nil)
+    }
+
     /// `/clear` rebinds a live panel to a new provider conversation while
     /// keeping the same managed session and the same `bindingID`, so the name
     /// read from the old transcript must not survive onto the new one.

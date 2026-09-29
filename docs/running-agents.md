@@ -687,6 +687,10 @@ clients, including the iOS app, title the conversation with the same name.
   rather than carried over.
 - Codex names interactive threads in `$CODEX_HOME/session_index.jsonl` (default
   `~/.codex`). Toastty reads the newest record for the bound thread.
+- For unnamed Claude Code and Codex conversations, Toastty checks for the
+  generated name every two seconds during the first active turn, for up to
+  30 seconds. The checks stop when a name appears or the turn ends. Later
+  turn boundaries still pick up title changes.
 - Cursor writes a `title` into `chats/<workspace>/<conversation>/meta.json`
   under `$CURSOR_CONFIG_DIR`, `$XDG_CONFIG_HOME/cursor`, or `~/.cursor`, in
   Cursor's own order of precedence. The title lands shortly after the first
