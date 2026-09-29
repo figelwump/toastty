@@ -122,14 +122,20 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         attach(app, name: "normal-back-home")
     }
 
-    func testPanelOnlyWorkspaceRemainsAvailableUnderActiveFilter() {
+    func testPanelOnlyWorkspaceIsReachableUnderAllButHiddenUnderActive() {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launch()
         let home = app.descendants(matching: .any)["toastty-mobile-home"]
         XCTAssertTrue(home.waitForExistence(timeout: 10))
-        app.segmentedControls["toastty-mobile-workspace-session-filter"].buttons["Active"].tap()
+        let filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
         let workspace = app.buttons["toastty-mobile-workspace-A1000000-0000-0000-0000-000000000004"]
+        // Active lists only workspaces with something happening, so a
+        // workspace with open panels and no sessions is reached through All.
+        filter.buttons["Active"].tap()
+        for _ in 0..<6 where !workspace.exists { home.swipeUp() }
+        XCTAssertFalse(workspace.exists)
+        filter.buttons["All"].tap()
         for _ in 0..<12 where !workspace.isHittable { home.swipeUp() }
         XCTAssertTrue(workspace.isHittable)
         workspace.tap()

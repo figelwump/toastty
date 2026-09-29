@@ -18,7 +18,7 @@ final class ToasttyWorkspaceSessionFilterTests: XCTestCase {
         )
     }
 
-    func testActiveExcludesIdleSessionsAndEmptyWorkspaceGroups() throws {
+    func testActiveExcludesIdleSessionsAndWorkspacesWithNothingActive() throws {
         let activeConversation = try XCTUnwrap(
             ToasttyMobileFixture.home.activitySessions.first { $0.state.bucket != .idle }
         )
@@ -30,18 +30,33 @@ final class ToasttyWorkspaceSessionFilterTests: XCTestCase {
             title: activeConversation.workspaceTitle,
             conversations: [idleConversation, activeConversation]
         )
+        // Open panels no longer keep an idle workspace under Active.
         let idleWorkspace = MobileWorkspace(
             id: idleConversation.workspaceID,
             title: idleConversation.workspaceTitle,
-            conversations: [idleConversation]
+            conversations: [idleConversation],
+            panels: ToasttyMobileFixture.previewPanels
         )
+        let panelOnlyWorkspace = MobileWorkspace(
+            id: UUID(),
+            title: "Panels",
+            conversations: [],
+            panels: ToasttyMobileFixture.previewPanels
+        )
+        let workspaces = [activeWorkspace, idleWorkspace, panelOnlyWorkspace]
 
-        let visible = ToasttyWorkspaceSessionFilter.active.workspaces(
-            from: [activeWorkspace, idleWorkspace]
-        )
+        let visible = ToasttyWorkspaceSessionFilter.active.workspaces(from: workspaces)
 
         XCTAssertEqual(visible.map(\.id), [activeWorkspace.id])
         XCTAssertEqual(visible.first?.conversations.map(\.id), [activeConversation.id])
+        XCTAssertEqual(ToasttyWorkspaceSessionFilter.active.hiddenSessionCount(in: workspaces), 2)
+        XCTAssertEqual(ToasttyWorkspaceSessionFilter.hiddenSessionsLabel(count: 2), "2 idle sessions hidden")
+        XCTAssertEqual(ToasttyWorkspaceSessionFilter.hiddenSessionsLabel(count: 1), "1 idle session hidden")
+
+        // All still lists every session and keeps panels reachable.
+        let all = ToasttyWorkspaceSessionFilter.all.workspaces(from: workspaces)
+        XCTAssertEqual(all.map(\.id), workspaces.map(\.id))
+        XCTAssertEqual(ToasttyWorkspaceSessionFilter.all.hiddenSessionCount(in: workspaces), 0)
     }
 
     func testAllIncludesIdleSessionsButStillOmitsEmptyWorkspaceGroups() throws {
@@ -129,6 +144,28 @@ final class HomeScreenControllerTests: XCTestCase {
         controller.dismissConversation()
         XCTAssertFalse(controller.openConversation(id: UUID()))
         XCTAssertNil(controller.selectedConversationID)
+    }
+
+    func testNextSessionQueueListsApprovalThenErrorThenReadyAndSkipsTheCurrentSession() {
+        let controller = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .live
+        )
+        func ids(_ numbers: [Int]) -> [UUID] {
+            numbers.map { UUID(uuidString: String(format: "B1000000-0000-0000-0000-%012d", $0))! }
+        }
+
+        // Fixture: 1 needs approval, 4 has an error, 7 (9m), 3 (18m) and
+        // 8 (3h) are ready, 2 and 5 are working, 6 is idle.
+        XCTAssertEqual(
+            controller.sessionsNeedingAttention(excluding: ids([7])[0]).map(\.id),
+            ids([1, 4, 3, 8])
+        )
+        XCTAssertEqual(
+            controller.sessionsNeedingAttention(excluding: ids([1])[0]).map(\.id),
+            ids([4, 7, 3, 8])
+        )
     }
 
     func testConnectionNoticeClassifiesTransportFailures() {

@@ -163,6 +163,13 @@ Mac. Other tool permission requests remain read-only on the phone. Existing
 Claude sessions must be relaunched or resumed through the updated Toastty to
 install the answer hook.
 
+Session rows follow the desktop sidebar: a status mark, the session name, and
+its latest summary. Touch and hold a row to see its path, last update, model,
+workspace, desktop tab, and agent, or to copy its path. In a conversation, the
+**Next** button beside the Scratchpad button opens another session that needs
+you: approvals first, then errors, then unread results. Touch and hold it to
+choose from the list. It is hidden when no other session needs you.
+
 Toastty Mobile reconnects automatically after transient network loss and
 reloads from Toastty's current snapshots when it detects an event gap. Keep
 Toastty running and Remote Access enabled; Tailscale Serve alone cannot reach a
@@ -176,9 +183,11 @@ workspace, including tabs that are not selected and panels in a hidden
 sidebar. Each row identifies its owning desktop tab. Panels are ordered by
 their latest known opening or update time, with a relative age beside the
 title. The list initially shows four panels; use **Show more** to see the rest
-and **Show less** to collapse it. Workspaces containing
-open panels remain available even when they have no sessions or the session
-filter hides all their sessions. Closed panels are not a document history.
+and **Show less** to collapse it. Under **All**, workspaces containing open
+panels remain available even when they have no sessions. **Active** lists only
+workspaces with a working, ready, needs-approval, or error session, and ends
+with a count of the idle sessions it hides. Closed panels are not a document
+history.
 
 Tap a panel to open a full page, then use Back to return to the workspace.
 Local file links in conversations open preview sheets. Explicit line references reveal the

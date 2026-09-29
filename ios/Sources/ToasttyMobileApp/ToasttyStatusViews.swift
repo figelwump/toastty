@@ -71,7 +71,7 @@ struct ToasttySessionStatusPresentation: Equatable, Sendable {
 
     func accessibilitySummary(for conversation: MobileConversation) -> String {
         let facts: [String?] = [
-            conversation.title,
+            ToasttySessionRowPresentation.title(for: conversation),
             isVisible ? accessibilityLabel : conversation.state.accessibilityLabel,
             conversation.lastActivity,
             conversation.workspaceTitle,

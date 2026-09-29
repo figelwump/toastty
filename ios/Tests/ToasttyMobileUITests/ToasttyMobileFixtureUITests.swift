@@ -14,6 +14,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     private let idleResearchConversationID = "B1000000-0000-0000-0000-000000000006"
     private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
     private let openPromptConversationID = "B1000000-0000-0000-0000-000000000007"
+    private let panelOnlyWorkspaceID = "A1000000-0000-0000-0000-000000000004"
 
     private struct TranscriptScrollTraceSample: Decodable {
         let elapsed: Double
@@ -437,6 +438,93 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"].exists)
 
         filter.buttons["All"].tap()
+    }
+
+    func testActiveHidesWorkspacesWithNothingActiveAndCountsHiddenSessions() {
+        let app = launchFixtureApp()
+        let filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 10))
+        XCTAssertTrue(filter.buttons["All"].isSelected)
+        let hiddenFooter = app.staticTexts["toastty-mobile-hidden-sessions"]
+        let panelOnlyHeader = app.buttons["toastty-mobile-workspace-\(panelOnlyWorkspaceID)"]
+        XCTAssertTrue(scrollHomeTo(panelOnlyHeader, in: app))
+        XCTAssertFalse(hiddenFooter.exists)
+        attachScreenshot(named: "fixture-home-all-rows", of: app)
+
+        filter.buttons["Active"].tap()
+        XCTAssertTrue(panelOnlyHeader.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(
+            app.buttons["toastty-mobile-grouped-card-\(idleResearchConversationID)"].exists
+        )
+        // The research workspace keeps its header for its working session.
+        XCTAssertTrue(scrollHomeTo(
+            app.buttons["toastty-mobile-grouped-card-\(activeResearchConversationID)"], in: app
+        ))
+        XCTAssertTrue(scrollHomeTo(hiddenFooter, in: app))
+        XCTAssertEqual(hiddenFooter.label, "1 idle session hidden")
+        attachScreenshot(named: "fixture-home-active-rows", of: app)
+
+        filter.buttons["All"].tap()
+    }
+
+    func testSessionRowLongPressShowsDetailCard() {
+        let app = launchFixtureApp()
+        let row = app.buttons["toastty-mobile-grouped-card-\(pendingInteractionID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.press(forDuration: 1.2)
+
+        // The preview's container identifier is not reliably exposed, but its
+        // menu and text are; context-menu previews expose text as generic
+        // elements rather than static texts.
+        XCTAssertTrue(app.buttons["Copy Path"].waitForExistence(timeout: 5))
+        for label in ["needs approval", "~/GiantThings/repos/toastty", "claude"] {
+            XCTAssertTrue(
+                app.descendants(matching: .any)
+                    .matching(NSPredicate(format: "label == %@", label)).firstMatch.exists,
+                "The detail card should show \(label)"
+            )
+        }
+        attachScreenshot(named: "fixture-session-detail-card", of: app)
+
+        app.buttons["Open"].tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["toastty-mobile-conversation-title"], "Mobile gateway design"))
+    }
+
+    func testNextButtonSitsBesideScratchpadAndOpensSessionsThatNeedYou() {
+        let app = launchFixtureApp()
+        let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.tap()
+
+        let title = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
+        let scratchpad = app.buttons["toastty-conversation-scratchpad"]
+        let next = app.buttons["toastty-conversation-next"]
+        XCTAssertTrue(scratchpad.waitForExistence(timeout: 5))
+        XCTAssertTrue(next.exists)
+        XCTAssertTrue(scratchpad.isHittable)
+        XCTAssertTrue(next.isHittable)
+        XCTAssertGreaterThanOrEqual(next.frame.minX, scratchpad.frame.maxX)
+        XCTAssertEqual(next.value as? String, "4 need you")
+        attachScreenshot(named: "fixture-conversation-next-and-scratchpad", of: app)
+
+        // Tap opens the most urgent session: the one waiting on approval.
+        next.tap()
+        XCTAssertTrue(waitForLabel(title, "Mobile gateway design"))
+
+        // Touch and hold lists the queue to choose from.
+        next.press(forDuration: 1.2)
+        let choice = app.buttons["toastty-conversation-next-\(openPromptConversationID)"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-conversation-next-menu", of: app)
+        choice.tap()
+        XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
+
+        // Next replaced the conversation instead of pushing, so Back
+        // returns straight to Home.
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 5))
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
     }
 
     func testFixtureHomeAtEveryAccessibilityContentSize() {
@@ -1776,6 +1864,18 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["toastty"].exists)
         XCTAssertTrue(context.exists)
         XCTAssertEqual(context.label, "4 sessions")
+    }
+
+    private func waitForLabel(
+        _ element: XCUIElement,
+        _ label: String,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", label),
+            object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func attachScreenshot(named name: String, of app: XCUIApplication) {

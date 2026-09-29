@@ -106,15 +106,16 @@ struct ToasttyWorkspaceView: View {
                     .padding(.vertical, 24)
                     .accessibilityIdentifier("toastty-mobile-workspace-empty")
                 } else {
-                    ForEach(visibleConversations) { conversation in
-                        ToasttySessionCard(
-                            conversation: conversation,
-                            freshness: controller.freshness,
-                            showsWorkspace: false,
-                            accessibilityIdentifier:
-                                "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
-                            onOpen: onOpen
-                        )
+                    VStack(spacing: 2) {
+                        ForEach(visibleConversations) { conversation in
+                            ToasttySessionRow(
+                                conversation: conversation,
+                                freshness: controller.freshness,
+                                accessibilityIdentifier:
+                                    "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
+                                onOpen: onOpen
+                            )
+                        }
                     }
                 }
             }
@@ -124,7 +125,7 @@ struct ToasttyWorkspaceView: View {
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
             // Reorders happen only on status-bucket transitions; animate so
-            // the moving card stays trackable.
+            // the moving row stays trackable.
             .animation(reduceMotion ? nil : .default, value: visibleConversations.map(\.id))
         }
         .scrollIndicators(.hidden)
