@@ -24,10 +24,11 @@ closes its own workspace.
 
 Later, from the project workspace, invoke `worktree-cleanup`. It lists ready,
 merged, and blocked PRs, merges any you name, and for merged PRs closes the task
-workspace, removes the worktree, and deletes the branches. It skips a workspace
-that still has an agent session, a busy terminal, or unsaved documents and reports
-it instead. A workspace-scoped session sees only some workspaces, so cleanup
-refuses to run there; `worktree-create` scopes the session that launches a task.
+workspace, removes the worktree, and deletes the branches. Closing the workspace
+ends any agent sessions and running commands in it, and cleanup reports what it
+ended. It skips a workspace with unsaved documents and reports it instead. A
+workspace-scoped session sees only some workspaces, so cleanup refuses to run
+there; `worktree-create` scopes the session that launches a task.
 Clear that session's scope when asked, or run cleanup from a new session.
 
 When detailed planning already happened in another conversation, use the
