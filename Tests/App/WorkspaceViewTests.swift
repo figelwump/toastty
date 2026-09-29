@@ -1910,9 +1910,21 @@ final class WorkspaceViewTests: XCTestCase {
             workspaceID: harness.workspaceID,
             panelID: harness.panelID
         )
-        pumpMainRunLoop(duration: 0.12)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let peakBitmap = try renderedBitmap(for: harness.hostingView)
+        // Request handling and SwiftUI drawing are asynchronous. Observe the
+        // pulse instead of assuming a particular frame arrives after 120 ms.
+        let pulseDeadline = ContinuousClock.now + .seconds(2)
+        var pulsePixelCount = 0
+        var sampledFrames = 0
+        repeat {
+            pumpMainRunLoop(duration: 0.02)
+            let frame = try renderedBitmap(for: harness.hostingView)
+            pulsePixelCount = try differingPixelCount(
+                in: sampledRegion,
+                between: baselineBitmap,
+                and: frame
+            )
+            sampledFrames += 1
+        } while pulsePixelCount == 0 && ContinuousClock.now < pulseDeadline
 
         pumpMainRunLoop(duration: 0.5)
         harness.hostingView.layoutSubtreeIfNeeded()
@@ -1920,13 +1932,10 @@ final class WorkspaceViewTests: XCTestCase {
 
         XCTAssertNil(harness.store.pendingPanelFlashRequest)
         XCTAssertGreaterThan(
-            try differingPixelCount(
-                in: sampledRegion,
-                between: baselineBitmap,
-                and: peakBitmap
-            ),
+            pulsePixelCount,
             0,
-            "Expected the terminal panel to visibly pulse when an explicit navigation flash request is handled"
+            "Expected a visible panel pulse; observed \(sampledFrames) frames, " +
+            "requestPending=\(harness.store.pendingPanelFlashRequest != nil)"
         )
         XCTAssertEqual(
             try differingPixelCount(

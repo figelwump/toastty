@@ -862,7 +862,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         runtime.updateDraftContent("# Saved\n", baseContentRevision: baseRevision)
 
         runtime.save(baseContentRevision: baseRevision)
-        try await Task.sleep(nanoseconds: 250_000_000)
+        try await waitForSaveToFinish(runtime)
 
         let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         XCTAssertFalse(bootstrap.isEditing)
@@ -1283,7 +1283,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         runtime.updateDraftContent("# Failed save\n", baseContentRevision: baseRevision)
 
         runtime.save(baseContentRevision: baseRevision)
-        try await Task.sleep(nanoseconds: 250_000_000)
+        try await waitForSaveToFinish(runtime)
 
         let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         XCTAssertTrue(bootstrap.isEditing)
@@ -2862,7 +2862,27 @@ private final class LocalDocumentRuntimeFocusTestWindow: NSWindow {
     }
 }
 
-private struct WaitUntilTimedOutError: Error {}
+private struct WaitUntilTimedOutError: Error, CustomStringConvertible {
+    var description = "Timed out waiting for condition"
+}
+
+@MainActor
+private func waitForSaveToFinish(_ runtime: LocalDocumentPanelRuntime) async throws {
+    XCTAssertEqual(runtime.automationState().currentBootstrap?.isSaving, true)
+    let started = ContinuousClock.now
+    do {
+        try await waitUntil(timeoutNanoseconds: 5_000_000_000) {
+            runtime.automationState().currentBootstrap?.isSaving == false
+        }
+    } catch is WaitUntilTimedOutError {
+        let bootstrap = runtime.automationState().currentBootstrap
+        throw WaitUntilTimedOutError(description:
+            "Save did not finish after \(started.duration(to: .now)); " +
+            "isSaving=\(String(describing: bootstrap?.isSaving)), " +
+            "revision=\(String(describing: bootstrap?.contentRevision))"
+        )
+    }
+}
 
 @MainActor
 private func waitUntil(

@@ -108,6 +108,33 @@ test('main pushes and manual runs require every job to pass', () => {
     MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
 });
 
+test('PR Debug selects UI smoke while main and manual Debug retain all UI tests', () => {
+  const iosJob = workflow.jobs.ios;
+  const command = iosJob.steps.find((step) => step.name === 'Test native client').run;
+  const prefix = 'node ios/scripts/toastty-ios.mjs test ';
+  assert.ok(command.startsWith(prefix));
+
+  const evaluate = (expression, eventName, configuration) => {
+    const match = expression.match(/^\$\{\{ (.+) \}\}$/);
+    assert.ok(match, expression);
+    return Function('github', 'matrix', `return ${match[1]}`)(
+      { event_name: eventName }, { configuration },
+    );
+  };
+
+  for (const [eventName, configuration, selector, timeout] of [
+    ['pull_request', 'Debug', '--ui-tests smoke', 45],
+    ['pull_request', 'Release', '', 45],
+    ['push', 'Debug', '', 60],
+    ['push', 'Release', '', 45],
+    ['workflow_dispatch', 'Debug', '', 60],
+    ['workflow_dispatch', 'Release', '', 45],
+  ]) {
+    assert.equal(evaluate(command.slice(prefix.length), eventName, configuration), selector);
+    assert.equal(evaluate(iosJob['timeout-minutes'], eventName, configuration), timeout);
+  }
+});
+
 
 test('every web-panel package is covered by the web test command', () => {
   const command = workflow.jobs.web.steps.find((step) => step.run).run;
