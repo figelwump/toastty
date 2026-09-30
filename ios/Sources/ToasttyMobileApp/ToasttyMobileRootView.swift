@@ -13,13 +13,18 @@ struct ToasttyMobileRootView: View {
     @State private var composerDraftState = ToasttyComposerDraftState()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
     @State private var fixtureComposerIsReserved = false
+#if DEBUG
+    @State private var controlledFixtureSubmission: ControlledFixtureSubmission?
+#endif
     @State private var fixtureInteractionAnswerState: ToasttyInteractionAnswerState?
     @State private var fixtureInteractionAcceptedAnswers: [RemoteInteractionAnswer]?
     @State private var diagnostics = ToasttyDiagnosticsState()
     @State private var diagnosedSessionState: AppSessionState?
     private let forcesPairingPrivacyShield: Bool
     private let fixtureScenario: ToasttyMobileFixtureScenario?
-    private let delaysFixtureSubmission: Bool
+#if DEBUG
+    private let controlsFixtureSubmission: Bool
+#endif
     private let deepLinkParser: DeepLinkParser?
 
     init(configuration: ToasttyMobileAppConfiguration) {
@@ -60,8 +65,10 @@ struct ToasttyMobileRootView: View {
         _fixtureInteractionAcceptedAnswers = State(initialValue: nil)
         forcesPairingPrivacyShield = configuration.fixtureScenario == .pairingPrivacy
         fixtureScenario = configuration.fixtureScenario
-        delaysFixtureSubmission = configuration.fixtureScenario == .gatedSend
-            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_DELAYED_SUBMIT"] == "1"
+#if DEBUG
+        controlsFixtureSubmission = configuration.fixtureScenario == .gatedSend
+            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_CONTROLLED_SUBMIT"] == "1"
+#endif
         deepLinkParser = configuration.urlScheme.flatMap(DeepLinkParser.init(scheme:))
     }
 
@@ -331,6 +338,31 @@ struct ToasttyMobileRootView: View {
             submitInteractionAnswer: conversationInteractionSubmitAction(for: conversationID),
             onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID)
         )
+#if DEBUG
+        .overlay(alignment: .topTrailing) {
+            if controlsFixtureSubmission,
+               conversationID == Self.fixtureOpenPromptConversationID,
+               let pending = controlledFixtureSubmission {
+                Button {
+                    advanceControlledFixtureSubmission()
+                } label: {
+                    Text(pending.phase == .awaitingOptimistic ? "Publish optimistic row" : "Finish submission")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
+                        .background(ToasttyDesignTokens.amber, in: Capsule())
+                }
+                .accessibilityIdentifier(
+                    pending.phase == .awaitingOptimistic
+                        ? "toastty-mobile-fixture-publish-optimistic"
+                        : "toastty-mobile-fixture-finish-submit"
+                )
+                .padding(.top, 8)
+                .padding(.trailing, 12)
+            }
+        }
+#endif
     }
 
     private func workspacePreview(workspaceID: UUID, panelID: UUID) -> some View {
@@ -628,30 +660,15 @@ struct ToasttyMobileRootView: View {
             return false
         }
         let clientRequestID = "fixture-enqueued-\(fixtureSendItems.count + 1)"
-        if delaysFixtureSubmission {
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(2))
-                fixtureSendItems.append(ToasttySendPresentationItem(
-                    clientRequestID: clientRequestID,
-                    text: submission.text,
-                    content: .optimistic(response: .accepted)
-                ))
-                fixtureComposerIsReserved = true
-
-                try? await Task.sleep(for: .seconds(2))
-                finishSubmission(
-                    submission,
-                    outcome: .enqueued(clientRequestID: clientRequestID)
-                )
-            }
+        if controlsFixtureSubmission {
+            controlledFixtureSubmission = ControlledFixtureSubmission(
+                submission: submission,
+                clientRequestID: clientRequestID,
+                phase: .awaitingOptimistic
+            )
             return true
         }
-        fixtureSendItems.append(ToasttySendPresentationItem(
-            clientRequestID: clientRequestID,
-            text: submission.text,
-            content: .optimistic(response: .accepted)
-        ))
-        fixtureComposerIsReserved = true
+        appendFixtureOptimisticSend(submission, clientRequestID: clientRequestID)
         finishSubmission(
             submission,
             outcome: .enqueued(clientRequestID: clientRequestID)
@@ -665,6 +682,46 @@ struct ToasttyMobileRootView: View {
         return false
 #endif
     }
+
+#if DEBUG
+    private struct ControlledFixtureSubmission {
+        enum Phase {
+            case awaitingOptimistic
+            case awaitingCompletion
+        }
+
+        let submission: ToasttyComposerSubmission
+        let clientRequestID: String
+        var phase: Phase
+    }
+
+    private func appendFixtureOptimisticSend(
+        _ submission: ToasttyComposerSubmission,
+        clientRequestID: String
+    ) {
+        fixtureSendItems.append(ToasttySendPresentationItem(
+            clientRequestID: clientRequestID,
+            text: submission.text,
+            content: .optimistic(response: .accepted)
+        ))
+        fixtureComposerIsReserved = true
+    }
+
+    private func advanceControlledFixtureSubmission() {
+        guard let pending = controlledFixtureSubmission else { return }
+        switch pending.phase {
+        case .awaitingOptimistic:
+            appendFixtureOptimisticSend(pending.submission, clientRequestID: pending.clientRequestID)
+            controlledFixtureSubmission?.phase = .awaitingCompletion
+        case .awaitingCompletion:
+            finishSubmission(
+                pending.submission,
+                outcome: .enqueued(clientRequestID: pending.clientRequestID)
+            )
+            controlledFixtureSubmission = nil
+        }
+    }
+#endif
 
     private func fixtureDismissReceipt(_ clientRequestID: String) {
         fixtureSendItems.removeAll { $0.clientRequestID == clientRequestID }
@@ -687,6 +744,9 @@ struct ToasttyMobileRootView: View {
 
     private func resetComposerPresentation() {
         composerDraftState.reset()
+#if DEBUG
+        controlledFixtureSubmission = nil
+#endif
         fixtureSendItems.removeAll(keepingCapacity: false)
         fixtureComposerIsReserved = false
     }
@@ -727,6 +787,9 @@ struct ToasttyMobileRootView: View {
         composerDraftState.retainConversations(conversationIDs)
         if conversationIDs.contains(Self.fixtureOpenPromptConversationID) == false {
             fixtureSendItems.removeAll(keepingCapacity: false)
+#if DEBUG
+            controlledFixtureSubmission = nil
+#endif
         }
     }
 

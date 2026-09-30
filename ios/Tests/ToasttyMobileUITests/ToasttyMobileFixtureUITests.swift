@@ -1134,11 +1134,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(jumpToLatest.exists, "A deliberate drag must release post-send following")
     }
 
-    func testGatedSendDelayedOptimisticRowKeepsTranscriptStableWhileComposerCollapses() {
+    func testGatedSendControlledOptimisticRowKeepsTranscriptStableWhileComposerCollapses() {
         let app = launchFixtureApp(
             environment: [
                 "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
-                "TOASTTY_MOBILE_FIXTURE_DELAYED_SUBMIT": "1",
+                "TOASTTY_MOBILE_FIXTURE_CONTROLLED_SUBMIT": "1",
                 "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
             ]
         )
@@ -1153,6 +1153,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
         let input = composerInput(in: app)
         let send = app.buttons["toastty-mobile-composer-send"]
+        let publish = app.buttons["toastty-mobile-fixture-publish-optimistic"]
+        let finish = app.buttons["toastty-mobile-fixture-finish-submit"]
         let draft = "Line 01\nLine 02\nLine 03\nLine 04\nLine 05"
 
         XCTAssertTrue(newestStableRow.waitForExistence(timeout: 5))
@@ -1166,28 +1168,41 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let expandedComposerHeight = input.frame.height
 
         send.tap()
-
-        var awaitingOptimisticCount = 0
-        var optimisticWithDraftCount = 0
-        var collapsedCount = 0
-        let deadline = Date().addingTimeInterval(7)
-        while Date() < deadline {
-            let hasOptimistic = optimistic.exists
-            let hasCollapsedDraft = (input.value as? String) != draft
-            if hasCollapsedDraft {
-                collapsedCount += 1
-            } else if hasOptimistic {
-                optimisticWithDraftCount += 1
-            } else {
-                awaitingOptimisticCount += 1
-            }
-            if collapsedCount >= 3 { break }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.06))
+        XCTAssertTrue(publish.waitForExistence(timeout: 10))
+        XCTAssertTrue(finish.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(send.isEnabled)
+        XCTAssertEqual(input.value as? String, draft)
+        XCTAssertFalse(optimistic.exists)
+        assertStateDoesNotChange(for: 3.5, description: "before optimistic publication") {
+            (input.value as? String) != draft
+                || optimistic.exists
+                || finish.exists
+                || abs(input.frame.height - expandedComposerHeight) > 2
         }
 
-        XCTAssertGreaterThanOrEqual(awaitingOptimisticCount, 2)
-        XCTAssertGreaterThanOrEqual(optimisticWithDraftCount, 2)
-        XCTAssertGreaterThanOrEqual(collapsedCount, 3)
+        publish.tap()
+        XCTAssertTrue(optimistic.waitForExistence(timeout: 10))
+        XCTAssertTrue(finish.waitForExistence(timeout: 10))
+        XCTAssertTrue(publish.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(send.isEnabled)
+        XCTAssertEqual(input.value as? String, draft)
+        XCTAssertEqual(input.frame.height, expandedComposerHeight, accuracy: 2)
+        XCTAssertTrue(optimistic.label.contains("Line 05"))
+        assertStateDoesNotChange(for: 3.5, description: "after optimistic publication") {
+            (input.value as? String) != draft
+                || optimistic.exists == false
+                || finish.exists == false
+                || abs(input.frame.height - expandedComposerHeight) > 2
+        }
+
+        finish.tap()
+        let draftCleared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value != %@", draft),
+            object: input
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [draftCleared], timeout: 10), .completed)
+        XCTAssertTrue(publish.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(finish.waitForNonExistence(timeout: 5))
         assertSendStayedAtBottom(in: app, startedAtBottom: true)
         XCTAssertLessThan(
             input.frame.height,
@@ -1198,7 +1213,24 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(optimistic.isHittable)
         XCTAssertFalse(
             jumpToLatest.exists,
-            "Delayed submission must finish at the live edge"
+            "Controlled submission must finish at the live edge"
+        )
+    }
+
+    private func assertStateDoesNotChange(
+        for duration: TimeInterval,
+        description: String,
+        violation: @escaping () -> Bool
+    ) {
+        let unexpectedChange = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in violation() },
+            object: nil
+        )
+        unexpectedChange.isInverted = true
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [unexpectedChange], timeout: duration),
+            .completed,
+            "The controlled fixture changed \(description) without its advance action"
         )
     }
 

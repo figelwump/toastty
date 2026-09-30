@@ -253,7 +253,10 @@ final class ToasttyPreviewTests: XCTestCase {
             withExtendedLifetime(probe) {}
         }
         webView.load(URLRequest(url: loader.entryURL))
-        let loadResult = await XCTWaiter.fulfillment(of: [loaded], timeout: 15)
+        // A cold simulator can spend more than 15 seconds starting WebContent
+        // before delivering any navigation callbacks. This includes process startup;
+        // the policy probes below retain their own shorter deadlines.
+        let loadResult = await XCTWaiter.fulfillment(of: [loaded], timeout: 60)
         guard loadResult == .completed else {
             XCTFail("Local HTML load wait ended with \(loadResult): \(probe.diagnostics(for: webView))")
             return
@@ -261,6 +264,7 @@ final class ToasttyPreviewTests: XCTestCase {
         // A terminal navigation error has already recorded its failure. Do not
         // turn an unavailable document into a cascade of policy assertion errors.
         guard probe.didFinishLoading else { return }
+        print("HTML preview loaded: \(probe.diagnostics(for: webView))")
         // Navigation completion does not wait for fetch rejection or queued
         // CSP events. Bound the wait, then inspect even a partial result so a
         // missing policy violation remains a specific assertion failure.
@@ -344,6 +348,7 @@ private final class PreviewNavigationProbe: NSObject, WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+        record("navigation policy: \(navigationAction.request.url?.absoluteString ?? "nil")")
         decisionHandler(navigationAction.request.url?.scheme == ToasttyHTMLPreviewPolicy.scheme ? .allow : .cancel)
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
@@ -359,7 +364,8 @@ private final class PreviewNavigationProbe: NSObject, WKNavigationDelegate {
     func diagnostics(for webView: WKWebView) -> String {
         "events=\(events), url=\(webView.url?.absoluteString ?? "nil"), " +
             "isLoading=\(webView.isLoading), progress=\(webView.estimatedProgress), " +
-            "hasWindow=\(webView.window != nil)"
+            "hasWindow=\(webView.window != nil), " +
+            "sceneActivation=\(String(describing: webView.window?.windowScene?.activationState.rawValue))"
     }
 
     private func record(_ event: String) {
