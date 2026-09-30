@@ -203,7 +203,10 @@ struct ToasttyConversationScreen: View {
     }
 
     private func nextSessionSubtitle(_ conversation: MobileConversation) -> String {
-        [conversation.workspaceTitle, conversation.state.bucket.rawValue]
+        let parent = controller.snapshot.parent(of: conversation.workspaceID)
+        let workspace = parent.map { "\($0.title) › \(conversation.workspaceTitle)" }
+            ?? conversation.workspaceTitle
+        return [workspace, conversation.state.bucket.rawValue]
             .filter { $0.isEmpty == false }
             .joined(separator: " · ")
     }

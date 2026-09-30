@@ -11,10 +11,43 @@ struct ToasttySessionRow: View {
     let conversation: MobileConversation
     let freshness: LiveProjectionFreshness
     let accessibilityIdentifier: String
+    /// The ⑂ chip, when this session spawned subspaces.
+    var spawnerChip: ToasttySpawnerChip? = nil
+    var isSpawnerFilterActive = false
+    var onSpawnerChip: (ToasttySpawnerChip) -> Void = { _ in }
     let onOpen: (MobileConversation) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        // The chip is its own button, so it sits over the row rather than
+        // inside the row's label; the label reserves its space.
+        ZStack(alignment: .bottomTrailing) {
+            rowButton
+            if let spawnerChip {
+                Button {
+                    onSpawnerChip(spawnerChip)
+                } label: {
+                    ToasttySpawnerChipLabel(
+                        chip: spawnerChip,
+                        isFilterActive: isSpawnerFilterActive,
+                        freshness: freshness
+                    )
+                    // The visible chip is small; the button around it is a
+                    // full-height touch target on the row's trailing edge.
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
+                    .frame(minWidth: 44, minHeight: 32, alignment: .bottomTrailing)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(spawnerChip.accessibilityLabel)
+                .accessibilityHint(isSpawnerFilterActive ? "Shows all subspaces" : "Shows only its subspaces")
+                .accessibilityIdentifier("toastty-session-subspaces-\(conversation.id.uuidString)")
+            }
+        }
+    }
+
+    private var rowButton: some View {
         Button {
             onOpen(conversation)
         } label: {
@@ -43,6 +76,14 @@ struct ToasttySessionRow: View {
         .contextMenu {
             Button("Open", systemImage: "arrow.up.right") {
                 onOpen(conversation)
+            }
+            if let spawnerChip {
+                Button(
+                    isSpawnerFilterActive ? "Show All Subspaces" : "Show Its Subspaces",
+                    systemImage: "arrow.triangle.branch"
+                ) {
+                    onSpawnerChip(spawnerChip)
+                }
             }
             if let cwd = conversation.cwd {
                 Button("Copy Path", systemImage: "doc.on.doc") {
@@ -115,12 +156,25 @@ struct ToasttySessionRow: View {
     }
 
     private var summaryLine: some View {
-        Text(conversation.lastActivity)
-            .font(isWorking ? .caption.monospaced().italic() : .caption.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.secondaryText)
-            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-            .truncationMode(.tail)
-            .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(conversation.lastActivity)
+                .font(isWorking ? .caption.monospaced().italic() : .caption.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let spawnerChip {
+                // Holds the place of the chip button drawn over the row.
+                ToasttySpawnerChipLabel(
+                    chip: spawnerChip,
+                    isFilterActive: isSpawnerFilterActive,
+                    freshness: freshness
+                )
+                .hidden()
+                .accessibilityHidden(true)
+            }
+        }
     }
 
     private var isWorking: Bool { bucket == .working }
@@ -176,7 +230,7 @@ enum ToasttySessionRowPresentation {
     }
 }
 
-private struct ToasttySessionRowButtonStyle: ButtonStyle {
+struct ToasttySessionRowButtonStyle: ButtonStyle {
     let tint: Color
 
     func makeBody(configuration: Configuration) -> some View {
@@ -185,6 +239,43 @@ private struct ToasttySessionRowButtonStyle: ButtonStyle {
                 configuration.isPressed ? ToasttyDesignTokens.raisedSurface : tint,
                 in: ToasttySessionRow.shape
             )
+    }
+}
+
+struct ToasttySpawnerChipLabel: View {
+    let chip: ToasttySpawnerChip
+    let isFilterActive: Bool
+    let freshness: LiveProjectionFreshness
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: "arrow.triangle.branch")
+                .imageScale(.small)
+            Text("\(chip.count)")
+                .monospacedDigit()
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(color.opacity(isFilterActive ? 0.3 : 0.14), in: shape)
+        .overlay {
+            if isFilterActive { shape.strokeBorder(color.opacity(0.7), lineWidth: 1) }
+        }
+        .fixedSize()
+    }
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: ToasttyDesignTokens.chipCornerRadius, style: .continuous)
+    }
+
+    private var color: Color {
+        guard freshness == .live else { return ToasttyDesignTokens.mutedText }
+        return switch chip.tone {
+        case .neutral: ToasttyDesignTokens.secondaryText
+        case .needsApproval: ToasttyDesignTokens.color(for: .needsApproval)
+        case .error: ToasttyDesignTokens.color(for: .error)
+        }
     }
 }
 

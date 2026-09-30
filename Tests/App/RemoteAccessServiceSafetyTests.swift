@@ -197,6 +197,146 @@ struct RemoteAccessServiceSafetyTests {
         #expect(cleared.isEmpty)
     }
 
+    @MainActor
+    @Test func remoteDoneMarksOnlySubspacesAndRebroadcastsTheNestedWorkspace() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try #require(store.state.windows.first?.id)
+        let parentID = try #require(store.state.selectedWorkspaceSelection()?.workspaceID)
+        #expect(store.send(.createWorkspace(windowID: windowID, title: "task", activate: false)))
+        let subspaceID = try #require(store.state.windows.first?.workspaceIDs.last)
+        #expect(subspaceID != parentID)
+        #expect(store.send(.setWorkspaceParent(
+            workspaceID: subspaceID, parentWorkspaceID: parentID, spawningSessionID: "session-1")))
+        #expect(store.send(.setWorkspaceAnnotation(
+            workspaceID: subspaceID,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #12", url: "https://github.com/example/repo/pull/12")
+        )))
+
+        let server = RemoteAccessGatewayServerSpy()
+        let runtimeHome = "/tmp/toastty-remote-access-done-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
+        let service = RemoteAccessService(
+            store: store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
+            sessionRuntimeStore: SessionRuntimeStore(),
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            port: 42_996,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in server }
+        )
+        defer { service.setEnabled(false, persist: false) }
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_996)
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: Date())
+        func delivered(
+            where isExpected: (RemoteWorkspaceSummary) -> Bool
+        ) async throws -> RemoteWorkspaceSummary {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline {
+                if let summary = server.sessionListSnapshots.last?
+                    .workspaces.first(where: { $0.id == subspaceID }),
+                   isExpected(summary) {
+                    return summary
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw CocoaError(.coderValueNotFound)
+        }
+
+        // A top-level workspace cannot hold a done mark.
+        #expect(service.setWorkspaceDone(.init(workspaceID: parentID, done: true), device: device) == .notSubspace)
+        #expect(service.setWorkspaceDone(.init(workspaceID: UUID(), done: true), device: device) == .workspaceNotFound)
+
+        server.removeAllBroadcasts()
+        #expect(service.setWorkspaceDone(.init(workspaceID: subspaceID, done: true), device: device) == .updated)
+        let done = try await delivered { $0.doneAt != nil }
+        #expect(done.parentWorkspaceID == parentID)
+        #expect(done.annotations.map(\.key) == ["github-pr"])
+        let markedAt = try #require(store.state.workspacesByID[subspaceID]?.doneAt)
+
+        // A retry keeps the original time and publishes nothing new.
+        server.removeAllBroadcasts()
+        #expect(service.setWorkspaceDone(.init(workspaceID: subspaceID, done: true), device: device) == .unchanged)
+        #expect(store.state.workspacesByID[subspaceID]?.doneAt == markedAt)
+
+        #expect(service.setWorkspaceDone(.init(workspaceID: subspaceID, done: false), device: device) == .updated)
+        #expect(try await delivered { $0.doneAt == nil }.parentWorkspaceID == parentID)
+
+        // A change of spawner alone republishes the list.
+        server.removeAllBroadcasts()
+        #expect(store.send(.setWorkspaceParent(
+            workspaceID: subspaceID, parentWorkspaceID: parentID, spawningSessionID: "session-2")))
+        _ = try await delivered { _ in true }
+
+        // A mark set on the Mac reaches clients too, and leaves with the
+        // nesting when the workspace moves to top level.
+        server.removeAllBroadcasts()
+        #expect(store.send(.setWorkspaceDone(workspaceID: subspaceID, doneAt: Date())))
+        _ = try await delivered { $0.doneAt != nil }
+        server.removeAllBroadcasts()
+        #expect(store.send(.setWorkspaceParent(
+            workspaceID: subspaceID, parentWorkspaceID: nil, spawningSessionID: nil)))
+        let promoted = try await delivered { $0.parentWorkspaceID == nil }
+        #expect(promoted.doneAt == nil)
+    }
+
+    @Test func remoteDoneRefusesALateRequestWhileWorkIsInProgress() {
+        func result(
+            done: Bool, isSubspace: Bool = true, isDone: Bool = false, busy: Bool = false
+        ) -> RemoteWorkspaceDoneResult {
+            RemoteAccessService.workspaceDoneResult(
+                requestedDone: done, isSubspace: isSubspace, isDone: isDone, hasWorkInProgress: busy)
+        }
+        #expect(result(done: true) == .updated)
+        // An agent started new work after the tap; its turn cleared or will
+        // clear the mark, and the late request must not restore it.
+        #expect(result(done: true, busy: true) == .workInProgress)
+        #expect(result(done: false, isDone: true, busy: true) == .updated)
+        #expect(result(done: true, isDone: true, busy: true) == .unchanged)
+        #expect(result(done: true, isSubspace: false) == .notSubspace)
+    }
+
+    @MainActor
+    @Test func workspaceInventoryNamesSpawnersByListedConversationAndOnlyKnownPrimaryKeys() throws {
+        var state = AppState.bootstrap()
+        let parentID = try #require(state.selectedWorkspaceSelection()?.workspaceID)
+        var subspace = WorkspaceState.bootstrap(title: "task")
+        subspace.parentWorkspaceID = parentID
+        subspace.spawningSessionID = "session-1"
+        subspace.annotations = ["ticket": WorkspaceAnnotation(text: "TOAST-7")]
+        subspace.primaryAnnotationKey = "ticket"
+        state.workspacesByID[subspace.id] = subspace
+        state.windows[0].workspaceIDs.append(subspace.id)
+        let conversationID = RemoteConversationID()
+
+        let named = RemoteAccessService.workspaceInventory(
+            state: state, conversationIDsBySessionID: ["session-1": conversationID])
+        let summary = try #require(named.first { $0.id == subspace.id })
+        #expect(summary.parentWorkspaceID == parentID)
+        #expect(summary.spawningConversationID == conversationID)
+        #expect(summary.primaryAnnotationKey == "ticket")
+        #expect(named.first { $0.id == parentID }?.parentWorkspaceID == nil)
+
+        // A spawner the snapshot does not list is left out rather than sent
+        // as an ID the client cannot open.
+        let unlisted = RemoteAccessService.workspaceInventory(state: state)
+        #expect(unlisted.first { $0.id == subspace.id }?.spawningConversationID == nil)
+
+        // A link to a missing parent is not one the sidebar honors.
+        state.workspacesByID[subspace.id]?.parentWorkspaceID = UUID()
+        state.workspacesByID[subspace.id]?.doneAt = Date()
+        let dangling = RemoteAccessService.workspaceInventory(state: state)
+        let flat = try #require(dangling.first { $0.id == subspace.id })
+        #expect(flat.parentWorkspaceID == nil)
+        #expect(flat.doneAt == nil)
+    }
+
     /// Waits for a broadcast session list whose annotations for the workspace
     /// satisfy `isExpected`.
     @MainActor

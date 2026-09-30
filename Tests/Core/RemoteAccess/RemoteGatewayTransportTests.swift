@@ -256,6 +256,7 @@ struct RemoteGatewayRequestHandlerTests {
         sendHandler: RemoteGatewayRequestHandler.SendHandler? = nil,
         questionAnswerHandler: RemoteGatewayRequestHandler.QuestionAnswerHandler? = nil,
         readAcknowledgementHandler: RemoteGatewayRequestHandler.ReadAcknowledgementHandler? = nil,
+        workspaceDoneHandler: RemoteGatewayRequestHandler.WorkspaceDoneHandler? = nil,
         nativeIdentityForTesting: String? = nil
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
         let audit = RemoteAccessAuditLog(fileURL: nil)
@@ -277,6 +278,7 @@ struct RemoteGatewayRequestHandlerTests {
             sendHandler: sendHandler,
             questionAnswerHandler: questionAnswerHandler,
             readAcknowledgementHandler: readAcknowledgementHandler,
+            workspaceDoneHandler: workspaceDoneHandler,
             nativeIdentityForTesting: nativeIdentityForTesting,
             pairingRateLimiter: pairingLimiter,
             authRateLimiter: authLimiter
@@ -392,6 +394,7 @@ struct RemoteGatewayRequestHandlerTests {
             .conversationReadAcknowledgement,
             .questionAnswers,
             .messageAttachments,
+            .workspaceDone,
         ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
@@ -1832,6 +1835,59 @@ extension RemoteGatewayRequestHandlerTests {
 
 
 extension RemoteGatewayRequestHandlerTests {
+    @Test func workspaceDoneNeedsNativeSendAccessAndAuditsOnlyChanges() throws {
+        var requests: [RemoteWorkspaceDoneRequest] = []
+        var nextResult = RemoteWorkspaceDoneResult.updated
+        let (handler, store, audit) = Self.makeHandler(workspaceDoneHandler: { request, _ in
+            requests.append(request)
+            return nextResult
+        })
+        let native = try Self.nativeCredential(handler: handler, store: store)
+        let headers = [("authorization", "Bearer \(native.credential)"), ("tailscale-user-login", "owner@example.com")]
+        let done = RemoteWorkspaceDoneRequest(workspaceID: UUID(), done: true)
+        let body = try ConversationEventCoding.makeEncoder().encode(done)
+        func response(_ headers: [(String, String)], body: Data) throws -> RemoteGatewayHTTPResponse {
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/api/workspace.done.set", headerFields: headers, body: body), at: Self.now
+            ) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            return response
+        }
+        func result(_ response: RemoteGatewayHTTPResponse) throws -> RemoteWorkspaceDoneResult {
+            try ConversationEventCoding.makeDecoder()
+                .decode(RemoteWorkspaceDoneResponse.self, from: response.body).result
+        }
+
+        let updated = try response(headers, body: body)
+        #expect(updated.status == 200)
+        #expect(try result(updated) == .updated)
+        #expect(requests == [done])
+        #expect(audit.entries.last?.action == .workspaceDoneChanged)
+        #expect(audit.entries.last?.detail == "done")
+
+        // A refusal or a repeat changes nothing, so it leaves no audit entry.
+        let auditCount = audit.entries.count
+        nextResult = .notSubspace
+        #expect(try result(try response(headers, body: body)) == .notSubspace)
+        nextResult = .unchanged
+        #expect(try result(try response(headers, body: body)) == .unchanged)
+        #expect(audit.entries.count == auditCount)
+
+        let handled = requests.count
+        #expect(try response(headers + [("origin", "https://hostile.example")], body: body).status == 403)
+        #expect(try response([headers[0]], body: body).status == 401)
+        #expect(try response([("cookie", Self.pairedDeviceCookie(store)), ("origin", Self.origin)], body: body).status == 401)
+        #expect(try response(headers, body: Data(repeating: 65, count: 1025)).status == 400)
+        #expect(try response(headers, body: Data("{}".utf8)).status == 400)
+        var unsupported = done
+        unsupported.protocolVersion = "99.0"
+        #expect(try response(headers, body: ConversationEventCoding.makeEncoder().encode(unsupported)).status == 409)
+        #expect(try store.setScopes([.read], forDevice: native.device.id))
+        #expect(try response(headers, body: body).status == 403)
+        #expect(requests.count == handled)
+    }
+
     @Test func attachmentAdmissionAuthenticatesHeadersAndSendScopeBeforeBody() throws {
         let (handler, store, _) = Self.makeHandler()
         let native = try Self.nativeCredential(handler: handler, store: store)

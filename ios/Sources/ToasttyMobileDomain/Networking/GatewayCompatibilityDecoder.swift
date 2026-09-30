@@ -116,7 +116,17 @@ public struct GatewayCompatibilityDecoder: Sendable {
             panels: ((try? object.requiredArray("panels")) ?? []).compactMap {
                 try? decode(RemoteWorkspacePanel.self, from: $0)
             },
-            annotations: ((try? object.requiredArray("annotations")) ?? []).compactMap(decodeWorkspaceAnnotation))
+            annotations: ((try? object.requiredArray("annotations")) ?? []).compactMap(decodeWorkspaceAnnotation),
+            // Nesting is presentation, so a malformed link leaves the
+            // workspace top level rather than failing the snapshot.
+            parentWorkspaceID: (try? object.optionalUUID("parentWorkspaceID")) ?? nil,
+            spawningConversationID: ((try? object.optionalUUID("spawningConversationID")) ?? nil)
+                .map(RemoteConversationID.init(rawValue:)),
+            primaryAnnotationKey: object.lossyString("primaryAnnotationKey"),
+            // Only the mark's presence is shown, so a time this client
+            // cannot read still counts as done.
+            doneAt: (try? object.requiredDate("doneAt"))
+                ?? object.lossyString("doneAt").map { _ in Date.distantPast })
     }
 
     /// Annotations are display-only, so a malformed chip is dropped rather

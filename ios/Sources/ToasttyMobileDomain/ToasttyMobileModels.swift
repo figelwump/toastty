@@ -373,7 +373,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     }
 }
 
-private extension MobileSessionStatus {
+extension MobileSessionStatus {
     var activitySortOrder: Int {
         switch self {
         case .known(let status): status.bucket.sortOrder
@@ -384,7 +384,7 @@ private extension MobileSessionStatus {
 
 /// Stable across user locales so snapshots do not visibly reshuffle when all
 /// authoritative ordering facts tie.
-private func deterministicStringOrder(_ lhs: String, _ rhs: String) -> Bool? {
+func deterministicStringOrder(_ lhs: String, _ rhs: String) -> Bool? {
     let locale = Locale(identifier: "en_US_POSIX")
     let leftFolded = lhs.folding(options: [.caseInsensitive], locale: locale)
     let rightFolded = rhs.folding(options: [.caseInsensitive], locale: locale)
@@ -448,32 +448,83 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     public let panels: [RemoteWorkspacePanel]
     /// Desktop annotation chips, sorted by key by the host.
     public let annotations: [RemoteWorkspaceAnnotation]
+    /// The workspace this one is nested under as a subspace, as the Mac
+    /// reported it. `MobileHomeSnapshot` decides whether the link holds.
+    public let parentWorkspaceID: UUID?
+    /// The conversation that spawned this subspace, when the Mac lists it.
+    public let spawningConversationID: UUID?
+    public let primaryAnnotationKey: String?
+    /// The subspace's done mark on the Mac.
+    public let isDone: Bool
 
     public init(
         id: UUID,
         title: String,
         conversations: [MobileConversation],
         panels: [RemoteWorkspacePanel] = [],
-        annotations: [RemoteWorkspaceAnnotation] = []
+        annotations: [RemoteWorkspaceAnnotation] = [],
+        parentWorkspaceID: UUID? = nil,
+        spawningConversationID: UUID? = nil,
+        primaryAnnotationKey: String? = nil,
+        isDone: Bool = false
     ) {
         self.id = id
         self.title = title
         self.conversations = conversations
         self.panels = panels
         self.annotations = annotations
+        self.parentWorkspaceID = parentWorkspaceID
+        self.spawningConversationID = spawningConversationID
+        self.primaryAnnotationKey = primaryAnnotationKey
+        self.isDone = isDone
     }
 
     public var sortedConversations: [MobileConversation] {
         conversations.sorted(by: MobileConversation.isOrderedBeforeInActivity)
     }
 
+    /// The same workspace listing other conversations, for filtered and
+    /// sorted views of it.
+    public func withConversations(_ conversations: [MobileConversation]) -> MobileWorkspace {
+        MobileWorkspace(
+            id: id,
+            title: title,
+            conversations: conversations,
+            panels: panels,
+            annotations: annotations,
+            parentWorkspaceID: parentWorkspaceID,
+            spawningConversationID: spawningConversationID,
+            primaryAnnotationKey: primaryAnnotationKey,
+            isDone: isDone
+        )
+    }
+
+    public func withDone(_ isDone: Bool) -> MobileWorkspace {
+        MobileWorkspace(
+            id: id,
+            title: title,
+            conversations: conversations,
+            panels: panels,
+            annotations: annotations,
+            parentWorkspaceID: parentWorkspaceID,
+            spawningConversationID: spawningConversationID,
+            primaryAnnotationKey: primaryAnnotationKey,
+            isDone: isDone
+        )
+    }
 }
 
 public struct MobileHomeSnapshot: Equatable, Sendable {
     public let hostName: String
     public let workspaces: [MobileWorkspace]
     public let activitySessions: [MobileConversation]
+    /// Every workspace, subspaces included, most urgent first.
     public let rankedWorkspaces: [MobileWorkspace]
+    /// Workspaces that are not nested under another, most urgent first. A
+    /// workspace's urgency counts its subspaces' sessions, so a parent whose
+    /// only activity is in a subspace still ranks by it.
+    public let topLevelWorkspaces: [MobileWorkspace]
+    private let subspaceRowsByParentID: [UUID: [MobileSubspaceRow]]
 
     public init(hostName: String, workspaces: [MobileWorkspace]) {
         self.hostName = hostName
@@ -481,24 +532,65 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
         activitySessions = workspaces
             .flatMap(\.conversations)
             .sorted(by: MobileConversation.isOrderedBeforeInActivity)
-        rankedWorkspaces = workspaces
-            .map { workspace in
-                MobileWorkspace(
-                    id: workspace.id,
-                    title: workspace.title,
-                    conversations: workspace.sortedConversations,
-                    panels: workspace.panels,
-                    annotations: workspace.annotations
-                )
+        let sorted = workspaces.map { $0.withConversations($0.sortedConversations) }
+        rankedWorkspaces = sorted.sorted {
+            Self.isOrderedBefore($0, $0.conversations.first, $1, $1.conversations.first)
+        }
+
+        // A link holds only when its parent is listed and is itself top
+        // level. The Mac sends only such links; checking again keeps a
+        // malformed snapshot from hiding a workspace. A parent whose own
+        // link names a missing workspace counts as top level, and the
+        // members of a cycle all stay top level.
+        let workspacesByID = Dictionary(sorted.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func listedParent(of workspace: MobileWorkspace) -> MobileWorkspace? {
+            guard let parentID = workspace.parentWorkspaceID, parentID != workspace.id else { return nil }
+            return workspacesByID[parentID]
+        }
+        func isSubspace(_ workspace: MobileWorkspace) -> Bool {
+            guard let parent = listedParent(of: workspace) else { return false }
+            return listedParent(of: parent) == nil
+        }
+        var rows: [UUID: [MobileSubspaceRow]] = [:]
+        for workspace in sorted where isSubspace(workspace) {
+            rows[workspace.parentWorkspaceID!, default: []].append(MobileSubspaceRow(workspace: workspace))
+        }
+        subspaceRowsByParentID = rows.mapValues { $0.sorted(by: MobileSubspaceRow.isOrderedBefore) }
+        topLevelWorkspaces = sorted
+            .filter { isSubspace($0) == false }
+            .map { workspace -> (MobileWorkspace, MobileConversation?) in
+                let members = workspace.conversations
+                    + (rows[workspace.id] ?? []).flatMap(\.workspace.conversations)
+                return (workspace, members.min(by: MobileConversation.isOrderedBeforeInActivity))
             }
-            .sorted(by: Self.isWorkspaceOrderedBefore)
+            .sorted { Self.isOrderedBefore($0.0, $0.1, $1.0, $1.1) }
+            .map(\.0)
     }
 
-    private static func isWorkspaceOrderedBefore(
+    /// Subspaces nested under `parentID`, in the desktop sidebar's order.
+    public func subspaceRows(of parentID: UUID) -> [MobileSubspaceRow] {
+        subspaceRowsByParentID[parentID] ?? []
+    }
+
+    /// The listed parent of a subspace, or `nil` for a top-level workspace.
+    public func parent(of workspaceID: UUID) -> MobileWorkspace? {
+        subspaceRowsByParentID.first { _, rows in
+            rows.contains { $0.id == workspaceID }
+        }.flatMap { parentID, _ in workspaces.first { $0.id == parentID } }
+    }
+
+    public func subspaceRow(id workspaceID: UUID) -> MobileSubspaceRow? {
+        subspaceRowsByParentID.values.lazy.joined().first { $0.id == workspaceID }
+    }
+
+    /// Orders two workspaces by their most urgent member.
+    private static func isOrderedBefore(
         _ lhs: MobileWorkspace,
-        _ rhs: MobileWorkspace
+        _ lhsLead: MobileConversation?,
+        _ rhs: MobileWorkspace,
+        _ rhsLead: MobileConversation?
     ) -> Bool {
-        switch (lhs.conversations.first, rhs.conversations.first) {
+        switch (lhsLead, rhsLead) {
         case (let left?, let right?):
             if left.state.activitySortOrder != right.state.activitySortOrder {
                 return left.state.activitySortOrder < right.state.activitySortOrder
@@ -514,6 +606,111 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
             break
         }
         if let titleOrder = deterministicStringOrder(lhs.title, rhs.title) { return titleOrder }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+}
+
+/// A subspace's status on its row, in the order rows sort: the desktop
+/// sidebar's order, where a finished turn leads because it is quickest to act
+/// on and done tasks sink to the bottom.
+public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
+    case ready
+    case needsApproval
+    case error
+    case working
+    case idle
+    case done
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    /// Whether the Active filter lists the row: something is happening in
+    /// the subspace or it wants the user.
+    public var isActive: Bool {
+        switch self {
+        case .ready, .needsApproval, .error, .working: true
+        case .idle, .done: false
+        }
+    }
+
+    /// The status mark is a checkbox only while the row is quiet. A spinner
+    /// or an approval or error mark says something the box would hide.
+    public var showsDoneToggle: Bool {
+        switch self {
+        case .idle, .ready, .done: true
+        case .needsApproval, .error, .working: false
+        }
+    }
+
+    /// Which status wins when a subspace has several sessions. Not the sort
+    /// order: approval and error outrank a finished turn here.
+    fileprivate var precedence: Int {
+        switch self {
+        case .needsApproval: 4
+        case .error: 3
+        case .ready: 2
+        case .working: 1
+        case .idle, .done: 0
+        }
+    }
+
+    fileprivate init(_ bucket: MobileSessionBucket) {
+        self = switch bucket {
+        case .needsApproval: .needsApproval
+        case .error: .error
+        case .ready: .ready
+        case .working: .working
+        case .idle: .idle
+        }
+    }
+}
+
+/// One subspace as its parent lists it: the workspace, the single status its
+/// sessions add up to, and the summary and chip that describe it.
+public struct MobileSubspaceRow: Identifiable, Equatable, Sendable {
+    public static let pullRequestAnnotationKey = "github-pr"
+
+    public let workspace: MobileWorkspace
+    public let status: MobileSubspaceStatus
+    /// From the session that sets the status, so the mark and the text
+    /// describe the same session.
+    public let summary: String?
+
+    public var id: UUID { workspace.id }
+
+    public init(workspace: MobileWorkspace) {
+        self.workspace = workspace
+        let lead = workspace.conversations.max { lhs, rhs in
+            let left = MobileSubspaceStatus(lhs.state.bucket).precedence
+            let right = MobileSubspaceStatus(rhs.state.bucket).precedence
+            if left != right { return left < right }
+            // `max` keeps the later of equal elements, so order the more
+            // recent one last.
+            return MobileConversation.isMoreRecent(rhs, lhs)
+        }
+        let sessionStatus = lead.map { MobileSubspaceStatus($0.state.bucket) } ?? .idle
+        // The done mark replaces a quiet status, including the unread turn
+        // that set it. A session that is working or wants the user still
+        // shows, since the user may need to act.
+        status = workspace.isDone && sessionStatus.showsDoneToggle ? .done : sessionStatus
+        summary = lead?.lastActivity
+    }
+
+    /// The one chip the row shows: the primary annotation, or the pull
+    /// request when none is marked primary.
+    public var chip: RemoteWorkspaceAnnotation? {
+        for key in [workspace.primaryAnnotationKey, Self.pullRequestAnnotationKey] {
+            if let key, let annotation = workspace.annotations.first(where: { $0.key == key }) {
+                return annotation
+            }
+        }
+        return nil
+    }
+
+    static func isOrderedBefore(_ lhs: MobileSubspaceRow, _ rhs: MobileSubspaceRow) -> Bool {
+        if lhs.status != rhs.status { return lhs.status < rhs.status }
+        if let titleOrder = deterministicStringOrder(lhs.workspace.title, rhs.workspace.title) {
+            return titleOrder
+        }
         return lhs.id.uuidString < rhs.id.uuidString
     }
 }

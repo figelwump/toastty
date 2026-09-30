@@ -613,6 +613,19 @@ public actor ConnectionCoordinator {
         return try await gateway.acknowledgeConversationRead(request)
     }
 
+    /// Sets a subspace's done mark only while live against a host that
+    /// advertises the operation. `nil` is a capability/lifecycle refusal, not
+    /// a transport failure.
+    public func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest
+    ) async throws -> RemoteWorkspaceDoneResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.workspaceDone) else {
+            return nil
+        }
+        return try await gateway.setWorkspaceDone(request)
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.

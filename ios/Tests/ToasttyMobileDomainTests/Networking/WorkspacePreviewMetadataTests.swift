@@ -57,6 +57,44 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         XCTAssertEqual(decodedPanel.associatedConversationID, panel.associatedConversationID)
     }
 
+    func testHostEncodedSubspaceFieldsReachThePresentationAndOlderHostsStayFlat() throws {
+        let parentID = UUID()
+        let subspaceID = UUID()
+        let spawner = RemoteConversationID(rawValue: UUID())
+        let response = RemoteGatewaySessionListResponse(snapshot: RemoteSessionListSnapshot(
+            projectionRunID: RemoteProjectionRunID(rawValue: UUID()), conversations: [],
+            generatedAt: Date(timeIntervalSince1970: 1_788_696_000),
+            workspaces: [
+                RemoteWorkspaceSummary(id: parentID, title: "toastty", panels: []),
+                RemoteWorkspaceSummary(
+                    id: subspaceID, title: "task", panels: [],
+                    annotations: [RemoteWorkspaceAnnotation(key: "ticket", text: "TOAST-7", color: "#7AA2F7")],
+                    parentWorkspaceID: parentID, spawningConversationID: spawner,
+                    primaryAnnotationKey: "ticket", doneAt: Date(timeIntervalSince1970: 1_788_695_000)
+                ),
+            ]
+        ))
+        // This is the encoder used by RemoteGatewayRequestHandler for session lists.
+        let data = try ConversationEventCoding.makeEncoder().encode(response)
+        let presentation = try GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation()
+
+        XCTAssertEqual(presentation.topLevelWorkspaces.map(\.id), [parentID])
+        let row = try XCTUnwrap(presentation.subspaceRows(of: parentID).first)
+        XCTAssertEqual(row.id, subspaceID)
+        XCTAssertEqual(row.status, .done)
+        XCTAssertEqual(row.chip?.text, "TOAST-7")
+        XCTAssertEqual(row.workspace.spawningConversationID, spawner.rawValue)
+        XCTAssertEqual(presentation.parent(of: subspaceID)?.id, parentID)
+
+        // An older host sends none of the fields, so every workspace is top level.
+        let flat = try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(workspaces: [
+            ["id": parentID.uuidString, "title": "toastty", "panels": []],
+            ["id": subspaceID.uuidString, "title": "task", "panels": []],
+        ])).presentation()
+        XCTAssertEqual(Set(flat.topLevelWorkspaces.map(\.id)), [parentID, subspaceID])
+        XCTAssertTrue(flat.subspaceRows(of: parentID).isEmpty)
+    }
+
     func testCanonicalHostAnnotationsReachWorkspacesAndOlderWorkspacesHaveNone() throws {
         let directory = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "v1", withExtension: nil))
         let rest = try GatewayCompatibilityDecoder().decodeSessionListResponse(Data(

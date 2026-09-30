@@ -4,6 +4,10 @@ import RemoteProtocol
 public enum ToasttyMobileFixture {
     public static let previewWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
     public static let panelOnlyWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000004")!
+    public static let needsApprovalSubspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000011")!
+    public static let readySubspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000012")!
+    public static let workingSubspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000013")!
+    public static let doneSubspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000014")!
     public static let scratchpadPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000001")!
     public static let scratchpadConversationID = UUID(uuidString: "B1000000-0000-0000-0000-000000000007")!
     public static let documentPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000002")!
@@ -156,8 +160,105 @@ public enum ToasttyMobileFixture {
             ]
         )
 
-        return MobileHomeSnapshot(hostName: "mac-studio", workspaces: [toastty, research, release, panelOnly])
+        return MobileHomeSnapshot(
+            hostName: "mac-studio",
+            workspaces: [toastty, research, release, panelOnly] + subspaces(of: toasttyID)
+        )
     }()
+
+    /// Task worktrees spawned from the toastty workspace, one in each state
+    /// a subspace row shows. Three come from the first session and one from
+    /// the second, so the ⑂ filter has something to leave out.
+    private static func subspaces(of parentID: UUID) -> [MobileWorkspace] {
+        let firstSpawner = UUID(uuidString: "B1000000-0000-0000-0000-000000000001")!
+        let secondSpawner = UUID(uuidString: "B1000000-0000-0000-0000-000000000002")!
+        func pullRequest(_ text: String, _ number: Int) -> RemoteWorkspaceAnnotation {
+            RemoteWorkspaceAnnotation(
+                key: "github-pr", text: text,
+                url: URL(string: "https://github.com/example/toastty/pull/\(number)"), color: "#5BA08A"
+            )
+        }
+        return [
+            MobileWorkspace(
+                id: needsApprovalSubspaceID,
+                title: "compact-session-rows",
+                conversations: [
+                    conversation(
+                        9, workspaceID: needsApprovalSubspaceID, workspaceTitle: "compact-session-rows",
+                        cwd: "~/GiantThings/repos/toastty-compact-session-rows", agent: .claude,
+                        title: "Implement compact rows", status: .needsApproval,
+                        availability: .pendingInteraction(preview: "Review the push on the Mac"),
+                        age: "5m", last: "Push feat/compact-session-rows?"
+                    ),
+                    conversation(
+                        13, workspaceID: needsApprovalSubspaceID, workspaceTitle: "compact-session-rows",
+                        cwd: "~/GiantThings/repos/toastty-compact-session-rows", agent: .codex,
+                        title: "Second-opinion review", status: .idle,
+                        availability: .unavailable(reason: "prompt not open"),
+                        age: "40m", last: "Two findings, both addressed"
+                    ),
+                ],
+                annotations: [pullRequest("PR #36", 36)],
+                parentWorkspaceID: parentID,
+                spawningConversationID: firstSpawner
+            ),
+            MobileWorkspace(
+                id: readySubspaceID,
+                title: "early-session-titles",
+                conversations: [
+                    conversation(
+                        10, workspaceID: readySubspaceID, workspaceTitle: "early-session-titles",
+                        cwd: "~/GiantThings/repos/toastty-early-session-titles", agent: .claude,
+                        title: "", status: .ready,
+                        availability: .unavailable(reason: "prompt not open"),
+                        age: "25m", last: "CI green, PR ready for review"
+                    ),
+                ],
+                // The primary annotation wins the row's one chip over the
+                // pull request.
+                annotations: [
+                    pullRequest("PR #45", 45),
+                    RemoteWorkspaceAnnotation(key: "ticket", text: "TOAST-45", color: "#7AA2F7"),
+                ],
+                parentWorkspaceID: parentID,
+                spawningConversationID: firstSpawner,
+                primaryAnnotationKey: "ticket"
+            ),
+            MobileWorkspace(
+                id: workingSubspaceID,
+                title: "ios-subspaces",
+                conversations: [
+                    conversation(
+                        11, workspaceID: workingSubspaceID, workspaceTitle: "ios-subspaces",
+                        cwd: "~/GiantThings/repos/toastty-ios-subspaces", agent: .claude,
+                        title: "Port subspaces to iOS", status: .working,
+                        availability: .unavailable(reason: "working"),
+                        age: "now", last: "Editing ToasttyHomeView.swift"
+                    ),
+                ],
+                parentWorkspaceID: parentID,
+                spawningConversationID: secondSpawner
+            ),
+            MobileWorkspace(
+                id: doneSubspaceID,
+                title: "sidebar-done-subspaces",
+                conversations: [
+                    // The unread turn that set the mark; the mark hides it.
+                    conversation(
+                        12, workspaceID: doneSubspaceID, workspaceTitle: "sidebar-done-subspaces",
+                        cwd: "~/GiantThings/repos/toastty-sidebar-done-subspaces", agent: .claude,
+                        title: "Mark subspaces done", status: .ready,
+                        availability: .unavailable(reason: "prompt not open"),
+                        age: "4h", last: "Auto-merge enabled"
+                    ),
+                ],
+                annotations: [pullRequest("#40 merged", 40)],
+                parentWorkspaceID: parentID,
+                spawningConversationID: firstSpawner,
+                isDone: true
+            ),
+        ]
+    }
 
     private static func previewPanel(
         _ number: Int,

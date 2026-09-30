@@ -170,6 +170,42 @@ workspace, desktop tab, and agent, or to copy its path. In a conversation, the
 you: approvals first, then errors, then unread results. Touch and hold it to
 choose from the list. It is hidden when no other session needs you.
 
+### Subspaces
+
+Subspaces, the workspaces an agent spawned from another workspace, appear
+under their parent in a collapsible **Subspaces** group, on Home and on the
+parent's workspace screen. Rows sort as in the desktop sidebar: unread results
+first, then approvals, errors, working, idle, and done. Each row shows the
+subspace's status, its primary annotation or pull request chip, and the
+summary of the session that sets the status. Tap a row to open the subspace,
+which names its parent above its sessions. Touch and hold a row for its
+annotations, sessions, path, and spawner.
+
+A session that spawned subspaces shows a ⑂ chip with their count. Tap it to
+show only that session's subspaces in the group, and again to show them all.
+The filter gives way while it would hide a subspace that needs approval or has
+an error. A collapsed group stays open under the same condition.
+
+While a subspace is idle, has an unread result, or is done, its status box is a
+checkbox. Tap it, or choose **Mark as Done** from the row's menu, to mark the
+subspace done without opening it; **Undo** appears for a few seconds. The
+change applies on the Mac through the same rule as the sidebar checkbox and
+reaches every connected device. When an agent in the subspace starts new work,
+the Mac clears the mark. The Mac also refuses to mark a subspace done while
+one of its sessions is working, waiting on approval, or failed, so a request
+delayed past the start of new work cannot restore the mark. The checkbox is
+read-only while the phone is disconnected.
+
+**Active** leaves out idle and done subspaces. A workspace whose only activity
+is in a subspace still appears under Active, listing that subspace.
+
+Subspaces and the done mark need updates on both sides. The host sends
+optional `parentWorkspaceID`, `spawningConversationID`, `primaryAnnotationKey`,
+and `doneAt` fields on each workspace summary, and advertises the
+`workspace_done` capability for `POST /api/workspace.done.set`. An older Mac
+omits them, so the phone lists every workspace at the top level and shows no
+checkbox. An older phone ignores them and keeps its flat list.
+
 Toastty Mobile reconnects automatically after transient network loss and
 reloads from Toastty's current snapshots when it detects an event gap. Keep
 Toastty running and Remote Access enabled; Tailscale Serve alone cannot reach a
@@ -290,6 +326,9 @@ support conversations; update Toastty on the Mac to enable previews.
   answer text; the Mac applies them only to the exact pending question through
   Claude's hook response. This does not grant tool permissions or change
   Claude's permission settings.
+- Marking a subspace done needs a native paired device with send access. It
+  changes only that subspace's done mark, and each change is recorded in the
+  audit log with the device that made it.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These

@@ -415,6 +415,36 @@ final class GatewayClientTests: XCTestCase {
         XCTAssertEqual(result, .rejected(reason: .sendScopeDenied))
     }
 
+    func testWorkspaceDoneUsesAuthenticatedPOSTContract() async throws {
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"protocolVersion":"1.0","result":"updated"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+        let request = RemoteWorkspaceDoneRequest(workspaceID: UUID(), done: true)
+
+        let response = try await client.setWorkspaceDone(request)
+
+        XCTAssertEqual(response.result, .updated)
+        let recordedRequests = await transport.recordedRequests()
+        let recorded = try XCTUnwrap(recordedRequests.first)
+        XCTAssertEqual(recorded.httpMethod, "POST")
+        XCTAssertEqual(recorded.url?.path, "/api/workspace.done.set")
+        XCTAssertEqual(recorded.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        // The Mac refuses this route to any request that names an Origin.
+        XCTAssertNil(recorded.value(forHTTPHeaderField: "Origin"))
+        XCTAssertEqual(
+            try ConversationEventCoding.makeDecoder().decode(
+                RemoteWorkspaceDoneRequest.self,
+                from: try XCTUnwrap(recorded.httpBody)
+            ),
+            request
+        )
+    }
+
     func testConversationReadAcknowledgementUsesAuthenticatedPOSTContract() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Data(#"{"protocolVersion":"1.0","result":"acknowledged"}"#.utf8)),

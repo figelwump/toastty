@@ -84,6 +84,9 @@ public protocol GatewayClientProtocol: Sendable {
     func acknowledgeConversationRead(
         _ request: RemoteConversationReadAcknowledgementRequest
     ) async throws -> RemoteConversationReadAcknowledgementResponse
+    func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest
+    ) async throws -> RemoteWorkspaceDoneResponse
 }
 
 public extension GatewayClientProtocol {
@@ -107,6 +110,12 @@ public extension GatewayClientProtocol {
     func answerQuestion(
         _ request: RemoteQuestionAnswerRequest
     ) async throws -> RemoteQuestionAnswerResult {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest
+    ) async throws -> RemoteWorkspaceDoneResponse {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -261,6 +270,28 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         return try mapCompatibility {
             let decoded = try ConversationEventCoding.makeDecoder().decode(
                 RemoteConversationReadAcknowledgementResponse.self,
+                from: response.body
+            )
+            guard decoded.protocolVersion == RemoteGatewayProtocol.version else {
+                throw GatewayCompatibilityError.unsupportedProtocolVersion(
+                    decoded.protocolVersion
+                )
+            }
+            return decoded
+        }
+    }
+
+    public func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest
+    ) async throws -> RemoteWorkspaceDoneResponse {
+        let response = try await perform(
+            method: "POST",
+            path: "/api/workspace.done.set",
+            body: try encode(request)
+        )
+        return try mapCompatibility {
+            let decoded = try ConversationEventCoding.makeDecoder().decode(
+                RemoteWorkspaceDoneResponse.self,
                 from: response.body
             )
             guard decoded.protocolVersion == RemoteGatewayProtocol.version else {

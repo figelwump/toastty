@@ -41,9 +41,18 @@ protocol LiveConnectionRuntime: Sendable {
     func acknowledgeConversationRead(
         _ request: RemoteConversationReadAcknowledgementRequest
     ) async throws -> RemoteConversationReadAcknowledgementResponse?
+    func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest
+    ) async throws -> RemoteWorkspaceDoneResponse?
 }
 
 extension LiveConnectionRuntime {
+    func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest
+    ) async throws -> RemoteWorkspaceDoneResponse? {
+        nil
+    }
+
     func sendMessage(
         conversationID: RemoteConversationID,
         text: String,
@@ -148,6 +157,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteConversationReadAcknowledgementResponse? {
         try await coordinator.acknowledgeConversationRead(request)
     }
+
+    func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest
+    ) async throws -> RemoteWorkspaceDoneResponse? {
+        try await coordinator.setWorkspaceDone(request)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -178,6 +193,7 @@ final class LiveSessionsController {
     private var coordinatorTask: Task<Void, Never>?
     private var sessionsTask: Task<Void, Never>?
     private var coordinatorState = ConnectionCoordinator.State()
+    private var deviceScopes: [RemoteDeviceScope] = []
     private var sessionsState = SessionsRuntime.State()
     /// Carries per-session bucket-entry anchors across snapshots so home
     /// lists reorder only on status transitions, not on streamed activity.
@@ -203,6 +219,22 @@ final class LiveSessionsController {
         self.onFreshness = onFreshness
         self.onTerminal = onTerminal
         self.manualRefreshPresentationDelay = manualRefreshPresentationDelay
+        homeController.installSubspaceDone { [runtime] workspaceID, isDone in
+            do {
+                let response = try await runtime.setWorkspaceDone(
+                    RemoteWorkspaceDoneRequest(workspaceID: workspaceID, done: isDone)
+                )
+                switch response?.result {
+                case .updated?, .unchanged?: return .applied
+                case .notSubspace?, .workspaceNotFound?, .workInProgress?: return .refused
+                // The connection dropped or the Mac stopped accepting the
+                // change between the tap and the request.
+                case nil: return .failed
+                }
+            } catch {
+                return .failed
+            }
+        }
         homeController.installConversationLifecycle(
             onOpen: { [weak self] conversationID in
                 Task { @MainActor [weak self] in
@@ -373,7 +405,15 @@ final class LiveSessionsController {
     }
 
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
+        deviceScopes = scopes
+        homeController.setHostSupportsSubspaceDone(acceptsSubspaceDone)
         await runtime.updateDeviceScopes(scopes)
+    }
+
+    /// The Mac takes a done change only from a device allowed to send, so a
+    /// read-only device shows the mark without a checkbox.
+    private var acceptsSubspaceDone: Bool {
+        coordinatorState.capabilities.contains(.workspaceDone) && deviceScopes.contains(.send)
     }
 
     func stopObserving() {
@@ -475,12 +515,14 @@ final class LiveSessionsController {
         let snapshot = sessionsState.snapshot?.presentation(
             hostName: hostName,
             stateTransitions: &stateTransitions
-        ) ?? homeController.snapshot
+        ) ?? homeController.hostSnapshot
         homeController.update(
             snapshot: snapshot,
             connectionState: connectionState,
             freshness: freshness,
-            latestTransportFailure: coordinatorState.latestTransportFailure
+            latestTransportFailure: coordinatorState.latestTransportFailure,
+            hostSupportsSubspaceDone: acceptsSubspaceDone,
+            hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)
     }

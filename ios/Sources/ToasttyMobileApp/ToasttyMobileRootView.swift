@@ -166,14 +166,16 @@ struct ToasttyMobileRootView: View {
             ToasttyHomeView(
                 controller: sessionController.homeController,
                 refresh: sessionController.refreshLiveSessions,
-                onSettings: { showsSettings = true }
+                onSettings: { showsSettings = true },
+                openWorkspace: openWorkspace
             )
                 .navigationDestination(for: ToasttyMobileRoute.self) { route in
                     switch route {
                     case .workspace(let workspaceID):
                         ToasttyWorkspaceView(
                             workspaceID: workspaceID,
-                            controller: sessionController.homeController
+                            controller: sessionController.homeController,
+                            openWorkspace: openWorkspace
                         )
                     case .conversation(let conversationID):
                         conversationScreen(for: conversationID)
@@ -232,6 +234,13 @@ struct ToasttyMobileRootView: View {
             .easeInOut(duration: 0.25),
             value: sessionController.homeController.removedSelectionMessage
         )
+    }
+
+    /// Pushes a workspace from a row or menu, which cannot use a
+    /// navigation link. Subspaces open from their parent this way.
+    private func openWorkspace(_ workspaceID: UUID) {
+        guard navigationPath.last != .workspace(workspaceID) else { return }
+        navigationPath.append(.workspace(workspaceID))
     }
 
     private func handleDeepLink(_ url: URL) {

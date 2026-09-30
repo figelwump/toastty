@@ -87,6 +87,21 @@ final class RemoteAccessReadAcknowledgementBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's authenticated done request into the main-actor-owned
+/// workspace state.
+final class RemoteAccessWorkspaceDoneBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func setDone(
+        _ request: RemoteWorkspaceDoneRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteWorkspaceDoneResult {
+        MainActor.assumeIsolated {
+            service?.setWorkspaceDone(request, device: device) ?? .workspaceNotFound
+        }
+    }
+}
+
 enum RemoteAccessPreferences {
     static let defaultPort: UInt16 = 42871
     private static let enabledKey = "toastty.remoteAccess.enabled"
@@ -317,6 +332,7 @@ final class RemoteAccessService: ObservableObject {
     private let sendBridge = RemoteAccessSendBridge()
     private let questionAnswerBridge = RemoteAccessQuestionAnswerBridge()
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
+    private let workspaceDoneBridge = RemoteAccessWorkspaceDoneBridge()
     private var coordinator = RemoteInputCoordinator()
     private let handler: RemoteGatewayRequestHandler
     private let server: any RemoteAccessGatewayServing
@@ -439,6 +455,9 @@ final class RemoteAccessService: ObservableObject {
             },
             readAcknowledgementHandler: { [readAcknowledgementBridge] request, device in
                 readAcknowledgementBridge.acknowledge(request, device: device)
+            },
+            workspaceDoneHandler: { [workspaceDoneBridge] request, device in
+                workspaceDoneBridge.setDone(request, device: device)
             }
         )
         self.server = gatewayServerFactory(handler)
@@ -457,6 +476,7 @@ final class RemoteAccessService: ObservableObject {
         sendBridge.service = self
         questionAnswerBridge.service = self
         readAcknowledgementBridge.service = self
+        workspaceDoneBridge.service = self
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
             switch device.authKind {
@@ -629,7 +649,15 @@ final class RemoteAccessService: ObservableObject {
             // Passing the claimed colors skips deriving a fallback for every
             // key on every action; color changes have their own trigger.
             let colors = self.annotationStyleStore.colorTokensByKey
-            if Self.workspaceInventory(state: previousState, annotationColorTokens: colors)
+            // The inventory names a spawner by conversation, which needs the
+            // live session map, so this comparison cannot see a change of
+            // spawner alone. Only a parent change makes one.
+            var inventoryChanged = false
+            if case .setWorkspaceParent = action {
+                inventoryChanged = true
+            }
+            if inventoryChanged
+                || Self.workspaceInventory(state: previousState, annotationColorTokens: colors)
                 != Self.workspaceInventory(state: nextState, annotationColorTokens: colors) {
                 self.scheduleSessionListBroadcast()
             }
@@ -846,8 +874,26 @@ final class RemoteAccessService: ObservableObject {
             generatedAt: date,
             workspaces: Self.workspaceInventory(
                 state: store.state, metadata: panelMetadataCache.metadata, associations: associations,
-                annotationColorTokens: annotationStyleStore.colorTokensByKey)
+                annotationColorTokens: annotationStyleStore.colorTokensByKey,
+                conversationIDsBySessionID: Self.conversationIDsBySessionID(
+                    activeSessionIDByConversationID, listed: conversations))
         )
+    }
+
+    /// Maps each managed session to its conversation, limited to the
+    /// conversations this snapshot lists, so a subspace never names a spawner
+    /// the client cannot open.
+    static func conversationIDsBySessionID(
+        _ activeSessionIDByConversationID: [RemoteConversationID: String],
+        listed conversations: [RemoteConversationSummary]
+    ) -> [String: RemoteConversationID] {
+        var result: [String: RemoteConversationID] = [:]
+        for conversation in conversations {
+            if let sessionID = activeSessionIDByConversationID[conversation.conversationID] {
+                result[sessionID] = conversation.conversationID
+            }
+        }
+        return result
     }
 
     /// Keys missing from `annotationColorTokens` resolve to the style store's
@@ -855,8 +901,10 @@ final class RemoteAccessService: ObservableObject {
     static func workspaceInventory(
         state: AppState, metadata: [UUID: RemotePanelMetadataCache.Metadata] = [:],
         associations: [UUID: RemoteConversationID] = [:],
-        annotationColorTokens: [String: AnnotationColorToken] = [:]
+        annotationColorTokens: [String: AnnotationColorToken] = [:],
+        conversationIDsBySessionID: [String: RemoteConversationID] = [:]
     ) -> [RemoteWorkspaceSummary] {
+        let parentIDs = state.subspaceParentIDsByWorkspaceID()
         var ids: [UUID] = []
         var seen: Set<UUID> = []
         for window in state.windows {
@@ -905,8 +953,17 @@ final class RemoteAccessService: ObservableObject {
                         color: WorkspaceAnnotationChipPalette.hexString(token.baseHexValue)
                     )
                 }
+            // A spawner and a done mark mean something only for a nested
+            // workspace, so they travel with a valid parent link.
+            let parentID = parentIDs[id]
             return RemoteWorkspaceSummary(
-                id: id, title: workspace.title, panels: panels, annotations: annotations)
+                id: id, title: workspace.title, panels: panels, annotations: annotations,
+                parentWorkspaceID: parentID,
+                spawningConversationID: parentID == nil
+                    ? nil : workspace.spawningSessionID.flatMap { conversationIDsBySessionID[$0] },
+                primaryAnnotationKey: workspace.primaryAnnotationKey
+                    .flatMap { workspace.annotations[$0] == nil ? nil : $0 },
+                doneAt: parentID == nil ? nil : workspace.doneAt)
         }
     }
 
@@ -1197,6 +1254,70 @@ final class RemoteAccessService: ObservableObject {
         // coalesced store-action broadcast scheduled for the same mutation.
         broadcastSessionList()
         return .acknowledged
+    }
+
+    /// Marks a subspace done or open again for a remote client, through the
+    /// same reducer action as the sidebar checkbox, so its rules (subspaces
+    /// only, an existing mark keeps its time) hold for every caller.
+    func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest,
+        device _: RemoteDeviceRecord
+    ) -> RemoteWorkspaceDoneResult {
+        var result = RemoteWorkspaceDoneResult.workspaceNotFound
+        if isReady, let workspace = store.state.workspacesByID[request.workspaceID] {
+            result = Self.workspaceDoneResult(
+                requestedDone: request.done,
+                isSubspace: store.state.subspaceParentIDsByWorkspaceID()[request.workspaceID] != nil,
+                isDone: workspace.doneAt != nil,
+                hasWorkInProgress: scanConversationCandidates(mintingIDs: false).contains { candidate in
+                    guard candidate.workspaceID == request.workspaceID else { return false }
+                    switch candidate.presentationStatus {
+                    case .working?, .needsApproval?, .error?: return true
+                    case .ready?, .idle?, nil: return false
+                    }
+                }
+            )
+            if result == .updated {
+                let didChange = store.send(.setWorkspaceDone(
+                    workspaceID: request.workspaceID,
+                    doneAt: request.done ? Date() : nil
+                ))
+                if didChange == false { result = .unchanged }
+            }
+        }
+        ToasttyLog.info(
+            "Remote workspace done request evaluated",
+            category: .automation,
+            metadata: [
+                "workspace_id": request.workspaceID.uuidString,
+                "done": String(request.done),
+                "result": result.rawValue,
+            ]
+        )
+        if result == .updated {
+            // Publish now so the requesting client confirms its optimistic
+            // check; this cancels the coalesced broadcast the store action
+            // scheduled for the same change.
+            broadcastSessionList()
+        }
+        return result
+    }
+
+    /// A client offers the checkbox only on a quiet subspace, so a request
+    /// to mark one done while a session works, waits on approval, or failed
+    /// is late: an agent started after the tap. Refusing it keeps a delayed
+    /// request from restoring a mark that new work just cleared. Opening a
+    /// task again is always allowed.
+    nonisolated static func workspaceDoneResult(
+        requestedDone: Bool,
+        isSubspace: Bool,
+        isDone: Bool,
+        hasWorkInProgress: Bool
+    ) -> RemoteWorkspaceDoneResult {
+        guard isSubspace else { return .notSubspace }
+        guard isDone != requestedDone else { return .unchanged }
+        if requestedDone, hasWorkInProgress { return .workInProgress }
+        return .updated
     }
 
     private func logReadAcknowledgement(

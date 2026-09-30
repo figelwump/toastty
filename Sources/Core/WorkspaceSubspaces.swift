@@ -31,6 +31,20 @@ extension AppState {
         }
     }
 
+    /// Every subspace link the sidebar honors, keyed by the nested
+    /// workspace.
+    public func subspaceParentIDsByWorkspaceID() -> [UUID: UUID] {
+        var result: [UUID: UUID] = [:]
+        for window in windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = workspacesByID[workspaceID],
+                      isValidParentLink(from: workspace, in: window) else { continue }
+                result[workspaceID] = workspace.parentWorkspaceID
+            }
+        }
+        return result
+    }
+
     /// The parent that nesting `workspaceID` under `requestedParentID` would
     /// resolve to, or `nil` when the request is invalid. A requested parent
     /// that is itself a subspace resolves to its root so nesting stays one

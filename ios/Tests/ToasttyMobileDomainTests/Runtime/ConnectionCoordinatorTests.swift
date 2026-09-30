@@ -371,6 +371,45 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
+    func testWorkspaceDoneIsSentOnlyToAHostThatAdvertisesIt() async throws {
+        let run = runID(4)
+        let request = RemoteWorkspaceDoneRequest(workspaceID: UUID(), done: true)
+        for (capabilities, expectsRequest) in [
+            ([RemoteGatewayCapability](), false),
+            ([.workspaceDone], true),
+        ] {
+            let operations = OperationLog()
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse(capabilities: capabilities))],
+                sessions: [.success(snapshot(runID: run, title: "Seed"))],
+                events: []
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(
+                    operations: operations,
+                    connections: [.success(subscription)]
+                )
+            )
+
+            // Not live yet, so nothing is sent whatever the host supports.
+            let early = try await coordinator.setWorkspaceDone(request)
+            XCTAssertNil(early)
+
+            await coordinator.connectIfNeeded()
+            await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh")))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            let response = try await coordinator.setWorkspaceDone(request)
+
+            XCTAssertEqual(response?.result, expectsRequest ? .updated : nil)
+            let sent = await gateway.recordedWorkspaceDoneRequests()
+            XCTAssertEqual(sent, expectsRequest ? [request] : [])
+            await coordinator.suspend()
+        }
+    }
+
     func testConversationBuffersLivePageBeforeRESTAndResnapshotsFromNilCursor() async throws {
         let operations = OperationLog()
         let firstRESTGate = CancellationAwareGate()
@@ -2001,6 +2040,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var sendRequests: [RemoteMessageSendRequest] = []
     private var questionAnswerRequests: [RemoteQuestionAnswerRequest] = []
     private var readAcknowledgements: [RemoteConversationReadAcknowledgementRequest] = []
+    private var workspaceDoneRequests: [RemoteWorkspaceDoneRequest] = []
 
     init(
         operations: OperationLog,
@@ -2077,6 +2117,14 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return RemoteConversationReadAcknowledgementResponse(result: .acknowledged)
     }
 
+    func setWorkspaceDone(
+        _ request: RemoteWorkspaceDoneRequest
+    ) async throws -> RemoteWorkspaceDoneResponse {
+        workspaceDoneRequests.append(request)
+        return RemoteWorkspaceDoneResponse(result: .updated)
+    }
+
+    func recordedWorkspaceDoneRequests() -> [RemoteWorkspaceDoneRequest] { workspaceDoneRequests }
     func helloCallCount() -> Int { helloCalls }
     func recordedEventCursors() -> [ConversationEventCursor?] { eventCursors }
     func recordedEventRequests() -> [RemoteGatewayEventsRequest] { eventRequests }

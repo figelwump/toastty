@@ -15,6 +15,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
     private let openPromptConversationID = "B1000000-0000-0000-0000-000000000007"
     private let panelOnlyWorkspaceID = "A1000000-0000-0000-0000-000000000004"
+    private let needsApprovalSubspaceID = "A1000000-0000-0000-0000-000000000011"
+    private let readySubspaceID = "A1000000-0000-0000-0000-000000000012"
+    private let workingSubspaceID = "A1000000-0000-0000-0000-000000000013"
+    private let doneSubspaceID = "A1000000-0000-0000-0000-000000000014"
+    private let subspaceSessionID = "B1000000-0000-0000-0000-000000000009"
 
     private struct TranscriptScrollTraceSample: Decodable {
         let elapsed: Double
@@ -461,10 +466,128 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             app.buttons["toastty-mobile-grouped-card-\(activeResearchConversationID)"], in: app
         ))
         XCTAssertTrue(scrollHomeTo(hiddenFooter, in: app))
-        XCTAssertEqual(hiddenFooter.label, "1 idle session hidden")
+        XCTAssertEqual(hiddenFooter.label, "1 idle session and 1 done subspace hidden")
         attachScreenshot(named: "fixture-home-active-rows", of: app)
 
         filter.buttons["All"].tap()
+    }
+
+    func testSubspacesNestUnderTheirParentAndActiveHidesQuietOnes() {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        let group = app.buttons["toastty-subspaces-group-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(scrollHomeTo(group, in: app))
+        XCTAssertEqual(group.label, "Subspaces, 4, 1 ready, 1 needs approval")
+        XCTAssertEqual(group.value as? String, "Expanded")
+
+        let approval = app.buttons["toastty-subspace-row-\(needsApprovalSubspaceID)"]
+        let done = app.buttons["toastty-subspace-row-\(doneSubspaceID)"]
+        XCTAssertTrue(scrollHomeTo(approval, in: app))
+        XCTAssertEqual(
+            approval.label,
+            "compact-session-rows, subspace, needs approval, Push feat/compact-session-rows?, github-pr: PR #36"
+        )
+        // The primary annotation is the row's one chip.
+        XCTAssertTrue(
+            app.buttons["toastty-subspace-row-\(readySubspaceID)"].label.hasSuffix("ticket: TOAST-45")
+        )
+        XCTAssertTrue(scrollHomeTo(done, in: app))
+        XCTAssertTrue(done.label.contains("subspace, done"))
+        // A subspace is a row under its parent, not a workspace of its own.
+        XCTAssertFalse(app.buttons["toastty-mobile-workspace-\(needsApprovalSubspaceID)"].exists)
+        attachScreenshot(named: "fixture-home-subspaces", of: app)
+
+        // Collapsing folds the rows away until a subspace needs the user;
+        // one does here, so the group stays open.
+        group.tap()
+        XCTAssertTrue(approval.exists)
+
+        app.segmentedControls["toastty-mobile-workspace-session-filter"].buttons["Active"].tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(scrollHomeTo(group, in: app))
+        XCTAssertEqual(group.label, "Subspaces, 3/4, 1 ready, 1 needs approval")
+        attachScreenshot(named: "fixture-home-subspaces-active", of: app)
+        app.segmentedControls["toastty-mobile-workspace-session-filter"].buttons["All"].tap()
+        group.tap()
+    }
+
+    func testSubspaceCheckboxMarksDoneAndUndoRestoresIt() {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        let row = app.buttons["toastty-subspace-row-\(readySubspaceID)"]
+        let checkbox = app.buttons["toastty-subspace-done-\(readySubspaceID)"]
+        XCTAssertTrue(scrollHomeTo(checkbox, in: app))
+        XCTAssertEqual(checkbox.label, "Mark as Done")
+        // A row that is working or waiting on approval has a status mark,
+        // not a checkbox.
+        XCTAssertFalse(app.buttons["toastty-subspace-done-\(needsApprovalSubspaceID)"].exists)
+        XCTAssertFalse(app.buttons["toastty-subspace-done-\(workingSubspaceID)"].exists)
+
+        checkbox.tap()
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertEqual(notice.label, "Marked done")
+        XCTAssertTrue(waitForLabel(checkbox, "Mark as Not Done"))
+        XCTAssertTrue(row.label.contains("subspace, done"))
+        // Checking the box does not open the subspace.
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
+        XCTAssertEqual(
+            app.buttons["toastty-subspaces-group-\(toasttyWorkspaceID)"].label,
+            "Subspaces, 4, 1 needs approval"
+        )
+        attachScreenshot(named: "fixture-subspace-marked-done", of: app)
+
+        app.buttons["toastty-subspace-done-undo"].tap()
+        XCTAssertTrue(waitForLabel(checkbox, "Mark as Done"))
+        XCTAssertTrue(row.label.contains("subspace, ready"))
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
+    }
+
+    func testSpawnerChipFiltersItsSubspacesAndARowOpensTheSubspace() {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        let chip = app.buttons["toastty-session-subspaces-\(pendingInteractionID)"]
+        XCTAssertTrue(scrollHomeTo(chip, in: app))
+        XCTAssertEqual(chip.label, "3 subspaces")
+        // The session row under the chip still opens the conversation.
+        XCTAssertTrue(app.buttons["toastty-mobile-grouped-card-\(pendingInteractionID)"].isHittable)
+
+        chip.tap()
+        let clear = app.buttons["toastty-subspaces-filter-clear"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        XCTAssertEqual(clear.label, "Only subspaces from Mobile gateway design")
+        XCTAssertFalse(app.buttons["toastty-subspace-row-\(workingSubspaceID)"].exists)
+        XCTAssertEqual(
+            app.buttons["toastty-subspaces-group-\(toasttyWorkspaceID)"].label,
+            "Subspaces, 3/4, 1 ready, 1 needs approval"
+        )
+        attachScreenshot(named: "fixture-subspaces-filtered", of: app)
+        XCTAssertTrue(scrollHomeTo(clear, in: app))
+        clear.tap()
+        XCTAssertTrue(
+            scrollHomeTo(app.buttons["toastty-subspace-row-\(workingSubspaceID)"], in: app)
+        )
+
+        let subspace = app.buttons["toastty-subspace-row-\(needsApprovalSubspaceID)"]
+        XCTAssertTrue(scrollHomeTo(subspace, in: app))
+        subspace.tap()
+        XCTAssertTrue(app.navigationBars["compact-session-rows"].waitForExistence(timeout: 5))
+        let breadcrumb = app.staticTexts["toastty-mobile-workspace-breadcrumb"]
+        XCTAssertTrue(breadcrumb.exists)
+        XCTAssertEqual(breadcrumb.label, "Subspace of toastty")
+        let session = app.buttons["toastty-mobile-workspace-session-\(subspaceSessionID)"]
+        XCTAssertTrue(scrollWorkspaceTo(session, in: app))
+        attachScreenshot(named: "fixture-subspace-screen", of: app)
+        session.tap()
+        XCTAssertTrue(waitForLabel(
+            app.staticTexts["toastty-mobile-conversation-title"], "Implement compact rows"
+        ))
+
+        // Back returns to the subspace, then to Home.
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["compact-session-rows"].waitForExistence(timeout: 5))
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 5))
     }
 
     func testSessionRowLongPressShowsDetailCard() {
@@ -505,7 +628,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(scratchpad.isHittable)
         XCTAssertTrue(next.isHittable)
         XCTAssertGreaterThanOrEqual(next.frame.minX, scratchpad.frame.maxX)
-        XCTAssertEqual(next.value as? String, "4 need you")
+        XCTAssertEqual(next.value as? String, "6 need you")
         attachScreenshot(named: "fixture-conversation-next-and-scratchpad", of: app)
 
         // Tap opens the most urgent session: the one waiting on approval.
@@ -1864,6 +1987,14 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["toastty"].exists)
         XCTAssertTrue(context.exists)
         XCTAssertEqual(context.label, "4 sessions")
+    }
+
+    /// The session filter persists across launches of the installed app, so
+    /// a test that needs All selects it rather than assuming it.
+    private func showAllSessions(in app: XCUIApplication) {
+        let all = app.segmentedControls["toastty-mobile-workspace-session-filter"].buttons["All"]
+        XCTAssertTrue(all.waitForExistence(timeout: 10))
+        if all.isSelected == false { all.tap() }
     }
 
     private func waitForLabel(

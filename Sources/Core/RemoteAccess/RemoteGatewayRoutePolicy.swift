@@ -12,6 +12,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case sessions
     case conversationEvents
     case conversationReadAcknowledge
+    case workspaceDone
     case questionAnswer
     case messageSend
     case messageSendWithAttachments
@@ -29,6 +30,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .sessions: "/api/sessions"
         case .conversationEvents: "/api/conversation.events.get"
         case .conversationReadAcknowledge: "/api/conversation.read.acknowledge"
+        case .workspaceDone: "/api/workspace.done.set"
         case .questionAnswer: "/api/conversation.question.answer"
         case .messageSendWithAttachments: RemoteAttachmentPolicy.sendPath
         case .messageSend: "/api/conversation.message.send"
@@ -80,6 +82,9 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .sessions: .init(route: .sessions, method: "GET", origin: .optionalAllowed, authentication: .browserOrNative, scope: .read),
         .conversationEvents: .init(route: .conversationEvents, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
         .conversationReadAcknowledge: .init(route: .conversationReadAcknowledge, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
+        // Changing workspace state is a write, so it needs the send scope
+        // even though it sends no text to an agent.
+        .workspaceDone: .init(route: .workspaceDone, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .questionAnswer: .init(route: .questionAnswer, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSendWithAttachments: .init(route: .messageSendWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSend: .init(route: .messageSend, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .send),
