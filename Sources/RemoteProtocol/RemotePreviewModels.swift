@@ -6,14 +6,35 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
     public var panels: [RemoteWorkspacePanel]
     /// Sorted by key. Omitted from the wire when empty, and absent from older hosts.
     public var annotations: [RemoteWorkspaceAnnotation]
+    /// The top-level workspace this one is nested under as a subspace. The
+    /// host sends only links its own sidebar honors, one level deep. Absent
+    /// for top-level workspaces and from older hosts, which clients show as a
+    /// flat list.
+    public var parentWorkspaceID: UUID?
+    /// The conversation of the session that spawned this subspace, while that
+    /// session is still one the host lists.
+    public var spawningConversationID: RemoteConversationID?
+    /// Key of the annotation that best identifies this workspace; always one
+    /// of `annotations`.
+    public var primaryAnnotationKey: String?
+    /// When this subspace's task was marked done; absent while it is open.
+    public var doneAt: Date?
     public init(
         id: UUID, title: String, panels: [RemoteWorkspacePanel],
-        annotations: [RemoteWorkspaceAnnotation] = []
+        annotations: [RemoteWorkspaceAnnotation] = [],
+        parentWorkspaceID: UUID? = nil,
+        spawningConversationID: RemoteConversationID? = nil,
+        primaryAnnotationKey: String? = nil,
+        doneAt: Date? = nil
     ) {
         self.id = id
         self.title = title
         self.panels = panels
         self.annotations = annotations
+        self.parentWorkspaceID = parentWorkspaceID
+        self.spawningConversationID = spawningConversationID
+        self.primaryAnnotationKey = primaryAnnotationKey
+        self.doneAt = doneAt
     }
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -21,14 +42,26 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         try container.encode(title, forKey: .title)
         try container.encode(panels, forKey: .panels)
         if !annotations.isEmpty { try container.encode(annotations, forKey: .annotations) }
+        try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
+        try container.encodeIfPresent(spawningConversationID, forKey: .spawningConversationID)
+        try container.encodeIfPresent(primaryAnnotationKey, forKey: .primaryAnnotationKey)
+        try container.encodeIfPresent(doneAt, forKey: .doneAt)
     }
-    private enum CodingKeys: String, CodingKey { case id, title, panels, annotations }
+    private enum CodingKeys: String, CodingKey {
+        case id, title, panels, annotations
+        case parentWorkspaceID, spawningConversationID, primaryAnnotationKey, doneAt
+    }
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         panels = try container.decode([RemoteWorkspacePanel].self, forKey: .panels)
         annotations = try container.decodeIfPresent([RemoteWorkspaceAnnotation].self, forKey: .annotations) ?? []
+        parentWorkspaceID = try container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)
+        spawningConversationID = try container.decodeIfPresent(
+            RemoteConversationID.self, forKey: .spawningConversationID)
+        primaryAnnotationKey = try container.decodeIfPresent(String.self, forKey: .primaryAnnotationKey)
+        doneAt = try container.decodeIfPresent(Date.self, forKey: .doneAt)
     }
 }
 

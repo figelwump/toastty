@@ -6,17 +6,21 @@ struct ToasttyWorkspaceView: View {
     @State private var showsAllPanels = false
     let workspaceID: UUID
     let controller: HomeScreenController
+    let openWorkspace: (UUID) -> Void
 
     @AppStorage private var storedWorkspaceSessionFilter: String
+    @State private var spawnerFilter: ToasttySpawnerChip?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         workspaceID: UUID,
         controller: HomeScreenController,
+        openWorkspace: @escaping (UUID) -> Void = { _ in },
         defaults: UserDefaults = .standard
     ) {
         self.workspaceID = workspaceID
         self.controller = controller
+        self.openWorkspace = openWorkspace
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
             ToasttyWorkspaceSessionFilter.preferenceKey,
@@ -39,6 +43,7 @@ struct ToasttyWorkspaceView: View {
             }
         }
         .background(ToasttyDesignTokens.background)
+        .toasttySubspaceDoneNotice(controller)
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -55,8 +60,22 @@ struct ToasttyWorkspaceView: View {
         let visibleConversations = selectedWorkspaceSessionFilter.conversations(in: workspace)
         let sortedPanels = ToasttyWorkspacePanels.sorted(workspace.panels)
         let visiblePanels = showsAllPanels ? sortedPanels : Array(sortedPanels.prefix(4))
+        let subspaceRows = selectedWorkspaceSessionFilter.subspaceRows(of: workspace.id, in: controller.snapshot)
+        let subspaceTotal = controller.snapshot.subspaceRows(of: workspace.id).count
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
+                if let parent = controller.snapshot.parent(of: workspace.id) {
+                    // A subspace says where it is nested; Back returns to
+                    // wherever it was opened from.
+                    Text("\(parent.title) › \(workspace.title)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 6)
+                        .accessibilityLabel("Subspace of \(parent.title)")
+                        .accessibilityIdentifier("toastty-mobile-workspace-breadcrumb")
+                }
                 if !workspace.annotations.isEmpty {
                     ToasttyWorkspaceAnnotationBlock(annotations: workspace.annotations)
                         .padding(.bottom, 4)
@@ -90,7 +109,10 @@ struct ToasttyWorkspaceView: View {
                     .padding(.horizontal, 6)
                     .accessibilityIdentifier("toastty-mobile-workspace-context")
 
-                if visibleConversations.isEmpty {
+                if visibleConversations.isEmpty, subspaceTotal > 0 {
+                    // The subspaces below are this workspace's content.
+                    EmptyView()
+                } else if visibleConversations.isEmpty {
                     ContentUnavailableView(
                         workspace.conversations.isEmpty
                             ? "No sessions yet"
@@ -108,15 +130,33 @@ struct ToasttyWorkspaceView: View {
                 } else {
                     VStack(spacing: 2) {
                         ForEach(visibleConversations) { conversation in
+                            let chip = ToasttySpawnerChip.chip(
+                                for: conversation, in: controller.snapshot,
+                                filter: selectedWorkspaceSessionFilter
+                            )
                             ToasttySessionRow(
                                 conversation: conversation,
                                 freshness: controller.freshness,
                                 accessibilityIdentifier:
                                     "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
+                                spawnerChip: chip,
+                                isSpawnerFilterActive: chip != nil
+                                    && spawnerFilter?.conversationID == conversation.id,
+                                onSpawnerChip: { toggleSpawnerFilter($0, in: workspace) },
                                 onOpen: onOpen
                             )
                         }
                     }
+                }
+                if !subspaceRows.isEmpty {
+                    ToasttySubspaceGroup(
+                        parent: workspace,
+                        rows: subspaceRows,
+                        total: subspaceTotal,
+                        controller: controller,
+                        spawnerFilter: $spawnerFilter,
+                        openWorkspace: openWorkspace
+                    )
                 }
             }
             .padding(.horizontal, 14)
@@ -126,7 +166,10 @@ struct ToasttyWorkspaceView: View {
             .frame(maxWidth: .infinity)
             // Reorders happen only on status-bucket transitions; animate so
             // the moving row stays trackable.
-            .animation(reduceMotion ? nil : .default, value: visibleConversations.map(\.id))
+            .animation(
+                reduceMotion ? nil : .default,
+                value: visibleConversations.map(\.id) + subspaceRows.map(\.id)
+            )
         }
         .scrollIndicators(.hidden)
         .background(ToasttyDesignTokens.background)
@@ -151,6 +194,16 @@ struct ToasttyWorkspaceView: View {
         }
         .pickerStyle(.segmented)
         .accessibilityIdentifier("toastty-mobile-workspace-session-filter")
+    }
+
+    /// A chip whose subspaces sit under another workspace opens that
+    /// workspace, since this screen lists only its own.
+    private func toggleSpawnerFilter(_ chip: ToasttySpawnerChip, in workspace: MobileWorkspace) {
+        guard chip.parentWorkspaceID == workspace.id else {
+            openWorkspace(chip.parentWorkspaceID)
+            return
+        }
+        spawnerFilter = spawnerFilter?.conversationID == chip.conversationID ? nil : chip
     }
 
     private func onOpen(_ conversation: MobileConversation) {

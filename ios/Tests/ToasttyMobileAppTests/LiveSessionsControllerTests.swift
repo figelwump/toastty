@@ -363,6 +363,39 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertEqual(scopes, [.read, .approve])
     }
 
+    func testSubspaceDoneNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        func connect(capabilities: Set<RemoteGatewayCapability>) {
+            subject.consumeSessionsState(SessionsRuntime.State(
+                connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+            ))
+            subject.consumeCoordinatorState(ConnectionCoordinator.State(
+                connectionGeneration: 7, phase: .live, capabilities: capabilities
+            ))
+        }
+
+        connect(capabilities: [.workspaceDone])
+        XCTAssertFalse(home.canMarkSubspacesDone, "The device's access is not known yet")
+
+        await subject.updateDeviceScopes([.read])
+        XCTAssertFalse(home.canMarkSubspacesDone, "A read-only device cannot change the Mac")
+
+        await subject.updateDeviceScopes([.read, .send])
+        XCTAssertTrue(home.canMarkSubspacesDone)
+
+        connect(capabilities: [])
+        XCTAssertFalse(home.canMarkSubspacesDone, "An older Mac does not take the change")
+    }
+
     func testActiveConversationSendAndReceiptDismissUseDomainRuntime() async throws {
         let runtime = LiveRuntimeSpy()
         let home = HomeScreenController(

@@ -50,6 +50,10 @@ public final class RemoteGatewayRequestHandler {
         RemoteConversationReadAcknowledgementRequest,
         RemoteDeviceRecord
     ) -> RemoteConversationReadAcknowledgementResult
+    public typealias WorkspaceDoneHandler = (
+        RemoteWorkspaceDoneRequest,
+        RemoteDeviceRecord
+    ) -> RemoteWorkspaceDoneResult
 
     private enum AuthResult {
         case success(RemoteDeviceRecord)
@@ -62,6 +66,7 @@ public final class RemoteGatewayRequestHandler {
     private static let maximumNativeExchangeBodyBytes = 2 * 1024
     private static let maximumNativeRevokeBodyBytes = 256
     private static let maximumReadAcknowledgementBodyBytes = 1024
+    private static let maximumWorkspaceDoneBodyBytes = 1024
 
     private let deviceStore: RemoteDeviceStore
     private let auditLog: RemoteAccessAuditLog
@@ -69,6 +74,7 @@ public final class RemoteGatewayRequestHandler {
     private let questionAnswerHandler: QuestionAnswerHandler?
     private let sendHandler: SendHandler?
     private let readAcknowledgementHandler: ReadAcknowledgementHandler?
+    private let workspaceDoneHandler: WorkspaceDoneHandler?
     private let nativeIdentityForTesting: String?
     private var configuration: RemoteGatewayConfiguration
     private var pairingRateLimiter: RemoteAccessRateLimiter
@@ -158,6 +164,7 @@ public final class RemoteGatewayRequestHandler {
         sendHandler: SendHandler? = nil,
         questionAnswerHandler: QuestionAnswerHandler? = nil,
         readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
+        workspaceDoneHandler: WorkspaceDoneHandler? = nil,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
     ) {
@@ -169,6 +176,7 @@ public final class RemoteGatewayRequestHandler {
             sendHandler: sendHandler,
             questionAnswerHandler: questionAnswerHandler,
             readAcknowledgementHandler: readAcknowledgementHandler,
+            workspaceDoneHandler: workspaceDoneHandler,
             // The public production entry point can never inject identity.
             nativeIdentityForTesting: nil,
             pairingRateLimiter: pairingRateLimiter,
@@ -187,6 +195,7 @@ public final class RemoteGatewayRequestHandler {
         sendHandler: SendHandler? = nil,
         questionAnswerHandler: QuestionAnswerHandler? = nil,
         readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
+        workspaceDoneHandler: WorkspaceDoneHandler? = nil,
         nativeIdentityForTesting: String?,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
@@ -198,6 +207,7 @@ public final class RemoteGatewayRequestHandler {
         self.sendHandler = sendHandler
         self.questionAnswerHandler = questionAnswerHandler
         self.readAcknowledgementHandler = readAcknowledgementHandler
+        self.workspaceDoneHandler = workspaceDoneHandler
         self.nativeIdentityForTesting = nativeIdentityForTesting
         self.pairingRateLimiter = pairingRateLimiter
         self.authRateLimiter = authRateLimiter
@@ -309,6 +319,16 @@ public final class RemoteGatewayRequestHandler {
             }
         case .send:
             guard authenticated.scopes.contains(.send) else {
+                if policy.route == .workspaceDone {
+                    // Not a message send, so it has neither a send result to
+                    // return nor a send rejection to audit.
+                    return .respond(errorResponse(
+                        status: 403,
+                        reason: "Forbidden",
+                        code: "send_scope_denied",
+                        message: "Send access is not granted"
+                    ))
+                }
                 auditLog.record(RemoteAccessAuditEntry(
                     at: date,
                     action: policy.route == .questionAnswer ? .questionAnswerRejected : .remoteSendRejected,
@@ -352,6 +372,8 @@ public final class RemoteGatewayRequestHandler {
             return handleConversationEvents(request)
         case .conversationReadAcknowledge:
             return handleConversationReadAcknowledgement(request, device: authenticated)
+        case .workspaceDone:
+            return handleWorkspaceDone(request, device: authenticated, at: date)
         case .questionAnswer:
             return handleQuestionAnswer(request, device: authenticated, at: date)
         case .messageSendWithAttachments:
@@ -563,6 +585,44 @@ public final class RemoteGatewayRequestHandler {
         let body = (try? encoder.encode(RemoteConversationReadAcknowledgementResponse(
             result: result
         ))) ?? Data()
+        return .respond(.json(body: body))
+    }
+
+    private func handleWorkspaceDone(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= Self.maximumWorkspaceDoneBodyBytes,
+              let doneRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteWorkspaceDoneRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected workspace done JSON"
+            ))
+        }
+        guard doneRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        let result = workspaceDoneHandler?(doneRequest, device) ?? .workspaceNotFound
+        if result == .updated {
+            auditLog.record(.init(
+                at: date,
+                action: .workspaceDoneChanged,
+                deviceID: device.id,
+                detail: doneRequest.done ? "done" : "not_done"
+            ))
+        }
+        let body = (try? encoder.encode(RemoteWorkspaceDoneResponse(result: result))) ?? Data()
         return .respond(.json(body: body))
     }
 

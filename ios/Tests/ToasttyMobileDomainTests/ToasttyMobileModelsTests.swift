@@ -22,7 +22,10 @@ final class ToasttyMobileModelsTests: XCTestCase {
         XCTAssertEqual(Set(snapshot.activitySessions.map(\.id)), Set(sourceSessions.map(\.id)))
         XCTAssertEqual(
             snapshot.activitySessions.map(\.state.bucket),
-            [.error, .ready, .ready, .ready, .needsApproval, .working, .working, .idle]
+            [
+                .error, .ready, .ready, .ready, .ready, .ready, .needsApproval, .needsApproval,
+                .working, .working, .working, .idle, .idle,
+            ]
         )
     }
 
@@ -303,6 +306,123 @@ final class ToasttyMobileModelsTests: XCTestCase {
         XCTAssertEqual(infiniteReceipt.receivedAtMonotonicTime, 0)
         XCTAssertEqual(nanReceipt.label(atMonotonicTime: .nan), "1m")
         XCTAssertEqual(infiniteReceipt.label(atMonotonicTime: .infinity), "1m")
+    }
+
+    func testSubspaceRowsCombineSessionsAndSortLikeTheDesktopSidebar() {
+        let parentID = UUID()
+        func subspace(
+            _ title: String,
+            _ states: [MobileSessionStatus],
+            isDone: Bool = false
+        ) -> MobileWorkspace {
+            MobileWorkspace(
+                id: UUID(),
+                title: title,
+                conversations: states.enumerated().map { index, state in
+                    conversation(title: "\(title) \(index)", state: state, lastActivity: "\(title) \(state.bucket.rawValue)")
+                },
+                parentWorkspaceID: parentID,
+                isDone: isDone
+            )
+        }
+        let snapshot = MobileHomeSnapshot(hostName: "Mac", workspaces: [
+            workspace(id: parentID, title: "parent", conversations: []),
+            subspace("idle", [.idle]),
+            subspace("done", [.ready], isDone: true),
+            subspace("done but asking", [.needsApproval], isDone: true),
+            subspace("working", [.idle, .working]),
+            subspace("error", [.working, .error]),
+            // Approval outranks an error in the same subspace.
+            subspace("approval", [.error, .needsApproval, .ready]),
+            subspace("ready", [.ready, .idle]),
+            subspace("empty", []),
+        ])
+
+        let rows = snapshot.subspaceRows(of: parentID)
+        XCTAssertEqual(rows.map(\.workspace.title), [
+            "ready", "approval", "done but asking", "error", "working", "empty", "idle", "done",
+        ])
+        XCTAssertEqual(rows.map(\.status), [
+            .ready, .needsApproval, .needsApproval, .error, .working, .idle, .idle, .done,
+        ])
+        // The summary comes from the session that sets the status.
+        XCTAssertEqual(rows[1].summary, "approval needs approval")
+        XCTAssertEqual(rows[4].summary, "working working")
+        XCTAssertNil(rows[5].summary)
+        XCTAssertEqual(rows.filter(\.status.isActive).count, 5)
+        XCTAssertEqual(rows.filter(\.status.showsDoneToggle).map(\.workspace.title), [
+            "ready", "empty", "idle", "done",
+        ])
+    }
+
+    func testOnlyLinksToListedTopLevelParentsNest() {
+        let parentID = UUID()
+        let childID = UUID()
+        let grandchild = MobileWorkspace(id: UUID(), title: "grandchild", conversations: [], parentWorkspaceID: childID)
+        let orphan = MobileWorkspace(id: UUID(), title: "orphan", conversations: [], parentWorkspaceID: UUID())
+        let selfLinkedID = UUID()
+        let snapshot = MobileHomeSnapshot(hostName: "Mac", workspaces: [
+            workspace(id: parentID, title: "parent", conversations: []),
+            MobileWorkspace(id: childID, title: "child", conversations: [], parentWorkspaceID: parentID),
+            grandchild,
+            orphan,
+            MobileWorkspace(id: selfLinkedID, title: "self", conversations: [], parentWorkspaceID: selfLinkedID),
+        ])
+
+        XCTAssertEqual(snapshot.subspaceRows(of: parentID).map(\.id), [childID])
+        XCTAssertEqual(
+            Set(snapshot.topLevelWorkspaces.map(\.id)),
+            [parentID, grandchild.id, orphan.id, selfLinkedID],
+            "A workspace whose link does not hold stays visible at top level"
+        )
+        XCTAssertNil(snapshot.parent(of: grandchild.id))
+
+        // A parent whose own link names a missing workspace is top level,
+        // so its subspace still nests. The members of a cycle stay flat.
+        let orphanChild = MobileWorkspace(
+            id: UUID(), title: "orphan child", conversations: [], parentWorkspaceID: orphan.id
+        )
+        let firstID = UUID()
+        let secondID = UUID()
+        let malformed = MobileHomeSnapshot(hostName: "Mac", workspaces: [
+            orphan,
+            orphanChild,
+            MobileWorkspace(id: firstID, title: "first", conversations: [], parentWorkspaceID: secondID),
+            MobileWorkspace(id: secondID, title: "second", conversations: [], parentWorkspaceID: firstID),
+        ])
+        XCTAssertEqual(malformed.subspaceRows(of: orphan.id).map(\.id), [orphanChild.id])
+        XCTAssertEqual(Set(malformed.topLevelWorkspaces.map(\.id)), [orphan.id, firstID, secondID])
+    }
+
+    func testTopLevelRankingCountsSubspaceSessions() {
+        let quietParentID = UUID()
+        let busyID = UUID()
+        let snapshot = MobileHomeSnapshot(hostName: "Mac", workspaces: [
+            workspace(id: busyID, title: "busy", conversations: [conversation(state: .working)]),
+            workspace(id: quietParentID, title: "quiet parent", conversations: [conversation(state: .idle)]),
+            MobileWorkspace(
+                id: UUID(), title: "task", conversations: [conversation(state: .error)],
+                parentWorkspaceID: quietParentID
+            ),
+        ])
+
+        XCTAssertEqual(snapshot.topLevelWorkspaces.map(\.id), [quietParentID, busyID])
+    }
+
+    func testSubspaceChipPrefersThePrimaryAnnotationOverThePullRequest() {
+        let pullRequest = RemoteWorkspaceAnnotation(key: "github-pr", text: "PR #1", color: "#5BA08A")
+        let ticket = RemoteWorkspaceAnnotation(key: "ticket", text: "TOAST-1", color: "#7AA2F7")
+        func row(_ annotations: [RemoteWorkspaceAnnotation], primary: String?) -> MobileSubspaceRow {
+            MobileSubspaceRow(workspace: MobileWorkspace(
+                id: UUID(), title: "task", conversations: [], annotations: annotations,
+                parentWorkspaceID: UUID(), primaryAnnotationKey: primary
+            ))
+        }
+
+        XCTAssertEqual(row([pullRequest, ticket], primary: "ticket").chip, ticket)
+        XCTAssertEqual(row([pullRequest, ticket], primary: nil).chip, pullRequest)
+        XCTAssertEqual(row([pullRequest, ticket], primary: "missing").chip, pullRequest)
+        XCTAssertNil(row([ticket], primary: nil).chip)
     }
 
     private func workspace(

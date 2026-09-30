@@ -30,12 +30,29 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
             // panels alone no longer keep an idle workspace's header.
             let keepsPanelOnlyWorkspace = self == .all && !workspace.panels.isEmpty
             guard !conversations.isEmpty || keepsPanelOnlyWorkspace else { return nil }
-            return MobileWorkspace(
-                id: workspace.id,
-                title: workspace.title,
-                conversations: conversations,
-                panels: workspace.panels,
-                annotations: workspace.annotations
+            return workspace.withConversations(conversations)
+        }
+    }
+
+    func subspaceRows(of parentID: UUID, in snapshot: MobileHomeSnapshot) -> [MobileSubspaceRow] {
+        snapshot.subspaceRows(of: parentID).filter { self == .all || $0.status.isActive }
+    }
+
+    /// Home's sections: each top-level workspace with the sessions and
+    /// subspaces this filter lists. A workspace whose only activity is in a
+    /// subspace still appears, showing that subspace.
+    func sections(in snapshot: MobileHomeSnapshot) -> [ToasttyHomeSection] {
+        snapshot.topLevelWorkspaces.compactMap { workspace in
+            let conversations = conversations(in: workspace)
+            let rows = subspaceRows(of: workspace.id, in: snapshot)
+            let keepsPanelOnlyWorkspace = self == .all && !workspace.panels.isEmpty
+            guard !conversations.isEmpty || !rows.isEmpty || keepsPanelOnlyWorkspace else {
+                return nil
+            }
+            return ToasttyHomeSection(
+                workspace: workspace.withConversations(conversations),
+                subspaceRows: rows,
+                subspaceTotal: snapshot.subspaceRows(of: workspace.id).count
             )
         }
     }
@@ -49,8 +66,120 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
         }
     }
 
+    /// What Home leaves out under this filter. Sessions inside a subspace
+    /// are listed on the subspace's own screen, so only the row counts here.
+    func hiddenCounts(in snapshot: MobileHomeSnapshot) -> ToasttyHiddenCounts {
+        guard self == .active else { return ToasttyHiddenCounts() }
+        var counts = ToasttyHiddenCounts(
+            idleSessions: hiddenSessionCount(in: snapshot.topLevelWorkspaces)
+        )
+        for workspace in snapshot.topLevelWorkspaces {
+            for row in snapshot.subspaceRows(of: workspace.id) where !row.status.isActive {
+                if row.status == .done {
+                    counts.doneSubspaces += 1
+                } else {
+                    counts.idleSubspaces += 1
+                }
+            }
+        }
+        return counts
+    }
+
     static func hiddenSessionsLabel(count: Int) -> String {
         "\(count) idle \(count == 1 ? "session" : "sessions") hidden"
+    }
+}
+
+struct ToasttyHomeSection: Identifiable, Equatable {
+    let workspace: MobileWorkspace
+    let subspaceRows: [MobileSubspaceRow]
+    /// Before filtering, for the group's "shown/total" count.
+    let subspaceTotal: Int
+
+    var id: UUID { workspace.id }
+}
+
+struct ToasttyHiddenCounts: Equatable {
+    var idleSessions = 0
+    var idleSubspaces = 0
+    var doneSubspaces = 0
+
+    /// For example "3 idle sessions and 1 done subspace hidden"; `nil` when
+    /// nothing is hidden.
+    var label: String? {
+        let parts = [
+            Self.part(idleSessions, "idle session"),
+            Self.part(idleSubspaces, "idle subspace"),
+            Self.part(doneSubspaces, "done subspace"),
+        ].compactMap { $0 }
+        guard let last = parts.last else { return nil }
+        let list = parts.count == 1
+            ? last
+            : parts.dropLast().joined(separator: ", ") + " and " + last
+        return "\(list) hidden"
+    }
+
+    private static func part(_ count: Int, _ noun: String) -> String? {
+        count == 0 ? nil : "\(count) \(noun)\(count == 1 ? "" : "s")"
+    }
+}
+
+/// The ⑂ chip on a session that spawned subspaces.
+struct ToasttySpawnerChip: Equatable {
+    enum Tone: Equatable {
+        case neutral
+        case needsApproval
+        case error
+    }
+
+    let conversationID: UUID
+    let count: Int
+    let tone: Tone
+    /// The workspace whose Subspaces group holds the spawned subspaces.
+    let parentWorkspaceID: UUID
+    /// Set when that workspace is not the session's own, since a session can
+    /// nest a subspace under another workspace.
+    let otherWorkspaceTitle: String?
+
+    var accessibilityLabel: String {
+        let noun = count == 1 ? "subspace" : "subspaces"
+        return otherWorkspaceTitle.map { "\(count) \(noun) in \($0)" } ?? "\(count) \(noun)"
+    }
+
+    /// Subspaces in the session's own workspace come first, as on the
+    /// desktop. Otherwise the chip points at the first workspace, in Home's
+    /// order, that holds one. Only subspaces the filter lists count, so the
+    /// chip never leads to a group that is not shown.
+    static func chip(
+        for conversation: MobileConversation,
+        in snapshot: MobileHomeSnapshot,
+        filter: ToasttyWorkspaceSessionFilter
+    ) -> ToasttySpawnerChip? {
+        let parentIDs = [conversation.workspaceID]
+            + snapshot.topLevelWorkspaces.map(\.id).filter { $0 != conversation.workspaceID }
+        for parentID in parentIDs {
+            let spawned = filter.subspaceRows(of: parentID, in: snapshot).filter {
+                $0.workspace.spawningConversationID == conversation.id
+            }
+            guard spawned.isEmpty == false else { continue }
+            let tone: Tone = if spawned.contains(where: { $0.status == .error }) {
+                .error
+            } else if spawned.contains(where: { $0.status == .needsApproval }) {
+                .needsApproval
+            } else {
+                .neutral
+            }
+            return ToasttySpawnerChip(
+                conversationID: conversation.id,
+                count: spawned.count,
+                tone: tone,
+                parentWorkspaceID: parentID,
+                otherWorkspaceTitle: parentID == conversation.workspaceID
+                    ? nil
+                    : snapshot.workspaces.first { $0.id == parentID }?.title
+            )
+        }
+        return nil
     }
 }
 
@@ -58,20 +187,26 @@ struct ToasttyHomeView: View {
     let controller: HomeScreenController
     let refresh: () async -> Void
     let onSettings: () -> Void
+    let openWorkspace: (UUID) -> Void
 
     @AppStorage private var storedWorkspaceSessionFilter: String
+    @AppStorage(ToasttyCollapsedSubspaceGroups.preferenceKey) private var storedCollapsedGroups = ""
     @State private var isRetryingConnection = false
+    /// The ⑂ chip whose subspaces its group is limited to.
+    @State private var spawnerFilter: ToasttySpawnerChip?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         controller: HomeScreenController,
         refresh: @escaping () async -> Void = {},
         onSettings: @escaping () -> Void = {},
+        openWorkspace: @escaping (UUID) -> Void = { _ in },
         defaults: UserDefaults = .standard
     ) {
         self.controller = controller
         self.refresh = refresh
         self.onSettings = onSettings
+        self.openWorkspace = openWorkspace
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
             ToasttyWorkspaceSessionFilter.preferenceKey,
@@ -80,19 +215,21 @@ struct ToasttyHomeView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 2) {
-                workspaceContent
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    workspaceContent(proxy)
+                }
+                // Reorders now happen only on status-bucket transitions, so
+                // animating them keeps a moving row trackable instead of
+                // teleporting.
+                .animation(reduceMotion ? nil : .default, value: orderedRowIDs)
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 40)
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity)
             }
-            // Reorders now happen only on status-bucket transitions, so
-            // animating them keeps a moving row trackable instead of
-            // teleporting.
-            .animation(reduceMotion ? nil : .default, value: orderedRowIDs)
-            .padding(.horizontal, 14)
-            .padding(.top, 8)
-            .padding(.bottom, 40)
-            .frame(maxWidth: 560)
-            .frame(maxWidth: .infinity)
         }
         .refreshable {
             await refresh()
@@ -117,6 +254,7 @@ struct ToasttyHomeView: View {
             .background(ToasttyDesignTokens.background)
         }
         .background(ToasttyDesignTokens.background)
+        .toasttySubspaceDoneNotice(controller)
         .toolbar(.hidden, for: .navigationBar)
         .sensoryFeedback(.warning, trigger: needsApprovalCount) { old, new in
             new > old
@@ -130,8 +268,8 @@ struct ToasttyHomeView: View {
     }
 
     private var orderedRowIDs: [UUID] {
-        visibleWorkspaces.flatMap { workspace in
-            [workspace.id] + workspace.conversations.map(\.id)
+        sections.flatMap { section in
+            [section.id] + section.workspace.conversations.map(\.id) + section.subspaceRows.map(\.id)
         }
     }
 
@@ -157,23 +295,41 @@ struct ToasttyHomeView: View {
     }
 
     @ViewBuilder
-    private var workspaceContent: some View {
-        if visibleWorkspaces.isEmpty {
+    private func workspaceContent(_ proxy: ScrollViewProxy) -> some View {
+        if sections.isEmpty {
             workspaceEmptyState
         } else {
-            ForEach(visibleWorkspaces) { workspace in
+            ForEach(sections) { section in
                 Section {
-                    ForEach(workspace.conversations) { conversation in
+                    ForEach(section.workspace.conversations) { conversation in
+                        let chip = ToasttySpawnerChip.chip(
+                            for: conversation, in: controller.snapshot, filter: selectedWorkspaceSessionFilter
+                        )
                         ToasttySessionRow(
                             conversation: conversation,
                             freshness: controller.freshness,
                             accessibilityIdentifier:
                                 "toastty-mobile-grouped-card-\(conversation.id.uuidString)",
+                            spawnerChip: chip,
+                            isSpawnerFilterActive: chip != nil
+                                && spawnerFilter?.conversationID == conversation.id,
+                            onSpawnerChip: { toggleSpawnerFilter($0, proxy: proxy) },
                             onOpen: controller.open
                         )
                     }
+                    if section.subspaceTotal > 0, !section.subspaceRows.isEmpty {
+                        ToasttySubspaceGroup(
+                            parent: section.workspace,
+                            rows: section.subspaceRows,
+                            total: section.subspaceTotal,
+                            controller: controller,
+                            spawnerFilter: $spawnerFilter,
+                            openWorkspace: openWorkspace
+                        )
+                        .id(Self.subspaceGroupID(section.id))
+                    }
                 } header: {
-                    workspaceHeader(workspace)
+                    workspaceHeader(section.workspace)
                         .padding(.top, 12)
                 }
             }
@@ -183,23 +339,42 @@ struct ToasttyHomeView: View {
         hiddenSessionsFooter
     }
 
+    private static func subspaceGroupID(_ parentID: UUID) -> String {
+        "subspaces-\(parentID.uuidString)"
+    }
+
+    /// The chip limits its group to the session's subspaces; tapping it
+    /// again shows them all. The group may sit under another workspace, so
+    /// it is opened and scrolled into view.
+    private func toggleSpawnerFilter(_ chip: ToasttySpawnerChip, proxy: ScrollViewProxy) {
+        guard spawnerFilter?.conversationID != chip.conversationID else {
+            spawnerFilter = nil
+            return
+        }
+        spawnerFilter = chip
+        var groups = ToasttyCollapsedSubspaceGroups(storedValue: storedCollapsedGroups)
+        groups.set(chip.parentWorkspaceID, collapsed: false)
+        storedCollapsedGroups = groups.storedValue
+        withAnimation(reduceMotion ? nil : .default) {
+            proxy.scrollTo(Self.subspaceGroupID(chip.parentWorkspaceID), anchor: .center)
+        }
+    }
+
     @ViewBuilder
     private var hiddenSessionsFooter: some View {
-        let count = selectedWorkspaceSessionFilter.hiddenSessionCount(
-            in: controller.snapshot.rankedWorkspaces
-        )
-        if count > 0 {
-            Text(ToasttyWorkspaceSessionFilter.hiddenSessionsLabel(count: count))
+        if let label = selectedWorkspaceSessionFilter.hiddenCounts(in: controller.snapshot).label {
+            Text(label)
                 .font(.caption2.monospaced())
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 18)
                 .accessibilityIdentifier("toastty-mobile-hidden-sessions")
         }
     }
 
-    private var visibleWorkspaces: [MobileWorkspace] {
-        selectedWorkspaceSessionFilter.workspaces(from: controller.snapshot.rankedWorkspaces)
+    private var sections: [ToasttyHomeSection] {
+        selectedWorkspaceSessionFilter.sections(in: controller.snapshot)
     }
 
     private func workspaceHeader(_ workspace: MobileWorkspace) -> some View {

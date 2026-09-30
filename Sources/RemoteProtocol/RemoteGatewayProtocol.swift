@@ -37,6 +37,10 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// Live structured questions can be answered through their provider hook.
     case questionAnswers = "question_answers"
     case messageAttachments = "message_attachments"
+    /// A client may mark a subspace's task done or open again. Subspace
+    /// nesting itself needs no capability: it arrives as optional fields on
+    /// each workspace summary.
+    case workspaceDone = "workspace_done"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -58,6 +62,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .conversationReadAcknowledgement,
             .questionAnswers,
             .messageAttachments,
+            .workspaceDone,
         ]
     ) {
         self.protocolVersion = protocolVersion
@@ -330,6 +335,46 @@ public struct RemoteConversationReadAcknowledgementRequest: Codable, Equatable, 
         self.projectionRunID = projectionRunID
         self.projectionGeneration = projectionGeneration
         self.observedThroughSequence = observedThroughSequence
+    }
+}
+
+/// Sets a subspace's done mark to a target state. Sending the state rather
+/// than a toggle makes a retry, or the same tap from two devices, harmless.
+public struct RemoteWorkspaceDoneRequest: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var workspaceID: UUID
+    public var done: Bool
+
+    public init(
+        protocolVersion: String = RemoteGatewayProtocol.version,
+        workspaceID: UUID,
+        done: Bool
+    ) {
+        self.protocolVersion = protocolVersion
+        self.workspaceID = workspaceID
+        self.done = done
+    }
+}
+
+public enum RemoteWorkspaceDoneResult: String, Codable, Equatable, Sendable {
+    case updated
+    /// The workspace was already in the requested state.
+    case unchanged
+    /// Only subspaces hold a done mark.
+    case notSubspace = "not_subspace"
+    /// A session in the subspace is working, waiting on approval, or failed,
+    /// so the task is not one to wave off as done.
+    case workInProgress = "work_in_progress"
+    case workspaceNotFound = "workspace_not_found"
+}
+
+public struct RemoteWorkspaceDoneResponse: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var result: RemoteWorkspaceDoneResult
+
+    public init(result: RemoteWorkspaceDoneResult) {
+        self.protocolVersion = RemoteGatewayProtocol.version
+        self.result = result
     }
 }
 
