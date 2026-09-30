@@ -584,7 +584,7 @@ private extension AppControlParameterDescriptor {
     static func annotationPrimary(required: Bool) -> Self {
         .init(
             name: "primary",
-            summary: "true makes this the workspace's one primary annotation, replacing any other; false removes that role from this key; omit to leave it unchanged. A subspace's row in its parent's Subspaces group shows its primary annotation, or its github-pr annotation when none is primary; the row truncates long text, so keep primary text short, such as #1234 or ENG-512.",
+            summary: "true makes this the workspace's one primary annotation, replacing any other; false removes that role from this key; omit to leave it unchanged. A subspace's row in its parent's Subspaces group shows its primary annotation, or its github-pr annotation when none is primary; the row truncates long text, so keep primary text short, such as PR #1234 or ENG-512. Use PR #<number> for all pull request chips, including primary annotations.",
             valueType: .boolean,
             required: required
         )
