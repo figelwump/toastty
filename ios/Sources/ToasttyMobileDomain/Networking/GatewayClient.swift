@@ -87,6 +87,9 @@ public protocol GatewayClientProtocol: Sendable {
     func setWorkspaceDone(
         _ request: RemoteWorkspaceDoneRequest
     ) async throws -> RemoteWorkspaceDoneResponse
+    func setConversationFlag(
+        _ request: RemoteConversationFlagRequest
+    ) async throws -> RemoteConversationFlagResponse
 }
 
 public extension GatewayClientProtocol {
@@ -116,6 +119,12 @@ public extension GatewayClientProtocol {
     func setWorkspaceDone(
         _ request: RemoteWorkspaceDoneRequest
     ) async throws -> RemoteWorkspaceDoneResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func setConversationFlag(
+        _ request: RemoteConversationFlagRequest
+    ) async throws -> RemoteConversationFlagResponse {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -292,6 +301,28 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         return try mapCompatibility {
             let decoded = try ConversationEventCoding.makeDecoder().decode(
                 RemoteWorkspaceDoneResponse.self,
+                from: response.body
+            )
+            guard decoded.protocolVersion == RemoteGatewayProtocol.version else {
+                throw GatewayCompatibilityError.unsupportedProtocolVersion(
+                    decoded.protocolVersion
+                )
+            }
+            return decoded
+        }
+    }
+
+    public func setConversationFlag(
+        _ request: RemoteConversationFlagRequest
+    ) async throws -> RemoteConversationFlagResponse {
+        let response = try await perform(
+            method: "POST",
+            path: "/api/conversation.flag.set",
+            body: try encode(request)
+        )
+        return try mapCompatibility {
+            let decoded = try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationFlagResponse.self,
                 from: response.body
             )
             guard decoded.protocolVersion == RemoteGatewayProtocol.version else {

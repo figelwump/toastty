@@ -257,6 +257,7 @@ struct RemoteGatewayRequestHandlerTests {
         questionAnswerHandler: RemoteGatewayRequestHandler.QuestionAnswerHandler? = nil,
         readAcknowledgementHandler: RemoteGatewayRequestHandler.ReadAcknowledgementHandler? = nil,
         workspaceDoneHandler: RemoteGatewayRequestHandler.WorkspaceDoneHandler? = nil,
+        conversationFlagHandler: RemoteGatewayRequestHandler.ConversationFlagHandler? = nil,
         nativeIdentityForTesting: String? = nil
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
         let audit = RemoteAccessAuditLog(fileURL: nil)
@@ -279,6 +280,7 @@ struct RemoteGatewayRequestHandlerTests {
             questionAnswerHandler: questionAnswerHandler,
             readAcknowledgementHandler: readAcknowledgementHandler,
             workspaceDoneHandler: workspaceDoneHandler,
+            conversationFlagHandler: conversationFlagHandler,
             nativeIdentityForTesting: nativeIdentityForTesting,
             pairingRateLimiter: pairingLimiter,
             authRateLimiter: authLimiter
@@ -395,6 +397,7 @@ struct RemoteGatewayRequestHandlerTests {
             .questionAnswers,
             .messageAttachments,
             .workspaceDone,
+            .conversationFlag,
         ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
@@ -1881,6 +1884,57 @@ extension RemoteGatewayRequestHandlerTests {
         #expect(try response(headers, body: Data(repeating: 65, count: 1025)).status == 400)
         #expect(try response(headers, body: Data("{}".utf8)).status == 400)
         var unsupported = done
+        unsupported.protocolVersion = "99.0"
+        #expect(try response(headers, body: ConversationEventCoding.makeEncoder().encode(unsupported)).status == 409)
+        #expect(try store.setScopes([.read], forDevice: native.device.id))
+        #expect(try response(headers, body: body).status == 403)
+        #expect(requests.count == handled)
+    }
+
+    @Test func conversationFlagNeedsNativeSendAccessAndAuditsOnlyChanges() throws {
+        var requests: [RemoteConversationFlagRequest] = []
+        var nextResult = RemoteConversationFlagResult.updated
+        let (handler, store, audit) = Self.makeHandler(conversationFlagHandler: { request, _ in
+            requests.append(request)
+            return nextResult
+        })
+        let native = try Self.nativeCredential(handler: handler, store: store)
+        let headers = [("authorization", "Bearer \(native.credential)"), ("tailscale-user-login", "owner@example.com")]
+        let flag = RemoteConversationFlagRequest(conversationID: RemoteConversationID(), flagged: true)
+        let body = try ConversationEventCoding.makeEncoder().encode(flag)
+        func response(_ headers: [(String, String)], body: Data) throws -> RemoteGatewayHTTPResponse {
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/api/conversation.flag.set", headerFields: headers, body: body), at: Self.now
+            ) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            return response
+        }
+        func result(_ response: RemoteGatewayHTTPResponse) throws -> RemoteConversationFlagResult {
+            try ConversationEventCoding.makeDecoder()
+                .decode(RemoteConversationFlagResponse.self, from: response.body).result
+        }
+
+        let updated = try response(headers, body: body)
+        #expect(updated.status == 200)
+        #expect(try result(updated) == .updated)
+        #expect(requests == [flag])
+        #expect(audit.entries.last?.action == .conversationFlagChanged)
+        #expect(audit.entries.last?.detail == "flagged")
+
+        let auditCount = audit.entries.count
+        nextResult = .unchanged
+        #expect(try result(try response(headers, body: body)) == .unchanged)
+        nextResult = .conversationNotFound
+        #expect(try result(try response(headers, body: body)) == .conversationNotFound)
+        #expect(audit.entries.count == auditCount)
+
+        let handled = requests.count
+        #expect(try response(headers + [("origin", "https://hostile.example")], body: body).status == 403)
+        #expect(try response([headers[0]], body: body).status == 401)
+        #expect(try response([("cookie", Self.pairedDeviceCookie(store)), ("origin", Self.origin)], body: body).status == 401)
+        #expect(try response(headers, body: Data("{}".utf8)).status == 400)
+        var unsupported = flag
         unsupported.protocolVersion = "99.0"
         #expect(try response(headers, body: ConversationEventCoding.makeEncoder().encode(unsupported)).status == 409)
         #expect(try store.setScopes([.read], forDevice: native.device.id))

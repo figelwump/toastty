@@ -15,8 +15,13 @@ struct ToasttySessionRow: View {
     var spawnerChip: ToasttySpawnerChip? = nil
     var isSpawnerFilterActive = false
     var onSpawnerChip: (ToasttySpawnerChip) -> Void = { _ in }
+    /// Whether the Mac takes a flag change from this device now.
+    var canFlag = false
+    var onFlag: (Bool) -> Void = { _ in }
     let onOpen: (MobileConversation) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    static let laterFlagColor = Color(red: 185 / 255, green: 140 / 255, blue: 224 / 255)
 
     var body: some View {
         // The chip is its own button, so it sits over the row rather than
@@ -54,14 +59,19 @@ struct ToasttySessionRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 // A blank line of the title font gives the rail the first
                 // line's height, so the mark stays centered on it at every
-                // text size.
-                Text(" ")
-                    .font(titleFont)
-                    .frame(width: 12)
-                    .overlay {
-                        ToasttySessionRailMark(bucket: bucket, freshness: freshness)
+                // text size. A standing flag sits under it, as on the desktop.
+                VStack(spacing: 4) {
+                    Text(" ")
+                        .font(titleFont)
+                        .frame(width: 12)
+                        .overlay {
+                            ToasttySessionRailMark(bucket: bucket, freshness: freshness)
+                        }
+                    if conversation.isFlaggedForLater {
+                        ToasttyLaterFlagMark()
                     }
-                    .accessibilityHidden(true)
+                }
+                .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     titleLine
                     summaryLine
@@ -76,6 +86,14 @@ struct ToasttySessionRow: View {
         .contextMenu {
             Button("Open", systemImage: "arrow.up.right") {
                 onOpen(conversation)
+            }
+            if canFlag {
+                Button(
+                    ToasttySessionRowPresentation.flagActionTitle(isFlagged: conversation.isFlaggedForLater),
+                    systemImage: conversation.isFlaggedForLater ? "flag.slash" : "flag"
+                ) {
+                    onFlag(!conversation.isFlaggedForLater)
+                }
             }
             if let spawnerChip {
                 Button(
@@ -147,11 +165,22 @@ struct ToasttySessionRow: View {
                 .background(statusColor.opacity(0.2), in: RoundedRectangle(cornerRadius: 4))
                 .fixedSize()
         }
-        TimelineView(.periodic(from: .now, by: 60)) { _ in
-            Text(conversation.age)
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .fixedSize()
+        if isWorking, freshness == .live, conversation.turnElapsed != nil {
+            // The turn's running time, ticking, in place of the age.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(conversation.elapsedTurnLabel(atMonotonicTime: ProcessInfo.processInfo.systemUptime) ?? "")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .fixedSize()
+                    .accessibilityIdentifier("toastty-session-elapsed-\(conversation.id.uuidString)")
+            }
+        } else {
+            TimelineView(.periodic(from: .now, by: 60)) { _ in
+                Text(conversation.age)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .fixedSize()
+            }
         }
     }
 
@@ -222,6 +251,10 @@ enum ToasttySessionRowPresentation {
         }
     }
 
+    static func flagActionTitle(isFlagged: Bool) -> String {
+        isFlagged ? "Clear Later Flag" : "Flag for Later"
+    }
+
     static func needsAttention(_ bucket: MobileSessionBucket) -> Bool {
         switch bucket {
         case .needsApproval, .error, .ready: true
@@ -276,6 +309,48 @@ struct ToasttySpawnerChipLabel: View {
         case .needsApproval: ToasttyDesignTokens.color(for: .needsApproval)
         case .error: ToasttyDesignTokens.color(for: .error)
         }
+    }
+}
+
+extension View {
+    /// The session row's swipe actions: Info always, and Flag while the Mac
+    /// takes the change. Neither is a full swipe, since a full swipe would
+    /// act on a row the user only meant to peek at.
+    func toasttySessionSwipeActions(
+        _ conversation: MobileConversation,
+        controller: HomeScreenController,
+        infoConversation: Binding<ToasttySessionInfoSelection?>
+    ) -> some View {
+        swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button {
+                infoConversation.wrappedValue = ToasttySessionInfoSelection(id: conversation.id)
+            } label: {
+                Label("Info", systemImage: "info.circle")
+            }
+            .tint(ToasttyDesignTokens.offline)
+            .accessibilityIdentifier("toastty-session-swipe-info-\(conversation.id.uuidString)")
+            if controller.canFlagConversations {
+                Button {
+                    controller.setConversationFlag(conversation.id, isFlagged: !conversation.isFlaggedForLater)
+                } label: {
+                    Label(
+                        conversation.isFlaggedForLater ? "Unflag" : "Flag",
+                        systemImage: conversation.isFlaggedForLater ? "flag.slash" : "flag"
+                    )
+                }
+                .tint(ToasttySessionRow.laterFlagColor)
+                .accessibilityIdentifier("toastty-session-swipe-flag-\(conversation.id.uuidString)")
+            }
+        }
+    }
+}
+
+/// The desktop's violet "Flag for Later" mark.
+struct ToasttyLaterFlagMark: View {
+    var body: some View {
+        Image(systemName: "flag.fill")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(ToasttySessionRow.laterFlagColor)
     }
 }
 
@@ -340,6 +415,16 @@ struct ToasttySessionDetailCard: View {
             divider
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
                 fact("status", statusText)
+                if conversation.turnElapsed != nil, freshness == .live {
+                    GridRow {
+                        Text("elapsed").foregroundStyle(ToasttyDesignTokens.mutedText)
+                        TimelineView(.periodic(from: .now, by: 1)) { _ in
+                            Text(conversation.elapsedTurnLabel(atMonotonicTime: ProcessInfo.processInfo.systemUptime) ?? "")
+                                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        }
+                    }
+                    .font(.caption.monospaced())
+                }
                 if let cwd = conversation.cwd {
                     // Long paths lose their front, so the worktree directory
                     // at the end stays readable, as in the desktop card.
@@ -354,8 +439,14 @@ struct ToasttySessionDetailCard: View {
                 ) {
                     fact("model", profile.text)
                 }
+                if let lastTurn = conversation.lastTurnLabel {
+                    fact("last turn", lastTurn)
+                }
                 if !conversation.workspaceTitle.isEmpty {
                     fact("workspace", conversation.workspaceTitle)
+                }
+                if conversation.isFlaggedForLater {
+                    fact("flagged", "for later")
                 }
             }
             divider

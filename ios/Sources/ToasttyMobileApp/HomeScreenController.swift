@@ -16,10 +16,12 @@ enum SubspaceDoneOutcome: Equatable, Sendable {
     case failed
 }
 
-/// The message shown after a done change, with Undo while it succeeded.
+/// The message shown after a done or flag change, with Undo while it
+/// succeeded.
 struct SubspaceDoneNotice: Identifiable, Equatable {
     enum Kind: Equatable {
         case changed(workspaceID: UUID, isDone: Bool)
+        case flagChanged(conversationID: UUID, isFlagged: Bool)
         case failed
     }
 
@@ -28,8 +30,10 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
     let message: String
 
     var canUndo: Bool {
-        if case .changed = kind { return true }
-        return false
+        switch kind {
+        case .changed, .flagChanged: true
+        case .failed: false
+        }
     }
 }
 
@@ -44,6 +48,8 @@ final class HomeScreenController {
     private(set) var hostSnapshot: MobileHomeSnapshot
     /// Whether the connected Mac accepts done changes from this device.
     private(set) var hostSupportsSubspaceDone: Bool
+    /// Whether the connected Mac accepts flag changes from this device.
+    private(set) var hostSupportsConversationFlag: Bool
     private(set) var subspaceDoneNotice: SubspaceDoneNotice?
     var connectionState: MobileConnectionState
     var freshness: LiveProjectionFreshness
@@ -53,6 +59,11 @@ final class HomeScreenController {
     private var onConversationOpened: @MainActor (UUID) -> Void = { _ in }
     private var onConversationClosed: @MainActor (UUID) -> Void = { _ in }
     private var sendSubspaceDone: (@MainActor (UUID, Bool) async -> SubspaceDoneOutcome)?
+    private var sendConversationFlag: (@MainActor (UUID, Bool) async -> SubspaceDoneOutcome)?
+    /// Flag states the user asked for that the Mac's snapshot does not show
+    /// yet, by conversation, with the same rules as `pendingSubspaceDone`.
+    private var pendingConversationFlag: [UUID: PendingSubspaceDone] = [:]
+    private var conversationsSendingFlag: Set<UUID> = []
     /// Done states the user asked for that the Mac's snapshot does not show
     /// yet, by subspace.
     private var pendingSubspaceDone: [UUID: PendingSubspaceDone] = [:]
@@ -67,10 +78,17 @@ final class HomeScreenController {
 
     private struct PendingSubspaceDone {
         var isDone: Bool
-        /// The snapshot count when the Mac accepted the state, or `nil` until
-        /// it has. A later snapshot is the Mac's final word even if it
-        /// disagrees, as when an agent reopened the task.
-        var acceptedAtOrdinal: UInt64?
+        /// The snapshot count when the user asked. Once the Mac has accepted
+        /// the state, any snapshot after this is the Mac's final word even if
+        /// it disagrees, as when an agent reopened the task or cleared a flag
+        /// before the reply arrived.
+        var sentAtOrdinal: UInt64
+        var isAccepted = false
+
+        var overrulingOrdinal: UInt64? {
+            isAccepted ? sentAtOrdinal : nil
+        }
+
     }
 
     init(
@@ -83,8 +101,10 @@ final class HomeScreenController {
         self.runtimeMode = runtimeMode
         self.snapshot = snapshot
         hostSnapshot = snapshot
-        // Fixtures have no Mac to ask, so they apply done changes locally.
+        // Fixtures have no Mac to ask, so they apply done and flag changes
+        // locally.
         hostSupportsSubspaceDone = runtimeMode == .fixture
+        hostSupportsConversationFlag = runtimeMode == .fixture
         self.connectionState = connectionState
         self.freshness = freshness ?? Self.freshness(for: connectionState)
         self.latestTransportFailure = latestTransportFailure
@@ -111,11 +131,15 @@ final class HomeScreenController {
         freshness: LiveProjectionFreshness,
         latestTransportFailure: NativeTransportFailure? = nil,
         hostSupportsSubspaceDone: Bool? = nil,
+        hostSupportsConversationFlag: Bool? = nil,
         hostSnapshotStamp: Date? = nil
     ) {
         let removedConversation = selectedConversationID.flatMap { conversation(id: $0) }
         if let hostSupportsSubspaceDone {
             self.hostSupportsSubspaceDone = hostSupportsSubspaceDone
+        }
+        if let hostSupportsConversationFlag {
+            self.hostSupportsConversationFlag = hostSupportsConversationFlag
         }
         // The same Mac snapshot is presented again whenever the connection
         // state changes, with fresh ages, so equality cannot tell a new one.
@@ -127,6 +151,7 @@ final class HomeScreenController {
         self.hostSnapshotStamp = hostSnapshotStamp
         hostSnapshot = newSnapshot
         reconcilePendingSubspaceDone()
+        reconcilePendingConversationFlag()
         presentSnapshot()
         self.connectionState = connectionState
         self.freshness = freshness
@@ -153,6 +178,111 @@ final class HomeScreenController {
     /// Whether a done change is still waiting on the Mac.
     var hasPendingSubspaceDone: Bool {
         pendingSubspaceDone.isEmpty == false
+    }
+
+    // MARK: - Flag for Later
+
+    /// The flag works only against a live Mac that accepts the change from
+    /// this device; otherwise rows show their last-known mark read-only.
+    var canFlagConversations: Bool {
+        hostSupportsConversationFlag && freshness == .live
+    }
+
+    func setHostSupportsConversationFlag(_ isSupported: Bool) {
+        hostSupportsConversationFlag = isSupported
+    }
+
+    var hasPendingConversationFlag: Bool {
+        pendingConversationFlag.isEmpty == false
+    }
+
+    func installConversationFlag(
+        _ send: @escaping @MainActor (UUID, Bool) async -> SubspaceDoneOutcome
+    ) {
+        sendConversationFlag = send
+    }
+
+    /// Shows the flag at once, then asks the Mac, exactly as a done change.
+    func setConversationFlag(_ conversationID: UUID, isFlagged: Bool, announces: Bool = true) {
+        guard canFlagConversations,
+              sendConversationFlag != nil || runtimeMode == .fixture,
+              let conversation = conversation(id: conversationID),
+              conversation.isFlaggedForLater != isFlagged else { return }
+        subspaceDoneNotice = announces
+            ? SubspaceDoneNotice(
+                kind: .flagChanged(conversationID: conversationID, isFlagged: isFlagged),
+                message: isFlagged ? "Flagged for later" : "Flag cleared"
+            )
+            : nil
+        guard let sendConversationFlag else {
+            hostSnapshot = Self.applyingFlags([conversationID: isFlagged], to: hostSnapshot)
+            presentSnapshot()
+            return
+        }
+        pendingConversationFlag[conversationID] = PendingSubspaceDone(
+            isDone: isFlagged, sentAtOrdinal: hostSnapshotOrdinal
+        )
+        presentSnapshot()
+        guard conversationsSendingFlag.insert(conversationID).inserted else { return }
+        let title = ToasttySessionRowPresentation.title(for: conversation)
+        Task { @MainActor [weak self] in
+            await self?.sendPendingConversationFlag(conversationID, title: title, using: sendConversationFlag)
+        }
+    }
+
+    private func sendPendingConversationFlag(
+        _ conversationID: UUID,
+        title: String,
+        using send: @MainActor (UUID, Bool) async -> SubspaceDoneOutcome
+    ) async {
+        defer {
+            conversationsSendingFlag.remove(conversationID)
+            reconcilePendingConversationFlag()
+            presentSnapshot()
+        }
+        while let requested = pendingConversationFlag[conversationID]?.isDone {
+            let outcome = await send(conversationID, requested)
+            guard let pending = pendingConversationFlag[conversationID] else { return }
+            if pending.isDone != requested { continue }
+            switch outcome {
+            case .applied:
+                pendingConversationFlag[conversationID]?.isAccepted = true
+            case .refused, .failed:
+                pendingConversationFlag[conversationID] = nil
+                subspaceDoneNotice = SubspaceDoneNotice(
+                    kind: .failed,
+                    message: outcome == .refused
+                        ? "\(title) is no longer running on your Mac."
+                        : "Couldn't update \(title). Check the connection to your Mac."
+                )
+            }
+            return
+        }
+    }
+
+    private func reconcilePendingConversationFlag() {
+        pendingConversationFlag = pendingConversationFlag.filter { conversationID, pending in
+            guard let conversation = hostSnapshot.activitySessions.first(where: { $0.id == conversationID }) else {
+                return false
+            }
+            if conversationsSendingFlag.contains(conversationID) { return true }
+            if conversation.isFlaggedForLater == pending.isDone { return false }
+            guard let overrulingOrdinal = pending.overrulingOrdinal else { return true }
+            return hostSnapshotOrdinal <= overrulingOrdinal
+        }
+    }
+
+    private static func applyingFlags(_ flags: [UUID: Bool], to snapshot: MobileHomeSnapshot) -> MobileHomeSnapshot {
+        guard flags.isEmpty == false else { return snapshot }
+        return MobileHomeSnapshot(
+            hostName: snapshot.hostName,
+            workspaces: snapshot.workspaces.map { workspace in
+                guard workspace.conversations.contains(where: { flags[$0.id] != nil }) else { return workspace }
+                return workspace.withConversations(workspace.conversations.map { conversation in
+                    flags[conversation.id].map(conversation.withFlaggedForLater) ?? conversation
+                })
+            }
+        )
     }
 
     func installSubspaceDone(
@@ -185,7 +315,9 @@ final class HomeScreenController {
             presentSnapshot()
             return
         }
-        pendingSubspaceDone[workspaceID] = PendingSubspaceDone(isDone: isDone)
+        // Stamped when the user asks, not when the request goes out, so a
+        // snapshot that arrives in between counts as after the request.
+        pendingSubspaceDone[workspaceID] = PendingSubspaceDone(isDone: isDone, sentAtOrdinal: hostSnapshotOrdinal)
         presentSnapshot()
         guard subspacesSendingDone.insert(workspaceID).inserted else {
             // The request already on its way finishes first; its loop then
@@ -215,7 +347,7 @@ final class HomeScreenController {
             if pending.isDone != requested { continue }
             switch outcome {
             case .applied:
-                pendingSubspaceDone[workspaceID]?.acceptedAtOrdinal = hostSnapshotOrdinal
+                pendingSubspaceDone[workspaceID]?.isAccepted = true
             case .refused, .failed:
                 pendingSubspaceDone[workspaceID] = nil
                 subspaceDoneNotice = SubspaceDoneNotice(
@@ -239,15 +371,22 @@ final class HomeScreenController {
             }
             if subspacesSendingDone.contains(workspaceID) { return true }
             if workspace.isDone == pending.isDone { return false }
-            guard let acceptedAtOrdinal = pending.acceptedAtOrdinal else { return true }
-            return hostSnapshotOrdinal <= acceptedAtOrdinal
+            guard let overrulingOrdinal = pending.overrulingOrdinal else { return true }
+            return hostSnapshotOrdinal <= overrulingOrdinal
         }
     }
 
     func undoSubspaceDoneNotice() {
-        guard case .changed(let workspaceID, let isDone)? = subspaceDoneNotice?.kind else { return }
-        subspaceDoneNotice = nil
-        setSubspaceDone(workspaceID, isDone: !isDone, announces: false)
+        switch subspaceDoneNotice?.kind {
+        case .changed(let workspaceID, let isDone)?:
+            subspaceDoneNotice = nil
+            setSubspaceDone(workspaceID, isDone: !isDone, announces: false)
+        case .flagChanged(let conversationID, let isFlagged)?:
+            subspaceDoneNotice = nil
+            setConversationFlag(conversationID, isFlagged: !isFlagged, announces: false)
+        case .failed?, nil:
+            break
+        }
     }
 
     func dismissSubspaceDoneNotice(_ notice: SubspaceDoneNotice) {
@@ -257,16 +396,17 @@ final class HomeScreenController {
     }
 
     private func presentSnapshot() {
-        guard pendingSubspaceDone.isEmpty == false else {
+        guard pendingSubspaceDone.isEmpty == false || pendingConversationFlag.isEmpty == false else {
             if snapshot != hostSnapshot { snapshot = hostSnapshot }
             return
         }
-        snapshot = MobileHomeSnapshot(
+        let withDone = MobileHomeSnapshot(
             hostName: hostSnapshot.hostName,
             workspaces: hostSnapshot.workspaces.map { workspace in
                 pendingSubspaceDone[workspace.id].map { workspace.withDone($0.isDone) } ?? workspace
             }
         )
+        snapshot = Self.applyingFlags(pendingConversationFlag.mapValues(\.isDone), to: withDone)
     }
 
     func workspace(id: UUID) -> MobileWorkspace? {

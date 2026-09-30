@@ -69,6 +69,9 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
     public var presentationStatus: CompatibleSessionPresentationStatus?
     public var inputAvailability: CompatibleInputAvailability
     public var pendingInteractionPreview: RemotePendingInteractionPreview?
+    public var isFlaggedForLater: Bool
+    public var turnStartedAt: Date?
+    public var lastTurnDuration: TimeInterval?
     public var projectionGeneration: UInt64
     public var latestSequence: UInt64
     public var updatedAt: Date
@@ -85,11 +88,17 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         presentationStatus: CompatibleSessionPresentationStatus? = nil,
         inputAvailability: CompatibleInputAvailability,
         pendingInteractionPreview: RemotePendingInteractionPreview? = nil,
+        isFlaggedForLater: Bool = false,
+        turnStartedAt: Date? = nil,
+        lastTurnDuration: TimeInterval? = nil,
         projectionGeneration: UInt64,
         latestSequence: UInt64,
         updatedAt: Date
     ) {
         self.conversationID = conversationID
+        self.isFlaggedForLater = isFlaggedForLater
+        self.turnStartedAt = turnStartedAt
+        self.lastTurnDuration = lastTurnDuration
         self.provider = provider
         self.title = title
         self.placement = placement
@@ -190,7 +199,19 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 ),
                 executionProfile: summary.executionProfile,
                 workspaceTabID: summary.placement.workspaceTabID,
-                workspaceTabTitle: summary.placement.workspaceTabTitle
+                workspaceTabTitle: summary.placement.workspaceTabTitle,
+                isFlaggedForLater: summary.isFlaggedForLater,
+                // Only a working session has a running turn; a stale field
+                // from a status the Mac has moved past is dropped.
+                turnElapsed: status.bucket == .working
+                    ? summary.turnStartedAt.map { startedAt in
+                        MobileActivityAge(
+                            secondsAtReceipt: Self.relativeAgeSeconds(from: startedAt, receivedAt: generatedAt),
+                            receivedAtMonotonicTime: receivedAtMonotonicTime
+                        )
+                    }
+                    : nil,
+                lastTurnDuration: summary.lastTurnDuration
             )
         }
         stateTransitions.retain(mobileConversations.map(\.id))

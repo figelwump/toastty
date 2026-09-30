@@ -57,6 +57,45 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         XCTAssertEqual(decodedPanel.associatedConversationID, panel.associatedConversationID)
     }
 
+    func testHostEncodedFlagAndTurnTimingReachThePresentation() throws {
+        let generatedAt = Date(timeIntervalSince1970: 1_788_696_000)
+        func summary(_ status: RemoteSessionPresentationStatus, turnStartedAt: Date?) -> RemoteConversationSummary {
+            RemoteConversationSummary(
+                conversationID: RemoteConversationID(), provider: .claude, title: "Session",
+                placement: RemoteConversationPlacement(workspaceID: UUID(), workspaceTitle: "toastty"),
+                state: .working, presentationStatus: status,
+                inputAvailability: .unavailable(reason: .unknownProviderState),
+                isFlaggedForLater: true, turnStartedAt: turnStartedAt, lastTurnDuration: 125,
+                latestSequence: 0, updatedAt: generatedAt
+            )
+        }
+        let response = RemoteGatewaySessionListResponse(snapshot: RemoteSessionListSnapshot(
+            projectionRunID: RemoteProjectionRunID(rawValue: UUID()),
+            conversations: [
+                summary(.working, turnStartedAt: generatedAt.addingTimeInterval(-221)),
+                // A turn start the Mac has moved past is dropped.
+                summary(.ready, turnStartedAt: generatedAt.addingTimeInterval(-221)),
+            ],
+            generatedAt: generatedAt
+        ))
+        let data = try ConversationEventCoding.makeEncoder().encode(response)
+        let presentation = try GatewayCompatibilityDecoder().decodeSessionListResponse(data)
+            .presentation(receivedAtMonotonicTime: 1_000)
+        let working = try XCTUnwrap(presentation.activitySessions.first { $0.state.bucket == .working })
+        let ready = try XCTUnwrap(presentation.activitySessions.first { $0.state.bucket == .ready })
+
+        XCTAssertTrue(working.isFlaggedForLater)
+        XCTAssertEqual(working.elapsedTurnLabel(atMonotonicTime: 1_000), "3m 41s")
+        XCTAssertEqual(working.elapsedTurnLabel(atMonotonicTime: 1_019), "4m 00s")
+        XCTAssertEqual(working.lastTurnLabel, "2m 05s")
+        XCTAssertNil(ready.turnElapsed)
+        XCTAssertNil(ready.elapsedTurnLabel(atMonotonicTime: 1_000))
+
+        // Older hosts send none of it.
+        let plain = try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(workspaces: nil))
+        XCTAssertTrue(plain.conversations.allSatisfy { $0.isFlaggedForLater == false && $0.turnStartedAt == nil })
+    }
+
     func testHostEncodedSubspaceFieldsReachThePresentationAndOlderHostsStayFlat() throws {
         let parentID = UUID()
         let subspaceID = UUID()

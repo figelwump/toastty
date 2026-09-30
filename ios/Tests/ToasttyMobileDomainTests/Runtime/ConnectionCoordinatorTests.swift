@@ -371,6 +371,43 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
+    func testConversationFlagIsSentOnlyToAHostThatAdvertisesIt() async throws {
+        let run = runID(4)
+        let request = RemoteConversationFlagRequest(conversationID: conversationID, flagged: true)
+        for (capabilities, expectsRequest) in [
+            ([RemoteGatewayCapability](), false),
+            ([.conversationFlag], true),
+        ] {
+            let operations = OperationLog()
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse(capabilities: capabilities))],
+                sessions: [.success(snapshot(runID: run, title: "Seed"))],
+                events: []
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(
+                    operations: operations,
+                    connections: [.success(subscription)]
+                )
+            )
+            let early = try await coordinator.setConversationFlag(request)
+            XCTAssertNil(early)
+
+            await coordinator.connectIfNeeded()
+            await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh")))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            let response = try await coordinator.setConversationFlag(request)
+
+            XCTAssertEqual(response?.result, expectsRequest ? .updated : nil)
+            let sent = await gateway.recordedConversationFlagRequests()
+            XCTAssertEqual(sent, expectsRequest ? [request] : [])
+            await coordinator.suspend()
+        }
+    }
+
     func testWorkspaceDoneIsSentOnlyToAHostThatAdvertisesIt() async throws {
         let run = runID(4)
         let request = RemoteWorkspaceDoneRequest(workspaceID: UUID(), done: true)
@@ -2041,6 +2078,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var questionAnswerRequests: [RemoteQuestionAnswerRequest] = []
     private var readAcknowledgements: [RemoteConversationReadAcknowledgementRequest] = []
     private var workspaceDoneRequests: [RemoteWorkspaceDoneRequest] = []
+    private var conversationFlagRequests: [RemoteConversationFlagRequest] = []
 
     init(
         operations: OperationLog,
@@ -2124,6 +2162,14 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return RemoteWorkspaceDoneResponse(result: .updated)
     }
 
+    func setConversationFlag(
+        _ request: RemoteConversationFlagRequest
+    ) async throws -> RemoteConversationFlagResponse {
+        conversationFlagRequests.append(request)
+        return RemoteConversationFlagResponse(result: .updated)
+    }
+
+    func recordedConversationFlagRequests() -> [RemoteConversationFlagRequest] { conversationFlagRequests }
     func recordedWorkspaceDoneRequests() -> [RemoteWorkspaceDoneRequest] { workspaceDoneRequests }
     func helloCallCount() -> Int { helloCalls }
     func recordedEventCursors() -> [ConversationEventCursor?] { eventCursors }

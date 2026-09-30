@@ -194,6 +194,8 @@ struct ToasttyHomeView: View {
     @State private var isRetryingConnection = false
     /// The ⑂ chip whose subspaces its group is limited to.
     @State private var spawnerFilter: ToasttySpawnerChip?
+    /// The session whose detail card the Info swipe opened.
+    @State private var infoConversation: ToasttySessionInfoSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
@@ -216,25 +218,26 @@ struct ToasttyHomeView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    workspaceContent(proxy)
-                }
-                // Reorders now happen only on status-bucket transitions, so
-                // animating them keeps a moving row trackable instead of
-                // teleporting.
-                .animation(reduceMotion ? nil : .default, value: orderedRowIDs)
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 40)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
+            // A List rather than a ScrollView so rows have swipe actions.
+            List {
+                workspaceContent(proxy)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.top, 8, for: .scrollContent)
+            .contentMargins(.bottom, 40, for: .scrollContent)
+            // Reorders now happen only on status-bucket transitions, so
+            // animating them keeps a moving row trackable instead of
+            // teleporting.
+            .animation(reduceMotion ? nil : .default, value: orderedRowIDs)
         }
         .refreshable {
             await refresh()
         }
         .scrollIndicators(.hidden)
+        .sheet(item: $infoConversation) { selection in
+            ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
+        }
         // The identifier must precede safeAreaInset: applied after it, it
         // stamps both the scroll view and the inset header, breaking UI-test
         // queries with ambiguous matches.
@@ -298,9 +301,15 @@ struct ToasttyHomeView: View {
     private func workspaceContent(_ proxy: ScrollViewProxy) -> some View {
         if sections.isEmpty {
             workspaceEmptyState
+                .toasttyListRow()
         } else {
+            // Plain rows rather than sections: a section header in a plain
+            // List pins to the top and lets rows scroll under it.
             ForEach(sections) { section in
-                Section {
+                Group {
+                    workspaceHeader(section.workspace)
+                        .padding(.top, 12)
+                        .toasttyListRow(vertical: 0)
                     ForEach(section.workspace.conversations) { conversation in
                         let chip = ToasttySpawnerChip.chip(
                             for: conversation, in: controller.snapshot, filter: selectedWorkspaceSessionFilter
@@ -314,7 +323,13 @@ struct ToasttyHomeView: View {
                             isSpawnerFilterActive: chip != nil
                                 && spawnerFilter?.conversationID == conversation.id,
                             onSpawnerChip: { toggleSpawnerFilter($0, proxy: proxy) },
+                            canFlag: controller.canFlagConversations,
+                            onFlag: { controller.setConversationFlag(conversation.id, isFlagged: $0) },
                             onOpen: controller.open
+                        )
+                        .toasttyListRow()
+                        .toasttySessionSwipeActions(
+                            conversation, controller: controller, infoConversation: $infoConversation
                         )
                     }
                     if section.subspaceTotal > 0, !section.subspaceRows.isEmpty {
@@ -328,15 +343,13 @@ struct ToasttyHomeView: View {
                         )
                         .id(Self.subspaceGroupID(section.id))
                     }
-                } header: {
-                    workspaceHeader(section.workspace)
-                        .padding(.top, 12)
                 }
             }
         }
         // Shown under the empty state too, so an all-idle Mac still says how
         // much Active is hiding.
         hiddenSessionsFooter
+            .toasttyListRow()
     }
 
     private static func subspaceGroupID(_ parentID: UUID) -> String {
@@ -377,8 +390,12 @@ struct ToasttyHomeView: View {
         selectedWorkspaceSessionFilter.sections(in: controller.snapshot)
     }
 
+    /// A button rather than a navigation link, which a List would dress as a
+    /// cell with its own disclosure chevron.
     private func workspaceHeader(_ workspace: MobileWorkspace) -> some View {
-        NavigationLink(value: ToasttyMobileRoute.workspace(workspace.id)) {
+        Button {
+            openWorkspace(workspace.id)
+        } label: {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(workspace.title)

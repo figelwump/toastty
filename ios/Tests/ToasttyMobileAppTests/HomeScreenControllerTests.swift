@@ -235,6 +235,124 @@ final class ToasttySubspacePresentationTests: XCTestCase {
 }
 
 @MainActor
+final class ConversationFlagControllerTests: XCTestCase {
+    private let workspaceID = UUID()
+    private let conversationID = UUID()
+
+    private func snapshot(isFlagged: Bool, generation: Int = 0) -> MobileHomeSnapshot {
+        MobileHomeSnapshot(hostName: "Mac \(generation)", workspaces: [
+            MobileWorkspace(id: workspaceID, title: "toastty", conversations: [
+                MobileConversation(
+                    id: conversationID, workspaceID: workspaceID, workspaceTitle: "toastty", cwd: nil,
+                    agent: .claude, title: "Session", state: MobileSessionStatus.ready,
+                    inputAvailability: .unavailable(reason: "test"), age: "now",
+                    lastActivity: "Done", isFlaggedForLater: isFlagged
+                ),
+            ]),
+        ])
+    }
+
+    private func liveController(supportsFlag: Bool = true) -> HomeScreenController {
+        let controller = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.example")!),
+            snapshot: snapshot(isFlagged: false), connectionState: .live
+        )
+        controller.update(
+            snapshot: snapshot(isFlagged: false), connectionState: .live, freshness: .live,
+            hostSupportsConversationFlag: supportsFlag
+        )
+        return controller
+    }
+
+    private func isShownFlagged(_ controller: HomeScreenController) -> Bool? {
+        controller.conversation(id: conversationID)?.isFlaggedForLater
+    }
+
+    func testFlagShowsAtOnceAndTheMacsSnapshotConfirmsIt() async throws {
+        let controller = liveController()
+        var requests: [Bool] = []
+        controller.installConversationFlag { _, isFlagged in
+            requests.append(isFlagged)
+            return .applied
+        }
+
+        controller.setConversationFlag(conversationID, isFlagged: true)
+        XCTAssertEqual(isShownFlagged(controller), true)
+        XCTAssertEqual(controller.subspaceDoneNotice?.message, "Flagged for later")
+        XCTAssertEqual(controller.subspaceDoneNotice?.canUndo, true)
+        try await waitUntil { requests == [true] }
+        controller.update(snapshot: snapshot(isFlagged: true, generation: 1), connectionState: .live, freshness: .live)
+        try await waitUntil { controller.hasPendingConversationFlag == false }
+        XCTAssertEqual(isShownFlagged(controller), true)
+
+        // Undo sends the opposite state without another notice.
+        controller.undoSubspaceDoneNotice()
+        XCTAssertNil(controller.subspaceDoneNotice)
+        XCTAssertEqual(isShownFlagged(controller), false)
+        try await waitUntil { requests == [true, false] }
+
+        // The Mac clears the flag itself when the session starts new work.
+        controller.update(snapshot: snapshot(isFlagged: false, generation: 2), connectionState: .live, freshness: .live)
+        try await waitUntil { controller.hasPendingConversationFlag == false }
+        XCTAssertEqual(isShownFlagged(controller), false)
+    }
+
+    func testASnapshotThatClearsTheFlagBeforeTheReplyWins() async throws {
+        let controller = liveController()
+        let reply = AsyncStream<SubspaceDoneOutcome>.makeStream()
+        controller.installConversationFlag { _, _ in
+            for await outcome in reply.stream { return outcome }
+            return .failed
+        }
+
+        controller.setConversationFlag(conversationID, isFlagged: true)
+        XCTAssertEqual(isShownFlagged(controller), true)
+        // The Mac applied the flag, then the session started new work and
+        // cleared it, both before the phone got its reply.
+        controller.update(snapshot: snapshot(isFlagged: true, generation: 1), connectionState: .live, freshness: .live)
+        controller.update(snapshot: snapshot(isFlagged: false, generation: 2), connectionState: .live, freshness: .live)
+        reply.continuation.yield(.applied)
+        try await waitUntil { controller.hasPendingConversationFlag == false }
+
+        XCTAssertEqual(isShownFlagged(controller), false)
+    }
+
+    func testRefusalPutsTheFlagBackAndSaysSo() async throws {
+        let controller = liveController()
+        controller.installConversationFlag { _, _ in .refused }
+
+        controller.setConversationFlag(conversationID, isFlagged: true)
+        try await waitUntil { controller.subspaceDoneNotice?.kind == .failed }
+
+        XCTAssertEqual(isShownFlagged(controller), false)
+        XCTAssertEqual(controller.subspaceDoneNotice?.message, "Session is no longer running on your Mac.")
+    }
+
+    func testFlagIsReadOnlyWithoutHostSupportOrSendAccess() {
+        var requests = 0
+        let unsupported = liveController(supportsFlag: false)
+        unsupported.installConversationFlag { _, _ in requests += 1; return .applied }
+        XCTAssertFalse(unsupported.canFlagConversations)
+        unsupported.setConversationFlag(conversationID, isFlagged: true)
+        XCTAssertEqual(isShownFlagged(unsupported), false)
+        XCTAssertEqual(requests, 0)
+    }
+
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Condition was not met in time", file: file, line: line)
+    }
+}
+
+@MainActor
 final class SubspaceDoneControllerTests: XCTestCase {
     private let parentID = UUID()
     private let subspaceID = UUID()

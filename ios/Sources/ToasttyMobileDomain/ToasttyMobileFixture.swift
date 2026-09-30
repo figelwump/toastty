@@ -59,14 +59,16 @@ public enum ToasttyMobileFixture {
                     cwd: "~/GiantThings/repos/toastty-ios", agent: .codex,
                     title: "Sparkle updater fix", status: .working,
                     availability: .unavailable(reason: "working"),
-                    age: "now", last: "Running the remote iOS test suite"
+                    age: "now", last: "Running the remote iOS test suite",
+                    turnElapsedSeconds: 221, lastTurnDuration: 125
                 ),
                 conversation(
                     3, workspaceID: toasttyID, workspaceTitle: "toastty",
                     cwd: nil, agent: .claude,
                     title: "Panel focus bug", status: .ready,
                     availability: .unavailable(reason: "prompt not open"),
-                    age: "18m", last: "Fixed panel focus and verified keyboard navigation"
+                    age: "18m", last: "Fixed panel focus and verified keyboard navigation",
+                    isFlaggedForLater: true, lastTurnDuration: 754
                 ),
                 conversation(
                     4, workspaceID: toasttyID, workspaceTitle: "toastty",
@@ -102,7 +104,8 @@ public enum ToasttyMobileFixture {
                     cwd: "~/GiantThings/playground/herdr", agent: .claude,
                     title: "Architecture review", status: .working,
                     availability: .unavailable(reason: "working"),
-                    age: "now", last: "Reading the handoff path"
+                    age: "now", last: "Reading the handoff path",
+                    turnElapsedSeconds: 47
                 ),
                 conversation(
                     6, workspaceID: researchID, workspaceTitle: "herdr research",
@@ -299,7 +302,10 @@ public enum ToasttyMobileFixture {
         availability: MobileInputAvailability,
         age: String,
         last: String,
-        executionProfile: RemoteSessionExecutionProfile? = nil
+        executionProfile: RemoteSessionExecutionProfile? = nil,
+        isFlaggedForLater: Bool = false,
+        turnElapsedSeconds: Int? = nil,
+        lastTurnDuration: TimeInterval? = nil
     ) -> MobileConversation {
         MobileConversation(
             id: UUID(uuidString: String(format: "B1000000-0000-0000-0000-%012d", number))!,
@@ -319,7 +325,12 @@ public enum ToasttyMobileFixture {
             executionProfile: executionProfile,
             workspaceTabID: [1, 7, 8].contains(number) ? UUID(uuidString: "D1000000-0000-0000-0000-000000000001") : nil,
             workspaceTabTitle: [1, 7, 8].contains(number)
-                ? "Release preparation — changelog, signing, and TestFlight verification" : nil
+                ? "Release preparation — changelog, signing, and TestFlight verification" : nil,
+            isFlaggedForLater: isFlaggedForLater,
+            turnElapsed: turnElapsedSeconds.map {
+                MobileActivityAge(secondsAtReceipt: $0, receivedAtMonotonicTime: fixtureReceiptTime)
+            },
+            lastTurnDuration: lastTurnDuration
         )
     }
 

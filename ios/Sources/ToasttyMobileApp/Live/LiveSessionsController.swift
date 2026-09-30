@@ -44,12 +44,21 @@ protocol LiveConnectionRuntime: Sendable {
     func setWorkspaceDone(
         _ request: RemoteWorkspaceDoneRequest
     ) async throws -> RemoteWorkspaceDoneResponse?
+    func setConversationFlag(
+        _ request: RemoteConversationFlagRequest
+    ) async throws -> RemoteConversationFlagResponse?
 }
 
 extension LiveConnectionRuntime {
     func setWorkspaceDone(
         _ request: RemoteWorkspaceDoneRequest
     ) async throws -> RemoteWorkspaceDoneResponse? {
+        nil
+    }
+
+    func setConversationFlag(
+        _ request: RemoteConversationFlagRequest
+    ) async throws -> RemoteConversationFlagResponse? {
         nil
     }
 
@@ -163,6 +172,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteWorkspaceDoneResponse? {
         try await coordinator.setWorkspaceDone(request)
     }
+
+    func setConversationFlag(
+        _ request: RemoteConversationFlagRequest
+    ) async throws -> RemoteConversationFlagResponse? {
+        try await coordinator.setConversationFlag(request)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -229,6 +244,22 @@ final class LiveSessionsController {
                 case .notSubspace?, .workspaceNotFound?, .workInProgress?: return .refused
                 // The connection dropped or the Mac stopped accepting the
                 // change between the tap and the request.
+                case nil: return .failed
+                }
+            } catch {
+                return .failed
+            }
+        }
+        homeController.installConversationFlag { [runtime] conversationID, isFlagged in
+            do {
+                let response = try await runtime.setConversationFlag(
+                    RemoteConversationFlagRequest(
+                        conversationID: RemoteConversationID(rawValue: conversationID), flagged: isFlagged
+                    )
+                )
+                switch response?.result {
+                case .updated?, .unchanged?: return .applied
+                case .conversationNotFound?: return .refused
                 case nil: return .failed
                 }
             } catch {
@@ -407,7 +438,12 @@ final class LiveSessionsController {
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
         deviceScopes = scopes
         homeController.setHostSupportsSubspaceDone(acceptsSubspaceDone)
+        homeController.setHostSupportsConversationFlag(acceptsConversationFlag)
         await runtime.updateDeviceScopes(scopes)
+    }
+
+    private var acceptsConversationFlag: Bool {
+        coordinatorState.capabilities.contains(.conversationFlag) && deviceScopes.contains(.send)
     }
 
     /// The Mac takes a done change only from a device allowed to send, so a
@@ -522,6 +558,7 @@ final class LiveSessionsController {
             freshness: freshness,
             latestTransportFailure: coordinatorState.latestTransportFailure,
             hostSupportsSubspaceDone: acceptsSubspaceDone,
+            hostSupportsConversationFlag: acceptsConversationFlag,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)

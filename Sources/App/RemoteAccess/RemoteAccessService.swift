@@ -102,6 +102,21 @@ final class RemoteAccessWorkspaceDoneBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's authenticated flag request into the main-actor-owned
+/// session registry.
+final class RemoteAccessConversationFlagBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func setFlag(
+        _ request: RemoteConversationFlagRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationFlagResult {
+        MainActor.assumeIsolated {
+            service?.setConversationFlag(request, device: device) ?? .conversationNotFound
+        }
+    }
+}
+
 enum RemoteAccessPreferences {
     static let defaultPort: UInt16 = 42871
     private static let enabledKey = "toastty.remoteAccess.enabled"
@@ -333,6 +348,7 @@ final class RemoteAccessService: ObservableObject {
     private let questionAnswerBridge = RemoteAccessQuestionAnswerBridge()
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
     private let workspaceDoneBridge = RemoteAccessWorkspaceDoneBridge()
+    private let conversationFlagBridge = RemoteAccessConversationFlagBridge()
     private var coordinator = RemoteInputCoordinator()
     private let handler: RemoteGatewayRequestHandler
     private let server: any RemoteAccessGatewayServing
@@ -458,6 +474,9 @@ final class RemoteAccessService: ObservableObject {
             },
             workspaceDoneHandler: { [workspaceDoneBridge] request, device in
                 workspaceDoneBridge.setDone(request, device: device)
+            },
+            conversationFlagHandler: { [conversationFlagBridge] request, device in
+                conversationFlagBridge.setFlag(request, device: device)
             }
         )
         self.server = gatewayServerFactory(handler)
@@ -477,6 +496,7 @@ final class RemoteAccessService: ObservableObject {
         questionAnswerBridge.service = self
         readAcknowledgementBridge.service = self
         workspaceDoneBridge.service = self
+        conversationFlagBridge.service = self
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
             switch device.authKind {
@@ -1303,6 +1323,40 @@ final class RemoteAccessService: ObservableObject {
         return result
     }
 
+    /// Sets or clears a session's "Flag for Later" mark for a remote client,
+    /// through the same store call as the sidebar's context menu item. The
+    /// Mac still clears the mark itself when the session starts new work.
+    func setConversationFlag(
+        _ request: RemoteConversationFlagRequest,
+        device _: RemoteDeviceRecord
+    ) -> RemoteConversationFlagResult {
+        var result = RemoteConversationFlagResult.conversationNotFound
+        // A fresh scan rather than the debounced conversation map, so a
+        // session that ended a moment ago is refused instead of "updated".
+        if isReady, let sessionID = scanConversationCandidates(mintingIDs: false)
+            .first(where: { $0.conversationID == request.conversationID })?.activeSessionID {
+            if sessionRuntimeStore.isLaterFlagged(sessionID: sessionID) == request.flagged {
+                result = .unchanged
+            } else {
+                sessionRuntimeStore.setLaterFlag(sessionID: sessionID, isFlagged: request.flagged)
+                result = .updated
+            }
+        }
+        ToasttyLog.info(
+            "Remote conversation flag request evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": request.conversationID.rawValue.uuidString,
+                "flagged": String(request.flagged),
+                "result": result.rawValue,
+            ]
+        )
+        if result == .updated {
+            broadcastSessionList()
+        }
+        return result
+    }
+
     /// A client offers the checkbox only on a quiet subspace, so a request
     /// to mark one done while a session works, waits on approval, or failed
     /// is late: an agent started after the tap. Refusing it keeps a delayed
@@ -1388,6 +1442,9 @@ final class RemoteAccessService: ObservableObject {
         var presentationStatus: RemoteSessionPresentationStatus?
         var isUnread: Bool
         var statusDetail: String?
+        var isFlaggedForLater: Bool
+        var turnStartedAt: Date?
+        var lastTurnDuration: TimeInterval?
         var updatedAt: Date
         var transcriptPath: String?
         var providerFeed: ManagedProviderConversationFeedSnapshot?
@@ -1863,6 +1920,10 @@ final class RemoteAccessService: ObservableObject {
                     },
                     isUnread: isUnread,
                     statusDetail: Self.remoteStatusDetail(from: panelStatus?.status.detail),
+                    isFlaggedForLater: hasLiveAgent
+                        && activeSessionID.map(sessionRuntimeStore.isLaterFlagged(sessionID:)) == true,
+                    turnStartedAt: panelStatus?.turnStartedAt,
+                    lastTurnDuration: panelStatus?.lastTurnDuration,
                     updatedAt: max(
                         activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? .distantPast,
                         providerFeed?.updatedAt ?? .distantPast
@@ -1929,6 +1990,9 @@ final class RemoteAccessService: ObservableObject {
                     pendingInteractionPreview: RemotePendingInteractionPreviewFormatter.make(
                         from: projectionStore.pendingInteractions(for: candidate.conversationID)
                     ),
+                    isFlaggedForLater: candidate.isFlaggedForLater,
+                    turnStartedAt: candidate.turnStartedAt,
+                    lastTurnDuration: candidate.lastTurnDuration,
                     projectionGeneration: projector.generation,
                     latestSequence: projector.latestSequence,
                     updatedAt: max(projector.updatedAt, candidate.updatedAt)
@@ -1944,6 +2008,9 @@ final class RemoteAccessService: ObservableObject {
                 presentationStatus: candidate.presentationStatus,
                 statusDetail: candidate.statusDetail,
                 inputAvailability: .unavailable(reason: .unknownProviderState),
+                isFlaggedForLater: candidate.isFlaggedForLater,
+                turnStartedAt: candidate.turnStartedAt,
+                lastTurnDuration: candidate.lastTurnDuration,
                 latestSequence: 0,
                 updatedAt: candidate.updatedAt
             )

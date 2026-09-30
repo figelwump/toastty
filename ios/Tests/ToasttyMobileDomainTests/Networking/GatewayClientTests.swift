@@ -415,6 +415,33 @@ final class GatewayClientTests: XCTestCase {
         XCTAssertEqual(result, .rejected(reason: .sendScopeDenied))
     }
 
+    func testConversationFlagUsesAuthenticatedPOSTContract() async throws {
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"protocolVersion":"1.0","result":"updated"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+        let request = RemoteConversationFlagRequest(conversationID: Self.conversationID, flagged: true)
+
+        let response = try await client.setConversationFlag(request)
+
+        XCTAssertEqual(response.result, .updated)
+        let recordedRequests = await transport.recordedRequests()
+        let recorded = try XCTUnwrap(recordedRequests.first)
+        XCTAssertEqual(recorded.httpMethod, "POST")
+        XCTAssertEqual(recorded.url?.path, "/api/conversation.flag.set")
+        XCTAssertEqual(recorded.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertNil(recorded.value(forHTTPHeaderField: "Origin"))
+        XCTAssertEqual(
+            try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationFlagRequest.self, from: try XCTUnwrap(recorded.httpBody)),
+            request
+        )
+    }
+
     func testWorkspaceDoneUsesAuthenticatedPOSTContract() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Data(#"{"protocolVersion":"1.0","result":"updated"}"#.utf8)),

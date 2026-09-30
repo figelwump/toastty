@@ -170,6 +170,18 @@ workspace, desktop tab, and agent, or to copy its path. In a conversation, the
 you: approvals first, then errors, then unread results. Touch and hold it to
 choose from the list. It is hidden when no other session needs you.
 
+Swipe a session row left for **Info**, which opens the same card as a sheet,
+and **Flag**, which sets or clears the desktop's Flag for Later mark on the
+session. The violet flag shows under the row's status mark, and **Undo**
+appears for a few seconds. The change reaches the Mac's sidebar and every other
+device; the Mac still clears the flag itself when the session starts new work.
+Flag needs a Mac that advertises it and a device with send access, and is
+hidden otherwise.
+
+While a session is working, its row shows the running turn's time, ticking,
+in place of its age. Touch and hold the row for the elapsed time and the
+length of its last turn.
+
 ### Subspaces
 
 Subspaces, the workspaces an agent spawned from another workspace, appear
@@ -187,8 +199,8 @@ The filter gives way while it would hide a subspace that needs approval or has
 an error. A collapsed group stays open under the same condition.
 
 While a subspace is idle, has an unread result, or is done, its status box is a
-checkbox. Tap it, or choose **Mark as Done** from the row's menu, to mark the
-subspace done without opening it; **Undo** appears for a few seconds. The
+checkbox. Tap it, swipe the row right, or choose **Mark as Done** from the
+row's menu, to mark the subspace done without opening it; **Undo** appears for a few seconds. The
 change applies on the Mac through the same rule as the sidebar checkbox and
 reaches every connected device. When an agent in the subspace starts new work,
 the Mac clears the mark. The Mac also refuses to mark a subspace done while
@@ -199,10 +211,13 @@ read-only while the phone is disconnected.
 **Active** leaves out idle and done subspaces. A workspace whose only activity
 is in a subspace still appears under Active, listing that subspace.
 
-Subspaces and the done mark need updates on both sides. The host sends
-optional `parentWorkspaceID`, `spawningConversationID`, `primaryAnnotationKey`,
-and `doneAt` fields on each workspace summary, and advertises the
-`workspace_done` capability for `POST /api/workspace.done.set`. An older Mac
+Subspaces, the done mark, the flag and turn times need updates on both sides.
+The host sends optional `parentWorkspaceID`, `spawningConversationID`,
+`primaryAnnotationKey`, and `doneAt` fields on each workspace summary, and
+optional `isFlaggedForLater`, `turnStartedAt`, and `lastTurnDuration` fields on
+each conversation summary. It advertises the `workspace_done` capability for
+`POST /api/workspace.done.set` and `conversation_flag` for
+`POST /api/conversation.flag.set`. An older Mac
 omits them, so the phone lists every workspace at the top level and shows no
 checkbox. An older phone ignores them and keeps its flat list.
 
@@ -326,9 +341,9 @@ support conversations; update Toastty on the Mac to enable previews.
   answer text; the Mac applies them only to the exact pending question through
   Claude's hook response. This does not grant tool permissions or change
   Claude's permission settings.
-- Marking a subspace done needs a native paired device with send access. It
-  changes only that subspace's done mark, and each change is recorded in the
-  audit log with the device that made it.
+- Marking a subspace done or flagging a session needs a native paired device
+  with send access. Each changes only that one mark, and each change is
+  recorded in the audit log with the device that made it.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These
