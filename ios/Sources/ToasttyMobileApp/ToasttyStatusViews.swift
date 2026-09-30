@@ -78,6 +78,7 @@ struct ToasttySessionStatusPresentation: Equatable, Sendable {
             conversation.agent.displayName,
             conversation.cwd,
             conversation.displayAge,
+            conversation.isFlaggedForLater ? "flagged for later" : nil,
         ]
         return facts
             .compactMap(Self.nonemptyTrimmed)

@@ -471,6 +471,70 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func remoteFlagSetsAndClearsTheSessionsLaterFlagAndPublishesIt() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
+        defer { fixture.removeRuntimeFiles() }
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        func summary() throws -> RemoteConversationSummary {
+            try #require(fixture.service.facadeSessionList(at: fixture.confirmedAt).conversations.first {
+                $0.conversationID == fixture.conversationID
+            })
+        }
+        #expect(try summary().isFlaggedForLater == false)
+
+        fixture.server.removeAllBroadcasts()
+        #expect(fixture.service.setConversationFlag(
+            .init(conversationID: fixture.conversationID, flagged: true), device: device) == .updated)
+        #expect(fixture.sessionRuntimeStore.isLaterFlagged(sessionID: fixture.sessionID))
+        #expect(try summary().isFlaggedForLater)
+        #expect(fixture.server.sessionListSnapshots.last?.conversations.first {
+            $0.conversationID == fixture.conversationID
+        }?.isFlaggedForLater == true)
+
+        #expect(fixture.service.setConversationFlag(
+            .init(conversationID: fixture.conversationID, flagged: true), device: device) == .unchanged)
+        #expect(fixture.service.setConversationFlag(
+            .init(conversationID: fixture.conversationID, flagged: false), device: device) == .updated)
+        #expect(try summary().isFlaggedForLater == false)
+        #expect(fixture.service.setConversationFlag(
+            .init(conversationID: RemoteConversationID(), flagged: true), device: device) == .conversationNotFound)
+
+        // A session that just ended is refused even before the debounced
+        // conversation map catches up.
+        fixture.sessionRuntimeStore.setLaterFlag(sessionID: fixture.sessionID, isFlagged: true)
+        fixture.sessionRuntimeStore.stopSession(sessionID: fixture.sessionID, at: fixture.confirmedAt.addingTimeInterval(1))
+        #expect(fixture.service.setConversationFlag(
+            .init(conversationID: fixture.conversationID, flagged: false), device: device) == .conversationNotFound)
+    }
+
+    @Test func conversationSummaryCarriesTurnTimingAndOmitsAbsentMarks() throws {
+        let startedAt = Date(timeIntervalSince1970: 1_788_696_000)
+        let full = RemoteConversationSummary(
+            conversationID: RemoteConversationID(), provider: .claude, title: "Session",
+            state: .working, inputAvailability: .unavailable(reason: .unknownProviderState),
+            isFlaggedForLater: true, turnStartedAt: startedAt, lastTurnDuration: 42,
+            latestSequence: 0, updatedAt: startedAt
+        )
+        let encoder = ConversationEventCoding.makeEncoder()
+        let decoded = try ConversationEventCoding.makeDecoder().decode(
+            RemoteConversationSummary.self, from: try encoder.encode(full))
+        #expect(decoded.isFlaggedForLater)
+        #expect(decoded.turnStartedAt == startedAt)
+        #expect(decoded.lastTurnDuration == 42)
+
+        // Absent marks leave the JSON as older clients expect it.
+        let quiet = RemoteConversationSummary(
+            conversationID: RemoteConversationID(), provider: .claude, title: "Session",
+            state: .ready, inputAvailability: .unavailable(reason: .unknownProviderState),
+            lastTurnDuration: -1, latestSequence: 0, updatedAt: startedAt
+        )
+        let json = try #require(String(data: try encoder.encode(quiet), encoding: .utf8))
+        #expect(json.contains("isFlaggedForLater") == false)
+        #expect(json.contains("turnStartedAt") == false)
+        #expect(json.contains("lastTurnDuration") == false)
+    }
+
+    @MainActor
     @Test func readAcknowledgementPublishesReadReadyConversationAsIdle() throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
         defer { fixture.removeRuntimeFiles() }

@@ -363,6 +363,34 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertEqual(scopes, [.read, .approve])
     }
 
+    func testConversationFlagNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.conversationFlag]
+        ))
+        XCTAssertFalse(home.canFlagConversations)
+        await subject.updateDeviceScopes([.read])
+        XCTAssertFalse(home.canFlagConversations)
+        await subject.updateDeviceScopes([.read, .send])
+        XCTAssertTrue(home.canFlagConversations)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: []
+        ))
+        XCTAssertFalse(home.canFlagConversations)
+    }
+
     func testSubspaceDoneNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
         let home = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),

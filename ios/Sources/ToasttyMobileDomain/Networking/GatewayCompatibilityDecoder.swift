@@ -184,6 +184,9 @@ public struct GatewayCompatibilityDecoder: Sendable {
             ),
             inputAvailability: inputAvailability,
             pendingInteractionPreview: pendingInteractionPreview,
+            isFlaggedForLater: (try? object.optionalBool("isFlaggedForLater")) == true,
+            turnStartedAt: try? object.requiredDate("turnStartedAt"),
+            lastTurnDuration: object.lossyDouble("lastTurnDuration"),
             projectionGeneration: try object.requiredUInt64("projectionGeneration"),
             latestSequence: try object.requiredUInt64("latestSequence"),
             updatedAt: try object.requiredDate("updatedAt")
@@ -430,6 +433,15 @@ private struct JSONObject {
     /// Optional additive display copy should never make the authoritative
     /// session facts unusable when an older or future host omits it or changes
     /// its representation.
+    /// A JSON number as a double. Booleans bridge to `NSNumber` too, so they
+    /// are turned away rather than read as 0 or 1.
+    func lossyDouble(_ key: String) -> Double? {
+        guard let number = storage[key] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            return nil
+        }
+        return number.doubleValue
+    }
+
     func lossyString(_ key: String) -> String? {
         storage[key] as? String
     }

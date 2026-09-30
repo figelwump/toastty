@@ -10,6 +10,7 @@ struct ToasttyWorkspaceView: View {
 
     @AppStorage private var storedWorkspaceSessionFilter: String
     @State private var spawnerFilter: ToasttySpawnerChip?
+    @State private var infoConversation: ToasttySessionInfoSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
@@ -44,6 +45,9 @@ struct ToasttyWorkspaceView: View {
         }
         .background(ToasttyDesignTokens.background)
         .toasttySubspaceDoneNotice(controller)
+        .sheet(item: $infoConversation) { selection in
+            ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
+        }
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -62,8 +66,10 @@ struct ToasttyWorkspaceView: View {
         let visiblePanels = showsAllPanels ? sortedPanels : Array(sortedPanels.prefix(4))
         let subspaceRows = selectedWorkspaceSessionFilter.subspaceRows(of: workspace.id, in: controller.snapshot)
         let subspaceTotal = controller.snapshot.subspaceRows(of: workspace.id).count
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
+        // A List rather than a ScrollView so rows have swipe actions. The
+        // screen's other content rides along as rows without separators.
+        return List {
+            Group {
                 if let parent = controller.snapshot.parent(of: workspace.id) {
                     // A subspace says where it is nested; Back returns to
                     // wherever it was opened from.
@@ -83,13 +89,18 @@ struct ToasttyWorkspaceView: View {
                 if !workspace.panels.isEmpty {
                     Text("Open panels").font(.headline).padding(.horizontal, 6)
                     ForEach(visiblePanels) { panel in
-                        NavigationLink(value: ToasttyMobileRoute.panelPreview(
-                            workspaceID: workspace.id, panelID: panel.panelID
-                        )) {
-                            ToasttyWorkspacePanelRow(panel: panel)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("toastty-workspace-panel-\(panel.panelID.uuidString)")
+                        // The row draws its own chevron; a bare navigation
+                        // link in a List would add a second one.
+                        ToasttyWorkspacePanelRow(panel: panel)
+                            .background {
+                                NavigationLink(value: ToasttyMobileRoute.panelPreview(
+                                    workspaceID: workspace.id, panelID: panel.panelID
+                                )) { EmptyView() }
+                                .opacity(0)
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityIdentifier("toastty-workspace-panel-\(panel.panelID.uuidString)")
                     }
                     if sortedPanels.count > 4 {
                         Button(showsAllPanels ? "Show less" : "Show more") {
@@ -108,7 +119,10 @@ struct ToasttyWorkspaceView: View {
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                     .padding(.horizontal, 6)
                     .accessibilityIdentifier("toastty-mobile-workspace-context")
+            }
+            .toasttyListRow(vertical: 5)
 
+            Group {
                 if visibleConversations.isEmpty, subspaceTotal > 0 {
                     // The subspaces below are this workspace's content.
                     EmptyView()
@@ -127,25 +141,30 @@ struct ToasttyWorkspaceView: View {
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
                     .padding(.vertical, 24)
                     .accessibilityIdentifier("toastty-mobile-workspace-empty")
+                    .toasttyListRow()
                 } else {
-                    VStack(spacing: 2) {
-                        ForEach(visibleConversations) { conversation in
-                            let chip = ToasttySpawnerChip.chip(
-                                for: conversation, in: controller.snapshot,
-                                filter: selectedWorkspaceSessionFilter
-                            )
-                            ToasttySessionRow(
-                                conversation: conversation,
-                                freshness: controller.freshness,
-                                accessibilityIdentifier:
-                                    "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
-                                spawnerChip: chip,
-                                isSpawnerFilterActive: chip != nil
-                                    && spawnerFilter?.conversationID == conversation.id,
-                                onSpawnerChip: { toggleSpawnerFilter($0, in: workspace) },
-                                onOpen: onOpen
-                            )
-                        }
+                    ForEach(visibleConversations) { conversation in
+                        let chip = ToasttySpawnerChip.chip(
+                            for: conversation, in: controller.snapshot,
+                            filter: selectedWorkspaceSessionFilter
+                        )
+                        ToasttySessionRow(
+                            conversation: conversation,
+                            freshness: controller.freshness,
+                            accessibilityIdentifier:
+                                "toastty-mobile-workspace-session-\(conversation.id.uuidString)",
+                            spawnerChip: chip,
+                            isSpawnerFilterActive: chip != nil
+                                && spawnerFilter?.conversationID == conversation.id,
+                            onSpawnerChip: { toggleSpawnerFilter($0, in: workspace) },
+                            canFlag: controller.canFlagConversations,
+                            onFlag: { controller.setConversationFlag(conversation.id, isFlagged: $0) },
+                            onOpen: onOpen
+                        )
+                        .toasttyListRow()
+                        .toasttySessionSwipeActions(
+                            conversation, controller: controller, infoConversation: $infoConversation
+                        )
                     }
                 }
                 if !subspaceRows.isEmpty {
@@ -159,18 +178,17 @@ struct ToasttyWorkspaceView: View {
                     )
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 40)
-            .frame(maxWidth: 560)
-            .frame(maxWidth: .infinity)
-            // Reorders happen only on status-bucket transitions; animate so
-            // the moving row stays trackable.
-            .animation(
-                reduceMotion ? nil : .default,
-                value: visibleConversations.map(\.id) + subspaceRows.map(\.id)
-            )
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.top, 12, for: .scrollContent)
+        .contentMargins(.bottom, 40, for: .scrollContent)
+        // Reorders happen only on status-bucket transitions; animate so
+        // the moving row stays trackable.
+        .animation(
+            reduceMotion ? nil : .default,
+            value: visibleConversations.map(\.id) + subspaceRows.map(\.id)
+        )
         .scrollIndicators(.hidden)
         .background(ToasttyDesignTokens.background)
     }

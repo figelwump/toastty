@@ -13,6 +13,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case conversationEvents
     case conversationReadAcknowledge
     case workspaceDone
+    case conversationFlag
     case questionAnswer
     case messageSend
     case messageSendWithAttachments
@@ -31,6 +32,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .conversationEvents: "/api/conversation.events.get"
         case .conversationReadAcknowledge: "/api/conversation.read.acknowledge"
         case .workspaceDone: "/api/workspace.done.set"
+        case .conversationFlag: "/api/conversation.flag.set"
         case .questionAnswer: "/api/conversation.question.answer"
         case .messageSendWithAttachments: RemoteAttachmentPolicy.sendPath
         case .messageSend: "/api/conversation.message.send"
@@ -85,6 +87,7 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // Changing workspace state is a write, so it needs the send scope
         // even though it sends no text to an agent.
         .workspaceDone: .init(route: .workspaceDone, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .conversationFlag: .init(route: .conversationFlag, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .questionAnswer: .init(route: .questionAnswer, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSendWithAttachments: .init(route: .messageSendWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSend: .init(route: .messageSend, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .send),

@@ -626,6 +626,19 @@ public actor ConnectionCoordinator {
         return try await gateway.setWorkspaceDone(request)
     }
 
+    /// Sets a session's "Flag for Later" mark only while live against a host
+    /// that advertises the operation. `nil` is a capability/lifecycle
+    /// refusal, not a transport failure.
+    public func setConversationFlag(
+        _ request: RemoteConversationFlagRequest
+    ) async throws -> RemoteConversationFlagResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.conversationFlag) else {
+            return nil
+        }
+        return try await gateway.setConversationFlag(request)
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.

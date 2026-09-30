@@ -590,6 +590,91 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 5))
     }
 
+    func testSwipeFlagsASessionAndUndoClearsIt() throws {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        // "Sparkle updater fix" is working and unflagged in the fixture.
+        let row = app.buttons["toastty-mobile-grouped-card-\(workingConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        XCTAssertFalse(row.label.contains("flagged for later"))
+        // A working row shows its turn's running time instead of an age.
+        let elapsed = app.staticTexts["toastty-session-elapsed-\(workingConversationID)"]
+        XCTAssertTrue(elapsed.exists)
+        // The fixture's turn started 3m 41s before launch and keeps running.
+        let first = try XCTUnwrap(elapsedSeconds(elapsed.label), elapsed.label)
+        XCTAssertTrue((221...400).contains(first), elapsed.label)
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { (self.elapsedSeconds(elapsed.label) ?? 0) > first },
+            "The elapsed time should tick"
+        )
+
+        row.swipeLeft()
+        let flag = app.buttons["toastty-session-swipe-flag-\(workingConversationID)"]
+        XCTAssertTrue(flag.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["toastty-session-swipe-info-\(workingConversationID)"].exists)
+        attachScreenshot(named: "fixture-session-swipe-actions", of: app)
+        flag.tap()
+
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertEqual(notice.label, "Flagged for later")
+        XCTAssertTrue(waitForLabelContaining(row, "flagged for later"))
+        attachScreenshot(named: "fixture-session-flagged", of: app)
+
+        app.buttons["toastty-subspace-done-undo"].tap()
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(row.label.contains("flagged for later"))
+
+        // The fixture's flagged session carries the mark in its label.
+        let flagged = app.buttons["toastty-mobile-grouped-card-\(firstToasttyConversationID)"]
+        XCTAssertTrue(scrollHomeTo(flagged, in: app))
+        XCTAssertTrue(flagged.label.hasSuffix("flagged for later"))
+    }
+
+    func testSwipeInfoOpensTheDetailSheet() {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        let row = app.buttons["toastty-mobile-grouped-card-\(pendingInteractionID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.swipeLeft()
+        let info = app.buttons["toastty-session-swipe-info-\(pendingInteractionID)"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        info.tap()
+
+        let sheet = app.descendants(matching: .any)["toastty-session-info-sheet"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["~/GiantThings/repos/toastty"].exists)
+        XCTAssertTrue(app.staticTexts["needs approval"].exists)
+        attachScreenshot(named: "fixture-session-info-sheet", of: app)
+        sheet.swipeDown()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
+    }
+
+    func testSwipeRightMarksASubspaceDone() {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        let row = app.buttons["toastty-subspace-row-\(readySubspaceID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        // A full swipe performs Done itself; a shorter one reveals the button.
+        row.swipeRight()
+        let done = app.buttons["toastty-subspace-swipe-done-\(readySubspaceID)"]
+        if done.waitForExistence(timeout: 2) { done.tap() }
+
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertEqual(notice.label, "Marked done")
+        XCTAssertTrue(waitForLabelContaining(row, "subspace, done"))
+        app.buttons["toastty-subspace-done-undo"].tap()
+        XCTAssertTrue(waitForLabelContaining(row, "subspace, ready"))
+
+        // A working subspace's mark is not a checkbox, so it has no swipe.
+        let working = app.buttons["toastty-subspace-row-\(workingSubspaceID)"]
+        XCTAssertTrue(scrollHomeTo(working, in: app))
+        working.swipeRight()
+        XCTAssertFalse(app.buttons["toastty-subspace-swipe-done-\(workingSubspaceID)"].waitForExistence(timeout: 2))
+    }
+
     func testSessionRowLongPressShowsDetailCard() {
         let app = launchFixtureApp()
         let row = app.buttons["toastty-mobile-grouped-card-\(pendingInteractionID)"]
@@ -1937,6 +2022,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             if element.exists, element.isHittable { return true }
             home.swipeUp()
         }
+        // The element may sit above what an earlier scroll reached.
+        for _ in 0..<attempts {
+            if element.exists, element.isHittable { return true }
+            home.swipeDown()
+        }
         return element.exists && element.isHittable
     }
 
@@ -1985,7 +2075,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         XCTAssertTrue(detail.waitForExistence(timeout: 5))
         XCTAssertTrue(app.navigationBars["toastty"].exists)
-        XCTAssertTrue(context.exists)
+        // The list is lazy, so at large text sizes the count sits below the
+        // panels until scrolled to.
+        XCTAssertTrue(scrollWorkspaceTo(context, in: app))
         XCTAssertEqual(context.label, "4 sessions")
     }
 
@@ -1995,6 +2087,43 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let all = app.segmentedControls["toastty-mobile-workspace-session-filter"].buttons["All"]
         XCTAssertTrue(all.waitForExistence(timeout: 10))
         if all.isSelected == false { all.tap() }
+    }
+
+    /// Seconds in a `4m 12s` or `45s` label.
+    private func elapsedSeconds(_ label: String) -> Int? {
+        let parts = label.split(separator: " ")
+        var seconds = 0
+        for part in parts {
+            if part.hasSuffix("m"), let minutes = Int(part.dropLast()) {
+                seconds += minutes * 60
+            } else if part.hasSuffix("s"), let value = Int(part.dropLast()) {
+                seconds += value
+            } else {
+                return nil
+            }
+        }
+        return parts.isEmpty ? nil : seconds
+    }
+
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        return condition()
+    }
+
+    private func waitForLabelContaining(
+        _ element: XCUIElement,
+        _ text: String,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", text),
+            object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func waitForLabel(

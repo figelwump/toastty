@@ -163,10 +163,14 @@ public struct MobileActivityAge: Equatable, Sendable {
             : 0
     }
 
-    public func label(atMonotonicTime now: TimeInterval) -> String {
+    /// Whole seconds elapsed, advanced only from the monotonic anchor.
+    public func seconds(atMonotonicTime now: TimeInterval) -> Int {
         let finiteNow = now.isFinite ? now : receivedAtMonotonicTime
-        let elapsed = max(0, Int(finiteNow - receivedAtMonotonicTime))
-        let seconds = secondsAtReceipt + elapsed
+        return secondsAtReceipt + max(0, Int(finiteNow - receivedAtMonotonicTime))
+    }
+
+    public func label(atMonotonicTime now: TimeInterval) -> String {
+        let seconds = seconds(atMonotonicTime: now)
         if seconds < 60 { return "now" }
         let minutes = seconds / 60
         if minutes < 60 { return "\(minutes)m" }
@@ -202,6 +206,13 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let workspaceTabID: UUID?
     public let workspaceTabTitle: String?
     public let executionProfile: RemoteSessionExecutionProfile?
+    /// The desktop's "Flag for Later" mark.
+    public let isFlaggedForLater: Bool
+    /// How long the turn a working session is in has run, anchored like
+    /// `activityAge` so the phone's clock cannot stretch or shrink it.
+    public let turnElapsed: MobileActivityAge?
+    /// Length of the last finished turn, in seconds.
+    public let lastTurnDuration: TimeInterval?
 
     public var age: String {
         activityAge?.label(atMonotonicTime: ProcessInfo.processInfo.systemUptime) ?? fixedAge
@@ -248,12 +259,20 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         lastActivity: String,
         executionProfile: RemoteSessionExecutionProfile? = nil,
         workspaceTabID: UUID? = nil,
-        workspaceTabTitle: String? = nil
+        workspaceTabTitle: String? = nil,
+        isFlaggedForLater: Bool = false,
+        turnElapsed: MobileActivityAge? = nil,
+        lastTurnDuration: TimeInterval? = nil
     ) {
         self.id = id
         self.workspaceID = workspaceID
         self.workspaceTitle = workspaceTitle
         self.cwd = Self.nonemptyTrimmed(cwd)
+        self.isFlaggedForLater = isFlaggedForLater
+        self.turnElapsed = turnElapsed
+        self.lastTurnDuration = lastTurnDuration.flatMap {
+            $0.isFinite && $0 >= 0 ? min($0, Self.maximumDurationSeconds) : nil
+        }
         self.agent = agent
         self.title = title
         self.state = state
@@ -284,7 +303,10 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         lastActivity: String,
         executionProfile: RemoteSessionExecutionProfile? = nil,
         workspaceTabID: UUID? = nil,
-        workspaceTabTitle: String? = nil
+        workspaceTabTitle: String? = nil,
+        isFlaggedForLater: Bool = false,
+        turnElapsed: MobileActivityAge? = nil,
+        lastTurnDuration: TimeInterval? = nil
     ) {
         self.init(
             id: id,
@@ -301,8 +323,45 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             lastActivity: lastActivity,
             executionProfile: executionProfile,
             workspaceTabID: workspaceTabID,
-            workspaceTabTitle: workspaceTabTitle
+            workspaceTabTitle: workspaceTabTitle,
+            isFlaggedForLater: isFlaggedForLater,
+            turnElapsed: turnElapsed,
+            lastTurnDuration: lastTurnDuration
         )
+    }
+
+    /// The same conversation with its flag changed, for a change shown
+    /// before the Mac confirms it.
+    public func withFlaggedForLater(_ isFlaggedForLater: Bool) -> MobileConversation {
+        MobileConversation(
+            id: id, workspaceID: workspaceID, workspaceTitle: workspaceTitle, cwd: cwd, agent: agent,
+            title: title, state: state, inputAvailability: inputAvailability, age: fixedAge,
+            activityAge: activityAge, stateEnteredAge: stateEnteredAge, lastActivity: lastActivity,
+            executionProfile: executionProfile, workspaceTabID: workspaceTabID,
+            workspaceTabTitle: workspaceTabTitle, isFlaggedForLater: isFlaggedForLater,
+            turnElapsed: turnElapsed, lastTurnDuration: lastTurnDuration
+        )
+    }
+
+    /// The running turn's length as the desktop shows it: `45s`, `4m 12s`.
+    public func elapsedTurnLabel(atMonotonicTime now: TimeInterval) -> String? {
+        turnElapsed.map { Self.durationLabel(seconds: TimeInterval($0.seconds(atMonotonicTime: now))) }
+    }
+
+    public var lastTurnLabel: String? {
+        lastTurnDuration.map(Self.durationLabel(seconds:))
+    }
+
+    /// Durations past this show as this; a garbled value must not trap the
+    /// integer conversion.
+    public static let maximumDurationSeconds: TimeInterval = 100 * 365 * 24 * 60 * 60
+
+    public static func durationLabel(seconds: TimeInterval) -> String {
+        let clamped = Int(seconds.isFinite ? min(max(0, seconds), maximumDurationSeconds) : 0)
+        let minutes = clamped / 60
+        let remaining = clamped % 60
+        guard minutes > 0 else { return "\(remaining)s" }
+        return String(format: "%dm %02ds", minutes, remaining)
     }
 
     public var accessibilitySummary: String {
@@ -314,6 +373,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             agent.displayName,
             cwd,
             displayAge,
+            isFlaggedForLater ? "flagged for later" : nil,
         ]
         return facts
             .compactMap(Self.nonemptyTrimmed)

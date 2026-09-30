@@ -82,13 +82,17 @@ struct ToasttySubspaceGroup: View {
 
     @AppStorage(ToasttyCollapsedSubspaceGroups.preferenceKey) private var storedCollapsedGroups = ""
 
+    /// Emits the header, the filter bar and each row as sibling views, so a
+    /// `List` gives every subspace its own row with its own swipe actions.
     var body: some View {
         let listed = ToasttySubspaceGroupPresentation.rows(rows, spawnedBy: activeFilter?.conversationID)
-        VStack(spacing: 2) {
+        Group {
             header(shown: listed.rows.count)
+                .toasttyListRow()
             if isExpanded {
                 if listed.isFiltered, let activeFilter {
                     filterBar(activeFilter)
+                        .toasttyListRow()
                 }
                 ForEach(listed.rows) { row in
                     ToasttySubspaceRow(
@@ -97,6 +101,21 @@ struct ToasttySubspaceGroup: View {
                         controller: controller,
                         openWorkspace: openWorkspace
                     )
+                    .toasttyListRow()
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if row.status.showsDoneToggle, controller.canMarkSubspacesDone {
+                            Button {
+                                controller.setSubspaceDone(row.id, isDone: !row.workspace.isDone)
+                            } label: {
+                                Label(
+                                    row.workspace.isDone ? "Not Done" : "Done",
+                                    systemImage: row.workspace.isDone ? "square" : "checkmark.square"
+                                )
+                            }
+                            .tint(ToasttyDesignTokens.green)
+                            .accessibilityIdentifier("toastty-subspace-swipe-done-\(row.id.uuidString)")
+                        }
+                    }
                 }
             }
         }
@@ -612,7 +631,7 @@ struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controller.subspaceDoneNotice)
             .sensoryFeedback(trigger: controller.subspaceDoneNotice) { _, notice in
                 switch notice?.kind {
-                case .changed?: .success
+                case .changed?, .flagChanged?: .success
                 case .failed?: .error
                 case nil: nil
                 }
@@ -645,5 +664,52 @@ struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
 extension View {
     func toasttySubspaceDoneNotice(_ controller: HomeScreenController) -> some View {
         modifier(ToasttySubspaceDoneNoticeModifier(controller: controller))
+    }
+
+    /// A row of the phone's session lists: no separator or system
+    /// background, the page's side gutters, and the 560pt column that keeps
+    /// rows readable on wide screens.
+    func toasttyListRow(vertical: CGFloat = 1) -> some View {
+        frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
+            .listRowInsets(EdgeInsets(top: vertical, leading: 14, bottom: vertical, trailing: 14))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+}
+
+/// Which session the Info swipe opened.
+struct ToasttySessionInfoSelection: Identifiable, Equatable {
+    let id: UUID
+}
+
+/// A session's detail card as a sheet, for the Info swipe action. It reads
+/// the session from the controller each time, so it follows live changes
+/// instead of showing a copy that keeps a finished turn ticking.
+struct ToasttySessionInfoSheet: View {
+    let conversationID: UUID
+    let controller: HomeScreenController
+
+    var body: some View {
+        ScrollView {
+            if let conversation = controller.conversation(id: conversationID) {
+                ToasttySessionDetailCard(conversation: conversation, freshness: controller.freshness)
+                    .clipShape(RoundedRectangle(cornerRadius: ToasttyDesignTokens.cardCornerRadius, style: .continuous))
+                    .padding(.top, 24)
+                    .frame(maxWidth: .infinity)
+            } else {
+                ContentUnavailableView(
+                    "Conversation no longer available",
+                    systemImage: "bubble.left.and.exclamationmark.bubble.right",
+                    description: Text("It was removed from Toastty on your Mac.")
+                )
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .padding(.top, 24)
+            }
+        }
+        .background(ToasttyDesignTokens.background)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .accessibilityIdentifier("toastty-session-info-sheet")
     }
 }

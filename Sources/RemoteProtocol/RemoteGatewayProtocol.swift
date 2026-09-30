@@ -41,6 +41,8 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// nesting itself needs no capability: it arrives as optional fields on
     /// each workspace summary.
     case workspaceDone = "workspace_done"
+    /// A client may set or clear a session's "Flag for Later" mark.
+    case conversationFlag = "conversation_flag"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -63,6 +65,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .questionAnswers,
             .messageAttachments,
             .workspaceDone,
+            .conversationFlag,
         ]
     ) {
         self.protocolVersion = protocolVersion
@@ -373,6 +376,41 @@ public struct RemoteWorkspaceDoneResponse: Codable, Equatable, Sendable {
     public var result: RemoteWorkspaceDoneResult
 
     public init(result: RemoteWorkspaceDoneResult) {
+        self.protocolVersion = RemoteGatewayProtocol.version
+        self.result = result
+    }
+}
+
+/// Sets a session's "Flag for Later" mark to a target state, so a retry or
+/// the same tap from two devices is harmless.
+public struct RemoteConversationFlagRequest: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var conversationID: RemoteConversationID
+    public var flagged: Bool
+
+    public init(
+        protocolVersion: String = RemoteGatewayProtocol.version,
+        conversationID: RemoteConversationID,
+        flagged: Bool
+    ) {
+        self.protocolVersion = protocolVersion
+        self.conversationID = conversationID
+        self.flagged = flagged
+    }
+}
+
+public enum RemoteConversationFlagResult: String, Codable, Equatable, Sendable {
+    case updated
+    case unchanged
+    /// The conversation has no running session to flag.
+    case conversationNotFound = "conversation_not_found"
+}
+
+public struct RemoteConversationFlagResponse: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var result: RemoteConversationFlagResult
+
+    public init(result: RemoteConversationFlagResult) {
         self.protocolVersion = RemoteGatewayProtocol.version
         self.result = result
     }

@@ -173,6 +173,14 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     }
     public var inputAvailability: RemoteInputAvailability
     public var pendingInteractionPreview: RemotePendingInteractionPreview?
+    /// The desktop's "Flag for Later" mark on the session. Sent only while
+    /// set; absent from older hosts.
+    public var isFlaggedForLater: Bool
+    /// Start of the turn a working session is in the middle of, so a client
+    /// can show a live elapsed time; absent otherwise and from older hosts.
+    public var turnStartedAt: Date?
+    /// Length of the last finished turn, in seconds.
+    public var lastTurnDuration: TimeInterval?
     /// Generation of this conversation's sequence space within the current
     /// projection run. Bumped when this one conversation is rebuilt mid-run
     /// (for example after an unreconcilable provider file rewrite) so its
@@ -195,6 +203,9 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         statusDetail: String? = nil,
         inputAvailability: RemoteInputAvailability,
         pendingInteractionPreview: RemotePendingInteractionPreview? = nil,
+        isFlaggedForLater: Bool = false,
+        turnStartedAt: Date? = nil,
+        lastTurnDuration: TimeInterval? = nil,
         projectionGeneration: UInt64 = 0,
         latestSequence: UInt64,
         updatedAt: Date
@@ -210,6 +221,9 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         self.storedStatusDetail = Self.normalizedStatusDetail(statusDetail)
         self.inputAvailability = inputAvailability
         self.pendingInteractionPreview = pendingInteractionPreview
+        self.isFlaggedForLater = isFlaggedForLater
+        self.turnStartedAt = turnStartedAt
+        self.lastTurnDuration = lastTurnDuration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
         self.projectionGeneration = projectionGeneration
         self.latestSequence = latestSequence
         self.updatedAt = updatedAt
@@ -235,6 +249,9 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
                 RemotePendingInteractionPreview.self,
                 forKey: .pendingInteractionPreview
             ),
+            isFlaggedForLater: try container.decodeIfPresent(Bool.self, forKey: .isFlaggedForLater) ?? false,
+            turnStartedAt: try container.decodeIfPresent(Date.self, forKey: .turnStartedAt),
+            lastTurnDuration: try container.decodeIfPresent(TimeInterval.self, forKey: .lastTurnDuration),
             projectionGeneration: try container.decode(UInt64.self, forKey: .projectionGeneration),
             latestSequence: try container.decode(UInt64.self, forKey: .latestSequence),
             updatedAt: try container.decode(Date.self, forKey: .updatedAt)
@@ -254,6 +271,9 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         try container.encodeIfPresent(statusDetail, forKey: .statusDetail)
         try container.encode(inputAvailability, forKey: .inputAvailability)
         try container.encodeIfPresent(pendingInteractionPreview, forKey: .pendingInteractionPreview)
+        if isFlaggedForLater { try container.encode(true, forKey: .isFlaggedForLater) }
+        try container.encodeIfPresent(turnStartedAt, forKey: .turnStartedAt)
+        try container.encodeIfPresent(lastTurnDuration, forKey: .lastTurnDuration)
         try container.encode(projectionGeneration, forKey: .projectionGeneration)
         try container.encode(latestSequence, forKey: .latestSequence)
         try container.encode(updatedAt, forKey: .updatedAt)
@@ -283,6 +303,9 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         case statusDetail
         case inputAvailability
         case pendingInteractionPreview
+        case isFlaggedForLater
+        case turnStartedAt
+        case lastTurnDuration
         case projectionGeneration
         case latestSequence
         case updatedAt
