@@ -53,18 +53,25 @@ automatic fixes. It exits non-zero only when at least one check fails.
 
 ### `setup guide`
 
-Print the bundled agent-guided Getting Started guide.
+Print a bundled guide for an agent to follow.
 
 ```
-toastty setup guide [--format text|md]
+toastty setup guide [--topic onboarding|workflows] [--format text|md]
 ```
+
+The default `onboarding` topic is the agent-guided Getting Started guide. The
+`workflows` topic explains how to turn a user's way of working into a workflow
+skill: the Toastty building blocks, example workflows, and rules for writing
+one. The onboarding guide's "Pick a workflow" step reads it.
 
 The default `text` format is optimized for terminal reading. Use `--format md`
 when another agent or tool should preserve Markdown headings and code fences.
+With `--json`, the response contains `topic`, `format`, and `content`.
 
 ```bash
 "$TOASTTY_CLI_PATH" setup guide
 "$TOASTTY_CLI_PATH" setup guide --format md
+"$TOASTTY_CLI_PATH" setup guide --topic workflows --format md
 ```
 
 ### `setup skills list`
@@ -128,6 +135,42 @@ and Toastty forwarder script; `--dry-run` names that default explicitly and is
 a usage error combined with `--apply`. With `--apply`, it writes those files
 directly.
 Codex may ask the user to trust updated hooks the next time it starts.
+
+### `setup install-workflow`
+
+Dry-run or install a bundled workflow: a set of example skill packages copied
+into the user skills directory (`~/.toastty/skills`, or `TOASTTY_USER_SKILLS_ROOT`
+when set). The installed packages
+are ordinary user skills that the user can edit.
+
+```
+toastty setup install-workflow <name> [--dry-run | --apply]
+```
+
+| Workflow | Packages |
+|---|---|
+| `worktree-handoff` | `worktree-create`, `worktree-done`, `worktree-cleanup` |
+
+Without `--apply`, the command lists the packages it would install;
+`--dry-run` names that default explicitly and is a usage error combined with
+`--apply`. With `--apply`, it installs every package or none. It never
+overwrites an existing package: a package that already matches the bundled copy
+is left alone, and one that differs (including a script that lost its
+executable bit), is a symlink, or is not a directory is a conflict. If a write
+fails partway, packages installed by that run are removed again. Conflicts are reported as warnings on a dry run; with `--apply` they
+produce the `refused` outcome, exit status 1, and no changes. After installing,
+the command checks that the skill catalog accepts the new packages and reports
+any exclusion as a warning. New packages load in newly launched managed
+sessions. Run this from a Toastty terminal pane.
+
+```bash
+"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --dry-run
+"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --apply
+```
+
+With `--json`, setup installers return `applied`, `outcome` (`dryRun`,
+`applied`, `noChanges`, `refused`, or `failed`), `plannedChanges`,
+`changedFiles`, `warnings`, and `nextSteps`.
 
 ### `diagnostics collect`
 

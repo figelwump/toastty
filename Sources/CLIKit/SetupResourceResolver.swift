@@ -28,6 +28,17 @@ enum SetupResourceResolver {
         .appendingPathComponent("Setup", isDirectory: true)
     }
 
+    static func workflowPackagesDirectoryURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executableURL: URL? = nil
+    ) -> URL {
+        resourcesDirectoryURL(
+            environment: environment,
+            executableURL: executableURL
+        )
+        .appendingPathComponent(ToasttyWorkflowCatalog.bundledPackagesSubpath, isDirectory: true)
+    }
+
     private static func normalizedPath(_ rawValue: String?) -> String? {
         guard let rawValue,
               rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {

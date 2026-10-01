@@ -7,11 +7,26 @@ enum SetupGuideFormat: String, CaseIterable, Codable, Equatable {
     case md
 }
 
+enum SetupGuideTopic: String, CaseIterable, Codable, Equatable {
+    case onboarding
+    case workflows
+
+    var resourceFileName: String {
+        switch self {
+        case .onboarding:
+            return "onboarding-guide.md"
+        case .workflows:
+            return "workflow-guide.md"
+        }
+    }
+}
+
 enum SetupCommand: Equatable {
-    case guide(format: SetupGuideFormat)
+    case guide(topic: SetupGuideTopic, format: SetupGuideFormat)
     case skillsList
     case installShellIntegration(shell: ProfileShellIntegrationShell?, apply: Bool)
     case installHooks(agent: AgentKind, apply: Bool)
+    case installWorkflow(name: String, apply: Bool)
 }
 
 struct SetupResourceStore {
@@ -23,12 +38,12 @@ struct SetupResourceStore {
         )
     }
 
-    func guideMarkdown() throws -> String {
-        try readUTF8(setupDirectoryURL.appendingPathComponent("onboarding-guide.md", isDirectory: false))
+    func guideMarkdown(topic: SetupGuideTopic) throws -> String {
+        try readUTF8(setupDirectoryURL.appendingPathComponent(topic.resourceFileName, isDirectory: false))
     }
 
-    func guide(format: SetupGuideFormat) throws -> String {
-        let markdown = try guideMarkdown()
+    func guide(topic: SetupGuideTopic, format: SetupGuideFormat) throws -> String {
+        let markdown = try guideMarkdown(topic: topic)
         switch format {
         case .md:
             return markdown
@@ -80,10 +95,10 @@ enum SetupCommandRunner {
         fileManager: FileManager = .default
     ) throws -> String {
         switch command {
-        case .guide(let format):
-            let content = try store.guide(format: format)
+        case .guide(let topic, let format):
+            let content = try store.guide(topic: topic, format: format)
             if jsonOutput {
-                return try renderJSON(GuidePayload(format: format, content: content))
+                return try renderJSON(GuidePayload(topic: topic, format: format, content: content))
             }
             return content
 
@@ -97,7 +112,7 @@ enum SetupCommandRunner {
             }
             return inventory.renderText()
 
-        case .installShellIntegration, .installHooks:
+        case .installShellIntegration, .installHooks, .installWorkflow:
             throw ToasttyCLIError.runtime("setup installer commands require a launch environment")
         }
     }
@@ -121,7 +136,7 @@ enum SetupCommandRunner {
 private extension SetupCommand {
     var isInstallerCommand: Bool {
         switch self {
-        case .installShellIntegration, .installHooks:
+        case .installShellIntegration, .installHooks, .installWorkflow:
             return true
         case .guide, .skillsList:
             return false
@@ -156,6 +171,7 @@ private enum SetupGuideTextRenderer {
 }
 
 private struct GuidePayload: Codable {
+    var topic: SetupGuideTopic
     var format: SetupGuideFormat
     var content: String
 }

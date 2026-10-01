@@ -1,4 +1,5 @@
 @testable import ToasttyApp
+import CoreState
 import Foundation
 import XCTest
 
@@ -221,6 +222,8 @@ final class SetupResourcesDriftTests: XCTestCase {
             "toastty setup skills list",
             "toastty setup install-shell-integration",
             "toastty setup install-hooks",
+            "toastty setup install-workflow",
+            "toastty setup guide --topic workflows",
         ] {
             XCTAssertTrue(guide.contains(command), "Guide is missing \(command)")
         }
@@ -261,10 +264,12 @@ final class SetupResourcesDriftTests: XCTestCase {
     }
 
     func testOnboardingGuideDoesNotReintroduceSupersededSkillMatrix() throws {
-        let guide = try String(
-            contentsOf: setupResourcesURL().appendingPathComponent("onboarding-guide.md", isDirectory: false),
-            encoding: .utf8
-        )
+        let guide = try ["onboarding-guide.md", "workflow-guide.md"].map { fileName in
+            try String(
+                contentsOf: setupResourcesURL().appendingPathComponent(fileName, isDirectory: false),
+                encoding: .utf8
+            )
+        }.joined(separator: "\n")
 
         for supersededText in [
             "toastty-orchestrator-builder",
@@ -285,6 +290,55 @@ final class SetupResourcesDriftTests: XCTestCase {
             tailorRegex.firstMatch(in: guide, range: guideRange),
             "Guide reintroduced the superseded interview/tailor matrix concept"
         )
+    }
+
+    func testWorkflowGuideMentionsOnlyKnownAppControlIDsAndBundledWorkflows() throws {
+        let guide = try String(
+            contentsOf: setupResourcesURL().appendingPathComponent("workflow-guide.md", isDirectory: false),
+            encoding: .utf8
+        )
+        let knownIDs = Set(AppControlActionID.allCases.map(\.rawValue))
+            .union(AppControlQueryID.allCases.map(\.rawValue))
+        let mentionedIDs = try mentionedAppControlIDs(in: guide)
+
+        XCTAssertTrue(mentionedIDs.contains(AppControlActionID.agentLaunch.rawValue))
+        XCTAssertTrue(
+            mentionedIDs.subtracting(knownIDs).isEmpty,
+            "Workflow guide mentions unknown app-control IDs: \(mentionedIDs.subtracting(knownIDs).sorted().joined(separator: ", "))"
+        )
+        for workflow in ToasttyWorkflowCatalog.workflows {
+            XCTAssertTrue(
+                guide.contains("setup install-workflow \(workflow.name) --dry-run"),
+                "Workflow guide is missing the install command for \(workflow.name)"
+            )
+        }
+        for rule in ["`ok`", "`scope_denied`", "merging"] {
+            XCTAssertTrue(guide.contains(rule), "Workflow guide is missing rule: \(rule)")
+        }
+    }
+
+    /// `setup install-workflow` copies these packages onto user machines, where
+    /// the user skill catalog must accept them as they ship.
+    func testWorkflowCatalogPackagesAreAcceptedUserSkills() throws {
+        let examplesURL = repoRootURL().appendingPathComponent("examples/skills", isDirectory: true)
+        let state = ToasttyUserSkillValidator().scan(userSkillsDirectoryURL: examplesURL).state
+        XCTAssertTrue(state.globalDiagnostics.isEmpty, "\(state.globalDiagnostics)")
+
+        for workflow in ToasttyWorkflowCatalog.workflows {
+            for packageName in workflow.packageNames {
+                let package = try XCTUnwrap(
+                    state.packages.first { $0.name == packageName },
+                    "\(workflow.name) lists \(packageName), which is missing from examples/skills"
+                )
+                XCTAssertEqual(package.status, .accepted, packageName)
+                let packageURL = examplesURL.appendingPathComponent(packageName, isDirectory: true)
+                for fileURL in try regularFiles(under: packageURL) {
+                    let content = try String(contentsOf: fileURL, encoding: .utf8)
+                    XCTAssertFalse(content.contains("/Users/vishal"), fileURL.path)
+                    XCTAssertFalse(content.contains("TOASTTY_DEV_WORKTREE_ROOT"), fileURL.path)
+                }
+            }
+        }
     }
 
     private func setupResourcesURL() -> URL {

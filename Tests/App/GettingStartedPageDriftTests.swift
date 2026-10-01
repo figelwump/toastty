@@ -11,6 +11,8 @@ final class GettingStartedPageDriftTests: XCTestCase {
             GettingStartedContent.shellIntegrationCommand,
             GettingStartedContent.codexStatusHooksCommand,
             GettingStartedContent.skillsListCommand,
+            GettingStartedContent.workflowInstallCommand,
+            GettingStartedContent.workflowGuideCommand,
         ] {
             XCTAssertTrue(pageSource.contains(htmlEscaped(command)), "Page is missing \(command)")
         }

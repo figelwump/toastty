@@ -517,3 +517,5 @@ proactively.
 ## When To Create Another Skill
 
 If the user asks for a recurring Toastty workflow, write a narrow, workflow-specific skill that extends these general capabilities instead of creating another general Toastty orchestration or capability skill. Describe the workflow intent, required Toastty context, scope policy, live discovery steps, actions and queries to use, validation, and failure handling.
+
+Before designing one, read `"$TOASTTY_CLI_PATH" setup guide --topic workflows`. It lists example workflows to suggest and the rules workflow skills follow. The bundled worktree handoff workflow installs with `"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --dry-run`, then `--apply` after the user approves.

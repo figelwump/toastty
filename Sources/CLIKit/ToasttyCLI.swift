@@ -817,10 +817,11 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
-      toastty [--json] setup guide [--format text|md]
+      toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
       toastty [--json] setup install-hooks --agent <id> [--dry-run | --apply]
+      toastty [--json] setup install-workflow <name> [--dry-run | --apply]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session background-activity start|finish --session <id> --activity <id> --kind child_agent|subagent [--panel <id>] [--display-name <text>] [--command <text>] [--pid <pid>]
@@ -904,7 +905,7 @@ public enum ToasttyCLI {
         case "guide":
             let parsed = try parseCommandArguments(
                 remainingArguments,
-                valueOptions: ["--format"]
+                valueOptions: ["--format", "--topic"]
             )
             guard parsed.positionals.isEmpty else {
                 throw ToasttyCLIError.usage("setup guide does not accept positional arguments\n\n\(usage)")
@@ -913,7 +914,11 @@ public enum ToasttyCLI {
             guard let format = SetupGuideFormat(rawValue: formatValue) else {
                 throw ToasttyCLIError.usage("--format must be one of: text, md")
             }
-            return .setup(.guide(format: format))
+            let topicValue = parsed.singleValue("--topic") ?? SetupGuideTopic.onboarding.rawValue
+            guard let topic = SetupGuideTopic(rawValue: topicValue) else {
+                throw ToasttyCLIError.usage("--topic must be one of: onboarding, workflows")
+            }
+            return .setup(.guide(topic: topic, format: format))
 
         case "skills":
             guard let skillsSubcommand = remainingArguments.first else {
@@ -965,6 +970,28 @@ public enum ToasttyCLI {
                 .installHooks(
                     agent: agent,
                     apply: try parseSetupApplyFlag(parsed, subcommand: "install-hooks")
+                )
+            )
+
+        case "install-workflow":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: [],
+                flagOptions: ["--dry-run", "--apply"]
+            )
+            let availableNames = ToasttyWorkflowCatalog.workflows.map(\.name).joined(separator: ", ")
+            guard parsed.positionals.count == 1, let name = parsed.positionals.first else {
+                throw ToasttyCLIError.usage(
+                    "setup install-workflow requires one workflow name (available: \(availableNames))\n\n\(usage)"
+                )
+            }
+            guard ToasttyWorkflowCatalog.workflow(named: name) != nil else {
+                throw ToasttyCLIError.usage("unknown workflow: \(name) (available: \(availableNames))")
+            }
+            return .setup(
+                .installWorkflow(
+                    name: name,
+                    apply: try parseSetupApplyFlag(parsed, subcommand: "install-workflow")
                 )
             )
 
