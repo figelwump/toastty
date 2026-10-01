@@ -370,8 +370,14 @@ final class ToasttyComposerTypingTests: XCTestCase {
         model.replace(with: "")
         oldTextView.insertText(" newer")
         model.editorID = UUID()
-        await settleLayout()
-        let textView = try XCTUnwrap(findComposer(in: try XCTUnwrap(window.rootViewController).view))
+        let hostView = try XCTUnwrap(window.rootViewController?.view)
+        for _ in 0..<60 {
+            if let textView = findComposer(in: hostView), textView !== oldTextView { break }
+            hostView.setNeedsLayout()
+            hostView.layoutIfNeeded()
+            await settleLayout()
+        }
+        let textView = try XCTUnwrap(findComposer(in: hostView))
         XCTAssertFalse(textView === oldTextView)
         XCTAssertEqual(textView.text, "sent newer")
         XCTAssertEqual(model.text, textView.text)
