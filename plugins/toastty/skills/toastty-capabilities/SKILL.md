@@ -78,7 +78,7 @@ split response omits `panelID`, resolve the newly focused or newly added
 terminal surface may take a moment to mount, so preserve a launch error rather
 than falling back to raw terminal input or another panel.
 
-To find an already-open browser, local document, or Scratchpad in the current
+To find an already-open browser or local document in the current
 workspace, query `terminal.state` to obtain the `workspaceID`, then query
 `workspace.snapshot` for that workspace. The snapshot's `rightPanel.tabs`
 describes the selected workspace tab's right-panel tabs and includes `panelID`,
@@ -92,6 +92,13 @@ known panel ID from creation or task records for those panels; do not select a
 tab merely to discover its contents. Report a discovery limit if no supported
 query supplies the missing identity.
 
+For Scratchpads bound to the current managed session, prefer
+`panel.scratchpad.list sessionID=$TOASTTY_SESSION_ID`. It returns every open
+bound document in the session's workspace tab without changing focus. Choose
+by title and purpose, then use its stable `documentID` for later content,
+export, patch, or metadata actions. A closed document must be reopened before
+an agent can access it; session-targeted actions then require a live binding.
+
 Common workflow families:
 
 - Annotation discovery: `annotation.keys`.
@@ -99,7 +106,7 @@ Common workflow families:
 - Panels: `panel.create.browser`, `panel.create.local-document`, `panel.close`, `panel.focus-mode.toggle`.
 - Terminal control: `terminal.send-text`, `terminal.visible-text`, `terminal.state`. To read another terminal's output in the same workspace, use the toastty-read-terminal skill. When sending a follow-up to a known managed session, pass its exact `expectedSessionID` together with the target `panelID`; Toastty then rejects delivery if that panel no longer hosts that session, without requiring a selected-tab snapshot. Do not use `allowUnavailable` to hide an expected-session mismatch.
 - Agents: `agent.launch`.
-- Scratchpad: `panel.scratchpad.set-content`, `panel.scratchpad.patch-content`, `panel.scratchpad.export`, `panel.scratchpad.state`.
+- Scratchpad: `panel.scratchpad.list`, `panel.scratchpad.lookup`, `panel.scratchpad.set-content`, `panel.scratchpad.patch-content`, `panel.scratchpad.update-metadata`, `panel.scratchpad.make-default`, `panel.scratchpad.unbind`, `panel.scratchpad.export`, `panel.scratchpad.state`.
 - Notifications: `toastty notify`.
 
 ## Background Browser Verification
@@ -475,14 +482,21 @@ Omit `placement` unless the workflow has a reason to override Toastty's default 
 
 Use Scratchpad for visual summaries, diagrams, QA packets, comparisons, or dashboards. Prefer a complete HTML document for first publish or major rewrites:
 
+List open session-bound Scratchpads first when updating an existing artifact.
+Use the selected `documentID` on subsequent calls:
+
 ```bash
 "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.set-content \
   --stdin content \
   "sessionID=$TOASTTY_SESSION_ID" \
+  "documentID=<document-id>" \
   title="Review Summary" < /tmp/review-summary.html
 ```
 
-For small exact updates, export or query state first and then use `panel.scratchpad.patch-content` with the current revision.
+For a separate artifact, use `createPolicy=additional` on its first publish,
+then retain the returned `documentID` for later updates. For small exact updates,
+export the selected document or query its state first and then use
+`panel.scratchpad.patch-content` with its current revision and `documentID`.
 
 ### Notify The User
 

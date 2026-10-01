@@ -6,6 +6,286 @@ import Testing
 @MainActor
 struct ScratchpadAppControlTests {
     @Test
+    func sessionHeaderBindingPreservesSelectionAndNewScratchpadPreservesDefault() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.createLinkedScratchpad()
+        let blank = try fixture.store.createBlankScratchpadPanel(workspaceID: fixture.workspaceID, documentStore: fixture.documentStore)
+        let before = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let tabID = try #require(before.tabID(containingPanelID: fixture.sourcePanelID))
+        for isBound in [true, false, true] {
+            try fixture.store.setScratchpadBindingFromSessionHeader(
+                panelID: blank.panelID, documentID: blank.documentID,
+                sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
+                isBound: isBound, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+            )
+            let after = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+            #expect(after.selectedTabID == before.selectedTabID)
+            #expect(after.focusedPanelID == before.focusedPanelID)
+            #expect(after.rightAuxPanel.activePanelID == before.rightAuxPanel.activePanelID)
+            #expect(after.rightAuxPanel.focusedPanelID == before.rightAuxPanel.focusedPanelID)
+            #expect(fixture.store.defaultScratchpadPanel(sessionID: fixture.sessionID)?.documentID == first.documentID)
+            #expect(try fixture.documentStore.load(documentID: blank.documentID)?.sessionLink?.sessionID == (isBound ? fixture.sessionID : nil))
+        }
+        #expect(fixture.store.focusPanel(containing: fixture.sourcePanelID))
+        let created = try fixture.store.createScratchpadFromSessionHeader(
+            sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
+            sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+        )
+        let document = try #require(try fixture.documentStore.load(documentID: created.documentID))
+        #expect(document.sessionLink?.sessionID == fixture.sessionID)
+        #expect(document.content.isEmpty)
+        #expect(fixture.store.linkedScratchpadPanels(sessionID: fixture.sessionID).count == 3)
+        #expect(fixture.store.defaultScratchpadPanel(sessionID: fixture.sessionID)?.documentID == first.documentID)
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        #expect(workspace.focusedPanelID == fixture.sourcePanelID)
+        #expect(workspace.rightAuxPanel.focusedPanelID == nil)
+    }
+
+    @Test
+    func sessionHeaderRejectsOwnershipChangesWhileMenuWasOpen() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linked = try fixture.createLinkedScratchpad()
+        let tabID = try #require(fixture.store.state.workspacesByID[fixture.workspaceID]?.tabID(containingPanelID: fixture.sourcePanelID))
+        let destination = try fixture.createDestinationSession()
+        _ = try fixture.store.rebindScratchpadPanel(
+            panelID: linked.panelID, toSessionID: destination.sessionID,
+            sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+        )
+        let before = fixture.store.state
+        for isBound in [true, false] {
+            #expect(throws: ScratchpadPanelError.scratchpadOwnedByAnotherSession(linked.panelID)) {
+                try fixture.store.setScratchpadBindingFromSessionHeader(
+                    panelID: linked.panelID, documentID: linked.documentID,
+                    sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
+                    isBound: isBound, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+                )
+            }
+        }
+        #expect(fixture.store.state == before)
+        #expect(try fixture.documentStore.load(documentID: linked.documentID)?.sessionLink?.sessionID == destination.sessionID)
+    }
+
+    @Test
+    func sessionHeaderRejectsStaleSessionTabAndDocumentIdentity() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linked = try fixture.createLinkedScratchpad()
+        let tabID = try #require(fixture.store.state.workspacesByID[fixture.workspaceID]?.tabID(containingPanelID: fixture.sourcePanelID))
+        for (documentID, capturedTabID) in [(UUID(), tabID), (linked.documentID, UUID())] {
+            #expect(throws: ScratchpadPanelError.sessionHeaderContextChanged) {
+                try fixture.store.setScratchpadBindingFromSessionHeader(
+                    panelID: linked.panelID, documentID: documentID,
+                    sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: capturedTabID,
+                    isBound: false, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+                )
+            }
+        }
+        #expect(fixture.store.send(.createWorkspaceTab(workspaceID: fixture.workspaceID, seed: nil)))
+        let otherTabPad = try fixture.store.createBlankScratchpadPanel(workspaceID: fixture.workspaceID, documentStore: fixture.documentStore)
+        #expect(throws: ScratchpadPanelError.sessionHeaderContextChanged) {
+            try fixture.store.setScratchpadBindingFromSessionHeader(
+                panelID: otherTabPad.panelID, documentID: otherTabPad.documentID,
+                sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
+                isBound: true, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+            )
+        }
+        fixture.sessionRuntimeStore.stopSession(sessionID: fixture.sessionID, at: Date(timeIntervalSince1970: 400))
+        #expect(throws: ScratchpadPanelError.sessionHeaderContextChanged) {
+            _ = try fixture.store.createScratchpadFromSessionHeader(
+                sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
+                sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+            )
+        }
+        #expect(try fixture.documentStore.load(documentID: linked.documentID)?.sessionLink?.sessionID == fixture.sessionID)
+    }
+
+    @Test
+    func multipleScratchpadsCanBeListedReadAndUpdatedIndependently() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.createLinkedScratchpad()
+        let second = try fixture.createAdditionalScratchpad(title: "Notes", purpose: "Comparison of the alternatives")
+        let beforeList = fixture.store.state
+        let entries = try fixture.listScratchpads()
+        #expect(fixture.store.state == beforeList)
+        #expect(entries.count == 2)
+        #expect(Set(entries.compactMap { $0.string("documentID") }) == [first.documentID.uuidString, second.documentID.uuidString])
+        let secondEntry = try #require(entries.first { $0.string("documentID") == second.documentID.uuidString })
+        #expect(secondEntry.string("purpose") == "Comparison of the alternatives")
+        #expect(secondEntry.bool("isDefault") == false)
+
+        let updated = try fixture.executor.runAction(id: "panel.scratchpad.set-content", args: [
+            "sessionID": .string(fixture.sessionID), "documentID": .string(second.documentID.uuidString),
+            "content": .string("<p>Comparison</p>"), "expectedRevision": .int(1),
+        ])
+        #expect(updated.result?.string("panelID") == second.panelID.uuidString)
+        let patched = try fixture.executor.runAction(id: "panel.scratchpad.patch-content", args: [
+            "sessionID": .string(fixture.sessionID), "documentID": .string(second.documentID.uuidString),
+            "expectedRevision": .int(2),
+            "patch": .string(try patchJSON([ScratchpadContentReplacement(oldText: "Comparison", newText: "Final comparison")])),
+        ])
+        #expect(patched.result?.int("revision") == 3)
+        #expect(try fixture.documentStore.load(documentID: first.documentID)?.content == "<p>Initial</p>")
+        #expect(try fixture.documentStore.load(documentID: first.documentID)?.revision == 1)
+        let exported = try fixture.executor.runAction(id: "panel.scratchpad.export", args: [
+            "sessionID": .string(fixture.sessionID), "panelID": .string(second.panelID.uuidString),
+        ])
+        let path = try #require(exported.result?.string("filePath"))
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == "<p>Final comparison</p>")
+        let lookup = try fixture.executor.runQuery(id: "panel.scratchpad.lookup", args: ["sessionID": .string(fixture.sessionID)])
+        #expect(lookup.string("documentID") == first.documentID.uuidString)
+        #expect(lookup.int("bindingCount") == 2)
+    }
+
+    @Test
+    func choosingDefaultDoesNotDependOnVisibleScratchpadAndLegacyNewPreservesAdditionalBindings() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.createLinkedScratchpad()
+        let second = try fixture.createAdditionalScratchpad()
+        _ = try fixture.executor.runAction(id: "panel.scratchpad.make-default", args: [
+            "sessionID": .string(fixture.sessionID), "documentID": .string(second.documentID.uuidString),
+        ])
+        #expect(fixture.store.focusPanel(containing: first.panelID))
+        let updated = try fixture.executor.runAction(id: "panel.scratchpad.set-content", args: [
+            "sessionID": .string(fixture.sessionID), "content": .string("<p>Default</p>"),
+        ])
+        #expect(updated.result?.string("documentID") == second.documentID.uuidString)
+        let replacement = try fixture.executor.runAction(id: "panel.scratchpad.set-content", args: [
+            "sessionID": .string(fixture.sessionID), "content": .string("<p>New default</p>"), "createPolicy": .string("new"),
+        ])
+        let newID = try #require(replacement.result?.string("documentID"))
+        let entries = try fixture.listScratchpads()
+        #expect(Set(entries.compactMap { $0.string("documentID") }) == [first.documentID.uuidString, newID])
+        #expect(entries.first { $0.string("documentID") == newID }?.bool("isDefault") == true)
+        #expect(try fixture.documentStore.load(documentID: second.documentID)?.sessionLink == nil)
+        #expect(try fixture.documentStore.load(documentID: second.documentID)?.content == "<p>Default</p>")
+    }
+
+    @Test
+    func metadataCanDescribeAndRenameOneScratchpadWithoutReplacingItsContent() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.createLinkedScratchpad()
+        let second = try fixture.createAdditionalScratchpad()
+        let changed = try fixture.executor.runAction(id: "panel.scratchpad.update-metadata", args: [
+            "sessionID": .string(fixture.sessionID), "documentID": .string(second.documentID.uuidString),
+            "title": .string("Tradeoffs"), "purpose": .string("Track rejected alternatives and reasons"), "expectedRevision": .int(1),
+        ])
+        #expect(changed.result?.int("revision") == 2)
+        let document = try #require(try fixture.documentStore.load(documentID: second.documentID))
+        #expect(document.title == "Tradeoffs")
+        #expect(document.purpose == "Track rejected alternatives and reasons")
+        #expect(document.content == "<p>Additional</p>")
+        #expect(try fixture.documentStore.load(documentID: first.documentID)?.revision == 1)
+        #expect(throws: (any Error).self) {
+            _ = try fixture.executor.runAction(id: "panel.scratchpad.update-metadata", args: [
+                "sessionID": .string(fixture.sessionID), "documentID": .string(second.documentID.uuidString),
+                "purpose": .string("Stale"), "expectedRevision": .int(1),
+            ])
+        }
+        _ = try fixture.executor.runAction(id: "panel.scratchpad.update-metadata", args: [
+            "sessionID": .string(fixture.sessionID), "documentID": .string(second.documentID.uuidString), "purpose": .string(""),
+        ])
+        #expect(try fixture.documentStore.load(documentID: second.documentID)?.purpose == nil)
+    }
+
+    @Test
+    func explicitDocumentMustBeBoundToRequestedSessionAndCannotCreateAnother() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linked = try fixture.createLinkedScratchpad()
+        let blank = try fixture.store.createBlankScratchpadPanel(workspaceID: fixture.workspaceID, documentStore: fixture.documentStore)
+        for documentID in [blank.documentID, UUID()] {
+            for action in ["panel.scratchpad.set-content", "panel.scratchpad.patch-content", "panel.scratchpad.export", "panel.scratchpad.make-default", "panel.scratchpad.unbind", "panel.scratchpad.update-metadata"] {
+                #expect(throws: (any Error).self) {
+                    _ = try fixture.executor.runAction(id: action, args: [
+                        "sessionID": .string(fixture.sessionID), "documentID": .string(documentID.uuidString),
+                        "content": .string("<p>Wrong</p>"), "purpose": .string("Wrong"), "expectedRevision": .int(1),
+                        "patch": .string(try patchJSON([ScratchpadContentReplacement(oldText: "Initial", newText: "Wrong")])),
+                    ])
+                }
+            }
+        }
+        for createPolicy in ["new", "additional"] {
+            #expect(throws: (any Error).self) {
+                _ = try fixture.executor.runAction(id: "panel.scratchpad.set-content", args: [
+                    "sessionID": .string(fixture.sessionID), "documentID": .string(linked.documentID.uuidString),
+                    "content": .string("<p>Wrong</p>"), "createPolicy": .string(createPolicy),
+                ])
+            }
+        }
+        #expect(try fixture.listScratchpads().count == 1)
+        #expect(try fixture.documentStore.load(documentID: linked.documentID)?.revision == 1)
+    }
+
+    @Test
+    func bindingIsAdditiveWithinTabAndUnbindPreservesOtherDocuments() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.createLinkedScratchpad()
+        let blank = try fixture.store.createBlankScratchpadPanel(workspaceID: fixture.workspaceID, documentStore: fixture.documentStore)
+        _ = try fixture.executor.runAction(id: "panel.scratchpad.rebind", args: [
+            "sessionID": .string(fixture.sessionID), "panelID": .string(blank.panelID.uuidString),
+        ])
+        #expect(try fixture.listScratchpads().count == 2)
+        _ = try fixture.executor.runAction(id: "panel.scratchpad.unbind", args: [
+            "sessionID": .string(fixture.sessionID), "documentID": .string(blank.documentID.uuidString),
+        ])
+        #expect(try fixture.listScratchpads().map { $0.string("documentID") } == [first.documentID.uuidString])
+        #expect(try fixture.documentStore.load(documentID: blank.documentID)?.sessionLink == nil)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: blank.panelID) != nil)
+        #expect(fixture.store.send(.createWorkspaceTab(workspaceID: fixture.workspaceID, seed: nil)))
+        let otherTabPad = try fixture.store.createBlankScratchpadPanel(workspaceID: fixture.workspaceID, documentStore: fixture.documentStore)
+        #expect(throws: (any Error).self) {
+            _ = try fixture.executor.runAction(id: "panel.scratchpad.rebind", args: [
+                "sessionID": .string(fixture.sessionID), "panelID": .string(otherTabPad.panelID.uuidString),
+            ])
+        }
+        let beforeList = fixture.store.state
+        #expect(try fixture.listScratchpads().count == 1)
+        #expect(fixture.store.state == beforeList)
+    }
+
+    @Test
+    func closingClearsBindingAndContentSurvivesReopeningUnbound() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let coordinator = ScratchpadSessionLinkCleanupCoordinator(store: fixture.store, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore)
+        defer { _ = coordinator }
+        let first = try fixture.createLinkedScratchpad()
+        let second = try fixture.createAdditionalScratchpad()
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let location = try #require(workspace.rightAuxPanelTabLocation(containingPanelID: second.panelID))
+        #expect(fixture.store.send(.closeRightAuxPanelTab(workspaceID: fixture.workspaceID, tabID: location.rightAuxTabID)))
+        #expect(try fixture.documentStore.load(documentID: second.documentID)?.sessionLink == nil)
+        #expect(try fixture.documentStore.load(documentID: second.documentID)?.content == "<p>Additional</p>")
+        #expect(try fixture.listScratchpads().map { $0.string("documentID") } == [first.documentID.uuidString])
+        #expect(throws: (any Error).self) {
+            _ = try fixture.executor.runAction(id: "panel.scratchpad.export", args: [
+                "sessionID": .string(fixture.sessionID), "documentID": .string(second.documentID.uuidString),
+            ])
+        }
+        let item = try #require(fixture.store.recentRightPanelItems.first { $0.id == .scratchpad(documentID: second.documentID) })
+        #expect(fixture.store.openRecentRightPanelItem(item, workspaceID: fixture.workspaceID, documentStore: fixture.documentStore))
+        #expect(try fixture.listScratchpads().count == 1)
+    }
+
+    @Test
+    func closingDefaultWithSeveralRemainingRequiresExplicitChoice() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.createLinkedScratchpad()
+        let second = try fixture.createAdditionalScratchpad()
+        _ = try fixture.createAdditionalScratchpad()
+        #expect(fixture.store.send(.closePanel(panelID: first.panelID)))
+        #expect(try fixture.listScratchpads().allSatisfy { $0.bool("isDefault") == false })
+        #expect(throws: (any Error).self) {
+            _ = try fixture.executor.runAction(id: "panel.scratchpad.set-content", args: [
+                "sessionID": .string(fixture.sessionID), "content": .string("<p>Ambiguous</p>"),
+            ])
+        }
+        _ = try fixture.executor.runAction(id: "panel.scratchpad.make-default", args: [
+            "sessionID": .string(fixture.sessionID), "documentID": .string(second.documentID.uuidString),
+        ])
+        let lookup = try fixture.executor.runQuery(id: "panel.scratchpad.lookup", args: ["sessionID": .string(fixture.sessionID)])
+        #expect(lookup.string("documentID") == second.documentID.uuidString)
+        #expect(try fixture.documentStore.load(documentID: second.documentID)?.revision == 1)
+    }
+
+    @Test
     func setContentFromFileCreatesSessionLinkedScratchpadAndRestoresTerminalFocus() throws {
         let fixture = try ScratchpadAppControlFixture()
         let contentURL = try fixture.writeContent("<h1>Architecture</h1>")
@@ -979,6 +1259,7 @@ struct ScratchpadAppControlTests {
     func cleanupStaleScratchpadSessionLinksClearsStoppedSessionLink() throws {
         let fixture = try ScratchpadAppControlFixture()
         let linkedScratchpad = try fixture.createLinkedScratchpad()
+        let additional = try fixture.createAdditionalScratchpad()
         fixture.sessionRuntimeStore.stopSession(
             sessionID: fixture.sessionID,
             at: Date(timeIntervalSince1970: 300)
@@ -996,7 +1277,9 @@ struct ScratchpadAppControlTests {
         }
         let document = try #require(try fixture.documentStore.load(documentID: linkedScratchpad.documentID))
 
-        #expect(outcome.clearedPanelIDs == [linkedScratchpad.panelID])
+        #expect(Set(outcome.clearedPanelIDs) == Set([linkedScratchpad.panelID, additional.panelID]))
+        #expect(try fixture.documentStore.load(documentID: additional.documentID)?.sessionLink == nil)
+        #expect(fixture.store.linkedScratchpadPanels(sessionID: fixture.sessionID).isEmpty)
         #expect(outcome.failures.isEmpty)
         #expect(webState.scratchpad?.sessionLink == nil)
         #expect(document.sessionLink == nil)
@@ -1168,7 +1451,7 @@ struct ScratchpadAppControlTests {
     @Test
     func lookupDeniesScopedCallerOutsideScratchpadWorkspace() throws {
         let fixture = try ScratchpadAppControlFixture()
-        _ = try fixture.createLinkedScratchpad()
+        let linked = try fixture.createLinkedScratchpad()
         #expect(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Other", activate: true)))
         let otherWorkspaceID = try #require(fixture.store.state.window(id: fixture.windowID)?.selectedWorkspaceID)
         let otherPanelID = try #require(fixture.store.state.workspacesByID[otherWorkspaceID]?.focusedPanelID)
@@ -1184,23 +1467,27 @@ struct ScratchpadAppControlTests {
             at: Date(timeIntervalSince1970: 200)
         )
 
-        do {
-            _ = try fixture.executor.runQuery(
-                id: AppControlQueryID.panelScratchpadLookup.rawValue,
-                args: [
-                    "sessionID": .string(fixture.sessionID),
-                ],
-                context: AutomationRequestContext(
-                    callerSessionID: "caller-scoped",
-                    commandName: "app_control.run_query"
-                )
-            )
-            Issue.record("lookup should deny scoped callers outside the Scratchpad workspace")
-        } catch AutomationSocketError.scopeDenied(let workspaceID) {
-            #expect(workspaceID == fixture.workspaceID)
-        } catch {
-            Issue.record("unexpected error: \(error)")
+        let context = AutomationRequestContext(callerSessionID: "caller-scoped", commandName: "app_control.run_query")
+        for query in ["panel.scratchpad.lookup", "panel.scratchpad.list"] {
+            do {
+                _ = try fixture.executor.runQuery(id: query, args: ["sessionID": .string(fixture.sessionID)], context: context)
+                Issue.record("\(query) should deny a caller outside the workspace")
+            } catch AutomationSocketError.scopeDenied(let workspaceID) {
+                #expect(workspaceID == fixture.workspaceID)
+            }
         }
+        for action in ["panel.scratchpad.set-content", "panel.scratchpad.patch-content", "panel.scratchpad.update-metadata", "panel.scratchpad.make-default", "panel.scratchpad.unbind", "panel.scratchpad.export"] {
+            do {
+                _ = try fixture.executor.runAction(id: action, args: [
+                    "sessionID": .string(fixture.sessionID), "documentID": .string(linked.documentID.uuidString),
+                    "title": .string("Denied"), "content": .string("Denied"),
+                ], context: context)
+                Issue.record("\(action) should deny a caller outside the workspace")
+            } catch AutomationSocketError.scopeDenied(let workspaceID) {
+                #expect(workspaceID == fixture.workspaceID)
+            }
+        }
+        #expect(try fixture.documentStore.load(documentID: linked.documentID)?.revision == 1)
     }
 
     @Test
@@ -1385,6 +1672,30 @@ private final class ScratchpadAppControlFixture {
         let documentIDString = try #require(result.string("documentID"))
         let documentID = try #require(UUID(uuidString: documentIDString))
         return (panelID, documentID)
+    }
+
+    func createAdditionalScratchpad(title: String = "Additional", purpose: String = "") throws -> (panelID: UUID, documentID: UUID) {
+        let outcome = try executor.runAction(id: "panel.scratchpad.set-content", args: [
+            "sessionID": .string(sessionID), "content": .string("<p>Additional</p>"),
+            "title": .string(title), "purpose": .string(purpose), "createPolicy": .string("additional"),
+        ])
+        let result = try #require(outcome.result)
+        let panelIDString = try #require(result.string("panelID"))
+        let documentIDString = try #require(result.string("documentID"))
+        return (try #require(UUID(uuidString: panelIDString)),
+                try #require(UUID(uuidString: documentIDString)))
+    }
+
+    func listScratchpads() throws -> [[String: AutomationJSONValue]] {
+        let result = try executor.runQuery(id: "panel.scratchpad.list", args: ["sessionID": .string(sessionID)])
+        guard case .array(let entries) = result["scratchpads"] else {
+            Issue.record("list should return a Scratchpad collection")
+            return []
+        }
+        return entries.compactMap { entry in
+            guard case .object(let object) = entry else { return nil }
+            return object
+        }
     }
 
     func waitForScratchpadSessionLink(

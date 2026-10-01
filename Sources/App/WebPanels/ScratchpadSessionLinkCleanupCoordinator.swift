@@ -11,6 +11,7 @@ final class ScratchpadSessionLinkCleanupCoordinator {
     private let documentStore: ScratchpadDocumentStore
     private let cleanupDelayNanoseconds: UInt64
     private var registryObservation: AnyCancellable?
+    private var storeActionObserverToken: UUID?
     private var cleanupTask: Task<Void, Never>?
     private var activeSessionIDs: Set<String>
 
@@ -30,11 +31,53 @@ final class ScratchpadSessionLinkCleanupCoordinator {
             .sink { [weak self] registry in
                 self?.handleSessionRegistryChange(registry)
             }
+        storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
+            switch action {
+            case .closePanel, .closeRightAuxPanelTab, .closeWorkspaceTab, .closeWorkspace, .closeWindow,
+                 .movePanelToSlot, .movePanelToWorkspace, .detachPanelToNewWindow:
+                self?.clearRemovedBindings(previousState: previousState, nextState: nextState)
+                self?.cleanupNow(reason: "layout_changed")
+            default:
+                break
+            }
+        }
         scheduleCleanup(reason: "initial_bootstrap")
     }
 
     deinit {
         cleanupTask?.cancel()
+        if let token = storeActionObserverToken {
+            Task { @MainActor [store] in store.removeActionAppliedObserver(token) }
+        }
+    }
+
+    private func clearRemovedBindings(previousState: AppState, nextState: AppState) {
+        func linkedDocuments(in state: AppState) -> [UUID: ScratchpadSessionLink] {
+            var result: [UUID: ScratchpadSessionLink] = [:]
+            for workspace in state.workspacesByID.values {
+                for panel in workspace.allPanelsByID.values {
+                    guard case .web(let web) = panel, web.definition == .scratchpad,
+                          let scratchpad = web.scratchpad, let link = scratchpad.sessionLink else { continue }
+                    result[scratchpad.documentID] = link
+                }
+            }
+            return result
+        }
+        let remaining = linkedDocuments(in: nextState)
+        for (documentID, link) in linkedDocuments(in: previousState) where remaining[documentID] == nil {
+            do {
+                // A document may be missing or already rebound; closing must not erase a newer link.
+                guard let document = try documentStore.load(documentID: documentID),
+                      document.sessionLink == link else { continue }
+                _ = try documentStore.updateSessionLink(documentID: documentID, sessionLink: nil)
+            } catch {
+                ToasttyLog.warning(
+                    "Failed to clear a closed Scratchpad document's session link",
+                    category: .state,
+                    metadata: ["document_id": documentID.uuidString, "error": error.localizedDescription]
+                )
+            }
+        }
     }
 
     private func handleSessionRegistryChange(_ registry: SessionRegistry) {

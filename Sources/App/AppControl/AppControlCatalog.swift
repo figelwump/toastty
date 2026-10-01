@@ -51,6 +51,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case panelScratchpadPatchContent = "panel.scratchpad.patch-content"
     case panelScratchpadRebind = "panel.scratchpad.rebind"
     case panelScratchpadExport = "panel.scratchpad.export"
+    case panelScratchpadUpdateMetadata = "panel.scratchpad.update-metadata"
+    case panelScratchpadMakeDefault = "panel.scratchpad.make-default"
+    case panelScratchpadUnbind = "panel.scratchpad.unbind"
     case panelLocalDocumentSearchStart = "panel.local-document.search.start"
     case panelLocalDocumentSearchUpdateQuery = "panel.local-document.search.update-query"
     case panelLocalDocumentSearchNext = "panel.local-document.search.next"
@@ -332,13 +335,15 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Create or update the Scratchpad linked to an active session.",
+                summary: "Create or update a session Scratchpad. documentID selects a bound document; omit it to use the default.",
                 selectors: [],
                 parameters: [
                     .sessionID(required: true),
+                    .scratchpadDocumentID(required: false),
                     .filePath(summary: "HTML file to render in the session Scratchpad.", required: false),
                     .content(required: false),
                     .title(required: false),
+                    .scratchpadPurpose(required: false),
                     .expectedRevision(required: false),
                     .scratchpadCreatePolicy(required: false),
                 ],
@@ -348,10 +353,11 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Patch the existing Scratchpad linked to an active session.",
+                summary: "Patch a bound Scratchpad by documentID, or the session default when omitted.",
                 selectors: [],
                 parameters: [
                     .sessionID(required: true),
+                    .scratchpadDocumentID(required: false),
                     .patch(required: true),
                     .expectedRevision(required: true),
                 ],
@@ -372,7 +378,24 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 kind: .action,
                 summary: "Export Scratchpad HTML to an app-chosen local file path.",
                 selectors: [.windowID, .workspaceID, .panelID],
-                parameters: [.sessionID(required: false)]
+                parameters: [.sessionID(required: false), .scratchpadDocumentID(required: false)]
+            )
+        case .panelScratchpadUpdateMetadata:
+            return .init(
+                id: rawValue, kind: .action,
+                summary: "Edit a bound Scratchpad title or purpose without replacing HTML. Empty values clear metadata; omitted values are preserved.",
+                selectors: [],
+                parameters: [.sessionID(required: true), .scratchpadDocumentID(required: true), .title(required: false), .scratchpadPurpose(required: false), .expectedRevision(required: false)]
+            )
+        case .panelScratchpadMakeDefault:
+            return .init(
+                id: rawValue, kind: .action, summary: "Make a bound Scratchpad the default for session-only commands.",
+                selectors: [], parameters: [.sessionID(required: true), .scratchpadDocumentID(required: true)]
+            )
+        case .panelScratchpadUnbind:
+            return .init(
+                id: rawValue, kind: .action, summary: "Remove a session binding while keeping the Scratchpad open and its content saved.",
+                selectors: [], parameters: [.sessionID(required: true), .scratchpadDocumentID(required: true)]
             )
         case .panelLocalDocumentSearchStart:
             return .init(id: rawValue, kind: .action, summary: "Show find for a local-document panel.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
@@ -443,6 +466,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case panelLocalDocumentState = "panel.local-document.state"
     case panelBrowserState = "panel.browser.state"
     case panelScratchpadLookup = "panel.scratchpad.lookup"
+    case panelScratchpadList = "panel.scratchpad.list"
     case panelScratchpadState = "panel.scratchpad.state"
     case agentProfileState = "agent.profile.state"
 
@@ -502,10 +526,16 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return metadata for the Scratchpad linked to an active session without exporting content.",
+                summary: "Return metadata for a bound Scratchpad by documentID, or the session default, without exporting content.",
                 selectors: [],
-                parameters: [.sessionID(required: true)],
+                parameters: [.sessionID(required: true), .scratchpadDocumentID(required: false)],
                 aliases: aliases
+            )
+        case .panelScratchpadList:
+            return .init(
+                id: rawValue, kind: .query,
+                summary: "List an active session's bound open Scratchpads with titles, purposes, revisions and default status without changing selection or focus.",
+                selectors: [], parameters: [.sessionID(required: true)]
             )
         case .panelScratchpadState:
             return .init(id: rawValue, kind: .query, summary: "Return Scratchpad panel state.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
@@ -653,10 +683,18 @@ private extension AppControlParameterDescriptor {
         .init(name: "expectedRevision", summary: "Reject the write unless the current document revision matches this value.", valueType: .integer, required: required)
     }
 
+    static func scratchpadDocumentID(required: Bool) -> Self {
+        .init(name: "documentID", summary: "Stable UUID of an open Scratchpad bound to sessionID in the same workspace tab.", valueType: .uuid, required: required)
+    }
+
+    static func scratchpadPurpose(required: Bool) -> Self {
+        .init(name: "purpose", summary: "Optional description of what this Scratchpad is for, up to 1024 characters. Empty clears it; omission preserves it.", valueType: .string, required: required)
+    }
+
     static func scratchpadCreatePolicy(required: Bool) -> Self {
         .init(
             name: "createPolicy",
-            summary: "Scratchpad creation policy. Defaults to reuse.",
+            summary: "reuse updates the default; additional creates another binding without changing the default; new replaces only the default binding. Defaults to reuse.",
             valueType: .string,
             required: required,
             allowedValues: ScratchpadPanelCreatePolicy.allCases.map(\.rawValue)

@@ -5,6 +5,78 @@ Date: 2026-04-24
 This document is the v1 implementation plan for Scratchpad. Shared panel/runtime
 architecture lives in `docs/plans/web-panels.md`.
 
+## Multiple Scratchpads extension (2026-10-01)
+
+The v1 sections below record the original single-binding design and are not
+the current command contract. This extension supersedes their
+one-Scratchpad-per-session assumptions while retaining the same document store,
+right-panel placement, and content rendering model.
+
+An active managed session may bind many open Scratchpads, all in its workspace
+tab. Each open document binds to at most one live session. Closing a panel
+removes its active binding; the stored content remains available after the
+user reopens and binds that panel. Agent actions cannot access closed documents.
+
+The session maintains an explicit default document for callers that omit a
+`documentID`. The first binding becomes the default. If the default is removed
+and one binding remains, that sole document becomes default. If several remain,
+there is no default until `panel.scratchpad.make-default` selects one. A
+session-only content update or lookup must fail in that ambiguous state rather
+than select a document by panel order or focus.
+
+`panel.scratchpad.list sessionID=...` returns metadata for all open bindings
+without creating, exporting, or focusing a panel. Its result contains
+`sessionID`, nullable `defaultDocumentID`, and `scratchpads` entries with
+`windowID`, `workspaceID`, `tabID`, `panelID`, `documentID`, `sessionID`,
+`title`, nullable `purpose`, `revision`, `updatedAt`, and `isDefault`. An agent
+selects by purpose/title, then uses the stable `documentID` for later actions.
+`panel.scratchpad.lookup` stays a single-object query; it adds optional
+`documentID` selection plus `purpose`, `updatedAt`, `isDefault`, `bindingCount`,
+and `defaultDocumentID` metadata.
+
+`panel.scratchpad.set-content` accepts optional `documentID` and `purpose`.
+An ID must name a document bound to that session in the same tab. Omitted
+`purpose` preserves existing metadata. `createPolicy=reuse` updates the default
+or sole bound document, or creates one if none is bound; `additional` creates
+another bound document without changing the current default. Legacy `new`
+replaces only the default binding and preserves other bindings. Neither
+creation policy can be combined
+with `documentID`. `panel.scratchpad.patch-content` and export accept optional
+`documentID`; export also accepts a bound `panelID` as a member selector, and
+panel-only export remains supported.
+
+`panel.scratchpad.update-metadata` requires `sessionID`, `documentID`, and
+`title` and/or `purpose`, with optional `expectedRevision`. Omitted metadata
+stays unchanged, empty purpose clears it, and empty title becomes `Scratchpad`;
+a successful update increments revision. `panel.scratchpad.make-default` sets
+the explicit default, `panel.scratchpad.unbind` removes one binding without
+deleting content, and panel-targeted rebind to a destination session adds the
+document without removing other bindings in that destination. The same-tab
+constraint continues to apply.
+
+### Session header binding menu
+
+For a live managed session, a normal click on the link control in its terminal
+header opens a native Scratchpad binding menu. The control is neutral when the
+session has no bound Scratchpads and accented when it has at least one. The
+menu lists every open Scratchpad in that session's workspace tab by title,
+including unbound pads. A check means that document is bound to this exact
+session; several rows may be checked. The default document has a separate
+`default` label so a check is never mistaken for default selection.
+
+Clicking an available row binds or unbinds that document. A Scratchpad owned
+by another live session appears disabled with its owner shown; the header menu
+does not transfer ownership. `New Scratchpad` creates a right-panel document
+already bound to this session. It adds the document without unbinding other
+pads or changing an existing default, matching `createPolicy=additional`. If
+this is the session's first binding, the new document becomes default under the
+usual default rule.
+
+Scratchpad-side rebind, details, and default controls remain available. A
+closed panel leaves this menu and loses its active binding, while its document
+content persists for reopening. The historical v1 backup entry point below
+describes its earlier behavior and does not override this header menu.
+
 ## summary
 
 1. Scratchpad is a typed built-in `web` panel definition, not a new renderer-level

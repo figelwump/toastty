@@ -4,6 +4,42 @@ import Testing
 
 extension AppReducerTests {
     @Test
+    func reopeningScratchpadRetainsDocumentButClearsLiveSessionBinding() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let sourcePanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        let scratchpad = ScratchpadState(
+            documentID: UUID(),
+            sessionLink: ScratchpadSessionLink(
+                sessionID: "session-before-close", agent: .codex,
+                sourcePanelID: sourcePanelID, sourceWorkspaceID: workspaceID
+            ),
+            revision: 3, purpose: "Saved design notes"
+        )
+        #expect(reducer.send(.createWebPanel(
+            workspaceID: workspaceID,
+            panel: WebPanelState(definition: .scratchpad, title: "Design", scratchpad: scratchpad),
+            placement: .splitRight
+        ), state: &state))
+        let panelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        #expect(reducer.send(.closePanel(panelID: panelID), state: &state))
+        #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let reopenedID = try #require(workspace.focusedPanelID)
+        guard case .web(let web)? = workspace.panelState(for: reopenedID) else {
+            Issue.record("Expected the saved Scratchpad to reopen")
+            return
+        }
+        #expect(web.title == "Design")
+        #expect(web.scratchpad?.documentID == scratchpad.documentID)
+        #expect(web.scratchpad?.revision == 3)
+        #expect(web.scratchpad?.purpose == "Saved design notes")
+        #expect(web.scratchpad?.sessionLink == nil)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func closeAndReopenPanelRestoresPanelState() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

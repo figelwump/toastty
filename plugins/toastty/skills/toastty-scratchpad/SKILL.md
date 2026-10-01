@@ -9,7 +9,7 @@ description: Use this skill to show the user anything visual — design mockups,
 
 The same default applies when another skill or workflow produces an HTML page for the user — an explainer, report, comparison, or demo. In a Toastty-managed session, do not run `open` on the generated file or launch an external browser. Publish self-contained HTML to the Scratchpad. If the page genuinely exceeds Scratchpad constraints (multi-file assets, remote scripts, content over roughly 1 MB), open it in a Toastty browser panel instead via `panel.create.browser` with a `file://` URL; the toastty-capabilities skill covers workspace targeting. Fall back to an external browser only when the user explicitly asks for one.
 
-Use Scratchpad when a visual surface will communicate better than terminal prose. If the user asks to read or review an existing Scratchpad, export the current session-linked Scratchpad and answer from that content without replacing it. If the user asks to create or update a visual artifact, open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots or exact targeted patches as the artifact takes shape, then publish the finished self-contained HTML artifact.
+Use Scratchpad when a visual surface will communicate better than terminal prose. If the user asks to read or review an existing Scratchpad, list the open Scratchpads bound to this session, select the intended document, and export it without replacing it. If the user asks to create or update a visual artifact, publish a quick loading screen to the selected or newly created document, optionally replace it with meaningful intermediate valid HTML snapshots or exact targeted patches as the artifact takes shape, then publish the finished self-contained HTML artifact.
 
 ## Managed Skill Root
 
@@ -25,18 +25,30 @@ fi
 Do not guess a repository checkout, global skill directory, or versioned Codex
 plugin cache when `TOASTTY_SKILLS_ROOT` is missing.
 
+## Select An Open Scratchpad
+
+A managed session can have several open Scratchpads in its workspace tab. List them before reading or updating an existing artifact:
+
+```bash
+"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.list \
+  "sessionID=$TOASTTY_SESSION_ID"
+```
+
+The result contains `defaultDocumentID` and a `scratchpads` array. Each entry has a stable `documentID`, `panelID`, `title`, optional `purpose`, `revision`, `updatedAt`, and `isDefault`. Match the user's intended artifact by title and purpose, then use its `documentID` for each later publish, export, patch, or metadata update. Use the default only when the request clearly refers to it. Listing is metadata-only: it does not create, export, or focus a panel. Closed documents are not available to agent actions; reopening makes panel-targeted export available, and binding enables session-targeted actions.
+
 ## Read Existing Scratchpad
 
 When the user asks to read, inspect, review, summarize, or propose changes based on the current Scratchpad, do not publish a loading screen and do not replace Scratchpad content.
 
-The current Scratchpad is the one linked to the current managed agent session. Prefer the session-bound path; do not scan the workspace to guess which Scratchpad is relevant.
+Select the intended open document from `panel.scratchpad.list`; do not scan workspace layout or use focus to guess.
 
 1. Confirm `TOASTTY_CLI_PATH` and `TOASTTY_SESSION_ID` are available.
-2. Export the linked Scratchpad directly:
+2. Export the selected Scratchpad directly:
 
 ```bash
 "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
-  "sessionID=${TOASTTY_SESSION_ID}"
+  "sessionID=${TOASTTY_SESSION_ID}" \
+  "documentID=<document-id>"
 ```
 
 3. Read the returned `filePath` and answer from that content.
@@ -47,11 +59,11 @@ The current Scratchpad is the one linked to the current managed agent session. P
   "panelID=<panel-id>"
 ```
 
-Only fall back to panel/workspace targeting when `TOASTTY_SESSION_ID` is missing, the current session has no linked Scratchpad, or the user explicitly asks for a different Scratchpad. If `panel.scratchpad.export` is unavailable in the running app, say so briefly and use the best available panel-targeted fallback rather than guessing silently.
+If no document is bound and the user identified an open unbound panel, use its known `panelID` for panel-targeted export. Otherwise ask the user to reopen the panel or bind it from the link menu in this session's terminal header; a closed document cannot be accessed through the agent API. If `panel.scratchpad.export` is unavailable in the running app, say so briefly and use the best available panel-targeted fallback rather than guessing silently.
 
 ## Open First
 
-When creating or replacing a visual Scratchpad artifact and a Toastty-managed session is available, publish a quick loading screen before doing deeper analysis, reading large files, or building the final artifact. The loading screen tells the user that a visual artifact is being prepared.
+When creating or replacing a visual Scratchpad artifact and a Toastty-managed session is available, publish a quick loading screen before doing deeper analysis, reading large files, or building the final artifact. List first when selecting an existing artifact. Use `--document-id` for the selected document; for a distinct artifact requested by the user, use `--additional` and save the returned `documentID` for later updates.
 
 The loading screen is intentionally minimal: a title (if known) and a subtle animated indicator. Do not pre-mock the structure of the final artifact. Pre-mocking biases the design toward the same look every time and flattens visual variety across runs.
 
@@ -62,24 +74,23 @@ Publish the loading screen:
   "Architecture Map"
 ```
 
-If the user explicitly asks for a new, separate, or additional Scratchpad rather
-than an update to the current one, pass `--new` on this first loading-screen
-publish only:
+If the user explicitly asks for a new, separate, or additional Scratchpad, pass `--additional` on this first loading-screen publish only:
 
 ```bash
 "$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-outline.sh" \
-  --new \
+  --additional \
+  --purpose "Compare architecture options" \
   "Architecture Map"
 ```
 
-Then do the needed thread/file/prompt analysis and publish updates over the same session-linked Scratchpad.
+Save the helper's returned `documentID`. Then do the needed analysis and publish updates with `--document-id <returned-id>`. `--new` remains available for legacy callers, but it unbinds the previous default and should not be used for a separate artifact that must stay agent-accessible.
 
 ## Input Modes
 
 - **Thread context**: publish a loading screen, then synthesize the visual from the current conversation, implementation plan, bug investigation, or decision tradeoff.
 - **File input**: publish a loading screen before deep reading, then read the referenced file, extract the structure that matters, and create a visual representation. Do not dump a long file verbatim into the panel.
 - **Manual prompt**: publish a loading screen from the prompt, then follow the prompt as the design brief. If the prompt is broad, choose a compact final visual that answers the likely need.
-- **Existing Scratchpad**: export the Scratchpad linked to `TOASTTY_SESSION_ID`, read the exported HTML, and answer in chat unless the user explicitly asks you to republish an updated artifact.
+- **Existing Scratchpad**: list the Scratchpads bound to `TOASTTY_SESSION_ID`, choose by purpose/title, export by `documentID`, and answer in chat unless the user explicitly asks you to republish an updated artifact.
 
 ## Good Uses
 
@@ -149,7 +160,7 @@ If the artifact starts to feel busy, the answer is almost always to remove eleme
    - make interactive controls usable with touch and expose essential information without requiring hover
    - enough labels that the user can understand the artifact without chat context
    - when previewing, check a smaller desktop panel and a mobile width as well as the wide layout
-5. Replace the initial loading screen by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact. If the first loading screen used `--new`, omit `--new` on later publishes so they update that newly linked Scratchpad.
+5. Replace the initial loading screen by publishing again with `--document-id <id>` from the loading-screen response. If updating an existing topic, reuse its document ID. If the first loading screen used `--additional`, omit that flag on later publishes and target the returned ID.
 
 ## Progressive Updates
 
@@ -158,13 +169,13 @@ Use whole-document publishing for the first Scratchpad update, full redesigns, m
 - Each update must be a full HTML document or complete renderable HTML snapshot, not a fragment or diff.
 - Publish only at stable points where the content is useful and syntactically valid. Good checkpoints are a finalized layout shell, populated major sections, complete data visualization, and final polish.
 - Avoid publishing every small edit or token stream. Each update reloads the generated iframe, which can reset scroll, focus, animation, and JavaScript state.
-- Keep using the same helper and session. The helper sends the full content through `panel.scratchpad.set-content`, so repeated publishes update the existing Scratchpad instead of creating separate panels.
-- Use `--new` only when the user explicitly asks for a new, separate, or additional Scratchpad, and only on the first publish for that artifact. Passing `--new` again intentionally creates another Scratchpad and unbinds the previous session-linked one.
+- Keep using the same helper, session, and `--document-id` for repeated publishes to one artifact.
+- Use `--additional` only on the first publish of an explicitly separate artifact. Save its returned document ID. `--new` is a legacy option that creates a new default and unbinds the prior default.
 - If an intermediate snapshot uses JavaScript, keep the no-blank-state and diagnostics guidance below in place just as you would for the final artifact.
 
 ## Targeted Patch Updates
 
-Use `panel.scratchpad.patch-content` only for small, exact edits to an existing session-linked Scratchpad. Before patching, export the current Scratchpad or query its state so you have the current `revision`; export whenever you do not already have the exact current HTML. Do not patch from stale memory.
+Use `panel.scratchpad.patch-content` only for small, exact edits to a selected open Scratchpad. Before patching, export that document or query its state so you have the current `revision`; export whenever you do not already have the exact current HTML. Do not patch from stale memory.
 
 Patch rules:
 
@@ -181,7 +192,8 @@ Example:
 
 ```bash
 "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
-  "sessionID=$TOASTTY_SESSION_ID"
+  "sessionID=$TOASTTY_SESSION_ID" \
+  "documentID=<document-id>"
 ```
 
 Read the exported `filePath`, choose a unique exact `oldText`, and use the returned `revision`:
@@ -201,6 +213,7 @@ JSON
 "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.patch-content \
   --stdin patch \
   "sessionID=$TOASTTY_SESSION_ID" \
+  "documentID=<document-id>" \
   "expectedRevision=<revision>" < /tmp/scratchpad-patch.json
 ```
 
@@ -239,17 +252,18 @@ When debugging JavaScript, add short `console.info(...)` checkpoints around star
 
 ## Read Current Scratchpad
 
-When the user asks you to look at, read, inspect, use, or implement what is in the current Scratchpad, export the session-linked Scratchpad through Toastty before acting on it.
+When the user asks you to look at, read, inspect, use, or implement what is in a Scratchpad, list the session's open Scratchpads and export the selected document through Toastty before acting on it.
 
 In a Toastty-managed agent terminal, run:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export "sessionID=$TOASTTY_SESSION_ID"
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+  "sessionID=$TOASTTY_SESSION_ID" "documentID=<document-id>"
 ```
 
 Read the returned `filePath` as the current Scratchpad HTML, then use that content as the source for the requested work. The response also includes `panelID`, `documentID`, `revision`, and `title` for diagnostics or follow-up state queries.
 
-If export reports that the session has no linked Scratchpad, ask the user to bind the Scratchpad to this agent from the Scratchpad action menu or specify the relevant Scratchpad panel.
+If the list is empty, use a known open panel ID for panel-targeted export or ask the user to reopen the intended Scratchpad and bind it from this session's terminal-header link menu. Scratchpad-side rebind remains available.
 
 ## Publish
 
@@ -268,12 +282,21 @@ Or publish an already-generated HTML file:
   --file /tmp/data-flow.html
 ```
 
-For an explicit new/separate Scratchpad, add `--new` to the first publish:
+For an explicit new/separate Scratchpad, add `--additional` to the first publish and use the returned `documentID` for later updates:
 
 ```bash
 "$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-html.sh" \
-  --new \
+  --additional \
+  --purpose "Data flow for the review" \
   --title "Data Flow" \
+  --file /tmp/data-flow.html
+```
+
+To update a selected existing artifact:
+
+```bash
+"$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-html.sh" \
+  --document-id <document-id> \
   --file /tmp/data-flow.html
 ```
 

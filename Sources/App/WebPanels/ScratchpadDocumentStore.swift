@@ -14,6 +14,7 @@ struct ScratchpadDocument: Codable, Equatable, Sendable {
     var createdAt: Date
     var updatedAt: Date
     var sessionLink: ScratchpadSessionLink?
+    var purpose: String? = nil
 }
 
 struct ScratchpadContentPatch: Codable, Equatable, Sendable {
@@ -71,6 +72,7 @@ struct ScratchpadDocumentPatchOutcome: Equatable, Sendable {
 }
 
 enum ScratchpadDocumentStoreError: LocalizedError, Equatable {
+    case invalidMetadata(String)
     case contentTooLarge(maxBytes: Int, actualBytes: Int)
     case patchTooLarge(maxBytes: Int, actualBytes: Int)
     case invalidPatch(String)
@@ -83,6 +85,8 @@ enum ScratchpadDocumentStoreError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .invalidMetadata(let reason):
+            return "scratchpad metadata is invalid: \(reason)"
         case .contentTooLarge(let maxBytes, let actualBytes):
             return "scratchpad content is too large (\(actualBytes) bytes, maximum \(maxBytes) bytes)"
         case .patchTooLarge(let maxBytes, let actualBytes):
@@ -161,6 +165,7 @@ final class ScratchpadDocumentStore {
         title: String?,
         content: String,
         sessionLink: ScratchpadSessionLink?,
+        purpose: String? = nil,
         now: Date = Date()
     ) throws -> ScratchpadDocument {
         try createDocument(
@@ -168,6 +173,7 @@ final class ScratchpadDocumentStore {
             title: title,
             content: content,
             sessionLink: sessionLink,
+            purpose: purpose,
             now: now
         )
     }
@@ -177,10 +183,12 @@ final class ScratchpadDocumentStore {
         title: String?,
         content: String,
         sessionLink: ScratchpadSessionLink?,
+        purpose: String? = nil,
         now: Date = Date()
     ) throws -> ScratchpadDocument {
         try lock.withLock {
             try validateContent(content)
+            let normalizedPurpose = try Self.normalizedPurpose(purpose)
             let document = ScratchpadDocument(
                 documentID: documentID,
                 revision: 1,
@@ -189,7 +197,8 @@ final class ScratchpadDocumentStore {
                 content: content,
                 createdAt: now,
                 updatedAt: now,
-                sessionLink: sessionLink
+                sessionLink: sessionLink,
+                purpose: normalizedPurpose
             )
             try writeUnlocked(document)
             return document
@@ -202,10 +211,12 @@ final class ScratchpadDocumentStore {
         content: String,
         expectedRevision: Int?,
         sessionLink: ScratchpadSessionLink?,
+        purpose: String? = nil,
         now: Date = Date()
     ) throws -> ScratchpadDocument {
         try lock.withLock {
             try validateContent(content)
+            let normalizedPurpose = try Self.normalizedPurpose(purpose)
             guard var document = try loadUnlocked(documentID: documentID) else {
                 throw ScratchpadDocumentStoreError.missingDocument(documentID)
             }
@@ -226,6 +237,9 @@ final class ScratchpadDocumentStore {
             document.content = content
             document.updatedAt = now
             document.sessionLink = sessionLink ?? document.sessionLink
+            if purpose != nil {
+                document.purpose = normalizedPurpose
+            }
             try writeUnlocked(document)
             return document
         }
@@ -286,6 +300,47 @@ final class ScratchpadDocumentStore {
             try writeUnlocked(document)
             return document
         }
+    }
+
+    func updateMetadata(
+        documentID: UUID,
+        title: String?,
+        purpose: String?,
+        expectedRevision: Int? = nil,
+        now: Date = Date()
+    ) throws -> ScratchpadDocument {
+        try lock.withLock {
+            let normalizedPurpose = try Self.normalizedPurpose(purpose)
+            guard var document = try loadUnlocked(documentID: documentID) else {
+                throw ScratchpadDocumentStoreError.missingDocument(documentID)
+            }
+            if let expectedRevision, expectedRevision != document.revision {
+                throw ScratchpadDocumentStoreError.staleRevision(
+                    expectedRevision: expectedRevision,
+                    currentRevision: document.revision
+                )
+            }
+            if let title {
+                document.title = WebPanelState.normalizedTitle(title)
+            }
+            if purpose != nil {
+                document.purpose = normalizedPurpose
+            }
+            document.revision += 1
+            document.updatedAt = now
+            try writeUnlocked(document)
+            return document
+        }
+    }
+
+    private static func normalizedPurpose(_ purpose: String?) throws -> String? {
+        guard let value = purpose?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        guard value.count <= 1_024 else {
+            throw ScratchpadDocumentStoreError.invalidMetadata("purpose must be at most 1024 characters")
+        }
+        return value
     }
 
     private func validateContent(_ content: String) throws {

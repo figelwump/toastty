@@ -4213,8 +4213,11 @@ struct PanelCardView: View {
         if let scratchpadTerminalBindingIndicatorState {
             ScratchpadTerminalBindingIndicator(
                 state: scratchpadTerminalBindingIndicatorState,
-                appIsActive: appIsActive
+                appIsActive: appIsActive,
+                menuState: { self.scratchpadTerminalBindingIndicatorState },
+                performAction: performScratchpadSessionHeaderAction(_:)
             )
+            .fixedSize()
         }
 
         if let terminalAllowsAgentReads {
@@ -4309,7 +4312,10 @@ struct PanelCardView: View {
         return Self.scratchpadTerminalBindingIndicatorState(
             for: panelID,
             in: owningTab,
-            sessionRegistry: sessionRuntimeStore.sessionRegistry
+            sessionRegistry: sessionRuntimeStore.sessionRegistry,
+            defaultDocumentID: sessionRuntimeStore.sessionRegistry.activeSession(for: panelID).flatMap {
+                store.defaultScratchpadPanel(sessionID: $0.sessionID)?.documentID
+            }
         )
     }
 
@@ -4381,9 +4387,14 @@ struct PanelCardView: View {
             documentID: webState.scratchpad?.documentID,
             bindingLabel: bindingStatus.label,
             isBound: bindingStatus.isLiveBound,
+            isDefault: bindingStatus.liveSessionID.map {
+                store.defaultScratchpadPanel(sessionID: $0)?.panelID == panelID
+            } ?? false,
             candidates: scratchpadBindCandidates,
             rebind: rebindScratchpad(to:),
             unbind: unbindScratchpad,
+            makeDefault: makeScratchpadDefault,
+            editDetails: editScratchpadDetails,
             exportToFile: exportScratchpadToFile(documentID:),
             openInBrowser: openScratchpadInBrowser(documentID:)
         )
@@ -4444,34 +4455,70 @@ struct PanelCardView: View {
     static func scratchpadTerminalBindingIndicatorState(
         for panelID: UUID,
         in workspaceTab: WorkspaceTabState,
-        sessionRegistry: SessionRegistry
+        sessionRegistry: SessionRegistry,
+        defaultDocumentID: UUID? = nil
     ) -> ScratchpadTerminalBindingIndicatorState? {
-        for rightAuxTab in workspaceTab.rightAuxPanel.orderedTabs {
-            guard case .web(let webState) = rightAuxTab.panelState,
+        guard let currentSession = sessionRegistry.activeSession(for: panelID),
+              currentSession.agent != .processWatch,
+              workspaceTab.layoutTree.slotContaining(panelID: panelID) != nil,
+              let terminalPanel = workspaceTab.panels[panelID],
+              case .terminal = terminalPanel else {
+            return nil
+        }
+        let mainPanels = workspaceTab.layoutTree.allSlotInfos.compactMap { slot -> (panelID: UUID, panelState: PanelState)? in
+            guard let panelState = workspaceTab.panels[slot.panelID] else { return nil }
+            return (slot.panelID, panelState)
+        }
+        let rightPanels = workspaceTab.rightAuxPanel.orderedTabs.map { ($0.panelID, $0.panelState) }
+        var seenPanelIDs = Set<UUID>()
+        let entries = (mainPanels + rightPanels).compactMap { panel -> ScratchpadTerminalBindingMenuEntry? in
+            guard seenPanelIDs.insert(panel.panelID).inserted,
+                  case .web(let webState) = panel.panelState,
                   webState.definition == .scratchpad,
-                  let sessionLink = webState.scratchpad?.sessionLink,
-                  sessionLink.sourcePanelID == panelID,
-                  let activeSession = sessionRegistry.activeSession(sessionID: sessionLink.sessionID),
-                  activeSession.panelID == panelID else {
-                continue
+                  let scratchpad = webState.scratchpad else {
+                return nil
             }
-
-            return ScratchpadTerminalBindingIndicatorState(
-                scratchpadPanelID: rightAuxTab.panelID,
-                helpText: scratchpadTerminalBindingIndicatorHelpText(for: webState)
+            let owner = scratchpad.sessionLink.flatMap {
+                sessionRegistry.activeSession(sessionID: $0.sessionID)
+            }
+            let isBound = owner?.sessionID == currentSession.sessionID
+                && scratchpad.sessionLink?.sourcePanelID == panelID
+            let ownerLabel: String?
+            if let owner, isBound == false {
+                ownerLabel = normalizedScratchpadBindingLabel(owner.displayTitleOverride)
+                    ?? normalizedScratchpadBindingLabel(scratchpad.sessionLink?.displayTitle)
+                    ?? owner.agent.displayName
+            } else {
+                ownerLabel = nil
+            }
+            return ScratchpadTerminalBindingMenuEntry(
+                panelID: panel.panelID,
+                documentID: scratchpad.documentID,
+                title: normalizedScratchpadBindingLabel(webState.title) ?? WebPanelDefinition.scratchpad.defaultTitle,
+                isBound: isBound,
+                isDefault: isBound && scratchpad.documentID == defaultDocumentID,
+                ownerLabel: ownerLabel
             )
         }
-
-        return nil
-    }
-
-    private static func scratchpadTerminalBindingIndicatorHelpText(for webState: WebPanelState) -> String {
-        guard let title = normalizedScratchpadBindingLabel(webState.title),
-              title != WebPanelDefinition.scratchpad.defaultTitle else {
-            return "Bound to Scratchpad"
+        let boundEntries = entries.filter(\.isBound)
+        let resolvedEntries = entries.map { entry in
+            ScratchpadTerminalBindingMenuEntry(
+                panelID: entry.panelID,
+                documentID: entry.documentID,
+                title: entry.title,
+                isBound: entry.isBound,
+                isDefault: entry.isDefault || (entry.isBound && boundEntries.count == 1),
+                ownerLabel: entry.ownerLabel
+            )
         }
-
-        return "Bound to Scratchpad: \(title)"
+        return ScratchpadTerminalBindingIndicatorState(
+            context: ScratchpadSessionHeaderContext(
+                sessionID: currentSession.sessionID,
+                sourcePanelID: panelID,
+                tabID: workspaceTab.id
+            ),
+            entries: resolvedEntries
+        )
     }
 
     private static func normalizedScratchpadBindingLabel(_ value: String?) -> String? {
@@ -4535,6 +4582,68 @@ struct PanelCardView: View {
             )
         } catch {
             NSLog("Scratchpad unbind failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func makeScratchpadDefault() {
+        do {
+            _ = try store.makeScratchpadDefault(panelID: panelID, sessionRuntimeStore: sessionRuntimeStore)
+        } catch {
+            NSLog("Making Scratchpad default failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func performScratchpadSessionHeaderAction(_ request: ScratchpadSessionHeaderActionRequest) {
+        do {
+            switch request.action {
+            case .setBinding(let scratchpadPanelID, let documentID, let isBound):
+                try store.setScratchpadBindingFromSessionHeader(
+                    panelID: scratchpadPanelID,
+                    documentID: documentID,
+                    sessionID: request.context.sessionID,
+                    sourcePanelID: request.context.sourcePanelID,
+                    tabID: request.context.tabID,
+                    isBound: isBound,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+                )
+            case .createScratchpad:
+                _ = try store.createScratchpadFromSessionHeader(
+                    sessionID: request.context.sessionID,
+                    sourcePanelID: request.context.sourcePanelID,
+                    tabID: request.context.tabID,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+                )
+            }
+        } catch {
+            NSLog("Scratchpad session binding action failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func editScratchpadDetails() {
+        guard case .web(let webState) = panelState,
+              let scratchpad = webState.scratchpad else { return }
+        do {
+            guard let document = try webPanelRuntimeRegistry.scratchpadDocumentStore.load(
+                documentID: scratchpad.documentID
+            ) else { return }
+            let editor = ScratchpadDetailsEditor(title: document.title, purpose: document.purpose)
+            guard let details = editor.present() else { return }
+            _ = try store.updateScratchpadMetadata(
+                panelID: panelID,
+                title: details.title,
+                purpose: details.purpose,
+                expectedRevision: document.revision,
+                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+            )
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Save Scratchpad Details"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
     }
 
@@ -4640,24 +4749,193 @@ struct ScratchpadBindingStatus: Equatable {
     }
 }
 
-struct ScratchpadTerminalBindingIndicatorState: Equatable {
-    let scratchpadPanelID: UUID
-    let helpText: String
+struct ScratchpadSessionHeaderContext: Equatable {
+    let sessionID: String
+    let sourcePanelID: UUID
+    let tabID: UUID
 }
 
-private struct ScratchpadTerminalBindingIndicator: View {
+enum ScratchpadSessionHeaderAction: Equatable {
+    case setBinding(panelID: UUID, documentID: UUID, isBound: Bool)
+    case createScratchpad
+}
+
+struct ScratchpadSessionHeaderActionRequest: Equatable {
+    let context: ScratchpadSessionHeaderContext
+    let action: ScratchpadSessionHeaderAction
+}
+
+struct ScratchpadTerminalBindingMenuEntry: Equatable {
+    let panelID: UUID
+    let documentID: UUID
+    let title: String
+    let isBound: Bool
+    let isDefault: Bool
+    let ownerLabel: String?
+}
+
+struct ScratchpadTerminalBindingIndicatorState: Equatable {
+    let context: ScratchpadSessionHeaderContext
+    let entries: [ScratchpadTerminalBindingMenuEntry]
+
+    var scratchpadPanelID: UUID? {
+        entries.first(where: \.isDefault)?.panelID ?? entries.first(where: \.isBound)?.panelID
+    }
+
+    var boundCount: Int {
+        entries.filter(\.isBound).count
+    }
+
+    var countLabel: String {
+        boundCount > 1 ? String(boundCount) : ""
+    }
+
+    var helpText: String {
+        guard boundCount > 0 else { return "Bind Scratchpads to This Session" }
+        guard boundCount == 1, let entry = entries.first(where: \.isBound) else {
+            return "Bound to \(boundCount) Scratchpads"
+        }
+        return entry.title == WebPanelDefinition.scratchpad.defaultTitle
+            ? "Bound to Scratchpad"
+            : "Bound to Scratchpad: \(entry.title)"
+    }
+
+    var accessibilityLabel: String {
+        guard boundCount > 0 else { return "Scratchpad Bindings" }
+        return boundCount > 1 ? "Bound to \(boundCount) Scratchpads" : "Bound to Scratchpad"
+    }
+}
+
+private struct ScratchpadTerminalBindingIndicator: NSViewRepresentable {
     let state: ScratchpadTerminalBindingIndicatorState
     let appIsActive: Bool
+    let menuState: () -> ScratchpadTerminalBindingIndicatorState?
+    let performAction: (ScratchpadSessionHeaderActionRequest) -> Void
 
-    var body: some View {
-        Image(systemName: "link")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(appIsActive ? ToastyTheme.accent : ToastyTheme.accent.opacity(0.55))
-            .frame(width: 16, height: 16)
-            .contentShape(Rectangle())
-            .accessibilityLabel("Bound to Scratchpad")
-            .accessibilityIdentifier("panel.header.scratchpad.bound.\(state.scratchpadPanelID.uuidString)")
-            .help(state.helpText)
+    func makeCoordinator() -> ScratchpadSessionHeaderMenuController {
+        ScratchpadSessionHeaderMenuController()
+    }
+
+    func makeNSView(context: Context) -> ScratchpadSessionBindingMenuButton {
+        let button = ScratchpadSessionBindingMenuButton()
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.imageScaling = .scaleProportionallyDown
+        button.focusRingType = .none
+        button.font = .systemFont(ofSize: 10, weight: .semibold)
+        button.target = context.coordinator
+        button.action = #selector(ScratchpadSessionHeaderMenuController.showMenu(_:))
+        button.setAccessibilityRole(.menuButton)
+        return button
+    }
+
+    func updateNSView(_ button: ScratchpadSessionBindingMenuButton, context: Context) {
+        context.coordinator.menuState = menuState
+        context.coordinator.performAction = performAction
+        button.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)
+        button.imagePosition = state.countLabel.isEmpty ? .imageOnly : .imageLeading
+        button.title = state.countLabel
+        let color = state.boundCount > 0 ? ToastyTheme.accent : ToastyTheme.mutedText
+        button.contentTintColor = NSColor(appIsActive ? color : color.opacity(0.55))
+        button.toolTip = state.helpText
+        button.setAccessibilityLabel(state.accessibilityLabel)
+        button.setAccessibilityHelp(state.helpText)
+        if let scratchpadPanelID = state.scratchpadPanelID {
+            button.setAccessibilityIdentifier("panel.header.scratchpad.bound.\(scratchpadPanelID.uuidString)")
+        } else {
+            button.setAccessibilityIdentifier("panel.header.scratchpad.binding.\(state.context.sourcePanelID.uuidString)")
+        }
+    }
+}
+
+@MainActor
+final class ScratchpadSessionHeaderMenuController: NSObject {
+    var menuState: (() -> ScratchpadTerminalBindingIndicatorState?)?
+    var performAction: ((ScratchpadSessionHeaderActionRequest) -> Void)?
+
+    func makeMenu() -> NSMenu? {
+        guard let state = menuState?() else { return nil }
+        return ScratchpadTerminalBindingMenuBuilder.menu(
+            state: state,
+            target: self,
+            action: #selector(performScratchpadAction(_:))
+        )
+    }
+
+    @objc func showMenu(_ sender: NSButton) {
+        guard let menu = makeMenu() else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
+    }
+
+    @objc private func performScratchpadAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? ScratchpadSessionHeaderMenuPayload else { return }
+        performAction?(payload.request)
+    }
+}
+
+@MainActor
+final class ScratchpadSessionBindingMenuButton: NSButton {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        refusesFirstResponder = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override func becomeFirstResponder() -> Bool { false }
+}
+
+final class ScratchpadSessionHeaderMenuPayload: NSObject {
+    let request: ScratchpadSessionHeaderActionRequest
+
+    init(request: ScratchpadSessionHeaderActionRequest) {
+        self.request = request
+    }
+}
+
+enum ScratchpadTerminalBindingMenuBuilder {
+    static func menu(
+        state: ScratchpadTerminalBindingIndicatorState,
+        target: AnyObject?,
+        action: Selector?
+    ) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let heading = NSMenuItem(title: "Scratchpads in This Tab", action: nil, keyEquivalent: "")
+        heading.isEnabled = false
+        menu.addItem(heading)
+        if state.entries.isEmpty {
+            let emptyItem = NSMenuItem(title: "No Scratchpads in This Tab", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            menu.addItem(emptyItem)
+        }
+        for entry in state.entries {
+            var title = entry.isDefault ? "\(entry.title) (default)" : entry.title
+            if let ownerLabel = entry.ownerLabel { title += " — \(ownerLabel)" }
+            let item = NSMenuItem(title: title, action: entry.ownerLabel == nil ? action : nil, keyEquivalent: "")
+            item.target = target
+            item.representedObject = ScratchpadSessionHeaderMenuPayload(request: ScratchpadSessionHeaderActionRequest(
+                context: state.context,
+                action: .setBinding(panelID: entry.panelID, documentID: entry.documentID, isBound: !entry.isBound)
+            ))
+            item.state = entry.isBound ? .on : .off
+            item.isEnabled = entry.ownerLabel == nil
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let newItem = NSMenuItem(title: "New Scratchpad", action: action, keyEquivalent: "")
+        newItem.target = target
+        newItem.representedObject = ScratchpadSessionHeaderMenuPayload(request: ScratchpadSessionHeaderActionRequest(
+            context: state.context,
+            action: .createScratchpad
+        ))
+        menu.addItem(newItem)
+        return menu
     }
 }
 
@@ -4737,9 +5015,12 @@ private struct ScratchpadHeaderAccessory: View {
     let documentID: UUID?
     let bindingLabel: String
     let isBound: Bool
+    let isDefault: Bool
     let candidates: [ScratchpadAgentBindCandidate]
     let rebind: (ScratchpadAgentBindCandidate) -> Void
     let unbind: () -> Void
+    let makeDefault: () -> Void
+    let editDetails: () -> Void
     let exportToFile: (UUID?) -> Void
     let openInBrowser: (UUID?) -> Void
 
@@ -4756,6 +5037,10 @@ private struct ScratchpadHeaderAccessory: View {
 
             ScratchpadActionsMenuButton(
                 documentID: documentID,
+                isBound: isBound,
+                isDefault: isDefault,
+                makeDefault: makeDefault,
+                editDetails: editDetails,
                 exportToFile: exportToFile,
                 openInBrowser: openInBrowser
             )
@@ -5107,6 +5392,10 @@ enum ScratchpadBindingMenuBuilder {
 
 private struct ScratchpadActionsMenuButton: NSViewRepresentable {
     let documentID: UUID?
+    let isBound: Bool
+    let isDefault: Bool
+    let makeDefault: () -> Void
+    let editDetails: () -> Void
     let exportToFile: (UUID?) -> Void
     let openInBrowser: (UUID?) -> Void
 
@@ -5132,6 +5421,10 @@ private struct ScratchpadActionsMenuButton: NSViewRepresentable {
 
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.documentID = documentID
+        context.coordinator.isBound = isBound
+        context.coordinator.isDefault = isDefault
+        context.coordinator.makeDefault = makeDefault
+        context.coordinator.editDetails = editDetails
         context.coordinator.exportToFile = exportToFile
         context.coordinator.openInBrowser = openInBrowser
 
@@ -5145,13 +5438,21 @@ private struct ScratchpadActionsMenuButton: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         var documentID: UUID?
+        var isBound = false
+        var isDefault = false
+        var makeDefault: (() -> Void)?
+        var editDetails: (() -> Void)?
         var exportToFile: ((UUID?) -> Void)?
         var openInBrowser: ((UUID?) -> Void)?
 
         @objc func showMenu(_ sender: NSButton) {
             let menu = ScratchpadActionsMenuBuilder.menu(
                 documentID: documentID,
+                isBound: isBound,
+                isDefault: isDefault,
                 target: self,
+                makeDefaultAction: #selector(makeScratchpadDefault(_:)),
+                editDetailsAction: #selector(editScratchpadDetails(_:)),
                 exportAction: #selector(exportScratchpad(_:)),
                 openInBrowserAction: #selector(openScratchpadInBrowser(_:))
             )
@@ -5161,6 +5462,14 @@ private struct ScratchpadActionsMenuButton: NSViewRepresentable {
                 at: NSPoint(x: 0, y: sender.bounds.height + 2),
                 in: sender
             )
+        }
+
+        @objc private func makeScratchpadDefault(_ sender: NSMenuItem) {
+            makeDefault?()
+        }
+
+        @objc private func editScratchpadDetails(_ sender: NSMenuItem) {
+            editDetails?()
         }
 
         @objc private func exportScratchpad(_ sender: NSMenuItem) {
@@ -5186,11 +5495,28 @@ final class ScratchpadDocumentMenuPayload: NSObject {
 enum ScratchpadActionsMenuBuilder {
     static func menu(
         documentID: UUID?,
+        isBound: Bool,
+        isDefault: Bool,
         target: AnyObject?,
+        makeDefaultAction: Selector?,
+        editDetailsAction: Selector?,
         exportAction: Selector?,
         openInBrowserAction: Selector?
     ) -> NSMenu {
         let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(documentActionItem(
+            title: "Edit Details...",
+            documentID: documentID,
+            target: target,
+            action: editDetailsAction
+        ))
+        let defaultItem = NSMenuItem(title: "Make Default", action: makeDefaultAction, keyEquivalent: "")
+        defaultItem.target = target
+        defaultItem.isEnabled = documentID != nil && isBound && isDefault == false
+        defaultItem.state = isDefault ? .on : .off
+        menu.addItem(defaultItem)
+        menu.addItem(.separator())
         menu.addItem(documentActionItem(
             title: "Export to File...",
             documentID: documentID,
@@ -5221,6 +5547,60 @@ enum ScratchpadActionsMenuBuilder {
             item.isEnabled = false
         }
         return item
+    }
+}
+
+struct ScratchpadDetailsDraft: Equatable {
+    let title: String
+    let purpose: String
+}
+
+@MainActor
+final class ScratchpadDetailsEditor {
+    let alert: NSAlert
+    let titleField: NSTextField
+    let purposeField: NSTextField
+
+    init(title: String?, purpose: String?) {
+        alert = NSAlert()
+        alert.messageText = "Edit Scratchpad Details"
+        alert.informativeText = "Give this Scratchpad a title and an optional purpose."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        titleField = NSTextField(string: title ?? "")
+        titleField.placeholderString = WebPanelDefinition.scratchpad.defaultTitle
+        titleField.setAccessibilityLabel("Title")
+        titleField.setAccessibilityIdentifier("scratchpad.details.title")
+        purposeField = NSTextField(string: purpose ?? "")
+        purposeField.placeholderString = "What this Scratchpad is used for"
+        purposeField.setAccessibilityLabel("Purpose (optional)")
+        purposeField.setAccessibilityIdentifier("scratchpad.details.purpose")
+
+        let form = NSStackView(views: [
+            NSTextField(labelWithString: "Title"),
+            titleField,
+            NSTextField(labelWithString: "Purpose (optional)"),
+            purposeField,
+        ])
+        form.orientation = .vertical
+        form.alignment = .leading
+        form.spacing = 6
+        NSLayoutConstraint.activate([
+            titleField.widthAnchor.constraint(equalToConstant: 360),
+            purposeField.widthAnchor.constraint(equalToConstant: 360),
+        ])
+        form.frame = NSRect(origin: .zero, size: form.fittingSize)
+        alert.accessoryView = form
+        titleField.nextKeyView = purposeField
+        alert.window.initialFirstResponder = titleField
+    }
+
+    func present(
+        runModal: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+    ) -> ScratchpadDetailsDraft? {
+        guard runModal(alert) == .alertFirstButtonReturn else { return nil }
+        return ScratchpadDetailsDraft(title: titleField.stringValue, purpose: purposeField.stringValue)
     }
 }
 

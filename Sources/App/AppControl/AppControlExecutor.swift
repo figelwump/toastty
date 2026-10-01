@@ -535,6 +535,8 @@ final class AppControlExecutor {
             return try rebindScratchpad(args: args)
         case .panelScratchpadExport:
             return try exportScratchpad(args: args)
+        case .panelScratchpadUpdateMetadata, .panelScratchpadMakeDefault, .panelScratchpadUnbind:
+            return try manageScratchpad(action: action, args: args)
 
         case .panelLocalDocumentSearchStart:
             let resolved = try resolveLocalDocumentTarget(payload: args)
@@ -902,25 +904,31 @@ final class AppControlExecutor {
                 runtimeState: runtime.automationState()
             )
 
-        case .panelScratchpadLookup:
-            guard let sessionID = normalizedOptionalText(args.stringValue("sessionID")) else {
-                throw AutomationSocketError.invalidPayload("sessionID is required")
-            }
+        case .panelScratchpadLookup, .panelScratchpadList:
+            let sessionID = try scratchpadSessionID(args: args)
             guard let record = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
                 throw AutomationSocketError.invalidPayload("sessionID does not refer to an active session")
             }
-            try enforceWorkspaceAutomationAccess(record.workspaceID)
-            guard let target = scratchpadTarget(linkedToSessionID: sessionID) else {
+            let store = try requiredStore()
+            if query == .panelScratchpadList {
+                let panels = store.linkedScratchpadPanels(sessionID: sessionID)
+                let entries = try panels.map { target in
+                    try enforceWorkspaceAutomationAccess(target.workspaceID)
+                    return AutomationJSONValue.object(try scratchpadLookupSnapshot(sessionID: sessionID, target: target))
+                }
+                return [
+                    "sessionID": .string(sessionID),
+                    "defaultDocumentID": store.defaultScratchpadPanel(sessionID: sessionID)
+                        .map { .string($0.documentID.uuidString) } ?? .null,
+                    "scratchpads": .array(entries),
+                ]
+            }
+            guard let target = try sessionScratchpadTarget(
+                sessionID: sessionID, documentID: try scratchpadDocumentID(args: args)
+            ) else {
                 return scratchpadLookupSnapshot(sessionRecord: record)
             }
-            try enforceWorkspaceAutomationAccess(target.workspaceID)
-            return try scratchpadLookupSnapshot(
-                sessionID: sessionID,
-                windowID: target.windowID,
-                workspaceID: target.workspaceID,
-                panelID: target.panelID,
-                webState: target.webState
-            )
+            return try scratchpadLookupSnapshot(sessionID: sessionID, target: target)
 
         case .panelScratchpadState:
             let resolved = try resolveScratchpadTarget(payload: args)
@@ -1306,6 +1314,14 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("sessionID is required")
         }
         try enforceWorkspaceAutomationAccessForSession(sessionID)
+        let documentID = try scratchpadDocumentID(args: args)
+        let createPolicy = try scratchpadCreatePolicy(args: args)
+        guard documentID == nil || createPolicy == .reuse else {
+            throw AutomationSocketError.invalidPayload(ScratchpadPanelError.incompatibleDocumentSelector.localizedDescription)
+        }
+        if createPolicy != .additional {
+            _ = try sessionScratchpadTarget(sessionID: sessionID, documentID: documentID)
+        }
         let content = try scratchpadContent(args: args, sessionID: sessionID)
 
         let outcome: ScratchpadPanelSetContentOutcome
@@ -1316,7 +1332,9 @@ private extension AppControlExecutor {
                     title: normalizedOptionalText(args.stringValue("title")),
                     content: content,
                     expectedRevision: args.intValue("expectedRevision"),
-                    createPolicy: try scratchpadCreatePolicy(args: args)
+                    createPolicy: createPolicy,
+                    documentID: documentID,
+                    purpose: args.stringValue("purpose")
                 ),
                 sessionRuntimeStore: sessionRuntimeStore,
                 documentStore: scratchpadDocumentStore
@@ -1346,6 +1364,8 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("sessionID is required")
         }
         try enforceWorkspaceAutomationAccessForSession(sessionID)
+        let documentID = try scratchpadDocumentID(args: args)
+        _ = try sessionScratchpadTarget(sessionID: sessionID, documentID: documentID)
         guard let patch = args.stringValue("patch") else {
             throw AutomationSocketError.invalidPayload("patch is required")
         }
@@ -1362,7 +1382,8 @@ private extension AppControlExecutor {
                 request: ScratchpadPanelPatchContentRequest(
                     sessionID: sessionID,
                     patch: patch,
-                    expectedRevision: expectedRevision
+                    expectedRevision: expectedRevision,
+                    documentID: documentID
                 ),
                 sessionRuntimeStore: sessionRuntimeStore,
                 documentStore: scratchpadDocumentStore
@@ -1394,6 +1415,7 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("sessionID is required")
         }
         let target = try resolveScratchpadTarget(payload: args)
+        try enforceWorkspaceAutomationAccessForSession(targetSessionID)
 
         let outcome: ScratchpadPanelRebindOutcome
         do {
@@ -1453,6 +1475,95 @@ private extension AppControlExecutor {
         )
     }
 
+    func scratchpadSessionID(args: [String: AutomationJSONValue]) throws -> String {
+        guard let sessionID = normalizedOptionalText(args.stringValue("sessionID")) else {
+            throw AutomationSocketError.invalidPayload("sessionID is required")
+        }
+        try enforceWorkspaceAutomationAccessForSession(sessionID)
+        return sessionID
+    }
+
+    func scratchpadDocumentID(args: [String: AutomationJSONValue], required: Bool = false) throws -> UUID? {
+        guard let value = args["documentID"] else {
+            if required { throw AutomationSocketError.invalidPayload("documentID is required") }
+            return nil
+        }
+        guard case .string(let rawValue) = value, let documentID = UUID(uuidString: rawValue) else {
+            throw AutomationSocketError.invalidPayload("documentID must be a UUID")
+        }
+        return documentID
+    }
+
+    func sessionScratchpadTarget(
+        sessionID: String,
+        documentID: UUID? = nil,
+        panelID: UUID? = nil
+    ) throws -> ScratchpadPanelReference? {
+        try enforceWorkspaceAutomationAccessForSession(sessionID)
+        let store = try requiredStore()
+        do {
+            let target: ScratchpadPanelReference?
+            if let panelID {
+                guard let panel = store.linkedScratchpadPanels(sessionID: sessionID).first(where: { $0.panelID == panelID }),
+                      documentID == nil || panel.documentID == documentID else {
+                    throw AutomationSocketError.invalidPayload("panelID does not match a bound sessionID Scratchpad")
+                }
+                target = panel
+            } else {
+                target = try store.resolveSessionScratchpad(sessionID: sessionID, documentID: documentID)
+            }
+            if let target {
+                try enforceWorkspaceAutomationAccess(target.workspaceID)
+                guard target.webState.scratchpad?.sessionLink?.sourcePanelID
+                    == sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.panelID else {
+                    throw ScratchpadPanelError.documentNotLinkedToSession(target.documentID, sessionID)
+                }
+            }
+            return target
+        } catch let error as ScratchpadPanelError {
+            throw AutomationSocketError.invalidPayload(error.localizedDescription)
+        }
+    }
+
+    func manageScratchpad(action: AppControlActionID, args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let sessionID = try scratchpadSessionID(args: args)
+        let documentID = try scratchpadDocumentID(args: args, required: true)
+        guard let target = try sessionScratchpadTarget(sessionID: sessionID, documentID: documentID) else {
+            throw AutomationSocketError.invalidPayload("sessionID has no linked Scratchpad panel")
+        }
+        let store = try requiredStore()
+        do {
+            switch action {
+            case .panelScratchpadUnbind:
+                let outcome = try store.unbindScratchpadPanel(panelID: target.panelID, documentStore: scratchpadDocumentStore)
+                return .init(didMutateState: true, result: [
+                    "windowID": .string(outcome.windowID.uuidString),
+                    "workspaceID": .string(outcome.workspaceID.uuidString),
+                    "panelID": .string(outcome.panelID.uuidString),
+                    "documentID": .string(outcome.documentID.uuidString),
+                    "revision": .int(outcome.revision), "sessionID": .null,
+                ])
+            case .panelScratchpadMakeDefault:
+                try store.makeScratchpadDefault(panelID: target.panelID, sessionRuntimeStore: sessionRuntimeStore)
+            case .panelScratchpadUpdateMetadata:
+                guard args.stringValue("title") != nil || args.stringValue("purpose") != nil else {
+                    throw AutomationSocketError.invalidPayload("title or purpose is required")
+                }
+                try store.updateScratchpadMetadata(
+                    panelID: target.panelID, title: args.stringValue("title"), purpose: args.stringValue("purpose"),
+                    expectedRevision: args.intValue("expectedRevision"), documentStore: scratchpadDocumentStore
+                )
+            default:
+                throw AutomationSocketError.invalidPayload("unsupported Scratchpad management action")
+            }
+            return .init(didMutateState: true, result: try scratchpadLookupSnapshot(sessionID: sessionID, target: target))
+        } catch let error as ScratchpadPanelError {
+            throw AutomationSocketError.invalidPayload(error.localizedDescription)
+        } catch let error as ScratchpadDocumentStoreError {
+            throw AutomationSocketError.invalidPayload(error.localizedDescription)
+        }
+    }
+
     func scratchpadContent(args: [String: AutomationJSONValue], sessionID: String) throws -> String {
         let inlineContent = args.stringValue("content")
         let filePath = normalizedOptionalText(args.stringValue("filePath"))
@@ -1481,7 +1592,7 @@ private extension AppControlExecutor {
         }
         let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let policy = ScratchpadPanelCreatePolicy(rawValue: normalized) else {
-            throw AutomationSocketError.invalidPayload("createPolicy must be one of: reuse, new")
+            throw AutomationSocketError.invalidPayload("createPolicy must be one of: reuse, new, additional")
         }
         return policy
     }
@@ -2073,8 +2184,17 @@ private extension AppControlExecutor {
     func resolveScratchpadExportTarget(
         payload: [String: AutomationJSONValue]
     ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
-        if let sessionID = normalizedOptionalText(payload.stringValue("sessionID")) {
-            guard let target = scratchpadTarget(linkedToSessionID: sessionID) else {
+        if payload["sessionID"] != nil {
+            let sessionID = try scratchpadSessionID(args: payload)
+            let documentID = try scratchpadDocumentID(args: payload)
+            var selectedPanelID: UUID?
+            if let value = payload["panelID"] {
+                guard case .string(let rawValue) = value, let panelID = UUID(uuidString: rawValue) else {
+                    throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+                }
+                selectedPanelID = panelID
+            }
+            guard let target = try sessionScratchpadTarget(sessionID: sessionID, documentID: documentID, panelID: selectedPanelID) else {
                 throw AutomationSocketError.invalidPayload("sessionID has no linked Scratchpad panel")
             }
             if let rawWindowID = payload.stringValue("windowID") {
@@ -2093,44 +2213,12 @@ private extension AppControlExecutor {
                     throw AutomationSocketError.invalidPayload("sessionID Scratchpad does not belong to workspaceID")
                 }
             }
-            if let rawPanelID = payload.stringValue("panelID") {
-                guard let panelID = UUID(uuidString: rawPanelID) else {
-                    throw AutomationSocketError.invalidPayload("panelID must be a UUID")
-                }
-                guard panelID == target.panelID else {
-                    throw AutomationSocketError.invalidPayload("panelID does not match sessionID Scratchpad")
-                }
-            }
-            return try scopedWebPanelTarget(
-                workspaceID: target.workspaceID,
-                panelID: target.panelID,
-                webState: target.webState
-            )
+            return (target.workspaceID, target.panelID, target.webState)
         }
-
+        guard payload["documentID"] == nil else {
+            throw AutomationSocketError.invalidPayload("documentID requires sessionID")
+        }
         return try resolveScratchpadTarget(payload: payload)
-    }
-
-    func scratchpadTarget(
-        linkedToSessionID sessionID: String
-    ) -> (windowID: UUID, workspaceID: UUID, panelID: UUID, webState: WebPanelState)? {
-        guard let store else { return nil }
-        for window in store.state.windows {
-            for workspaceID in window.workspaceIDs {
-                guard let workspace = store.state.workspacesByID[workspaceID] else {
-                    continue
-                }
-                for (panelID, panelState) in workspace.allPanelsByID {
-                    guard case .web(let webState) = panelState,
-                          webState.definition == .scratchpad,
-                          webState.scratchpad?.sessionLink?.sessionID == sessionID else {
-                        continue
-                    }
-                    return (window.id, workspaceID, panelID, webState)
-                }
-            }
-        }
-        return nil
     }
 
     func terminalStateSnapshot(
@@ -2300,10 +2388,9 @@ private extension AppControlExecutor {
             "sessionID": .string(sessionRecord.sessionID),
             "windowID": .string(sessionRecord.windowID.uuidString),
             "workspaceID": .string(sessionRecord.workspaceID.uuidString),
-            "panelID": .null,
-            "documentID": .null,
-            "revision": .null,
-            "title": .null,
+            "panelID": .null, "documentID": .null, "revision": .null, "title": .null,
+            "purpose": .null, "updatedAt": .null, "defaultDocumentID": .null,
+            "isDefault": .bool(false), "bindingCount": .int(0),
             "sourcePanelID": .string(sessionRecord.panelID.uuidString),
             "sourceWorkspaceID": .string(sessionRecord.workspaceID.uuidString),
             "displayTitle": sessionRecord.displayTitleOverride.map { .string($0) } ?? .null,
@@ -2314,31 +2401,39 @@ private extension AppControlExecutor {
 
     func scratchpadLookupSnapshot(
         sessionID: String,
-        windowID: UUID,
-        workspaceID: UUID,
-        panelID: UUID,
-        webState: WebPanelState
+        target: ScratchpadPanelReference
     ) throws -> [String: AutomationJSONValue] {
-        guard let scratchpad = webState.scratchpad,
-              let sessionLink = scratchpad.sessionLink,
-              sessionLink.sessionID == sessionID else {
+        guard let scratchpad = target.webState.scratchpad,
+              let link = scratchpad.sessionLink, link.sessionID == sessionID else {
             throw AutomationSocketError.invalidPayload("sessionID has no linked Scratchpad panel")
         }
-
+        let document: ScratchpadDocument
+        do {
+            guard let loaded = try scratchpadDocumentStore.load(documentID: target.documentID) else {
+                throw ScratchpadDocumentStoreError.missingDocument(target.documentID)
+            }
+            document = loaded
+        } catch {
+            throw AutomationSocketError.invalidPayload("could not read Scratchpad metadata: \(error.localizedDescription)")
+        }
+        let store = try requiredStore()
+        let defaultID = store.defaultScratchpadPanel(sessionID: sessionID)?.documentID
         return [
-            "linked": .bool(true),
-            "windowID": .string(windowID.uuidString),
-            "workspaceID": .string(workspaceID.uuidString),
-            "panelID": .string(panelID.uuidString),
-            "documentID": .string(scratchpad.documentID.uuidString),
-            "revision": .int(scratchpad.revision),
-            "title": .string(webState.title),
-            "sessionID": .string(sessionLink.sessionID),
-            "sourcePanelID": .string(sessionLink.sourcePanelID.uuidString),
-            "sourceWorkspaceID": .string(sessionLink.sourceWorkspaceID.uuidString),
-            "displayTitle": sessionLink.displayTitle.map { .string($0) } ?? .null,
-            "repoRoot": sessionLink.repoRoot.map { .string($0) } ?? .null,
-            "cwd": sessionLink.cwd.map { .string($0) } ?? .null,
+            "linked": .bool(true), "sessionID": .string(sessionID),
+            "windowID": .string(target.windowID.uuidString), "workspaceID": .string(target.workspaceID.uuidString),
+            "tabID": .string(target.tabID.uuidString), "panelID": .string(target.panelID.uuidString),
+            "documentID": .string(target.documentID.uuidString), "revision": .int(document.revision),
+            "title": .string(document.title ?? WebPanelDefinition.scratchpad.defaultTitle),
+            "purpose": document.purpose.map(AutomationJSONValue.string) ?? .null,
+            "updatedAt": .string(document.updatedAt.ISO8601Format()),
+            "isDefault": .bool(defaultID == target.documentID),
+            "defaultDocumentID": defaultID.map { .string($0.uuidString) } ?? .null,
+            "bindingCount": .int(store.linkedScratchpadPanels(sessionID: sessionID).count),
+            "sourcePanelID": .string(link.sourcePanelID.uuidString),
+            "sourceWorkspaceID": .string(link.sourceWorkspaceID.uuidString),
+            "displayTitle": link.displayTitle.map { .string($0) } ?? .null,
+            "repoRoot": link.repoRoot.map { .string($0) } ?? .null,
+            "cwd": link.cwd.map { .string($0) } ?? .null,
         ]
     }
 

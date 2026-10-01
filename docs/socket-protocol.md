@@ -351,17 +351,26 @@ Notable action-specific behavior:
   - requires exactly one of `args.filePath` or `args.content`.
   - `args.filePath` is read as UTF-8. Relative paths resolve from the active
     session's `cwd` when available, then from the app process working directory.
-  - `args.title` is optional.
+  - `args.title`, `args.purpose`, and `args.documentID` are optional.
+    `purpose` describes the artifact's intended use; omitting it preserves
+    existing metadata. `documentID` must select an open document bound to
+    that session in the same workspace tab.
   - `args.expectedRevision` is optional. New documents accept `0`; existing
     documents reject stale revisions.
-  - `args.createPolicy` is optional and accepts `reuse` (default) or `new`.
-    `reuse` updates the Scratchpad currently linked to the session. `new`
-    creates a fresh session-linked Scratchpad, leaves the previous Scratchpad
-    open with its content intact, and clears the previous session link.
+  - `args.createPolicy` is optional and accepts `reuse` (default), `new`, or
+    `additional`. `reuse` updates the session's explicit default or sole bound
+    document, or creates one when the session has no bindings. `additional` creates a separate
+    bound document without changing the default. Legacy `new` creates a fresh
+    default and unbinds only the previous default, leaving its panel and
+    content intact. Neither `new` nor `additional` can be combined with
+    `documentID`.
+  - If multiple documents are bound but no default is set, a session-only
+    content update fails. Supply `documentID`, call
+    `panel.scratchpad.make-default`, or use `additional` to create another.
   - Content is stored as HTML in the Scratchpad document store and is limited to
     1,048,576 UTF-8 bytes.
-  - The action creates or updates the Scratchpad linked to the active managed
-    session. Session-linked Scratchpads open the source session's right panel
+  - The action creates or updates a Scratchpad bound to the active managed
+    session. New Scratchpads open the source session's right panel
     and make the Scratchpad active there without activating another window,
     workspace, or workspace tab, and without moving keyboard focus into the
     Scratchpad. Unfocused Scratchpads are marked updated.
@@ -369,12 +378,15 @@ Notable action-specific behavior:
     `revision`, and `created`.
 - `panel.scratchpad.patch-content`
   - requires `args.sessionID`, `args.expectedRevision`, and `args.patch`.
+  - optional `args.documentID` selects an open document bound to that session.
+    Without it, the explicit default or sole binding is used; multiple bindings without a
+    default are ambiguous and rejected.
   - `args.patch` is a JSON string. Prefer passing it with CLI `--stdin patch`.
   - Patch JSON is limited to 262,144 UTF-8 bytes.
   - The patch shape is `{"replacements":[{"oldText":"...","newText":"..."}]}`.
   - The top-level patch object only accepts `replacements`; each replacement
     object only accepts `oldText` and `newText`. Unknown fields are rejected.
-  - The action only updates an existing Scratchpad linked to the active managed
+  - The action only updates an existing Scratchpad bound to the active managed
     session; it does not auto-create one.
   - `args.expectedRevision` must match the current Scratchpad document revision.
   - Replacements apply sequentially against the latest intermediate HTML.
@@ -394,17 +406,36 @@ Notable action-specific behavior:
   - requires `args.sessionID` for an active managed session.
   - Targets an existing Scratchpad panel using `args.panelID`, workspace/window
     selectors, or the focused/active Scratchpad resolution order.
-  - The target session must be in the same workspace tab as the Scratchpad, and
-    a session may only be linked to one Scratchpad at a time.
+  - The target session must be in the same workspace tab as the Scratchpad.
+    Binding is additive: other Scratchpads bound to the destination remain.
+    A document is bound to at most one live session.
   - `panel.scratchpad.bind` is accepted as a compatibility alias.
   - The result includes `windowID`, `workspaceID`, `panelID`, `documentID`,
     `revision`, and `sessionID`.
 - `panel.scratchpad.export`
-  - Targets by `args.sessionID` when provided, otherwise by the normal
-    Scratchpad panel selectors.
+  - With `args.sessionID`, optional `args.documentID` or `args.panelID`
+    selects a document bound to that session. A supplied target is a member
+    selector, not an assertion against the default. Without either selector,
+    export uses the explicit default or sole binding and rejects ambiguity. Panel-only export
+    remains available for an open unbound Scratchpad.
   - Writes the Scratchpad HTML to an app-chosen local file path.
   - The result includes `workspaceID`, `panelID`, `filePath`, `documentID`,
     `revision`, and `title`.
+- `panel.scratchpad.update-metadata`
+  - requires `args.sessionID`, `args.documentID`, and at least one of
+    `args.title` or `args.purpose`; `args.expectedRevision` is optional.
+  - Omitted metadata is preserved. An empty purpose clears it; an empty title
+    becomes `Scratchpad`. A successful update advances the document revision.
+- `panel.scratchpad.make-default`
+  - requires `args.sessionID` and a bound `args.documentID`. The first binding
+    becomes default. Removing the default promotes the sole remaining binding;
+    if several remain, callers must set a new default explicitly.
+- `panel.scratchpad.unbind`
+  - requires `args.sessionID` and a bound `args.documentID`. The open panel
+    stays open and its content persists, but the session binding is removed.
+
+Closing a Scratchpad removes its active binding while preserving content for
+later reopening. Closed documents cannot be reached through agent actions.
 
 ### `app_control.list_queries`
 
@@ -445,6 +476,7 @@ Common query IDs include:
 - `panel.local-document.state`
 - `panel.browser.state`
 - `panel.scratchpad.lookup`
+- `panel.scratchpad.list`
 - `panel.scratchpad.state`
 
 `annotation.keys` takes no selectors or arguments and returns
@@ -462,12 +494,21 @@ layout Scratchpad order. It returns Scratchpad document metadata, linked session
 ID when present, host lifecycle state, bootstrap content hashes, and recent
 Scratchpad diagnostics.
 
-`panel.scratchpad.lookup` requires `args.sessionID` and resolves only the
-Scratchpad linked to that active session. It returns `linked: false` with null
-panel/document metadata when the session has no linked Scratchpad, or
-`linked: true` with the panel ID, document ID, revision, title, and source
-session metadata when one exists. It never exports document content or guesses
-from focused/active Scratchpad state.
+`panel.scratchpad.list` requires `args.sessionID` and returns metadata for all
+open Scratchpads bound to that active session. The response contains
+`sessionID`, nullable `defaultDocumentID`, and `scratchpads` entries with
+`windowID`, `workspaceID`, `tabID`, `panelID`, `documentID`, `sessionID`,
+`title`, nullable `purpose`, `revision`, `updatedAt`, and `isDefault`. It does
+not create, export, or focus a Scratchpad.
+
+`panel.scratchpad.lookup` requires `args.sessionID` and accepts optional
+`args.documentID`. It returns a single metadata object with `linked: false`
+and null panel/document fields when no document is bound, or `linked: true`
+with the selected document's metadata. A linked result includes `purpose`,
+`updatedAt`, `isDefault`, `bindingCount`, and `defaultDocumentID` alongside
+the existing panel, document, revision, title, and source session fields.
+Without `documentID`, lookup uses the explicit default or sole binding and rejects multiple
+bindings with no default. Neither query exports content or guesses from focus.
 
 ## 6) implemented automation commands
 
@@ -624,21 +665,23 @@ Supported action IDs:
 - `panel.scratchpad.set-content`
   - requires `args.sessionID`
   - requires exactly one of `args.filePath` or `args.content`
-  - accepts optional `args.title`, `args.expectedRevision`, and
-    `args.createPolicy` (`reuse` or `new`)
-  - creates or updates the Scratchpad linked to the active managed session
+  - accepts optional `args.title`, `args.purpose`, `args.documentID`,
+    `args.expectedRevision`, and `args.createPolicy` (`reuse`, `new`, or
+    `additional`); `documentID` cannot be combined with `new` or `additional`
+  - creates a bound Scratchpad or updates the selected or default document
   - opens the source session's right panel on the Scratchpad without activating
     another window, workspace, or workspace tab
   - returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and
     `created`
 - `panel.scratchpad.patch-content`
   - requires `args.sessionID`, `args.expectedRevision`, and `args.patch`
+  - accepts optional `args.documentID` to select a bound document
   - `args.patch` is exact-text replacement JSON:
     `{"replacements":[{"oldText":"...","newText":"..."}]}`
   - patch JSON is limited to 262,144 UTF-8 bytes
   - the top-level patch object only accepts `replacements`; each replacement
     object only accepts `oldText` and `newText`; unknown fields are rejected
-  - updates only the existing Scratchpad linked to the active managed session
+  - updates only an existing Scratchpad bound to the active managed session
   - matches each `oldText` byte-for-byte against the current HTML
   - rejects stale revisions, empty replacement arrays, empty `oldText`, missing
     `oldText`, duplicate `oldText`, oversized patch JSON, and oversized final
@@ -653,14 +696,25 @@ Supported action IDs:
   - requires `args.sessionID`
   - targets an existing Scratchpad panel by `args.panelID`, workspace/window
     selectors, or focused/active Scratchpad resolution
+  - adds that document to the destination session's bindings in the same tab
   - returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and
     `sessionID`
 - `panel.scratchpad.export`
-  - targets by `args.sessionID` when provided, otherwise by the normal
-    Scratchpad panel selectors
+  - accepts `args.sessionID` with optional bound `args.documentID` or
+    `args.panelID`; panel-only export also works for an open unbound panel
   - writes the Scratchpad HTML to an app-chosen local file path
   - returns `workspaceID`, `panelID`, `filePath`, `documentID`, `revision`, and
     `title`
+- `panel.scratchpad.update-metadata`
+  - requires `args.sessionID`, `args.documentID`, and `args.title` or
+    `args.purpose`; optional `args.expectedRevision` guards the write
+  - updates only supplied metadata and increments revision
+- `panel.scratchpad.make-default`
+  - requires `args.sessionID` and bound `args.documentID`
+  - selects the default for session-only calls
+- `panel.scratchpad.unbind`
+  - requires `args.sessionID` and bound `args.documentID`
+  - removes that live binding while preserving panel and content
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
   - terminal-only window font increase

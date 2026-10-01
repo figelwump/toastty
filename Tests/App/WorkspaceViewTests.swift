@@ -270,7 +270,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
-    func testScratchpadTerminalBindingIndicatorShowsLiveScratchpadBinding() {
+    func testScratchpadTerminalBindingIndicatorShowsLiveScratchpadBinding() throws {
         let panelID = UUID()
         let scratchpadPanelID = UUID()
         let workspaceID = UUID()
@@ -301,17 +301,132 @@ final class WorkspaceViewTests: XCTestCase {
             at: Date(timeIntervalSince1970: 200)
         )
 
-        XCTAssertEqual(
-            PanelCardView.scratchpadTerminalBindingIndicatorState(
-                for: panelID,
-                in: tab,
-                sessionRegistry: sessionRegistry
-            ),
-            ScratchpadTerminalBindingIndicatorState(
-                scratchpadPanelID: scratchpadPanelID,
-                helpText: "Bound to Scratchpad: Agent Notes"
-            )
+        let state = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: panelID, in: tab, sessionRegistry: sessionRegistry
+        ))
+        XCTAssertEqual(state.context.sessionID, "live-session")
+        XCTAssertEqual(state.context.sourcePanelID, panelID)
+        XCTAssertEqual(state.context.tabID, tab.id)
+        XCTAssertEqual(state.entries.first?.panelID, scratchpadPanelID)
+        XCTAssertEqual(state.entries.first?.title, "Agent Notes")
+        XCTAssertEqual(state.entries.first?.isBound, true)
+        XCTAssertEqual(state.entries.first?.isDefault, true)
+        XCTAssertEqual(state.helpText, "Bound to Scratchpad: Agent Notes")
+    }
+
+    func testScratchpadTerminalBindingIndicatorCountsPadsAndMarksDefaultIndependentlyOfSelection() throws {
+        let panelID = UUID()
+        let firstPadID = UUID()
+        let secondPadID = UUID()
+        let secondDocumentID = UUID()
+        let workspaceID = UUID()
+        let link = ScratchpadSessionLink(
+            sessionID: "live-session",
+            agent: .codex,
+            sourcePanelID: panelID,
+            sourceWorkspaceID: workspaceID,
+            displayTitle: "Codex",
+            startedAt: Date(timeIntervalSince1970: 100)
         )
+        var tab = makeTerminalTabWithScratchpad(
+            terminalPanelID: panelID,
+            scratchpadPanelID: firstPadID,
+            scratchpadTitle: "Implementation",
+            sessionLink: link
+        )
+        let secondPad = try XCTUnwrap(makeScratchpadRightAuxPanel(
+            panelID: secondPadID,
+            isVisible: false,
+            title: "Review Notes",
+            sessionLink: link,
+            documentID: secondDocumentID
+        ).orderedTabs.first)
+        tab.rightAuxPanel.appendTab(secondPad, activate: false)
+        var registry = SessionRegistry()
+        registry.startSession(
+            sessionID: "live-session", agent: .codex, panelID: panelID,
+            windowID: UUID(), workspaceID: workspaceID,
+            cwd: nil, repoRoot: nil, at: Date(timeIntervalSince1970: 100)
+        )
+
+        let state = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: panelID, in: tab, sessionRegistry: registry, defaultDocumentID: secondDocumentID
+        ))
+
+        XCTAssertEqual(tab.rightAuxPanel.activeTab?.panelID, firstPadID)
+        XCTAssertEqual(state.entries.map(\.title), ["Implementation", "Review Notes"])
+        XCTAssertEqual(state.entries.map(\.isDefault), [false, true])
+        XCTAssertEqual(state.entries.map(\.isBound), [true, true])
+        XCTAssertEqual(state.countLabel, "2")
+        XCTAssertEqual(state.helpText, "Bound to 2 Scratchpads")
+        XCTAssertEqual(state.accessibilityLabel, "Bound to 2 Scratchpads")
+        XCTAssertEqual(state.scratchpadPanelID, secondPadID)
+
+        let withoutDefault = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: panelID, in: tab, sessionRegistry: registry
+        ))
+        XCTAssertTrue(withoutDefault.entries.allSatisfy { $0.isDefault == false })
+    }
+
+    func testScratchpadTerminalBindingIndicatorPreservesSinglePadHelpAndHidesCount() {
+        let panelID = UUID()
+        let state = ScratchpadTerminalBindingIndicatorState(
+            context: ScratchpadSessionHeaderContext(sessionID: "live-session", sourcePanelID: UUID(), tabID: UUID()),
+            entries: [ScratchpadTerminalBindingMenuEntry(
+                panelID: panelID, documentID: UUID(), title: "Scratchpad",
+                isBound: true, isDefault: true, ownerLabel: nil
+            )]
+        )
+
+        XCTAssertEqual(state.countLabel, "")
+        XCTAssertEqual(state.helpText, "Bound to Scratchpad")
+        XCTAssertEqual(state.accessibilityLabel, "Bound to Scratchpad")
+        XCTAssertEqual(state.scratchpadPanelID, panelID)
+    }
+
+    func testScratchpadSessionHeaderIncludesRestoredMainSplitScratchpadsWithRightPanelPads() throws {
+        let terminalPanelID = UUID()
+        let mainPadID = UUID()
+        let mainDocumentID = UUID()
+        let rightPadID = UUID()
+        let workspaceID = UUID()
+        let link = ScratchpadSessionLink(
+            sessionID: "current-session", agent: .codex,
+            sourcePanelID: terminalPanelID, sourceWorkspaceID: workspaceID,
+            displayTitle: "Codex", startedAt: Date(timeIntervalSince1970: 100)
+        )
+        var tab = makeTerminalTabWithScratchpad(
+            terminalPanelID: terminalPanelID, scratchpadPanelID: rightPadID,
+            scratchpadTitle: "Right Notes", sessionLink: link
+        )
+        tab.panels[mainPadID] = .web(WebPanelState(
+            definition: .scratchpad, title: "Restored Main Notes",
+            scratchpad: ScratchpadState(documentID: mainDocumentID, sessionLink: link, revision: 0)
+        ))
+        tab.layoutTree = .split(
+            nodeID: UUID(), orientation: .horizontal, ratio: 0.5,
+            first: tab.layoutTree, second: .slot(slotID: UUID(), panelID: mainPadID)
+        )
+        var registry = SessionRegistry()
+        registry.startSession(
+            sessionID: "current-session", agent: .codex, panelID: terminalPanelID,
+            windowID: UUID(), workspaceID: workspaceID, cwd: nil, repoRoot: nil,
+            at: Date(timeIntervalSince1970: 100)
+        )
+
+        let state = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: terminalPanelID, in: tab, sessionRegistry: registry
+        ))
+        XCTAssertEqual(state.entries.map(\.panelID), [mainPadID, rightPadID])
+        XCTAssertEqual(state.entries.map(\.title), ["Restored Main Notes", "Right Notes"])
+        XCTAssertEqual(state.entries.map(\.isBound), [true, true])
+        XCTAssertEqual(state.boundCount, 2)
+        XCTAssertTrue(state.entries.allSatisfy { $0.isDefault == false })
+
+        let withDefault = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: terminalPanelID, in: tab, sessionRegistry: registry, defaultDocumentID: mainDocumentID
+        ))
+        XCTAssertEqual(withDefault.entries.map(\.isDefault), [true, false])
     }
 
     func testScratchpadTerminalBindingIndicatorHidesStaleScratchpadBinding() {
@@ -377,6 +492,104 @@ final class WorkspaceViewTests: XCTestCase {
                 sessionRegistry: sessionRegistry
             )
         )
+    }
+
+    func testScratchpadTerminalBindingIndicatorShowsNeutralZeroStateForLiveManagedSession() throws {
+        let panelID = UUID()
+        let tab = makeTerminalWorkspaceTab(panelID: panelID)
+        var registry = SessionRegistry()
+        registry.startSession(
+            sessionID: "live-session", agent: .codex, panelID: panelID,
+            windowID: UUID(), workspaceID: UUID(), cwd: nil, repoRoot: nil,
+            at: Date(timeIntervalSince1970: 100)
+        )
+
+        let state = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: panelID, in: tab, sessionRegistry: registry
+        ))
+        XCTAssertTrue(state.entries.isEmpty)
+        XCTAssertEqual(state.boundCount, 0)
+        XCTAssertEqual(state.countLabel, "")
+        XCTAssertEqual(state.helpText, "Bind Scratchpads to This Session")
+        XCTAssertEqual(state.accessibilityLabel, "Scratchpad Bindings")
+        XCTAssertNil(state.scratchpadPanelID)
+
+        registry.startSession(
+            sessionID: "process-watch", agent: .processWatch, panelID: panelID,
+            windowID: UUID(), workspaceID: UUID(), cwd: nil, repoRoot: nil,
+            at: Date(timeIntervalSince1970: 200)
+        )
+        XCTAssertNil(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: panelID, in: tab, sessionRegistry: registry
+        ))
+    }
+
+    func testScratchpadSessionHeaderListsUnboundAndOtherLiveOwnersWithinSameTab() throws {
+        let panelID = UUID()
+        let otherPanelID = UUID()
+        let stalePanelID = UUID()
+        let unboundPadID = UUID()
+        let otherPadID = UUID()
+        let stalePadID = UUID()
+        let mismatchedSourcePadID = UUID()
+        let workspaceID = UUID()
+        var tab = makeTerminalTabWithScratchpad(
+            terminalPanelID: panelID, scratchpadPanelID: unboundPadID,
+            scratchpadTitle: "Available Notes", sessionLink: nil
+        )
+        for (padID, title, sessionID, ownerPanelID) in [
+            (otherPadID, "Test Checklist", "other-session", otherPanelID),
+            (stalePadID, "Old Notes", "stale-session", stalePanelID),
+            (mismatchedSourcePadID, "Moved Notes", "current-session", otherPanelID),
+        ] {
+            let link = ScratchpadSessionLink(
+                sessionID: sessionID, agent: .claude,
+                sourcePanelID: ownerPanelID, sourceWorkspaceID: workspaceID,
+                displayTitle: "Old Title", startedAt: Date(timeIntervalSince1970: 100)
+            )
+            let pad = try XCTUnwrap(makeScratchpadRightAuxPanel(
+                panelID: padID, isVisible: true, title: title, sessionLink: link
+            ).orderedTabs.first)
+            tab.rightAuxPanel.appendTab(pad, activate: false)
+        }
+        var registry = SessionRegistry()
+        registry.startSession(
+            sessionID: "current-session", agent: .codex, panelID: panelID,
+            windowID: UUID(), workspaceID: workspaceID, displayTitleOverride: "Codex",
+            cwd: nil, repoRoot: nil,
+            at: Date(timeIntervalSince1970: 100)
+        )
+        registry.startSession(
+            sessionID: "other-session", agent: .claude, panelID: otherPanelID,
+            windowID: UUID(), workspaceID: workspaceID, displayTitleOverride: "Claude · Tests",
+            cwd: nil, repoRoot: nil, at: Date(timeIntervalSince1970: 100)
+        )
+
+        let state = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: panelID, in: tab, sessionRegistry: registry
+        ))
+        XCTAssertEqual(state.entries.map(\.panelID), [unboundPadID, otherPadID, stalePadID, mismatchedSourcePadID])
+        XCTAssertEqual(state.entries.map(\.title), ["Available Notes", "Test Checklist", "Old Notes", "Moved Notes"])
+        XCTAssertEqual(state.entries.map(\.isBound), [false, false, false, false])
+        XCTAssertEqual(state.entries.map(\.ownerLabel), [nil, "Claude · Tests", nil, "Codex"])
+        XCTAssertEqual(state.boundCount, 0)
+
+        registry.startSession(
+            sessionID: "stale-session", agent: .processWatch, panelID: stalePanelID,
+            windowID: UUID(), workspaceID: workspaceID, displayTitleOverride: "npm test",
+            cwd: nil, repoRoot: nil, at: Date(timeIntervalSince1970: 200)
+        )
+        let withLegacyOwner = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: panelID, in: tab, sessionRegistry: registry
+        ))
+        XCTAssertEqual(withLegacyOwner.entries[2].ownerLabel, "npm test")
+        XCTAssertFalse(withLegacyOwner.entries[2].isBound)
+
+        let anotherTab = makeTerminalWorkspaceTab(panelID: panelID)
+        let emptyState = try XCTUnwrap(PanelCardView.scratchpadTerminalBindingIndicatorState(
+            for: panelID, in: anotherTab, sessionRegistry: registry
+        ))
+        XCTAssertTrue(emptyState.entries.isEmpty)
     }
 
     func testEffectivePrimaryFocusedPanelIDClearsWhenVisibleRightPanelIsFocused() {
@@ -2437,7 +2650,8 @@ final class WorkspaceViewTests: XCTestCase {
         panelID: UUID,
         isVisible: Bool,
         title: String = "Scratchpad",
-        sessionLink: ScratchpadSessionLink? = nil
+        sessionLink: ScratchpadSessionLink? = nil,
+        documentID: UUID = UUID()
     ) -> RightAuxPanelState {
         let tabID = UUID()
         let panelState = PanelState.web(
@@ -2445,7 +2659,7 @@ final class WorkspaceViewTests: XCTestCase {
                 definition: .scratchpad,
                 title: title,
                 scratchpad: ScratchpadState(
-                    documentID: UUID(),
+                    documentID: documentID,
                     sessionLink: sessionLink,
                     revision: 0
                 )

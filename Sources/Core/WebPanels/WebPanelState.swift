@@ -150,15 +150,18 @@ public struct ScratchpadState: Codable, Equatable, Sendable {
     public var documentID: UUID
     public var sessionLink: ScratchpadSessionLink?
     public var revision: Int
+    public var purpose: String?
 
     public init(
         documentID: UUID,
         sessionLink: ScratchpadSessionLink? = nil,
-        revision: Int
+        revision: Int,
+        purpose: String? = nil
     ) {
         self.documentID = documentID
         self.sessionLink = sessionLink
         self.revision = max(revision, 0)
+        self.purpose = normalizedWebPanelValue(purpose)
     }
 }
 
