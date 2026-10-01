@@ -15,7 +15,12 @@ struct ToasttyConversationScreen: View {
     let controller: HomeScreenController
     let presentation: ToasttyConversationPresentationState?
     let composer: ToasttyComposerPresentation?
-    @Binding var draft: String
+    let draft: String
+    let draftGeneration: UUID?
+    let draftEditRevision: UInt64
+    let draftReplacement: ToasttyComposerReplacement?
+    let draftDidChange: (String, UInt64) -> Void
+    let draftReplacementCompleted: (ToasttyComposerReplacementResult) -> Void
     let isSubmitting: Bool
     let attachments: [RemoteMessageAttachment]
     let supportsAttachments: Bool
@@ -35,7 +40,12 @@ struct ToasttyConversationScreen: View {
         controller: HomeScreenController,
         presentation: ToasttyConversationPresentationState? = nil,
         composer: ToasttyComposerPresentation? = nil,
-        draft: Binding<String> = .constant(""),
+        draft: String = "",
+        draftGeneration: UUID? = nil,
+        draftEditRevision: UInt64 = 0,
+        draftReplacement: ToasttyComposerReplacement? = nil,
+        draftDidChange: @escaping (String, UInt64) -> Void = { _, _ in },
+        draftReplacementCompleted: @escaping (ToasttyComposerReplacementResult) -> Void = { _ in },
         isSubmitting: Bool = false,
         attachments: [RemoteMessageAttachment] = [],
         supportsAttachments: Bool = false,
@@ -57,7 +67,12 @@ struct ToasttyConversationScreen: View {
         self.controller = controller
         self.presentation = presentation
         self.composer = composer
-        _draft = draft
+        self.draft = draft
+        self.draftGeneration = draftGeneration
+        self.draftEditRevision = draftEditRevision
+        self.draftReplacement = draftReplacement
+        self.draftDidChange = draftDidChange
+        self.draftReplacementCompleted = draftReplacementCompleted
         self.isSubmitting = isSubmitting
         self.attachments = attachments
         self.supportsAttachments = supportsAttachments
@@ -371,7 +386,11 @@ struct ToasttyConversationScreen: View {
         _ presentation: ToasttyComposerPresentation
     ) -> some View {
         ToasttyComposerTextView(
-            text: $draft,
+            text: draft,
+            onTextChange: draftDidChange,
+            editRevision: draftEditRevision,
+            replacement: draftReplacement,
+            onReplacementCompleted: draftReplacementCompleted,
             isFocused: $isComposerFocused,
             placeholder: presentation.placeholder,
             isEnabled: presentation.gate.allowsInput,
@@ -381,6 +400,8 @@ struct ToasttyConversationScreen: View {
                 : disabledAccessibilityHint(presentation),
             maximumVisibleLines: usesCompactAttachmentComposer ? 2 : 5
         )
+            .id(draftGeneration)
+            .id(conversationID)
             // Keep the measured UIKit text height when attachments and the
             // keyboard compete for space; the preview list can shrink instead.
             .fixedSize(horizontal: false, vertical: usesCompactAttachmentComposer)
