@@ -9,7 +9,8 @@ Create the task's worktree and workspace together. Launch a fresh task session,
 or fork the current conversation when the task has already been discussed.
 A generated summary must not replace inherited conversation or a settled plan.
 The user continues directly in the new workspace, and the task session reports
-to them there.
+to them there. After a verified handoff, the launcher exits its own agent session
+by default; see [parent session lifetime](#parent-session-lifetime).
 
 Resolve scripts relative to the loaded package, including inside plugin snapshots.
 Use `scripts/create-worktree.sh` and `scripts/open-toastty-worktree-session.sh`.
@@ -249,3 +250,54 @@ validate scripts and exercise the changed launch behavior with a disposable CLI
 fixture. For repository copies, also follow that repository's verification guide.
 Custom `--startup-command` launches are only for explicit smoke/custom shell use
 and cannot claim managed forks.
+
+## Parent session lifetime
+
+Default to exiting the launching parent agent after a successful single-task
+handoff. Keep it running when the parent is creating multiple worktrees as part
+of the current request, has specific unfinished coordination work from that
+request, or the user explicitly asks to keep it. Decide from the actual assignment;
+do not ask for routine confirmation. Record whether the parent will exit or
+remain and why in the launcher's completion notes, not in the child's
+post-launch handoff.
+
+Keep the parent available if setup, child startup, fork verification, scope, or
+artifact opening failed or remains unverified. Finish the independent setup work
+and report the exact blocker. Creating a workspace or delivering a launch command
+alone is insufficient. Do not exit while another authorized parent task remains.
+
+Exit belongs to the launcher after all setup and artifact work, never inside
+`open-toastty-worktree-session.sh`. Before exiting, save the resource identities
+and verification results in the durable completion record and give the user the
+handoff summary, including where to continue and that the parent is about to
+exit. Complete any Toastty notification before the exit request. The child must
+not depend on a reply to a parent that is exiting.
+
+For a Codex or Claude Code interactive parent, use the provider's native `/exit`
+command through `terminal.send-text`, targeting the injected parent panel and
+requiring its exact managed session identity. Resolve both from the launcher's
+injected `TOASTTY_PANEL_ID` and `TOASTTY_SESSION_ID`; never use the currently
+focused panel, the returned child IDs, or an inherited child environment.
+Discover the live descriptor and require `expectedSessionID` support. If the
+parent composer contains a draft or queued user input, retain the parent rather
+than appending to or replacing it; when that cannot be established safely,
+report the exit as blocked. Other providers require a verified native exit
+mechanism; do not guess an equivalent.
+
+After the handoff summary, this is the final tool action:
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run terminal.send-text \
+  --panel "$TOASTTY_PANEL_ID" \
+  "expectedSessionID=$TOASTTY_SESSION_ID" text=/exit submit=true
+```
+
+The exit may terminate the parent before the tool returns. End the turn without
+further work after delivery; do not rely on a later final response or polling by
+the exiting agent. A successful response proves input delivery, not process exit.
+Describe the action as an exit request, never as a verified parent exit. If
+delivery returns an error, retain the parent and report it. Make at most one exit
+request; do not retry or weaken the identity check. Never substitute
+`session stop` (registry bookkeeping), `exit` in a tool shell (only exits that
+shell), delayed process kills, or panel or workspace closure. Preserve the
+parent's terminal, workspace, and source artifacts.
