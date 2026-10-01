@@ -68,7 +68,8 @@ final class ToasttyComposerTextViewTests: XCTestCase {
         defer { window.isHidden = true }
         var draft = ""
         let composer = ToasttyComposerTextView(
-            text: Binding(get: { draft }, set: { draft = $0 }),
+            text: draft,
+            onTextChange: { text, _ in draft = text },
             isFocused: .constant(true),
             placeholder: "Message Codex…",
             isEnabled: true,
@@ -102,30 +103,6 @@ final class ToasttyComposerTextViewTests: XCTestCase {
         XCTAssertEqual(textView.text, "")
         XCTAssertEqual(draft, "")
         XCTAssertTrue(textView.isFirstResponder)
-    }
-
-    func testProgrammaticTextUpdateClampsSelectionWithoutMovingValidRange() {
-        XCTAssertEqual(
-            ToasttyComposerTextView.clampedSelection(
-                NSRange(location: 3, length: 4),
-                utf16Count: 12
-            ),
-            NSRange(location: 3, length: 4)
-        )
-        XCTAssertEqual(
-            ToasttyComposerTextView.clampedSelection(
-                NSRange(location: 9, length: 5),
-                utf16Count: 10
-            ),
-            NSRange(location: 9, length: 1)
-        )
-        XCTAssertEqual(
-            ToasttyComposerTextView.clampedSelection(
-                NSRange(location: 9, length: 0),
-                utf16Count: 0
-            ),
-            NSRange(location: 0, length: 0)
-        )
     }
 
     func testRevealSelectionScrollsOverflowingCaretIntoVisibleBounds() {

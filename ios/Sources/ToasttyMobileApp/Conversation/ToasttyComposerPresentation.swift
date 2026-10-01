@@ -262,6 +262,22 @@ struct ToasttyComposerSubmission: Equatable, Sendable {
     var attachments: [RemoteMessageAttachment] = []
 }
 
+/// A native edit is published as text; only an explicit request may replace the field.
+struct ToasttyComposerReplacement: Equatable, Sendable {
+    let revision: UInt64
+    // External replacements do not advance the native edit revision, so a
+    // coalesced clear and restore can apply unless the user edited in between.
+    let expectedEditRevision: UInt64
+    let text: String
+}
+
+struct ToasttyComposerReplacementResult {
+    let revision: UInt64
+    let nativeText: String
+    let nativeEditRevision: UInt64
+    let wasApplied: Bool
+}
+
 struct ToasttyComposerDraftState: Equatable, Sendable {
     static let maximumAttachmentDraftBytes = 32 * 1024 * 1024
     private(set) var generation = UUID()
@@ -270,6 +286,15 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     private(set) var attachmentDrafts: [UUID: [RemoteMessageAttachment]] = [:]
     private(set) var drafts: [UUID: String] = [:]
     private(set) var submissions: [UUID: ToasttyComposerSubmission] = [:]
+    private(set) var editRevisions: [UUID: UInt64] = [:]
+    private(set) var replacements: [UUID: ToasttyComposerReplacement] = [:]
+    private var replacementRevision: UInt64 = 0
+    private struct RestoredRecovery: Equatable, Sendable {
+        let requestID: String
+        let submission: ToasttyComposerSubmission
+        var wasDismissed = false
+    }
+    private var restoredRecoveries: [UUID: RestoredRecovery] = [:]
 
     func draft(for conversationID: UUID) -> String {
         drafts[conversationID, default: ""]
@@ -305,11 +330,54 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         submissions[conversationID] != nil
     }
 
-    mutating func updateDraft(_ text: String, for conversationID: UUID) {
+    mutating func updateDraft(_ text: String, for conversationID: UUID, editRevision: UInt64? = nil) {
+        if let editRevision {
+            editRevisions[conversationID] = editRevision
+        } else if draft(for: conversationID) != text {
+            editRevisions[conversationID, default: 0] += 1
+        }
+        storeDraft(text, for: conversationID)
+    }
+
+    private mutating func storeDraft(_ text: String, for conversationID: UUID) {
         if text.isEmpty {
             drafts.removeValue(forKey: conversationID)
         } else {
             drafts[conversationID] = text
+        }
+    }
+
+    private mutating func replaceDraft(_ text: String, for conversationID: UUID) {
+        replacementRevision += 1
+        replacements[conversationID] = ToasttyComposerReplacement(
+            revision: replacementRevision, expectedEditRevision: editRevisions[conversationID, default: 0], text: text
+        )
+        restoredRecoveries.removeValue(forKey: conversationID)
+        storeDraft(text, for: conversationID)
+    }
+
+    /// A native edit can arrive between issuing a replacement and rendering it.
+    /// Keep that edit, and defer any attachment recovery associated with the request.
+    mutating func completeReplacement(_ result: ToasttyComposerReplacementResult, for conversationID: UUID) {
+        guard replacements[conversationID]?.revision == result.revision else { return }
+        replacements.removeValue(forKey: conversationID)
+        updateDraft(result.nativeText, for: conversationID, editRevision: result.nativeEditRevision)
+        guard !result.wasApplied else {
+            restoredRecoveries.removeValue(forKey: conversationID)
+            return
+        }
+        if let recovery = restoredRecoveries.removeValue(forKey: conversationID) {
+            // A subsequent send already owns these attachments. Do not create
+            // a second recovery for the same files when this callback arrives.
+            guard !isSubmitting(conversationID) else { return }
+            let restoredIDs = Set(recovery.submission.attachments.map(\.id))
+            attachmentDrafts[conversationID]?.removeAll { restoredIDs.contains($0.id) }
+            if attachmentDrafts[conversationID]?.isEmpty == true {
+                attachmentDrafts.removeValue(forKey: conversationID)
+            }
+            guard !recovery.wasDismissed else { return }
+            attachmentRecoveries[recovery.requestID] = recovery.submission
+            attachmentRecoveryMessages[conversationID] = "A rejected attachment draft is saved. Clear this draft to restore it, or dismiss the rejected send to discard its attachments."
         }
     }
 
@@ -345,7 +413,7 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         }
         attachmentRecoveryMessages.removeValue(forKey: submission.conversationID)
         if draft(for: submission.conversationID) == submission.text {
-            drafts.removeValue(forKey: submission.conversationID)
+            replaceDraft("", for: submission.conversationID)
         }
         let submittedIDs = Set(submission.attachments.map(\.id))
         attachmentDrafts[submission.conversationID]?.removeAll { submittedIDs.contains($0.id) }
@@ -364,7 +432,10 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
                 let currentText = draft(for: conversationID)
                 if !isSubmitting(conversationID), attachments(for: conversationID).isEmpty,
                    currentText.isEmpty || currentText == submission.text {
-                    updateDraft(submission.text, for: conversationID)
+                    replaceDraft(submission.text, for: conversationID)
+                    restoredRecoveries[conversationID] = RestoredRecovery(
+                        requestID: record.clientRequestID, submission: submission
+                    )
                     attachmentDrafts[conversationID] = submission.attachments
                     attachmentRecoveries.removeValue(forKey: record.clientRequestID)
                     attachmentRecoveryMessages[conversationID] = "The Mac rejected the send. Your attachments are back in this draft."
@@ -382,6 +453,9 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     /// Dismissing a rejected receipt also releases its deferred recovery.
     /// Attachments already restored to the editable draft remain there.
     mutating func discardAttachmentRecovery(clientRequestID: String, for conversationID: UUID) {
+        if restoredRecoveries[conversationID]?.requestID == clientRequestID {
+            restoredRecoveries[conversationID]?.wasDismissed = true
+        }
         if attachmentRecoveries[clientRequestID]?.conversationID == conversationID {
             attachmentRecoveries.removeValue(forKey: clientRequestID)
         }
@@ -396,6 +470,9 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         attachmentDrafts = attachmentDrafts.filter { conversationIDs.contains($0.key) }
         drafts = drafts.filter { conversationIDs.contains($0.key) }
         submissions = submissions.filter { conversationIDs.contains($0.key) }
+        editRevisions = editRevisions.filter { conversationIDs.contains($0.key) }
+        replacements = replacements.filter { conversationIDs.contains($0.key) }
+        restoredRecoveries = restoredRecoveries.filter { conversationIDs.contains($0.key) }
     }
 
     mutating func reset() {
@@ -405,6 +482,9 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         attachmentDrafts.removeAll(keepingCapacity: false)
         drafts.removeAll(keepingCapacity: false)
         submissions.removeAll(keepingCapacity: false)
+        editRevisions.removeAll(keepingCapacity: false)
+        replacements.removeAll(keepingCapacity: false)
+        restoredRecoveries.removeAll(keepingCapacity: false)
     }
 }
 
