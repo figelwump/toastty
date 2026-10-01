@@ -80,7 +80,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
     timestamp; the marker files do not store prompts, tool output, native
     session IDs, or working directories.
 - `~/.toastty/scratchpad-documents/`
-  - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
+  - One JSON file per Scratchpad document, including the document ID, revision, title, optional purpose, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes. Closing a panel retains its saved document but removes its active session binding.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
 - `~/.toastty/hooks/agent-hook`

@@ -230,6 +230,9 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `panel.create.local-document`
 - `panel.scratchpad.set-content`
 - `panel.scratchpad.patch-content`
+- `panel.scratchpad.update-metadata`
+- `panel.scratchpad.make-default`
+- `panel.scratchpad.unbind`
 - `panel.scratchpad.rebind`
 - `panel.scratchpad.export`
 - `panel.focus-mode.toggle`
