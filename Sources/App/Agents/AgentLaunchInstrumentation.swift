@@ -804,11 +804,12 @@ private extension AgentLaunchInstrumentation {
             "matcher": "AskUserQuestion",
             "hooks": [["type": "command", "command": command]],
         ]
-        // The response runner waits at most five minutes. Give it time to
-        // release the host lease before Claude cancels the command itself.
+        // Give the response runner time to release the host lease before
+        // Claude cancels the command itself, using the same response limit.
         let permissionCommandHook: [String: Any] = [
             "matcher": "*",
-            "hooks": [["type": "command", "command": command, "timeout": 310]],
+            "hooks": [["type": "command", "command": command,
+                       "timeout": Int(ClaudeQuestionValidation.maximumWaitSeconds) + 10]],
         ]
 
         var hooks = mergedSettings["hooks"] as? [String: Any] ?? [:]

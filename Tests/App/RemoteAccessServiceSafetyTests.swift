@@ -1839,7 +1839,7 @@ private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
 
 extension RemoteAccessServiceSafetyTests {
     @MainActor
-    @Test func claudeQuestionAnswerUsesExactPendingEpochAndWritePolicyWithoutTerminalInput() throws {
+    @Test func claudeQuestionAnswerHoursLaterUsesExactPendingEpochAndWritePolicyWithoutTerminalInput() throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working)
         defer { fixture.removeRuntimeFiles(); fixture.sessionRuntimeStore.reset() }
         #expect(fixture.confirmCurrentLaunchBinding())
@@ -1847,15 +1847,23 @@ extension RemoteAccessServiceSafetyTests {
             options: [.init(id: "q0:o0", label: "Blue"), .init(id: "q0:o1", label: "Green")])]
         let responseID = UUID().uuidString
         let now = Date()
+        let askedAt = now.addingTimeInterval(-2 * 60 * 60)
         func hook(_ phase: ClaudeQuestionHookRequest.Phase, name: ClaudeQuestionHookEvent.EventName) -> ClaudeQuestionHookRequest {
             .init(phase: phase, sessionID: fixture.sessionID, panelID: fixture.panelID,
                 event: .init(eventName: name, nativeSessionID: fixture.resumeRecord.nativeSessionID,
                     promptID: "prompt", transcriptPath: fixture.resumeRecord.sessionFilePath,
-                    providerCallID: name == .preToolUse ? "question-call" : nil, questions: questions, timestamp: now),
+                    providerCallID: name == .preToolUse ? "question-call" : nil, questions: questions, timestamp: askedAt),
                 responseID: phase == .begin ? responseID : nil)
         }
-        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.observe, name: .preToolUse), at: now).status == .observed)
-        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.begin, name: .permissionRequest), at: now).status == .pending)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.observe, name: .preToolUse), at: askedAt).status == .observed)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.begin, name: .permissionRequest), at: askedAt).status == .pending)
+        let poll = ClaudeQuestionHookRequest(phase: .poll, sessionID: fixture.sessionID,
+            panelID: fixture.panelID, responseID: responseID)
+        // The phone has not connected yet, but the launch hook remains alive.
+        for second in stride(from: 5, through: 2 * 60 * 60, by: 5) {
+            #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(poll,
+                at: askedAt.addingTimeInterval(Double(second))).status == .pending)
+        }
         let snapshot = try #require(fixture.service.facadeConversationSnapshot(for: fixture.conversationID, at: now))
         let interaction = try #require(snapshot.pendingInteractions.first)
         #expect(interaction.responseID == responseID)
@@ -1902,8 +1910,6 @@ extension RemoteAccessServiceSafetyTests {
             #expect(response.status == 200)
             #expect(try ConversationEventCoding.makeDecoder().decode(RemoteQuestionAnswerResult.self, from: response.body) == expected)
         }
-        let poll = ClaudeQuestionHookRequest(phase: .poll, sessionID: fixture.sessionID,
-            panelID: fixture.panelID, responseID: responseID)
         #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(poll, at: now).answers == request.answers)
         let completed = ClaudeQuestionHookRequest(phase: .observe, sessionID: fixture.sessionID, panelID: fixture.panelID,
             event: .init(eventName: .postToolUse, nativeSessionID: fixture.resumeRecord.nativeSessionID,

@@ -60,7 +60,10 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertEqual(failureEntries.compactMap { $0["matcher"] as? String }, ["AskUserQuestion"])
         let permissionEntries = try XCTUnwrap(hooks["PermissionRequest"] as? [[String: Any]])
         let permissionHooks = try XCTUnwrap(permissionEntries.last?["hooks"] as? [[String: Any]])
-        XCTAssertEqual(permissionHooks.first?["timeout"] as? Int, 310)
+        let permissionTimeout = try XCTUnwrap(permissionHooks.first?["timeout"] as? Int)
+        XCTAssertGreaterThan(Double(permissionTimeout), ClaudeQuestionValidation.maximumWaitSeconds,
+                             "Claude must allow time for the runner to close its response channel before cancellation")
+        XCTAssertEqual(permissionTimeout, 86_410)
 
         let notificationEntries = try XCTUnwrap(hooks["Notification"] as? [[String: Any]])
         let matcherEntry = notificationEntries.first { entry in

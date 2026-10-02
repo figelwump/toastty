@@ -112,12 +112,87 @@ struct ClaudeQuestionBrokerTests {
 
     @Test func livePollRenewsLeaseButCannotExtendAbsoluteDeadline() {
         var (broker, responseID) = started()
-        for second in stride(from: 5, through: 295, by: 5) {
+        let deadline = ClaudeQuestionValidation.maximumWaitSeconds
+        for second in stride(from: 5.0, to: deadline, by: 5) {
             #expect(broker.handle(hook(.poll, responseID: responseID), identity: identity,
                                   at: now.addingTimeInterval(Double(second))).status == .pending)
         }
         #expect(broker.handle(hook(.poll, responseID: responseID), identity: identity,
-                              at: now.addingTimeInterval(300)).status == .finished)
+                              at: now.addingTimeInterval(deadline)).status == .finished)
+    }
+
+    @Test func pendingQuestionAcceptsAnswerHoursLaterWhileHookKeepsPolling() {
+        var (broker, responseID) = started()
+        for second in stride(from: 5, through: 2 * 60 * 60, by: 5) {
+            #expect(broker.handle(hook(.poll, responseID: responseID), identity: identity,
+                                  at: now.addingTimeInterval(Double(second))).status == .pending)
+        }
+        let later = now.addingTimeInterval(2 * 60 * 60)
+        #expect(broker.submit(answer(responseID), identity: identity, at: later) == .submitted)
+        #expect(broker.handle(hook(.poll, responseID: responseID), identity: identity, at: later).answers == answer(responseID).answers)
+    }
+
+    @Test func hookTimeoutReasonSurvivesCleanupBeforeHostDeadline() throws {
+        var (broker, responseID) = started()
+        var end = hook(.end, responseID: responseID)
+        end.endReason = .expired
+        _ = broker.handle(end, identity: identity, at: now.addingTimeInterval(1))
+        // A repeated generic cleanup cannot overwrite the original reason.
+        _ = broker.handle(hook(.end, responseID: responseID), identity: identity, at: now.addingTimeInterval(2))
+        let changes = broker.drainChanges()
+        #expect(changes.count == 1)
+        guard case .transcript(.interactionResponseClosed(let closure)) = try #require(changes.first).payload else {
+            Issue.record("Expected response closure")
+            return
+        }
+        #expect(closure.reason == .expired)
+        #expect(!broker.entries[0].resolved)
+    }
+
+    @Test func completedEntriesArePrunedWithoutRetainingThemForTheAnswerWindow() {
+        var (broker, responseID) = started()
+        _ = broker.handle(hook(.end, responseID: responseID), identity: identity, at: now)
+        broker.expire(at: now.addingTimeInterval(10 * 60))
+        #expect(broker.entries.isEmpty)
+    }
+
+    @Test func oldQuestionRetainsRecentClosureForLateDesktopAnswer() throws {
+        var (broker, responseID) = started()
+        for second in stride(from: 5, through: 2 * 60 * 60, by: 5) {
+            _ = broker.handle(hook(.poll, responseID: responseID), identity: identity,
+                              at: now.addingTimeInterval(Double(second)))
+        }
+        let later = now.addingTimeInterval(2 * 60 * 60)
+        // A delayed transcript completion's timestamp must not shorten the
+        // retention available for the authoritative PostToolUse answer.
+        broker.reconcile([.init(timestamp: now.addingTimeInterval(1), providerIdentity: identity.nativeSessionID,
+            fingerprint: "delayed-finish", payload: .transcript(.toolFinished(.init(callID: "call"))))],
+            identity: identity, at: later)
+        _ = broker.drainChanges()
+        _ = broker.handle(hook(.observe, event: event(.postToolUse, callID: "call", answers: ["Which color?": "Green"])),
+                          identity: identity, at: later.addingTimeInterval(30))
+        guard case .transcript(.interactionResolved(let resolution)) = try #require(broker.drainChanges().first).payload else {
+            Issue.record("Expected late desktop answer enrichment")
+            return
+        }
+        #expect(resolution.answers == [.init(questionID: "0", selectedOptionIDs: ["1"])])
+    }
+
+    @Test func deliveredAnswerWaitsOnlyBrieflyForProviderConfirmation() throws {
+        var (broker, responseID) = started()
+        #expect(broker.submit(answer(responseID), identity: identity, at: now) == .submitted)
+        #expect(broker.handle(hook(.poll, responseID: responseID), identity: identity, at: now).status == .answer)
+        // Delivery ended the hook. A missing PostToolUse must not retain an
+        // open response for the entire human answer window.
+        broker.expire(at: now.addingTimeInterval(301))
+        #expect(broker.handle(hook(.poll, responseID: responseID), identity: identity,
+                              at: now.addingTimeInterval(302)).status == .finished)
+        guard case .transcript(.interactionResponseClosed(let closure)) = try #require(broker.drainChanges().first).payload else {
+            Issue.record("Expected delivery confirmation wait to close")
+            return
+        }
+        #expect(closure.reason == .notPending)
+        #expect(!broker.entries[0].resolved)
     }
 }
 
@@ -126,7 +201,8 @@ extension ClaudeQuestionBrokerTests {
     @Test func transcriptCompletionClosesResponseButRetainsSnapshotForAcceptedAnswerEnrichment() throws {
         var (broker, responseID) = started()
         broker.reconcile([.init(timestamp: now.addingTimeInterval(1), providerIdentity: identity.nativeSessionID,
-            fingerprint: "finished", payload: .transcript(.toolFinished(.init(callID: "call"))))], identity: identity)
+            fingerprint: "finished", payload: .transcript(.toolFinished(.init(callID: "call"))))],
+            identity: identity, at: now.addingTimeInterval(1))
         #expect(broker.handle(hook(.poll, responseID: responseID), identity: identity, at: now.addingTimeInterval(2)).status == .finished)
         #expect(!broker.entries[0].resolved)
         _ = broker.drainChanges()
