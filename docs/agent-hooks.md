@@ -2,7 +2,8 @@
 
 Toastty can invoke one user-configured executable for normalized managed-session
 lifecycle and actionable status events. The hook is global: every managed agent
-session (Codex, Claude Code, Cursor, OpenCode, MiMo Code, Pi, and process watch) reports
+session (Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, Pi, and process
+watch) reports
 through the same script with the same normalized contract. There is no
 per-agent hook configuration and no raw provider-event passthrough.
 
