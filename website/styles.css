@@ -23,7 +23,7 @@ button { font: inherit; color: inherit; }
 
 /* ---------- Site nav ---------- */
 .nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+.brand { text-decoration: none; display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
 .brand svg { width: 30px; height: 30px; }
 .nav-links { display: flex; gap: 26px; font-size: 14.5px; color: var(--ink-2); }
 .btn { display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; padding: 10px 16px; font-weight: 600; font-size: 14.5px; text-decoration: none; border: 1px solid transparent; cursor: pointer; }
