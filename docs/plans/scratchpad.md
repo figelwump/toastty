@@ -65,9 +65,10 @@ session; several rows may be checked. The default document has a separate
 `default` label so a check is never mistaken for default selection.
 
 Clicking an available row binds or unbinds that document. A Scratchpad owned
-by another live session appears disabled with its owner shown; the header menu
-does not transfer ownership. `New Scratchpad` creates a right-panel document
-already bound to this session. It adds the document without unbinding other
+by another live session has a `Move from [session]` label; selecting it transfers
+the binding to this session. The action checks the ownership captured when the
+menu opened and rejects the action if it changed. `New Scratchpad` creates a
+right-panel document already bound to this session. It adds the document without unbinding other
 pads or changing an existing default, matching `createPolicy=additional`. If
 this is the session's first binding, the new document becomes default under the
 usual default rule.

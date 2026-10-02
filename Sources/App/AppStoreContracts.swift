@@ -244,7 +244,6 @@ enum ScratchpadPanelError: LocalizedError, Equatable {
     case incompatibleDocumentSelector
     case scratchpadIsUnbound(UUID)
     case sessionHeaderContextChanged
-    case scratchpadOwnedByAnotherSession(UUID)
     case targetSessionOutsideScratchpadTab(String)
 
     var errorDescription: String? {
@@ -275,8 +274,6 @@ enum ScratchpadPanelError: LocalizedError, Equatable {
             return "Scratchpad panel is not bound to an active session: \(panelID.uuidString)"
         case .sessionHeaderContextChanged:
             return "The session or Scratchpad changed while the menu was open. Open the menu again."
-        case .scratchpadOwnedByAnotherSession(let panelID):
-            return "Scratchpad \(panelID.uuidString) belongs to another live session. Use its ownership menu to rebind it."
         case .targetSessionOutsideScratchpadTab(let sessionID):
             return "target session is not in the Scratchpad tab: \(sessionID)"
         }

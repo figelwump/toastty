@@ -129,7 +129,7 @@ documents, and Scratchpads. Open the list from the empty right-panel view or
 the right-panel Add menu to reopen supporting material without navigating back
 to its original workspace tab.
 
-`Cmd+Ctrl+S` starts an unbound manual Scratchpad. A live managed session's terminal-header link menu lists the Scratchpads in its workspace tab. Check several titles to bind them to that session, or choose **New Scratchpad** to create another bound document. A Scratchpad can belong to only one session; pads owned by another live session are unavailable in this menu. The Scratchpad header also offers binding controls.
+`Cmd+Ctrl+S` starts an unbound manual Scratchpad. A live managed session's terminal-header link menu lists the Scratchpads in its workspace tab. Check several titles to bind them to that session, or choose **New Scratchpad** to create another bound document. A Scratchpad can belong to only one session; selecting a row labeled **Move from [session]** transfers its binding to this session. The Scratchpad header also offers binding controls.
 
 Use **Edit Details…** to give each Scratchpad a title and optional purpose. **Make Default** chooses which document receives session-only agent commands; selecting a visible panel does not change that default. Closing a Scratchpad removes its binding while retaining its saved content, and reopening starts it unbound. Supported managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions receive the `toastty-scratchpad` skill automatically, so you can usually ask the agent for a visual and let it create and bind its own Scratchpad on demand.
 

@@ -501,34 +501,44 @@ final class RightAuxPanelViewTests: XCTestCase {
     }
 
     @MainActor
-    func testScratchpadTerminalMenuChecksBindingsSeparatelyFromDefaultAndDisablesOtherOwners() throws {
+    func testScratchpadTerminalMenuChecksBindingsSeparatelyFromDefaultAndOffersOwnershipTransfer() throws {
         let firstPadID = UUID()
         let secondPadID = UUID()
         let firstDocumentID = UUID()
         let secondDocumentID = UUID()
         let availablePadID = UUID()
         let availableDocumentID = UUID()
+        let otherPadID = UUID()
+        let otherDocumentID = UUID()
         let context = ScratchpadSessionHeaderContext(
             sessionID: "current-session", sourcePanelID: UUID(), tabID: UUID()
+        )
+        let currentLink = ScratchpadSessionLink(
+            sessionID: context.sessionID, agent: .codex,
+            sourcePanelID: context.sourcePanelID, sourceWorkspaceID: UUID()
+        )
+        let otherLink = ScratchpadSessionLink(
+            sessionID: "other-session", agent: .claude,
+            sourcePanelID: UUID(), sourceWorkspaceID: currentLink.sourceWorkspaceID
         )
         let recorder = ScratchpadTerminalMenuActionRecorder()
         let menu = ScratchpadTerminalBindingMenuBuilder.menu(
             state: ScratchpadTerminalBindingIndicatorState(context: context, entries: [
                 ScratchpadTerminalBindingMenuEntry(
                     panelID: firstPadID, documentID: firstDocumentID, title: "Implementation",
-                    isBound: true, isDefault: true, ownerLabel: nil
+                    isBound: true, isDefault: true, ownerLabel: nil, sessionLink: currentLink
                 ),
                 ScratchpadTerminalBindingMenuEntry(
                     panelID: secondPadID, documentID: secondDocumentID, title: "Review Notes",
-                    isBound: true, isDefault: false, ownerLabel: nil
+                    isBound: true, isDefault: false, ownerLabel: nil, sessionLink: currentLink
                 ),
                 ScratchpadTerminalBindingMenuEntry(
                     panelID: availablePadID, documentID: availableDocumentID, title: "UI Explorations",
-                    isBound: false, isDefault: false, ownerLabel: nil
+                    isBound: false, isDefault: false, ownerLabel: nil, sessionLink: nil
                 ),
                 ScratchpadTerminalBindingMenuEntry(
-                    panelID: UUID(), documentID: UUID(), title: "Test Checklist",
-                    isBound: false, isDefault: false, ownerLabel: "Claude · Tests"
+                    panelID: otherPadID, documentID: otherDocumentID, title: "Test Checklist",
+                    isBound: false, isDefault: false, ownerLabel: "Claude · Tests", sessionLink: otherLink
                 ),
             ]),
             target: recorder,
@@ -537,20 +547,24 @@ final class RightAuxPanelViewTests: XCTestCase {
 
         XCTAssertEqual(menu.items.map(\.title), [
             "Scratchpads in This Tab", "Implementation (default)", "Review Notes", "UI Explorations",
-            "Test Checklist — Claude · Tests", "", "New Scratchpad",
+            "Test Checklist — Move from Claude · Tests", "", "New Scratchpad",
         ])
         XCTAssertEqual(Array(menu.items[1...4]).map(\.state), [.on, .on, .off, .off])
-        XCTAssertFalse(menu.items[4].isEnabled)
-        XCTAssertNil(menu.items[4].action)
+        XCTAssertTrue(menu.items[4].isEnabled)
         menu.performActionForItem(at: 1)
         XCTAssertEqual(recorder.request, ScratchpadSessionHeaderActionRequest(
             context: context,
-            action: .setBinding(panelID: firstPadID, documentID: firstDocumentID, isBound: false)
+            action: .setBinding(panelID: firstPadID, documentID: firstDocumentID, expectedSessionLink: currentLink, isBound: false)
         ))
         menu.performActionForItem(at: 3)
         XCTAssertEqual(recorder.request, ScratchpadSessionHeaderActionRequest(
             context: context,
-            action: .setBinding(panelID: availablePadID, documentID: availableDocumentID, isBound: true)
+            action: .setBinding(panelID: availablePadID, documentID: availableDocumentID, expectedSessionLink: nil, isBound: true)
+        ))
+        menu.performActionForItem(at: 4)
+        XCTAssertEqual(recorder.request, ScratchpadSessionHeaderActionRequest(
+            context: context,
+            action: .setBinding(panelID: otherPadID, documentID: otherDocumentID, expectedSessionLink: otherLink, isBound: true)
         ))
         menu.performActionForItem(at: 6)
         XCTAssertEqual(recorder.request, ScratchpadSessionHeaderActionRequest(context: context, action: .createScratchpad))
@@ -564,6 +578,10 @@ final class RightAuxPanelViewTests: XCTestCase {
         let tabID = UUID()
         let firstContext = ScratchpadSessionHeaderContext(sessionID: "first-session", sourcePanelID: sourcePanelID, tabID: tabID)
         let secondContext = ScratchpadSessionHeaderContext(sessionID: "second-session", sourcePanelID: sourcePanelID, tabID: tabID)
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: secondContext.sessionID, agent: .codex,
+            sourcePanelID: sourcePanelID, sourceWorkspaceID: UUID()
+        )
         var state = ScratchpadTerminalBindingIndicatorState(context: firstContext, entries: [])
         let controller = ScratchpadSessionHeaderMenuController()
         controller.menuState = { state }
@@ -578,7 +596,7 @@ final class RightAuxPanelViewTests: XCTestCase {
         state = ScratchpadTerminalBindingIndicatorState(context: secondContext, entries: [
             ScratchpadTerminalBindingMenuEntry(
                 panelID: padID, documentID: documentID, title: "New Notes",
-                isBound: true, isDefault: true, ownerLabel: nil
+                isBound: true, isDefault: true, ownerLabel: nil, sessionLink: sessionLink
             )
         ])
         let secondMenu = try XCTUnwrap(controller.makeMenu())
@@ -589,7 +607,7 @@ final class RightAuxPanelViewTests: XCTestCase {
         secondMenu.performActionForItem(at: 1)
         XCTAssertEqual(request, ScratchpadSessionHeaderActionRequest(
             context: secondContext,
-            action: .setBinding(panelID: padID, documentID: documentID, isBound: false)
+            action: .setBinding(panelID: padID, documentID: documentID, expectedSessionLink: sessionLink, isBound: false)
         ))
 
         controller.menuState = { nil }

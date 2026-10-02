@@ -370,11 +370,16 @@ final class WorkspaceViewTests: XCTestCase {
 
     func testScratchpadTerminalBindingIndicatorPreservesSinglePadHelpAndHidesCount() {
         let panelID = UUID()
+        let sourcePanelID = UUID()
         let state = ScratchpadTerminalBindingIndicatorState(
-            context: ScratchpadSessionHeaderContext(sessionID: "live-session", sourcePanelID: UUID(), tabID: UUID()),
+            context: ScratchpadSessionHeaderContext(sessionID: "live-session", sourcePanelID: sourcePanelID, tabID: UUID()),
             entries: [ScratchpadTerminalBindingMenuEntry(
                 panelID: panelID, documentID: UUID(), title: "Scratchpad",
-                isBound: true, isDefault: true, ownerLabel: nil
+                isBound: true, isDefault: true, ownerLabel: nil,
+                sessionLink: ScratchpadSessionLink(
+                    sessionID: "live-session", agent: .codex,
+                    sourcePanelID: sourcePanelID, sourceWorkspaceID: UUID()
+                )
             )]
         )
 
@@ -572,6 +577,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(state.entries.map(\.title), ["Available Notes", "Test Checklist", "Old Notes", "Moved Notes"])
         XCTAssertEqual(state.entries.map(\.isBound), [false, false, false, false])
         XCTAssertEqual(state.entries.map(\.ownerLabel), [nil, "Claude · Tests", nil, "Codex"])
+        XCTAssertEqual(state.entries.map { $0.sessionLink?.sessionID }, [nil, "other-session", "stale-session", "current-session"])
         XCTAssertEqual(state.boundCount, 0)
 
         registry.startSession(

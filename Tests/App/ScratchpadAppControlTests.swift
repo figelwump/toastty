@@ -15,6 +15,7 @@ struct ScratchpadAppControlTests {
         for isBound in [true, false, true] {
             try fixture.store.setScratchpadBindingFromSessionHeader(
                 panelID: blank.panelID, documentID: blank.documentID,
+                expectedSessionLink: try fixture.documentStore.load(documentID: blank.documentID)?.sessionLink,
                 sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
                 isBound: isBound, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
             )
@@ -42,9 +43,47 @@ struct ScratchpadAppControlTests {
     }
 
     @Test
+    func sessionHeaderTransfersAnOwnedScratchpadWithoutChangingContentSelectionOrDestinationDefault() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let transferred = try fixture.createLinkedScratchpad()
+        let retained = try fixture.createAdditionalScratchpad(title: "Keep with original session")
+        let documentBefore = try #require(try fixture.documentStore.load(documentID: transferred.documentID))
+        let destination = try fixture.createDestinationSession()
+        let destinationDefault = try fixture.store.setScratchpadContentForSession(
+            request: ScratchpadPanelSetContentRequest(sessionID: destination.sessionID, content: "<p>Destination default</p>"),
+            sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+        )
+        let before = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let tabID = try #require(before.tabID(containingPanelID: destination.panelID))
+
+        try fixture.store.setScratchpadBindingFromSessionHeader(
+            panelID: transferred.panelID, documentID: transferred.documentID,
+            expectedSessionLink: documentBefore.sessionLink,
+            sessionID: destination.sessionID, sourcePanelID: destination.panelID, tabID: tabID,
+            isBound: true, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+        )
+
+        let after = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        #expect(after.selectedTabID == before.selectedTabID)
+        #expect(after.focusedPanelID == before.focusedPanelID)
+        #expect(after.rightAuxPanel.activePanelID == before.rightAuxPanel.activePanelID)
+        #expect(after.rightAuxPanel.focusedPanelID == before.rightAuxPanel.focusedPanelID)
+        #expect(fixture.store.linkedScratchpadPanels(sessionID: fixture.sessionID).map(\.documentID) == [retained.documentID])
+        #expect(Set(fixture.store.linkedScratchpadPanels(sessionID: destination.sessionID).map(\.documentID)) == [transferred.documentID, destinationDefault.documentID])
+        #expect(fixture.store.defaultScratchpadPanel(sessionID: fixture.sessionID)?.documentID == retained.documentID)
+        #expect(fixture.store.defaultScratchpadPanel(sessionID: destination.sessionID)?.documentID == destinationDefault.documentID)
+        let documentAfter = try #require(try fixture.documentStore.load(documentID: transferred.documentID))
+        #expect(documentAfter.sessionLink?.sessionID == destination.sessionID)
+        #expect(documentAfter.sessionLink?.sourcePanelID == destination.panelID)
+        #expect(documentAfter.content == documentBefore.content)
+        #expect(documentAfter.revision == documentBefore.revision)
+    }
+
+    @Test
     func sessionHeaderRejectsOwnershipChangesWhileMenuWasOpen() throws {
         let fixture = try ScratchpadAppControlFixture()
         let linked = try fixture.createLinkedScratchpad()
+        let capturedLink = try #require(try fixture.documentStore.load(documentID: linked.documentID)?.sessionLink)
         let tabID = try #require(fixture.store.state.workspacesByID[fixture.workspaceID]?.tabID(containingPanelID: fixture.sourcePanelID))
         let destination = try fixture.createDestinationSession()
         _ = try fixture.store.rebindScratchpadPanel(
@@ -53,9 +92,10 @@ struct ScratchpadAppControlTests {
         )
         let before = fixture.store.state
         for isBound in [true, false] {
-            #expect(throws: ScratchpadPanelError.scratchpadOwnedByAnotherSession(linked.panelID)) {
+            #expect(throws: ScratchpadPanelError.sessionHeaderContextChanged) {
                 try fixture.store.setScratchpadBindingFromSessionHeader(
                     panelID: linked.panelID, documentID: linked.documentID,
+                    expectedSessionLink: capturedLink,
                     sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
                     isBound: isBound, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
                 )
@@ -63,6 +103,16 @@ struct ScratchpadAppControlTests {
         }
         #expect(fixture.store.state == before)
         #expect(try fixture.documentStore.load(documentID: linked.documentID)?.sessionLink?.sessionID == destination.sessionID)
+
+        #expect(throws: ScratchpadPanelError.sessionHeaderContextChanged) {
+            try fixture.store.setScratchpadBindingFromSessionHeader(
+                panelID: linked.panelID, documentID: linked.documentID,
+                expectedSessionLink: nil,
+                sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
+                isBound: true, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
+            )
+        }
+        #expect(fixture.store.state == before)
     }
 
     @Test
@@ -74,6 +124,7 @@ struct ScratchpadAppControlTests {
             #expect(throws: ScratchpadPanelError.sessionHeaderContextChanged) {
                 try fixture.store.setScratchpadBindingFromSessionHeader(
                     panelID: linked.panelID, documentID: documentID,
+                    expectedSessionLink: try fixture.documentStore.load(documentID: linked.documentID)?.sessionLink,
                     sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: capturedTabID,
                     isBound: false, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
                 )
@@ -84,6 +135,7 @@ struct ScratchpadAppControlTests {
         #expect(throws: ScratchpadPanelError.sessionHeaderContextChanged) {
             try fixture.store.setScratchpadBindingFromSessionHeader(
                 panelID: otherTabPad.panelID, documentID: otherTabPad.documentID,
+                expectedSessionLink: nil,
                 sessionID: fixture.sessionID, sourcePanelID: fixture.sourcePanelID, tabID: tabID,
                 isBound: true, sessionRuntimeStore: fixture.sessionRuntimeStore, documentStore: fixture.documentStore
             )

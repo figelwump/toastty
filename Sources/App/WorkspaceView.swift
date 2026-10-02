@@ -4497,7 +4497,8 @@ struct PanelCardView: View {
                 title: normalizedScratchpadBindingLabel(webState.title) ?? WebPanelDefinition.scratchpad.defaultTitle,
                 isBound: isBound,
                 isDefault: isBound && scratchpad.documentID == defaultDocumentID,
-                ownerLabel: ownerLabel
+                ownerLabel: ownerLabel,
+                sessionLink: scratchpad.sessionLink
             )
         }
         let boundEntries = entries.filter(\.isBound)
@@ -4508,7 +4509,8 @@ struct PanelCardView: View {
                 title: entry.title,
                 isBound: entry.isBound,
                 isDefault: entry.isDefault || (entry.isBound && boundEntries.count == 1),
-                ownerLabel: entry.ownerLabel
+                ownerLabel: entry.ownerLabel,
+                sessionLink: entry.sessionLink
             )
         }
         return ScratchpadTerminalBindingIndicatorState(
@@ -4596,10 +4598,11 @@ struct PanelCardView: View {
     private func performScratchpadSessionHeaderAction(_ request: ScratchpadSessionHeaderActionRequest) {
         do {
             switch request.action {
-            case .setBinding(let scratchpadPanelID, let documentID, let isBound):
+            case .setBinding(let scratchpadPanelID, let documentID, let expectedSessionLink, let isBound):
                 try store.setScratchpadBindingFromSessionHeader(
                     panelID: scratchpadPanelID,
                     documentID: documentID,
+                    expectedSessionLink: expectedSessionLink,
                     sessionID: request.context.sessionID,
                     sourcePanelID: request.context.sourcePanelID,
                     tabID: request.context.tabID,
@@ -4756,7 +4759,7 @@ struct ScratchpadSessionHeaderContext: Equatable {
 }
 
 enum ScratchpadSessionHeaderAction: Equatable {
-    case setBinding(panelID: UUID, documentID: UUID, isBound: Bool)
+    case setBinding(panelID: UUID, documentID: UUID, expectedSessionLink: ScratchpadSessionLink?, isBound: Bool)
     case createScratchpad
 }
 
@@ -4772,6 +4775,7 @@ struct ScratchpadTerminalBindingMenuEntry: Equatable {
     let isBound: Bool
     let isDefault: Bool
     let ownerLabel: String?
+    let sessionLink: ScratchpadSessionLink?
 }
 
 struct ScratchpadTerminalBindingIndicatorState: Equatable {
@@ -4916,15 +4920,18 @@ enum ScratchpadTerminalBindingMenuBuilder {
         }
         for entry in state.entries {
             var title = entry.isDefault ? "\(entry.title) (default)" : entry.title
-            if let ownerLabel = entry.ownerLabel { title += " — \(ownerLabel)" }
-            let item = NSMenuItem(title: title, action: entry.ownerLabel == nil ? action : nil, keyEquivalent: "")
+            if let ownerLabel = entry.ownerLabel { title += " — Move from \(ownerLabel)" }
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = target
             item.representedObject = ScratchpadSessionHeaderMenuPayload(request: ScratchpadSessionHeaderActionRequest(
                 context: state.context,
-                action: .setBinding(panelID: entry.panelID, documentID: entry.documentID, isBound: !entry.isBound)
+                action: .setBinding(
+                    panelID: entry.panelID, documentID: entry.documentID,
+                    expectedSessionLink: entry.sessionLink, isBound: !entry.isBound
+                )
             ))
             item.state = entry.isBound ? .on : .off
-            item.isEnabled = entry.ownerLabel == nil
+            item.isEnabled = true
             menu.addItem(item)
         }
         menu.addItem(.separator())

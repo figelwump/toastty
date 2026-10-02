@@ -1304,6 +1304,7 @@ final class AppStore: ObservableObject {
     func setScratchpadBindingFromSessionHeader(
         panelID: UUID,
         documentID: UUID,
+        expectedSessionLink: ScratchpadSessionLink?,
         sessionID: String,
         sourcePanelID: UUID,
         tabID: UUID,
@@ -1322,10 +1323,8 @@ final class AppStore: ObservableObject {
             throw ScratchpadPanelError.sessionHeaderContextChanged
         }
         let currentLink = selection.scratchpad.sessionLink
-        if let ownerID = currentLink?.sessionID,
-           ownerID != sessionID,
-           sessionRuntimeStore.sessionRegistry.activeSession(sessionID: ownerID) != nil {
-            throw ScratchpadPanelError.scratchpadOwnedByAnotherSession(panelID)
+        guard currentLink == expectedSessionLink else {
+            throw ScratchpadPanelError.sessionHeaderContextChanged
         }
         if isBound {
             if currentLink?.sessionID == sessionID, currentLink?.sourcePanelID == sourcePanelID { return }
