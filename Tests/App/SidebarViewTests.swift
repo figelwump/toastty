@@ -312,7 +312,7 @@ final class SidebarViewTests: XCTestCase {
                 .init(
                     title: "Fix nav drawer focus", panelID: targetPanelID, agentLabel: "claude",
                     isUnread: false, railState: .approvalDot,
-                    badgeKind: .needsApproval, turnStartedAt: nil, summary: "pnpm db:migrate"
+                    badgeKind: .needsApproval, isWaiting: false, turnStartedAt: nil, summary: "pnpm db:migrate"
                 ),
             ],
             hiddenSessionCount: 0,
@@ -981,8 +981,7 @@ final class SidebarViewTests: XCTestCase {
 
     /// A narrow sidebar drops the waiting chip to keep room for the name and
     /// moves it to the row tooltip; at the default width the chip shows and
-    /// the tooltip stays empty. The chip has no text bridge of its own, so
-    /// the tooltip is how the test tells which layout the row chose.
+    /// the tooltip stays empty.
     func testCrowdedNarrowSessionRowDropsWaitingChipAndMovesStatusToRowTooltip() throws {
         for (sidebarWidth, showsChip) in [(CGFloat(WindowState.minSidebarWidth), false), (ToastyTheme.sidebarWidth, true)] {
             let state = AppState.bootstrap()
@@ -1910,7 +1909,7 @@ final class SidebarViewTests: XCTestCase {
     /// A parent card with two spawning sessions and four subspaces in one
     /// group, plus a second top-level card, so the test can see sorting,
     /// the spawner tags, and that subspaces do not render as cards.
-    private func makeSubspacesHarness() throws -> (SidebarHarness, SubspacesHarnessIDs) {
+    private func makeSubspacesHarness(sidebarWidth: CGFloat = ToastyTheme.sidebarWidth) throws -> (SidebarHarness, SubspacesHarnessIDs) {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentLeftPanelID = UUID()
         let parentRightPanelID = UUID()
@@ -1978,7 +1977,7 @@ final class SidebarViewTests: XCTestCase {
             workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
             selectedWindowID: windowID
         )
-        let harness = try makeSidebarHarness(state: state, windowID: windowID)
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, sidebarWidth: sidebarWidth)
 
         func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
             harness.sessionRuntimeStore.startSession(
@@ -2061,6 +2060,83 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.contains("sub-agent") }, "Subspace agents should not be ↗ rows: \(textValues)")
 
         try writeSidebarEvidence(rootView, name: "sidebar-subspaces-sorted")
+    }
+
+    func testSubspaceWaitingPillFollowsBackgroundShellStateAndFitsWithAnnotation() throws {
+        for (width, annotation, showsPill, showsAnnotation) in [
+            (ToastyTheme.sidebarWidth, "PR #58", true, true),
+            (ToastyTheme.sidebarWidth, "ENG-1234-fix", true, false),
+            (CGFloat(220), "PR #58", true, false),
+            (CGFloat(WindowState.minSidebarWidth), "PR #58", false, false),
+        ] {
+            let (harness, ids) = try makeSubspacesHarness(sidebarWidth: width)
+            defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+            let rootView = harness.hostingView
+            harness.store.send(.setWorkspaceAnnotation(
+                workspaceID: ids.workingID, key: "github-pr",
+                annotation: WorkspaceAnnotation(text: annotation, url: "https://github.com/example/repo/pull/58")
+            ))
+            let now = Date()
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: "working-agent",
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: "Review still running"),
+                at: now
+            )
+            XCTAssertTrue(harness.sessionRuntimeStore.syncBackgroundActivities(
+                sessionID: "working-agent", kind: .subagent, entries: [],
+                pendingBackgroundTaskCount: 1, at: now.addingTimeInterval(1)
+            ))
+            pumpMainRunLoop(duration: 0.6)
+            rootView.layoutSubtreeIfNeeded()
+            let text = renderedTextValues(in: rootView)
+            XCTAssertTrue(text.contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, waiting") })
+            XCTAssertEqual(text.contains("waiting"), showsPill, "Pill at \(width)pt: \(text)")
+            XCTAssertEqual(text.contains("github-pr: \(annotation)"), showsAnnotation, "Annotation at \(width)pt: \(text)")
+            XCTAssertLessThanOrEqual(rootView.fittingSize.width, width + 1)
+            let image = NSImage(size: rootView.bounds.size)
+            image.addRepresentation(try renderedBitmap(for: rootView))
+            let capture = XCTAttachment(image: image)
+            capture.name = "sidebar-subspace-waiting-\(Int(width))-\(annotation)"
+            capture.lifetime = .keepAlways
+            add(capture)
+
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: "working-agent",
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve review command"),
+                at: now.addingTimeInterval(2)
+            )
+            pumpMainRunLoop()
+            rootView.layoutSubtreeIfNeeded()
+            XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
+            XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, needs approval") })
+
+            // Parent activity resumes while the shell remains outstanding.
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: "working-agent",
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Reading review findings"),
+                at: now.addingTimeInterval(3)
+            )
+            pumpMainRunLoop()
+            rootView.layoutSubtreeIfNeeded()
+            XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
+            XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, working") })
+
+            XCTAssertTrue(harness.sessionRuntimeStore.syncBackgroundActivities(
+                sessionID: "working-agent", kind: .subagent, entries: [],
+                pendingBackgroundTaskCount: 0, at: now.addingTimeInterval(4)
+            ))
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: "working-agent",
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: "Review complete"),
+                at: now.addingTimeInterval(5)
+            )
+            pumpMainRunLoop()
+            rootView.layoutSubtreeIfNeeded()
+            XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, waiting") })
+            if width == 220 {
+                XCTAssertTrue(renderedTextValues(in: rootView).contains("github-pr: \(annotation)"))
+            }
+        }
     }
 
     func testNextUnreadJumpLeavesTheSubspaceInItsSlotUntilSelectionMoves() throws {
@@ -2705,7 +2781,8 @@ final class SidebarViewTests: XCTestCase {
 
     private func makeSidebarHarness(
         state: AppState,
-        windowID: UUID
+        windowID: UUID,
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -2720,9 +2797,9 @@ final class SidebarViewTests: XCTestCase {
             annotationStyleStore: makeTestAnnotationStyleStore(),
             terminalRuntimeContext: runtimeContext
         )
-        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
         let hostWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: sidebarWidth, height: 600),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
