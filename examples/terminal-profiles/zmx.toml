@@ -5,8 +5,8 @@
 # restarting Toastty reconnects the pane to the same persistent session.
 #
 # Live title updates inside the zmx session still depend on shell-side
-# integration. Use Terminal > Install Shell Integration… or see the README
-# manual setup instructions before relying on title-based panel metadata.
+# integration. Use Toastty > Install Shell Integration… or see the manual setup
+# in docs/shell-integration.md before relying on title-based panel metadata.
 
 [zmx]
 displayName = "ZMX"

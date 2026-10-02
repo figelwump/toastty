@@ -60,6 +60,7 @@ If the file fails to parse at startup, Toastty logs a warning and continues with
   `pi --session`. If the record is missing or fails pre-launch validation,
   normal profile startup applies.
 - Profile bindings are persisted with workspace layouts, so the same profile comes back after relaunch.
+- While the referenced profile still exists, the panel-header badge resolves from the live profile definition rather than from the stored binding.
 - If the referenced profile no longer exists, Toastty falls back to a degraded badge based on the stored profile ID instead of silently pretending the pane was unprofiled.
 - `default-terminal-profile` in `~/.toastty/config` applies only to new terminals Toastty creates automatically, including the standard `Cmd+D` and `Cmd+Shift+D` split shortcuts. It does not rewrite existing pane bindings.
 
@@ -111,7 +112,7 @@ startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
 shortcutKey = "z"
 ```
 
-This maps one Toastty pane to one persistent `zmx` session name derived from the stable Toastty panel ID.
+This maps one Toastty pane to one persistent `zmx` session name derived from the stable Toastty panel ID. An example `zmx` profile file is included at [`examples/terminal-profiles/zmx.toml`](../examples/terminal-profiles/zmx.toml).
 
 ### `tmux`
 

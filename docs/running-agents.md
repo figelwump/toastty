@@ -21,7 +21,7 @@ or custom initial-prompt support.
 
 ## agents.toml
 
-Agent profiles live in `~/.toastty/agents.toml`. Each TOML table defines one launchable profile:
+Agent profiles live in `~/.toastty/agents.toml`. `Agent > Manage Agents…` and the Getting Started panel's `Open agents.toml` link open the file inside Toastty, creating a commented template first if it does not exist yet. Each TOML table defines one launchable profile:
 
 ```toml
 [codex]
@@ -284,7 +284,10 @@ Codex state, and all globally or repository-locally installed skills are never
 part of Toastty's skill state.
 
 Toastty shows one nonblocking notice the first time it successfully provides
-skills to each agent. It does not inspect or modify `~/.codex/skills`,
+skills to each agent. Its `View Skills…` button opens the shared skills sheet
+(`Toastty > Manage Toastty Skills…`), which lists built-in and user skills,
+explains each agent's delivery model, and provides Codex status and repair
+controls. It does not inspect or modify `~/.codex/skills`,
 `~/.claude/skills`, `~/.cursor/skills`, or `~/.agents/skills`; if old unnamespaced Toastty skills
 appear alongside the `toastty:` entries, remove those global copies manually.
 
@@ -382,10 +385,21 @@ The optional [personal workflow skills](../examples/skills/README.md) show how t
 build your own development workflow with Toastty. Copy them into `~/.toastty/skills`
 and customize them. `worktree-create` continues an agreed task in its own Git
 worktree and background Toastty workspace. It preserves the plan and local task
-identity; the child uses its runtime's native persistent goal when available and
-permitted to implement, review, and verify the change. The child uses subagents
-and chooses available models and reasoning levels as appropriate to each task.
-The workspace shows a PR chip once the task publishes one.
+identity; the child session then designs, implements, reviews, and verifies the
+change there under the repository's review and testing instructions, and
+presents its verification evidence as an HTML report in the task workspace's
+right panel. The workspace shows a PR chip once the task publishes one. After a
+verified handoff, the launching session exits by default.
+
+The skill's `open-toastty-worktree-session.sh` helper drives a normal running
+Toastty instance through the CLI. It resolves the current Toastty window, scopes
+the current parent session to its workspace when the parent is unrestricted,
+creates a background workspace, opens `WORKTREE_HANDOFF.md` as a local-document
+panel using Toastty's default Markdown placement, and launches the new agent
+with structured `agent.launch` arguments for `cwd`, environment,
+`initialPrompt`, and optional setup commands (`--initial-command`). Fully
+custom startup commands remain available through the helper's explicit
+`--startup-command` path.
 
 Before branching, the launcher honors an explicit base or continuation; otherwise
 it fetches the intended landing branch and compares it with the local branch. It
@@ -480,6 +494,13 @@ to keep and edit. `worktree-done` and `worktree-cleanup` are also personal examp
 - A startup sweeper deletes superseded snapshots under
   `~/.toastty/agent-plugins/`, keeping the newest snapshot plus one previous
   verified fallback.
+
+For Toastty development, repo-local skills can be linked into the global Claude
+(`~/.claude/skills`) and generic-agent (`~/.agents/skills`) skill directories
+with `scripts/agents/link-global-skills.sh`. Normal managed Codex, Claude Code,
+Cursor, OpenCode, MiMo Code, and Pi sessions use Toastty's automatic
+launch-scoped delivery instead. Run the script with `--help` to list its
+supported targets, skill selection, and cleanup options.
 
 ## Launch flow
 

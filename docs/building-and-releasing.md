@@ -312,6 +312,29 @@ sv exec -- env \
 
 Add `--dry-run` to print the exact `git tag`, `git push`, and `gh release create ...` commands without creating anything. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly. Pass `--notes-file` only when you want to override the default notes path.
 
+## Website and README images
+
+The landing page in `website/` is static HTML with no build step. Its hero is an HTML recreation of the app driven by one timeline in `website/hero.js`; when the UI it imitates changes, update that markup and timeline. The README hero, the README workflow images, and the social preview card are all rendered from that page, so they stay consistent with it:
+
+```bash
+node scripts/website/render-hero-video.mjs \
+  --stills 'workflow-1=6.0,workflow-2=15.9,workflow-3=20.8,right-panel=11.7@.rp,sidebar=0@.sbdemo' \
+  --social
+```
+
+The script uses local Google Chrome (or `CHROME_PATH`) and `ffmpeg`, reads only local files, and writes to `artifacts/website-hero/`: `toastty-tour.mp4`, `poster.png`, one PNG per still, and `social-preview.png`. Copy `poster.png` to `docs/assets/toastty-hero.png` and the workflow stills, downscaled to 1600px wide, to `docs/assets/readme/`.
+
+The README's other images and the social card's close-up are screenshots of the real app. `scripts/website/capture-demo-screenshots.sh` launches an isolated Debug build with its own runtime home, home folder, shell, and Ghostty config, builds a made-up `lumen` demo through the `toastty` CLI with fake sessions, and captures the window with `screencapture -l`. It needs a Mac GUI session with Screen Recording permission for your terminal, and it shows a Toastty window on screen for about a minute without focusing or clicking anything. The demo app gets its own home folder and temporary directory, so it never reads or changes your Toastty settings, `~/.toastty`, Codex hooks, or the socket discovery record your CLI uses:
+
+```bash
+scripts/website/capture-demo-screenshots.sh --build --out artifacts/website-capture/latest
+node scripts/website/render-hero-video.mjs --no-video --social \
+  --social-image artifacts/website-capture/latest/sidebar.png \
+  --social-crop "$(cat artifacts/website-capture/latest/social-crop.txt)"
+```
+
+Copy `sidebar.png` and `right-panel.png` to `docs/assets/readme/`, `window.png` (downscaled to 1600px wide) to `docs/assets/readme/window.png`, and `artifacts/website-hero/social-preview.png` to `website/assets/social-preview.png`. The GitHub repository's own social preview is set separately under the repository's Settings.
+
 ## Related docs
 
 - [Environment and Launch Flags](environment-and-build-flags.md)
