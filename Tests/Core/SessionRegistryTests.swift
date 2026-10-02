@@ -1923,6 +1923,7 @@ struct SessionRegistryTests {
     func workspaceStatusesAssembleChildRowsFromActivitiesAndSessionsInStableOrder() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()
+        let childWorkspaceID = UUID()
         let parentPanelID = UUID()
         let childPanelID = UUID()
         let now = Date(timeIntervalSince1970: 760)
@@ -1959,7 +1960,7 @@ struct SessionRegistryTests {
             agent: .codex,
             panelID: childPanelID,
             windowID: UUID(),
-            workspaceID: workspaceID,
+            workspaceID: childWorkspaceID,
             parentSessionID: "parent",
             displayTitleOverride: "Codex Review",
             cwd: nil,
@@ -1979,7 +1980,7 @@ struct SessionRegistryTests {
         #expect(parentStatus.children[0].context == "Running check.sh")
         #expect(parentStatus.children[0].statusKind == .working)
         #expect(parentStatus.children[0].panelID == childPanelID)
-        #expect(parentStatus.children[0].workspaceID == workspaceID)
+        #expect(parentStatus.children[0].workspaceID == childWorkspaceID)
         #expect(parentStatus.children[0].sessionID == "child-earlier")
         #expect(parentStatus.children[1].displayName == "Explore")
         #expect(parentStatus.children[1].context == "find session callers")
@@ -1987,7 +1988,7 @@ struct SessionRegistryTests {
     }
 
     @Test
-    func sameWorkspaceChildSessionsAreSuppressedAndPromotedWhenParentStops() throws {
+    func sameWorkspaceChildSessionsKeepTheirOwnRowsAndBackgroundActivitiesStayNested() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()
         let now = Date(timeIntervalSince1970: 770)
@@ -2020,13 +2021,39 @@ struct SessionRegistryTests {
         )
         registry.updateStatus(
             sessionID: "child",
-            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Done"),
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Reviewing email design"),
             at: now.addingTimeInterval(3)
         )
 
-        let nestedStatuses = registry.workspaceStatuses(for: workspaceID)
-        #expect(nestedStatuses.map(\.sessionID) == ["parent"])
-        #expect(nestedStatuses.first?.children.compactMap(\.sessionID) == ["child"])
+        let statuses = registry.workspaceStatuses(for: workspaceID, at: now.addingTimeInterval(3))
+        #expect(statuses.map(\.sessionID) == ["parent", "child"])
+        #expect(statuses.allSatisfy { $0.children.isEmpty })
+        #expect(statuses[0].status.kind == .ready)
+        #expect(statuses[1].parentSessionID == "parent")
+        #expect(statuses[1].status.detail == "Reviewing email design")
+        let summary = WorkspaceAgentSummary.make(from: statuses, workspaceID: workspaceID)
+        #expect(summary.running == 2)
+        #expect(summary.active == 1)
+
+        registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "background-review",
+                kind: .subagent,
+                displayName: "Explore",
+                startedAt: now.addingTimeInterval(3),
+                lastUpdatedAt: now.addingTimeInterval(3)
+            ),
+            at: now.addingTimeInterval(3)
+        )
+        let waitingStatuses = registry.workspaceStatuses(for: workspaceID, at: now.addingTimeInterval(3))
+        #expect(waitingStatuses.map(\.sessionID) == ["parent", "child"])
+        #expect(waitingStatuses[0].children.map(\.id) == ["background-review"])
+        #expect(waitingStatuses[0].children.map(\.source) == [.activity])
+        #expect(waitingStatuses[0].projection == .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0))
+        let waitingSummary = WorkspaceAgentSummary.make(from: waitingStatuses, workspaceID: workspaceID)
+        #expect(waitingSummary.running == 2)
+        #expect(waitingSummary.active == 2)
 
         registry.stopSession(sessionID: "parent", at: now.addingTimeInterval(4))
 
@@ -2082,10 +2109,11 @@ struct SessionRegistryTests {
         #expect(childHomeStatuses.first?.parentSessionID == "parent")
     }
 
-    @Test
-    func workspaceStatusesDoNotSuppressOrNestSessionCycles() throws {
+    @Test(arguments: [false, true])
+    func workspaceStatusesDoNotSuppressOrNestSessionCycles(crossWorkspace: Bool) throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()
+        let secondWorkspaceID = crossWorkspace ? UUID() : workspaceID
         let now = Date(timeIntervalSince1970: 790)
 
         registry.startSession(
@@ -2109,7 +2137,7 @@ struct SessionRegistryTests {
             agent: .codex,
             panelID: UUID(),
             windowID: UUID(),
-            workspaceID: workspaceID,
+            workspaceID: secondWorkspaceID,
             parentSessionID: "a",
             cwd: nil,
             repoRoot: nil,
@@ -2122,8 +2150,13 @@ struct SessionRegistryTests {
         )
 
         let statuses = registry.workspaceStatuses(for: workspaceID)
-        #expect(statuses.map(\.sessionID) == ["a", "b"])
+        #expect(statuses.map(\.sessionID) == (crossWorkspace ? ["a"] : ["a", "b"]))
         #expect(statuses.flatMap(\.children).isEmpty)
+        if crossWorkspace {
+            let secondStatuses = registry.workspaceStatuses(for: secondWorkspaceID)
+            #expect(secondStatuses.map(\.sessionID) == ["b"])
+            #expect(secondStatuses.flatMap(\.children).isEmpty)
+        }
     }
 
     @Test
