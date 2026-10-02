@@ -1,6 +1,6 @@
 ---
 name: worktree-done
-description: Use when the user says they are done reviewing or testing this worktree and want its pull request merged. Verifies the worktree matches the PR, then enables auto-merge so GitHub merges it once required checks pass. Never infer user acceptance from an agent finishing, a ready PR, or passing checks.
+description: Use when the user says they are done reviewing or testing this worktree or subspace and want its pull request merged. Verifies the worktree matches the PR, then enables auto-merge so GitHub merges it once required checks pass. Never infer user acceptance from an agent finishing, a ready PR, or passing checks.
 ---
 
 # Worktree Done
