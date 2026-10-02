@@ -153,15 +153,19 @@ Claude Code sessions launched or resumed through Toastty can also answer
 where offered, or enter a custom answer, then submit the complete form. The
 desktop question remains available. The phone waits for Claude's completion
 event before showing the accepted answers, including when you answer on the Mac
-first.
+first. Once the hook receives a phone answer, Toastty allows up to five minutes
+for Claude to confirm it before closing the mobile response channel.
 
 Question answers require a native paired device with send access and remote
 replies enabled for that session. A question can be answered remotely for up to
-five minutes while its launch hook remains connected. If that connection ends,
-the question expires, or the provider's form is unsupported, continue on the
-Mac. Other tool permission requests remain read-only on the phone. Existing
-Claude sessions must be relaunched or resumed through the updated Toastty to
-install the answer hook.
+24 hours while its launch hook remains connected. The phone can disconnect and
+return later during that window. The Mac must remain awake with Toastty and the
+Claude session running: a lost hook connection, including a long sleep or host
+restart, closes mobile input without answering Claude's question. If the
+connection ends, the window expires, or the provider's form is unsupported,
+continue on the Mac. Other tool permission requests remain read-only on the
+phone. Existing Claude sessions must be relaunched or resumed through the
+updated Toastty to install the hook with the longer answer window.
 
 Session rows follow the desktop sidebar: a status mark, the session name, and
 its latest summary. Touch and hold a row to see its path, last update, model,

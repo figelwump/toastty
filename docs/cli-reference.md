@@ -53,18 +53,28 @@ automatic fixes. It exits non-zero only when at least one check fails.
 
 ### `setup guide`
 
-Print the bundled agent-guided Getting Started guide.
+Print a bundled guide for an agent to follow.
 
 ```
-toastty setup guide [--format text|md]
+toastty setup guide [--topic onboarding|workflows] [--format text|md]
 ```
+
+The default `onboarding` topic is the agent-guided Getting Started guide. The
+`workflows` topic explains how to turn a user's way of working into a workflow
+skill: the Toastty building blocks, example workflows, and rules for writing
+one. It also prints the absolute path of the example skills bundled with the
+app (`Contents/Resources/WorkflowExamples/skills`, copied from this
+repository's `examples/skills`), which the agent copies and adapts into the
+user skills directory. The onboarding guide's "Pick a workflow" step reads it.
 
 The default `text` format is optimized for terminal reading. Use `--format md`
 when another agent or tool should preserve Markdown headings and code fences.
+With `--json`, the response contains `topic`, `format`, and `content`.
 
 ```bash
 "$TOASTTY_CLI_PATH" setup guide
 "$TOASTTY_CLI_PATH" setup guide --format md
+"$TOASTTY_CLI_PATH" setup guide --topic workflows --format md
 ```
 
 ### `setup skills list`
@@ -428,14 +438,19 @@ was supplied or verified; do not guess one from the label. Validation rules:
 - Setting an identical annotation again reports `didMutateState=false`, unless
   `primary` changes which annotation is primary.
 
-A subspace's row in its parent's Subspaces group has room for one chip. It
-shows the workspace's primary annotation, or its `github-pr` annotation when
+A subspace's row in its parent's Subspaces group shows one annotation chip:
+the workspace's primary annotation, or its `github-pr` annotation when
 none is marked primary. Pass `primary=true` to make an annotation primary; a
 workspace has at most one, so this replaces any earlier choice. `primary=false`
 removes the role only when this key holds it, and omitting `primary` leaves it
 unchanged. Clearing the primary annotation clears the role. The row chip
 truncates past about 12 characters, so keep primary text short, such as
 `PR #1234` or `ENG-512`; the chip's tooltip shows the full text.
+
+When all working sessions in a subspace are waiting on background work, its row
+shows a `waiting` status pill. At narrow widths, the row drops the annotation
+before the waiting pill to keep room for the title. The hover card keeps both
+the session's waiting status and every annotation.
 
 Prefer `action list --json` to discover the current canonical IDs. Common actions include:
 

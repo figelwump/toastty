@@ -130,6 +130,25 @@ struct ClaudeQuestionHookRunnerTests {
         #expect(result.suppressTelemetry)
         #expect(result.providerResponse == nil)
         #expect(harness.requests.map(\.phase) == [.begin, .poll, .end])
+        #expect(harness.requests.last?.endReason == nil)
+    }
+
+    @Test
+    func answerStillReachesClaudeWhenPhoneReturnsHoursLater() {
+        var time: TimeInterval = 0
+        let runner = ClaudeQuestionHookRunner(send: { request in
+            if request.phase == .poll && time >= 2 * 60 * 60 {
+                return .init(status: .answer, responseID: "response-1", answers: [
+                    .init(questionID: "q0", selectedOptionIDs: ["q0:o0"]),
+                ])
+            }
+            return .init(status: .pending, responseID: "response-1")
+        }, makeResponseID: { "response-1" }, uptime: { time }, sleep: { time += $0 })
+
+        let result = runner.run(payload: payload(), sessionID: "managed", panelID: UUID())
+        #expect(time == 2 * 60 * 60)
+        #expect(result.providerResponse != nil)
+        #expect(result.suppressTelemetry)
     }
 
     @Test
@@ -140,7 +159,7 @@ struct ClaudeQuestionHookRunnerTests {
         #expect(result.providerResponse == nil)
         #expect(harness.time == ClaudeQuestionValidation.maximumWaitSeconds)
         #expect(harness.requests.last?.phase == .end)
-        #expect(harness.requests.filter { $0.phase == .poll }.count == 299)
+        #expect(harness.requests.last?.endReason == .expired)
     }
 
     @Test
@@ -149,7 +168,7 @@ struct ClaudeQuestionHookRunnerTests {
         var phases: [ClaudeQuestionHookRequest.Phase] = []
         let runner = ClaudeQuestionHookRunner(send: { request in
             phases.append(request.phase)
-            if request.phase == .poll && time == 299 {
+            if request.phase == .poll && time == ClaudeQuestionValidation.maximumWaitSeconds - 1 {
                 time += 2
                 return .init(status: .answer, responseID: "response-1", answers: [
                     .init(questionID: "q0", selectedOptionIDs: ["q0:o0"]),
@@ -159,10 +178,9 @@ struct ClaudeQuestionHookRunnerTests {
         }, makeResponseID: { "response-1" }, uptime: { time }, sleep: { time += $0 })
 
         let result = runner.run(payload: payload(), sessionID: "managed", panelID: UUID())
-        #expect(time == 301)
+        #expect(time == ClaudeQuestionValidation.maximumWaitSeconds + 1)
         #expect(result.providerResponse != nil)
         #expect(result.suppressTelemetry)
-        #expect(phases.filter { $0 == .poll }.count == 299)
         #expect(!phases.contains(.end))
     }
 

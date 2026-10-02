@@ -4,13 +4,22 @@ Toastty's shell integration emits `OSC 2` title sequences so panel headers show 
 
 On restore, Toastty imports that pane's journal into the shell's in-memory history. That means `Up` starts with the last commands from that pane, while reverse-search and normal history traversal can still see the broader shared shell history.
 
-The easiest automatic install is `Toastty > Install Shell Integration…`, which writes the snippet and sources it from your shell init file. The top-bar `Get Started…` button opens the Getting Started panel, where you can copy a CLI command for manual setup. This page covers manual setup for users who manage their own dotfiles.
+The easiest automatic install is `Toastty > Install Shell Integration…`, which writes the snippet and sources it from your shell init file. The top-bar `Get Started…` button and `Toastty > Get Started with Toastty…` open the Getting Started page in the right panel, where you can copy a CLI command for manual setup, open `agents.toml`, or open the full shortcut reference. This page covers manual setup for users who manage their own dotfiles.
 
 For automatic installs, Toastty first prefers the live shell executable path
 for the current Toastty terminal window when it resolves to `zsh`, `bash`, or
 `fish`. If no live terminal shell is available or that path is unsupported,
 Toastty falls back to the current process `SHELL`, then the macOS account login
 shell.
+
+The automatic installer writes a managed snippet under `~/.toastty/shell/` and
+adds one `source` line to the detected shell's init file:
+
+- `zsh` → `~/.zshrc`
+- `bash` → an existing `~/.bash_profile`, otherwise an existing `~/.profile`, otherwise a new `~/.bash_profile`
+- `fish` → `~/.config/fish/config.fish`
+
+After installing, new profiled panes pick up the integration automatically.
 
 If you keep shell startup files in version control, the installer is still the easiest way to get the exact current snippet. Install once, keep the managed file under `~/.toastty/shell/`, and version only the `source` line in your shell init file if that matches your workflow.
 

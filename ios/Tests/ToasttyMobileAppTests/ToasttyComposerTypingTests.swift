@@ -169,6 +169,59 @@ final class ToasttyComposerTypingTests: XCTestCase {
         )
     }
 
+    func testStaleEmptyDraftDoesNotMoveCaretBeforeFirstCharacter() async throws {
+        try await assertStaleEchoPreservesEdit(initial: "") { $0.insertText("h") }
+    }
+
+    func testStaleDraftDoesNotRestoreDeletedCharacter() async throws {
+        try await assertStaleEchoPreservesEdit(initial: "that") { $0.deleteBackward() }
+    }
+
+    func testStaleDraftBeforeKeyboardReplacementPreservesTextAndCaret() async throws {
+        try await assertStaleEchoPreservesEdit(initial: "teh") { textView in
+            textView.selectedRange = NSRange(location: 0, length: 3)
+            textView.insertText("the ")
+        }
+    }
+
+    private func assertStaleEchoPreservesEdit(
+        initial: String,
+        edit: (ToasttyComposerUIKitTextView) -> Void
+    ) async throws {
+        let model = ComposerStalePublishModel()
+        let host = UIHostingController(rootView: ComposerStalePublishHarness(model: model, width: 281))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 360, height: 640)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        for _ in 0..<40 where findComposer(in: host.view) == nil {
+            host.view.layoutIfNeeded()
+            await settleLayout()
+        }
+        let textView = try XCTUnwrap(findComposer(in: host.view))
+        XCTAssertTrue(textView.becomeFirstResponder())
+        textView.insertText(initial)
+        await settleLayout()
+        model.holdPublished = true
+        edit(textView)
+        let expectedText = try XCTUnwrap(textView.text)
+        let expectedSelection = textView.selectedRange
+        model.poke += 1
+        await settleLayout()
+        XCTAssertEqual(textView.text, expectedText, "An old rendered draft must not undo a native edit")
+        XCTAssertEqual(textView.selectedRange, expectedSelection)
+        model.holdPublished = false
+        model.published = expectedText
+        model.poke += 1
+        await settleLayout()
+        XCTAssertEqual(textView.selectedRange, expectedSelection, "The current draft must not leave a stale insertion point")
+        textView.insertText("!")
+        await settleLayout()
+        XCTAssertEqual(model.published, expectedText + "!")
+    }
+
     func testTextDidChangeNotificationRerenderDuringWrap() async throws {
         let prefix = "Here’s another thought taking a step back here what if we used open claw for the coordinator. And the idea is "
         let (window, model, textView) = try await makeComposer(width: 281)
@@ -196,6 +249,139 @@ final class ToasttyComposerTypingTests: XCTestCase {
             textView.selectedRange,
             NSRange(location: (prefix + "hat").utf16.count, length: 0)
         )
+    }
+
+    func testExplicitClearAndRestoreApplyOnceAndPlaceCaretAtEnd() async throws {
+        let (window, model, textView) = try await makeComposer()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        textView.insertText("send this")
+        await settleLayout()
+        model.replace(with: "")
+        await settleLayout()
+        XCTAssertEqual(textView.text, "")
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 0, length: 0))
+        model.replace(with: "restored 👩🏽‍💻 draft")
+        await settleLayout()
+        XCTAssertEqual(textView.text, model.text)
+        XCTAssertEqual(textView.selectedRange.location, model.text.utf16.count)
+        textView.insertText("!")
+        model.revision += 1
+        await settleLayout()
+        XCTAssertEqual(textView.text, "restored 👩🏽‍💻 draft!")
+        XCTAssertEqual(model.text, textView.text)
+        XCTAssertTrue(textView.isFirstResponder)
+    }
+
+    func testClearPreservesNativeEditMadeBeforeRequestRenders() async throws {
+        let (window, model, textView) = try await makeComposer()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        textView.insertText("sent")
+        await settleLayout()
+        model.replace(with: "")
+        textView.insertText(" newer")
+        await settleLayout()
+        XCTAssertEqual(textView.text, "sent newer")
+        XCTAssertEqual(model.text, textView.text)
+        XCTAssertEqual(model.rejectedRevision, 1)
+        XCTAssertEqual(textView.selectedRange.location, "sent newer".utf16.count)
+    }
+
+    func testReplacementWaitsForCompositionToEndWithoutAnotherRender() async throws {
+        let (window, model, textView) = try await makeComposer()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        textView.setMarkedText("draft", selectedRange: NSRange(location: 5, length: 0))
+        await settleLayout()
+        model.replace(with: "")
+        await settleLayout()
+        XCTAssertNotNil(textView.markedTextRange)
+        XCTAssertEqual(textView.text, "draft")
+        // UIKit may publish a final composition callback before unmarking.
+        textView.delegate?.textViewDidChange?(textView)
+        XCTAssertEqual(model.text, "draft")
+        textView.unmarkText()
+        await settleLayout()
+        XCTAssertNil(textView.markedTextRange)
+        XCTAssertEqual(textView.text, "")
+        XCTAssertEqual(model.text, "")
+    }
+
+    func testNewerCompositionEditRejectsDeferredReplacement() async throws {
+        let (window, model, textView) = try await makeComposer()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        textView.setMarkedText("draft", selectedRange: NSRange(location: 5, length: 0))
+        await settleLayout()
+        model.replace(with: "")
+        await settleLayout()
+        textView.setMarkedText("draft continued", selectedRange: NSRange(location: 15, length: 0))
+        textView.unmarkText()
+        await settleLayout()
+        XCTAssertEqual(textView.text, "draft continued")
+        XCTAssertEqual(model.text, textView.text)
+        XCTAssertEqual(model.rejectedRevision, 1)
+    }
+
+    func testCoalescedClearAndRestorePreservesSelection() async throws {
+        let (window, model, textView) = try await makeComposer()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        textView.insertText("restore me")
+        textView.selectedRange = NSRange(location: 3, length: 2)
+        await settleLayout()
+        model.replace(with: "")
+        model.replace(with: "restore me")
+        await settleLayout()
+        XCTAssertEqual(textView.text, "restore me")
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 3, length: 2))
+        XCTAssertNil(model.rejectedRevision)
+    }
+
+    func testCoalescedClearAndDifferentRecoveryAppliesWithoutNativeEdit() async throws {
+        let (window, model, textView) = try await makeComposer()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        textView.insertText("newly sent")
+        await settleLayout()
+        model.replace(with: "")
+        model.replace(with: "older rejected attachment draft")
+        await settleLayout()
+        XCTAssertEqual(textView.text, "older rejected attachment draft")
+        XCTAssertEqual(model.text, textView.text)
+        XCTAssertEqual(textView.selectedRange.location, model.text.utf16.count)
+        XCTAssertNil(model.rejectedRevision)
+    }
+
+    func testClearPreservesEditEvenWhenTextReturnsToOriginalValue() async throws {
+        let (window, model, textView) = try await makeComposer()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        textView.insertText("sent")
+        await settleLayout()
+        model.replace(with: "")
+        textView.insertText("!")
+        textView.deleteBackward()
+        await settleLayout()
+        XCTAssertEqual(textView.text, "sent")
+        XCTAssertEqual(model.text, "sent")
+        XCTAssertEqual(model.rejectedRevision, 1)
+    }
+
+    func testRemountPreservesNewerDraftAndRejectsUnconsumedClear() async throws {
+        let (window, model, oldTextView) = try await makeComposer()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        oldTextView.insertText("sent")
+        await settleLayout()
+        model.replace(with: "")
+        oldTextView.insertText(" newer")
+        model.editorID = UUID()
+        let hostView = try XCTUnwrap(window.rootViewController?.view)
+        for _ in 0..<60 {
+            if let textView = findComposer(in: hostView), textView !== oldTextView { break }
+            hostView.setNeedsLayout()
+            hostView.layoutIfNeeded()
+            await settleLayout()
+        }
+        let textView = try XCTUnwrap(findComposer(in: hostView))
+        XCTAssertFalse(textView === oldTextView)
+        XCTAssertEqual(textView.text, "sent newer")
+        XCTAssertEqual(model.text, textView.text)
+        XCTAssertEqual(model.rejectedRevision, 1)
     }
 
     private func makeComposer() async throws -> (UIWindow, ComposerTypingModel, ToasttyComposerUIKitTextView) {
@@ -235,7 +421,18 @@ final class ToasttyComposerTypingTests: XCTestCase {
 private final class ComposerTypingModel: ObservableObject {
     @Published var text = ""
     @Published var focused = false
+    var editRevision: UInt64 = 0
     @Published var revision = 0
+    @Published var editorID = UUID()
+    @Published var replacement: ToasttyComposerReplacement?
+    var rejectedRevision: UInt64?
+
+    func replace(with text: String) {
+        replacement = ToasttyComposerReplacement(
+            revision: (replacement?.revision ?? 0) + 1, expectedEditRevision: editRevision, text: text
+        )
+        self.text = text
+    }
 }
 
 private struct ComposerTypingHarness: View {
@@ -244,8 +441,17 @@ private struct ComposerTypingHarness: View {
     var body: some View {
         VStack {
             Text("Revision \(model.revision)")
-            ToasttyComposerTextView(text: $model.text, isFocused: $model.focused,
+            ToasttyComposerTextView(text: model.text, onTextChange: { text, revision in model.text = text; model.editRevision = revision },
+                editRevision: model.editRevision,
+                replacement: model.replacement,
+                onReplacementCompleted: { result in
+                    guard model.replacement?.revision == result.revision else { return }
+                    model.text = result.nativeText
+                    model.editRevision = result.nativeEditRevision
+                    if !result.wasApplied { model.rejectedRevision = result.revision }
+                }, isFocused: $model.focused,
                 placeholder: "Message", isEnabled: true, accessibilityLabel: "Message", accessibilityHint: "")
+                .id(model.editorID)
                 .frame(width: width)
         }
     }
@@ -266,13 +472,11 @@ private struct ComposerStalePublishHarness: View {
         VStack {
             Text("poke \(model.poke)")
             ToasttyComposerTextView(
-                text: Binding(
-                    get: { model.published },
-                    set: { newValue in
-                        if model.holdPublished { return }
-                        model.published = newValue
-                    }
-                ),
+                text: model.published,
+                onTextChange: { newValue, _ in
+                    if model.holdPublished { return }
+                    model.published = newValue
+                },
                 isFocused: $model.focused,
                 placeholder: "Message", isEnabled: true, accessibilityLabel: "Message", accessibilityHint: ""
             )
@@ -289,10 +493,11 @@ private struct ComposerStateTypingHarness: View {
 
     var body: some View {
         ToasttyComposerTextView(
-            text: Binding(
-                get: { drafts.draft(for: conversationID) },
-                set: { drafts.updateDraft($0, for: conversationID) }
-            ),
+            text: drafts.draft(for: conversationID),
+            onTextChange: { drafts.updateDraft($0, for: conversationID, editRevision: $1) },
+            editRevision: drafts.editRevisions[conversationID, default: 0],
+            replacement: drafts.replacements[conversationID],
+            onReplacementCompleted: { drafts.completeReplacement($0, for: conversationID) },
             isFocused: $focused,
             placeholder: "Message", isEnabled: true, accessibilityLabel: "Message", accessibilityHint: ""
         )

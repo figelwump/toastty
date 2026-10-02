@@ -54,19 +54,24 @@ public struct ClaudeQuestionHookRequest: Codable, Equatable, Sendable {
     public var panelID: UUID
     public var event: ClaudeQuestionHookEvent?
     public var responseID: String?
+    /// Only a runner that exhausted its own deadline supplies `.expired`.
+    /// Omitted by older helpers and by cleanup after other failures.
+    public var endReason: RemoteQuestionAnswerRejectionReason?
 
     public init(
         phase: Phase,
         sessionID: String,
         panelID: UUID,
         event: ClaudeQuestionHookEvent? = nil,
-        responseID: String? = nil
+        responseID: String? = nil,
+        endReason: RemoteQuestionAnswerRejectionReason? = nil
     ) {
         self.phase = phase
         self.sessionID = sessionID
         self.panelID = panelID
         self.event = event
         self.responseID = responseID
+        self.endReason = endReason
     }
 }
 
@@ -94,7 +99,9 @@ public struct ClaudeQuestionHookReply: Codable, Equatable, Sendable {
 }
 
 public enum ClaudeQuestionValidation {
-    public static let maximumWaitSeconds: TimeInterval = 300
+    // Human replies may arrive hours after the question, while the hook must
+    // still have a finite lifetime and renew its short liveness lease.
+    public static let maximumWaitSeconds: TimeInterval = 24 * 60 * 60
     public static let leaseSeconds: TimeInterval = 10
     public static let pollIntervalSeconds: TimeInterval = 1
 

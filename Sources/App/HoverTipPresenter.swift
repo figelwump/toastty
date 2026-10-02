@@ -205,6 +205,7 @@ struct SubspaceHoverTipModel: Hashable {
         let railState: SidebarSessionPresentation.SessionRailState
         /// Approval and error only; the rail carries the other states.
         let badgeKind: SessionStatusKind?
+        let isWaiting: Bool
         let turnStartedAt: Date?
         let summary: String?
     }
@@ -368,6 +369,9 @@ struct SubspaceHoverTipCard: View {
                     }
                     if let badgeKind = session.badgeKind {
                         SessionStatusBadge(kind: badgeKind)
+                    }
+                    if session.isWaiting {
+                        SidebarView.sessionWaitingChip()
                     }
                     if let turnStartedAt = session.turnStartedAt {
                         TimelineView(.periodic(from: turnStartedAt, by: 1)) { timeline in

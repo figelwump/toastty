@@ -5377,8 +5377,9 @@ extension SessionRuntimeStore {
 
     func reconcileClaudeQuestionTranscript(_ observations: [ProviderTranscriptObservation], sessionID: String, panelID: UUID) {
         guard let identity = claudeQuestionIdentity(sessionID: sessionID, panelID: panelID) else { return }
-        claudeQuestionBroker.reconcile(observations, identity: identity)
-        publishClaudeQuestionChanges(at: Date())
+        let now = Date()
+        claudeQuestionBroker.reconcile(observations, identity: identity, at: now)
+        publishClaudeQuestionChanges(at: now)
     }
 
     func submitClaudeQuestion(_ request: RemoteQuestionAnswerRequest, sessionID: String, panelID: UUID,

@@ -314,7 +314,17 @@ struct ToasttyMobileRootView: View {
             controller: sessionController.homeController,
             presentation: conversationPresentation(for: conversationID),
             composer: conversationComposer(for: conversationID),
-            draft: conversationDraft(for: conversationID),
+            draft: composerDraftState.draft(for: conversationID),
+            draftGeneration: generation,
+            draftEditRevision: composerDraftState.editRevisions[conversationID, default: 0],
+            draftReplacement: composerDraftState.replacements[conversationID],
+            draftDidChange: conversationDraftChange(for: conversationID, generation: generation),
+            draftReplacementCompleted: { result in
+                guard composerDraftState.generation == generation,
+                      sessionController.homeController.conversation(id: conversationID) != nil else { return }
+                composerDraftState.completeReplacement(result, for: conversationID)
+                reconcileAttachmentDrafts()
+            },
             isSubmitting: composerDraftState.isSubmitting(conversationID),
             attachments: composerDraftState.attachments(for: conversationID),
             supportsAttachments: supportsAttachments,
@@ -488,18 +498,17 @@ struct ToasttyMobileRootView: View {
         )
     }
 
-    private func conversationDraft(for conversationID: UUID) -> Binding<String> {
-        Binding(
-            get: { composerDraftState.draft(for: conversationID) },
-            set: {
-                composerDraftState.updateDraft($0, for: conversationID)
-                reconcileAttachmentDrafts()
-                if let controller = sessionController.liveController?.activeConversationController,
-                   controller.conversationID == conversationID {
-                    controller.draftDidChange()
-                }
+    private func conversationDraftChange(for conversationID: UUID, generation: UUID) -> (String, UInt64) -> Void {
+        { text, editRevision in
+            guard composerDraftState.generation == generation,
+                  sessionController.homeController.conversation(id: conversationID) != nil else { return }
+            composerDraftState.updateDraft(text, for: conversationID, editRevision: editRevision)
+            reconcileAttachmentDrafts()
+            if let controller = sessionController.liveController?.activeConversationController,
+               controller.conversationID == conversationID {
+                controller.draftDidChange()
             }
-        )
+        }
     }
 
     private func conversationSubmitAction(for conversationID: UUID) -> () -> Bool {

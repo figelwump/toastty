@@ -3,385 +3,496 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Toastty — The native home for coding with agents</title>
-    <meta
-      name="description"
-      content="The native home for coding with agents. Workspaces, live agent status, keyboard-first control, and a growing extension panel. Built on Ghostty."
-    >
-    <meta property="og:title" content="Toastty — The native home for coding with agents">
-    <meta property="og:description" content="Workspaces, live agent status, keyboard-first control, and a growing extension panel. Built on Ghostty.">
+    <title>Toastty — Any agent. Any workflow.</title>
+    <meta name="description" content="Toastty is a native macOS terminal multiplexer for coding agents. It gives your agents building blocks they can drive. Shape them into the workflow that fits how you work, with any agent that runs in a terminal.">
+    <meta name="theme-color" content="#f5eee2">
+    <meta property="og:title" content="Toastty — Any agent. Any workflow.">
+    <meta property="og:description" content="Toastty gives your agents building blocks they can drive. Shape them into the workflow that fits how you work, with any agent that runs in a terminal.">
     <meta property="og:type" content="website">
-    <meta property="og:image" content="./assets/social-preview.png">
+    <meta property="og:url" content="https://toastty.dev/">
+    <meta property="og:image" content="https://toastty.dev/assets/social-preview.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="Toastty app interface with agent workspaces, terminal panels, and side panel context">
+    <meta property="og:image:alt" content="Toastty: Any agent. Any workflow. Beside the Toastty sidebar, where a checkout-redesign subspace is ready for review with its PR #128 chip.">
+    <meta name="twitter:image:alt" content="Toastty: Any agent. Any workflow. Beside the Toastty sidebar, where a checkout-redesign subspace is ready for review with its PR #128 chip.">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Toastty — The native home for coding with agents">
-    <meta name="twitter:description" content="Workspaces, live agent status, keyboard-first control, and a growing extension panel. Built on Ghostty.">
-    <meta name="twitter:image" content="./assets/social-preview.png">
-    <meta name="twitter:image:alt" content="Toastty app interface with agent workspaces, terminal panels, and side panel context">
+    <meta name="twitter:title" content="Toastty — Any agent. Any workflow.">
+    <meta name="twitter:description" content="Toastty gives your agents building blocks they can drive. Shape them into the workflow that fits how you work, with any agent that runs in a terminal.">
+    <meta name="twitter:image" content="https://toastty.dev/assets/social-preview.png">
+    <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="./assets/icon-256.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&display=swap">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <header class="site-header" aria-label="Primary">
-      <a class="brand" href="#top" aria-label="Toastty home">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 48 48" role="img">
-            <defs>
-              <linearGradient id="brandAmber" x1="24" y1="11.2" x2="24" y2="39.1" gradientUnits="userSpaceOnUse">
-                <stop offset="0" stop-color="#ffce6b" />
-                <stop offset="0.42" stop-color="#ffa62b" />
-                <stop offset="1" stop-color="#c87a18" />
-              </linearGradient>
-            </defs>
-            <path class="toast-outline" d="M10.8 36V23C9.1 21.6 8.6 18.7 9.7 16.3C11.2 12.9 15.3 11.2 24 11.2C32.7 11.2 36.8 12.9 38.3 16.3C39.4 18.7 38.9 21.6 37.2 23V36C37.2 38.1 35.4 39.1 24 39.1C12.6 39.1 10.8 38.1 10.8 36Z" />
-            <path class="toast-prompt" d="M18.1 20.7 23.7 24.5 18.1 28.3" />
-            <path class="toast-cursor" d="M27 28.5h4.8" />
-          </svg>
-        </span>
-        <span>Toastty</span>
-      </a>
-      <nav class="nav-links" aria-label="Page sections">
-        <a href="#features">Features</a>
-        <a href="https://github.com/figelwump/toastty">GitHub</a>
-      </nav>
-      <a class="button button-primary header-cta" href="https://github.com/figelwump/toastty/releases/latest">
-        Download for macOS
-      </a>
-    </header>
+<!-- Icon symbols derived from Sources/App/Resources/Assets.xcassets/AppIcon.appiconset/terminal-toast-1024.svg -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="ic-bg" x1="178" y1="52" x2="846" y2="972" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#3d2618"/><stop offset="0.54" stop-color="#2a1407"/><stop offset="1" stop-color="#241407"/></linearGradient>
+    <radialGradient id="ic-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 532) rotate(90) scale(390 420)"><stop offset="0" stop-color="#f6a72e" stop-opacity="0.30"/><stop offset="0.48" stop-color="#f6a72e" stop-opacity="0.10"/><stop offset="1" stop-color="#f6a72e" stop-opacity="0"/></radialGradient>
+    <linearGradient id="ic-crust" x1="512" y1="184" x2="512" y2="804" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffbf54"/><stop offset="0.42" stop-color="#f4a62d"/><stop offset="1" stop-color="#8a4a08"/></linearGradient>
+    <linearGradient id="ic-crust2" x1="320" y1="218" x2="736" y2="806" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffe2a0" stop-opacity="0.68"/><stop offset="0.4" stop-color="#f4a62d" stop-opacity="0.18"/><stop offset="1" stop-color="#6e3d08" stop-opacity="0.40"/></linearGradient>
+    <linearGradient id="ic-bread" x1="512" y1="274" x2="512" y2="732" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff8e9"/><stop offset="0.58" stop-color="#f7e6bd"/><stop offset="1" stop-color="#e6cc93"/></linearGradient>
+    <clipPath id="ic-clip"><rect x="78" y="78" width="868" height="868" rx="196"/></clipPath>
+    <filter id="ic-shadow" x="130" y="120" width="764" height="780" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="30" stdDeviation="26" flood-color="#000" flood-opacity="0.4"/></filter>
+    <filter id="ic-shadow-light" x="130" y="120" width="764" height="780" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#6b3b08" flood-opacity="0.28"/></filter>
+    <g id="ic-toast">
+      <path d="M226 746V472C190 442 180 379 203 328C235 254 322 218 512 218C702 218 789 254 821 328C844 379 834 442 798 472V746C798 790 758 813 512 813C266 813 226 790 226 746Z" fill="url(#ic-crust)"/>
+      <path d="M226 746V472C190 442 180 379 203 328C235 254 322 218 512 218C702 218 789 254 821 328C844 379 834 442 798 472V746C798 790 758 813 512 813C266 813 226 790 226 746Z" fill="url(#ic-crust2)" opacity="0.92"/>
+      <path d="M305 704V469C276 446 268 397 286 359C311 306 379 281 512 281C645 281 713 306 738 359C756 397 748 446 719 469V704C719 734 692 749 512 749C332 749 305 734 305 704Z" fill="url(#ic-bread)"/>
+      <path d="M305 704V469C276 446 268 397 286 359C311 306 379 281 512 281C645 281 713 306 738 359C756 397 748 446 719 469V704C719 734 692 749 512 749C332 749 305 734 305 704Z" fill="none" stroke="#7c3f08" stroke-opacity="0.36" stroke-width="5"/>
+      <path d="M220 365C249 275 344 239 512 239C680 239 775 275 804 365" fill="none" stroke="#ffe3a0" stroke-opacity="0.74" stroke-width="14" stroke-linecap="round"/>
+      <g stroke="#2a1408" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M372 435L496 522L372 609" stroke-width="50"/><path d="M556 614H664" stroke-width="46"/></g>
+    </g>
+  </defs>
+  <symbol id="icon-full" viewBox="78 78 868 868">
+    <g clip-path="url(#ic-clip)"><rect width="1024" height="1024" fill="url(#ic-bg)"/><rect width="1024" height="1024" fill="url(#ic-glow)"/></g>
+    <rect x="80" y="80" width="864" height="864" rx="194" fill="none" stroke="#f0c083" stroke-opacity="0.14" stroke-width="4"/>
+    <g filter="url(#ic-shadow)"><use href="#ic-toast"/></g>
+  </symbol>
+  <symbol id="icon-toast" viewBox="170 190 684 660">
+    <g filter="url(#ic-shadow-light)"><use href="#ic-toast"/></g>
+  </symbol>
+</svg>
 
-    <main id="top">
-      <section class="hero section-shell">
-        <div class="hero-copy">
-          <h1>The native home for coding <span>with agents.</span></h1>
-          <p>
-            Workspaces, live agent status, keyboard-first control, and a growing extension panel. Built on Ghostty.
-          </p>
-          <div class="hero-actions" aria-label="Primary actions">
-            <a class="button button-primary" href="https://github.com/figelwump/toastty/releases/latest">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 4v11" />
-                <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
-                <path d="M5 20h14" />
-              </svg>
-              Download for macOS
-            </a>
-            <a class="button button-secondary" href="https://github.com/figelwump/toastty">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M12 2.5c-5.25 0-9.5 4.15-9.5 9.27 0 4.1 2.73 7.58 6.52 8.8.48.08.66-.2.66-.45v-1.58c-2.65.56-3.21-1.1-3.21-1.1-.44-1.08-1.07-1.37-1.07-1.37-.87-.58.07-.57.07-.57.96.07 1.47.96 1.47.96.85 1.43 2.23 1.02 2.78.78.08-.6.33-1.02.6-1.25-2.12-.23-4.35-1.03-4.35-4.58 0-1.01.37-1.84.98-2.49-.1-.24-.43-1.2.09-2.46 0 0 .8-.25 2.62.95A9.25 9.25 0 0 1 12 7.08c.8 0 1.6.1 2.35.32 1.82-1.2 2.62-.95 2.62-.95.52 1.26.19 2.22.09 2.46.61.65.98 1.48.98 2.49 0 3.56-2.23 4.35-4.36 4.58.34.29.65.86.65 1.74v2.4c0 .25.18.54.66.45 3.79-1.22 6.51-4.7 6.51-8.8 0-5.12-4.25-9.27-9.5-9.27Z"
-                />
-              </svg>
-              View on GitHub
-            </a>
-          </div>
-          <p class="requirement">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M16.4 2.7c-.9.06-1.96.62-2.58 1.36-.56.67-1.03 1.73-.9 2.75 1 .08 2.03-.5 2.65-1.24.62-.74.98-1.77.83-2.87Z" />
-              <path d="M20 16.9c-.42.94-.62 1.36-1.16 2.2-.75 1.16-1.8 2.6-3.1 2.62-1.17.02-1.47-.76-3.05-.75-1.59.01-1.92.77-3.09.75-1.3-.02-2.3-1.31-3.05-2.47-2.09-3.24-2.31-7.05-1.02-9.07.92-1.43 2.37-2.27 3.74-2.27 1.39 0 2.27.76 3.42.76 1.12 0 1.8-.76 3.41-.76 1.22 0 2.5.66 3.42 1.8-3 1.64-2.51 5.92.48 7.19Z" />
-            </svg>
-            macOS 14.0+ required
-          </p>
-        </div>
+<header class="shell nav">
+  <a class="brand" href="./" aria-label="Toastty home"><svg aria-hidden="true"><use href="#icon-toast"/></svg><span>Toastty</span></a>
+  <nav class="nav-links" aria-label="Page sections"><a href="#workflows">Workflows</a><a href="#features">Features</a><a href="https://github.com/figelwump/toastty/tree/main/docs">Docs</a></nav>
+  <div class="nav-cta"><a class="btn btn-ghost gh" href="https://github.com/figelwump/toastty" aria-label="Toastty on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5c-5.25 0-9.5 4.15-9.5 9.27 0 4.1 2.73 7.58 6.52 8.8.48.08.66-.2.66-.45v-1.58c-2.65.56-3.21-1.1-3.21-1.1-.44-1.08-1.07-1.37-1.07-1.37-.87-.58.07-.57.07-.57.96.07 1.47.96 1.47.96.85 1.43 2.23 1.02 2.78.78.08-.6.33-1.02.6-1.25-2.12-.23-4.35-1.03-4.35-4.58 0-1.01.37-1.84.98-2.49-.1-.24-.43-1.2.09-2.46 0 0 .8-.25 2.62.95A9.25 9.25 0 0 1 12 7.08c.8 0 1.6.1 2.35.32 1.82-1.2 2.62-.95 2.62-.95.52 1.26.19 2.22.09 2.46.61.65.98 1.48.98 2.49 0 3.56-2.23 4.35-4.36 4.58.34.29.65.86.65 1.74v2.4c0 .25.18.54.66.45 3.79-1.22 6.51-4.7 6.51-8.8 0-5.12-4.25-9.27-9.5-9.27Z"/></svg><span>GitHub</span></a><a class="btn btn-dark" href="https://github.com/figelwump/toastty/releases/latest">Download</a></div>
+</header>
 
-        <figure class="hero-media" aria-label="Toastty app interface">
-          <img src="./assets/hero_0.6.5.png" alt="Toastty showing agent workspaces, terminal output, and a right-side document panel">
-        </figure>
-      </section>
+<main id="top">
+<section class="shell hero">
+  <div class="eyebrow">A native macOS terminal multiplexer for coding agents</div>
+  <h1>Any agent.<em>Any workflow.</em></h1>
+  <p class="sub">Toastty gives your agents building blocks they can drive. Shape them into the workflow that fits how you work, with any agent that runs in a terminal.</p>
+  <div class="ctas">
+    <a class="btn btn-dark" href="https://github.com/figelwump/toastty/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg>Download for macOS</a>
+  </div>
+  <div class="meta">Free and open source · macOS 14+ · Built on Ghostty</div>
+</section>
 
-      <section class="feature-grid-section product-section" id="features" aria-label="Key features">
-        <div class="section-shell feature-grid">
-          <article class="feature-tile">
-            <span class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="m12 3 8 4-8 4-8-4 8-4Z" />
-                <path d="m4 12 8 4 8-4" />
-                <path d="m4 17 8 4 8-4" />
-              </svg>
-            </span>
-            <div>
-              <h3>Workspaces in vertical tabs</h3>
-              <p>Organize conversations, contexts, and projects in a clean, persistent sidebar.</p>
-            </div>
-          </article>
-          <article class="feature-tile">
-            <span class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M3 12h4l2.2-6 5.6 12L17 12h4" />
-              </svg>
-            </span>
-            <div>
-              <h3>Real-time agent status</h3>
-              <p>See what each agent is doing right now with live activity and state indicators.</p>
-            </div>
-          </article>
-          <article class="feature-tile">
-            <span class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 7h18s-3 0-3-7Z" />
-                <path d="M10 20a2.4 2.4 0 0 0 4 0" />
-              </svg>
-            </span>
-            <div>
-              <h3>Unread badges &amp; notifications</h3>
-              <p>Native macOS notifications and sidebar unread counts so you never miss when an agent needs you.</p>
-            </div>
-          </article>
-          <article class="feature-tile">
-            <span class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M9 8v8a3 3 0 1 1-3-3h12a3 3 0 1 1-3 3V8a3 3 0 1 1 3 3H6a3 3 0 1 1 3-3Z" />
-              </svg>
-            </span>
-            <div>
-              <h3>Command palette</h3>
-              <p>Run actions, open workspaces, and search for local files instantly.</p>
-            </div>
-          </article>
-          <article class="feature-tile">
-            <span class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="m4 7 5 5-5 5" />
-                <path d="M12 19h8" />
-              </svg>
-            </span>
-            <div>
-              <h3>Terminal profiles</h3>
-              <p>Auto-launch tmux, an SSH session, or any startup command when you open a new terminal.</p>
-            </div>
-          </article>
-          <article class="feature-tile">
-            <span class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M8 2v6" />
-                <path d="M16 2v6" />
-                <path d="M6 8h12v5a6 6 0 0 1-12 0V8Z" />
-                <path d="M12 19v3" />
-              </svg>
-            </span>
-            <div>
-              <h3>Toastty CLI</h3>
-              <p>Integrate Toastty into your scripts, skills, and workflows via a local automation socket.</p>
-            </div>
-          </article>
-        </div>
-      </section>
+<section class="shell video" aria-labelledby="video-title">
+  <h2 class="sr-only" id="video-title">Example workflow</h2>
+  <p class="sr-only">An animated recreation of Toastty: a Claude Code session hands a checkout redesign off to a new worktree, which appears as a subspace in the sidebar with the conversation forked into it. While it works, the user marks up a docs preview in the right panel and sends the comment to a Codex session, which fixes the page. The subspace turns green when it is ready, and its PR opens from the chip in the sidebar.</p>
+  <div class="stage-wrap" id="wrap" aria-hidden="true">
+    <div class="stage" id="stage">
+     <div class="viewport" id="viewport">
+      <div class="cam" id="cam">
+      <div class="win">
 
-      <section class="agent-dashboard-section product-section" aria-labelledby="dashboard-title">
-        <div class="section-shell agent-dashboard-layout">
-          <figure class="screenshot-frame sidebar-frame">
-            <img src="./assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and agent status rows" loading="lazy" decoding="async">
-          </figure>
-          <div class="section-copy">
-            <h2 id="dashboard-title">Know which agent needs you next.</h2>
-            <p>
-              Workspaces become an agent dashboard. Toastty surfaces ready, working, unread, and later-marked
-              sessions without making you leave the terminal.
-            </p>
-            <div class="feature-stack">
-              <article>
-                <span class="status-dot green" aria-hidden="true"></span>
-                <div>
-                  <h3>Live sidebar status</h3>
-                  <p>Agent sessions can report readiness, working state, errors, and unread output.</p>
-                </div>
-              </article>
-              <article>
-                <span class="status-dot amber" aria-hidden="true"></span>
-                <div>
-                  <h3>Jump to active work</h3>
-                  <p>Use <kbd>⌘⇧A</kbd> to rotate through unread, approval, ready, and active sessions.</p>
-                </div>
-              </article>
-              <article>
-                <span class="status-dot cyan" aria-hidden="true"></span>
-                <div>
-                  <h3>Focus Mode</h3>
-                  <p>Focus on one panel at a time when you want to stay in the flow.</p>
-                </div>
-              </article>
+        <!-- Sidebar -->
+        <aside class="sb">
+          <div class="lights"><i></i><i></i><i></i></div>
+
+          <div class="card sel" id="card-lumen">
+            <div class="wsn"><span>lumen</span><span class="pill" id="pill"><span class="spin" id="pill-spin"></span><span id="pill-t">1/2</span></span></div>
+            <span class="branch">main</span>
+            <div class="row" id="row-plan">
+              <span class="ic" id="plan-ic"></span>
+              <div class="t">Plan checkout redesign</div>
+              <div class="s" id="plan-s">Waiting for your input</div>
+              <span class="chip fork" id="plan-fork" style="display:none">⑂ 1</span>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="side-panel-section product-section" aria-labelledby="side-panel-title">
-        <div class="section-shell side-panel-layout">
-          <div class="section-copy">
-            <h2 id="side-panel-title">Keep context beside the terminal.</h2>
-            <p>
-              Extensions — built-in today, user-built soon — live in a per-workspace side panel. Fully
-              automatable with the Toastty CLI.
-            </p>
-            <ul class="plain-list">
-              <li>Open markdown and code without leaving Toastty.</li>
-              <li>Visualize ideas, architectures, mockups, and data flows with sandboxed HTML pages in Toastty Scratchpads.</li>
-              <li>Open webpages in the built-in browser.</li>
-            </ul>
-          </div>
-          <figure class="screenshot-frame wide-frame">
-            <img src="./assets/right_panel_cropped_0.6.2.jpg" alt="Toastty side panel showing README.md, scratchpad, and browser tabs" loading="lazy" decoding="async">
-          </figure>
-        </div>
-      </section>
-
-      <section class="palette-section product-section" id="command-palette" aria-labelledby="palette-title">
-        <div class="section-shell palette-layout">
-          <figure class="screenshot-frame palette-frame">
-            <img src="./assets/command_palette_0.6.2.png" alt="Toastty command palette filtering worktree-create skill files" loading="lazy" decoding="async">
-          </figure>
-          <div class="section-copy">
-            <h2 id="palette-title">Every action has a shortcut.</h2>
-            <p>
-              Anything you can do with the mouse, you can do with the keyboard. Search and open local files
-              right from the command palette.
-            </p>
-          </div>
-        </div>
-        <div class="section-shell shortcut-reference" aria-label="Keyboard shortcut reference">
-          <div class="shortcut-reference-header">
-            <span>Keyboard-first</span>
-            <a href="https://github.com/figelwump/toastty/blob/main/docs/keyboard-shortcuts.md">Full reference →</a>
-          </div>
-          <div class="shortcut-reference-grid">
-            <ul class="shortcut-reference-column">
-              <li><span>Focus mode</span><kbd>⌘⇧F</kbd></li>
-              <li><span>Next active agent</span><kbd>⌘⇧A</kbd></li>
-            </ul>
-            <ul class="shortcut-reference-column">
-              <li><span>Sidebar</span><kbd>⌘B</kbd></li>
-              <li><span>Side panel</span><kbd>⌘⇧B</kbd></li>
-            </ul>
-            <ul class="shortcut-reference-column">
-              <li><span>Split horizontal</span><kbd>⌘D</kbd></li>
-              <li><span>Split vertical</span><kbd>⌘⇧D</kbd></li>
-            </ul>
-            <ul class="shortcut-reference-column">
-              <li><span>New workspace</span><kbd>⌘⇧N</kbd></li>
-              <li><span>Switch workspace</span><kbd>⌥1</kbd>–<kbd>9</kbd></li>
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section class="feature-band" aria-labelledby="native-title">
-        <div class="section-shell feature-band-layout">
-          <div class="section-heading">
-            <h2 id="native-title">Native terminal power, shaped for agents.</h2>
-            <p>Toastty stays close to the terminal while adding just enough app structure around it.</p>
-          </div>
-          <div class="feature-card-grid">
-            <article class="feature-card">
-              <h3>Full layout flexibility</h3>
-              <p>Split horizontal, vertical, resize with arrows, equalize, zoom one to full view. Layouts persist across restarts.</p>
-              <div class="terminal-split-preview animated-split-preview" aria-hidden="true">
-                <div class="split-layout split-layout-one">
-                  <div class="split-pane split-pane-primary">
-                    <span class="split-pane-label">zsh ~/code</span>
-                    <code>$ npm test<br>✓ 142 passing</code>
-                  </div>
-                </div>
-                <div class="split-layout split-layout-two">
-                  <div class="split-pane split-pane-primary">
-                    <span class="split-pane-label">zsh ~/code</span>
-                    <code>$ npm test<br>✓ 142 passing</code>
-                  </div>
-                  <div class="split-pane split-pane-secondary">
-                    <span class="split-pane-label">Claude Code</span>
-                    <code>working</code>
-                  </div>
-                </div>
-                <div class="split-layout split-layout-three">
-                  <div class="split-pane split-pane-primary">
-                    <span class="split-pane-label">zsh ~/code</span>
-                    <code>$ npm test<br>✓ 142 passing</code>
-                  </div>
-                  <div class="split-pane split-pane-secondary">
-                    <span class="split-pane-label">Claude Code</span>
-                    <code>working</code>
-                  </div>
-                  <div class="split-pane split-pane-tertiary">
-                    <span class="split-pane-label">zmx attach</span>
-                    <code>$ tail -f log</code>
-                  </div>
-                </div>
+            <div class="row">
+              <span class="ic"></span>
+              <div class="t">Fix flaky auth test</div>
+              <div class="s">Ready for prompt</div>
+            </div>
+            <div class="grow" data-at="5.0">
+              <div class="grp">⌄ SUBSPACES 1</div>
+              <div class="row working has-chip" id="row-sub">
+                <span class="ic" id="sub-ic"><span class="spin"></span></span>
+                <div class="t">checkout-redesign</div>
+                <div class="s" id="sub-s">Reading handoff…</div>
+                <span class="chip pr" id="sub-pr">PR #128</span>
+                <span class="elapsed" id="sub-el">0m 04s</span>
               </div>
-            </article>
-            <article class="feature-card">
-              <h3>Automate your workflows</h3>
-              <p>
-                Toastty's CLI can drive the app over its automation socket, so skills can prepare background
-                workspaces, start agent terminals, and attach handoff context.
-              </p>
-              <pre class="terminal-code syntax-code"><code><span class="token-comment">~/.toastty/skills/worktree-create/SKILL.md</span>
-<span class="token-key">name</span><span class="token-punct">:</span> <span class="token-value">worktree-create</span>
-<span class="token-key">steps</span><span class="token-punct">:</span>
-  <span class="token-punct">-</span> <span class="token-command">toastty action run</span> <span class="token-action">workspace.create</span> <span class="token-arg">activate</span><span class="token-punct">=</span><span class="token-value">false</span>
-  <span class="token-punct">-</span> <span class="token-command">toastty action run</span> <span class="token-action">terminal.send-text</span> <span class="token-ref">text=@startupPrompt</span>
-  <span class="token-punct">-</span> <span class="token-command">toastty action run</span> <span class="token-action">panel.create.local-document</span> <span class="token-string">WORKTREE_HANDOFF.md</span>
-  <span class="token-punct">-</span> <span class="token-command">toastty action run</span> <span class="token-action">panel.scratchpad.set-content</span> <span class="token-ref">content=@planHtml</span>
-
-<span class="token-shell">$</span> <span class="token-command">toastty action run workspace.create</span> <span class="token-success">● ready</span></code></pre>
-            </article>
-            <article class="feature-card">
-              <h3>Ghostty under the hood</h3>
-              <p>Built on libghostty's GPU-accelerated rendering. Your existing Ghostty config just works.</p>
-              <pre class="terminal-code syntax-code"><code><span class="token-shell">$</span> <span class="token-command">cat ~/.config/ghostty/config</span>
-<span class="token-comment"># your existing config — just works</span>
-<span class="token-key">theme</span> <span class="token-punct">=</span> <span class="token-string">tokyonight</span>
-<span class="token-key">font-family</span> <span class="token-punct">=</span> <span class="token-string">JetBrains Mono</span>
-<span class="token-key">font-size</span> <span class="token-punct">=</span> <span class="token-value">14</span>
-<span class="token-key">background-opacity</span> <span class="token-punct">=</span> <span class="token-value">0.96</span>
-<span class="token-key">unfocused-split-opacity</span> <span class="token-punct">=</span> <span class="token-value">0.7</span>
-<span class="token-key">unfocused-split-fill</span> <span class="token-punct">=</span> <span class="token-value">#4a4a66</span></code></pre>
-            </article>
+            </div>
           </div>
+
+          <div class="card" id="card-docs">
+            <div class="wsn"><span>docs-site</span><span class="pill quiet" id="docs-pill"><span class="spin" id="docs-spin"></span><span id="docs-pill-t">0/1</span></span></div>
+            <div class="row" id="row-docs">
+              <span class="ic" id="docs-ic"></span>
+              <div class="t">Update API reference</div>
+              <div class="s" id="docs-s">Ready for prompt</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="wsn"><span>infra</span><span class="pill quiet">0/1</span></div>
+            <div class="row has-chip approval">
+              <span class="ic"><span class="mk dot appr"></span></span>
+              <div class="t">Rotate staging keys</div>
+              <div class="s">Needs approval: apply plan</div>
+              <span class="chip appr">approval</span>
+            </div>
+          </div>
+
+          <div class="newws">+ New workspace</div>
+        </aside>
+
+        <!-- Top bar -->
+        <div class="top">
+          <div class="wtitle" id="wtitle"><b>lumen</b><span>1 running</span></div>
+          <div class="tabs"><span class="tab on" id="tab-main">main</span><span class="tab">review</span></div>
         </div>
-      </section>
 
-      <section class="final-cta" aria-labelledby="cta-title">
-        <div class="section-shell cta-grid">
-          <div>
-            <h2 id="cta-title">Make Toastty your terminal home.</h2>
-            <p>
-              Free and open source for macOS 14.0+.
-            </p>
-          </div>
-          <div class="cta-actions">
-            <a class="button button-primary" href="https://github.com/figelwump/toastty/releases/latest">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 4v11" />
-                <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
-                <path d="M5 20h14" />
-              </svg>
-              Download for macOS
-            </a>
-            <a class="button button-secondary" href="https://github.com/figelwump/toastty">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M12 2.5c-5.25 0-9.5 4.15-9.5 9.27 0 4.1 2.73 7.58 6.52 8.8.48.08.66-.2.66-.45v-1.58c-2.65.56-3.21-1.1-3.21-1.1-.44-1.08-1.07-1.37-1.07-1.37-.87-.58.07-.57.07-.57.96.07 1.47.96 1.47.96.85 1.43 2.23 1.02 2.78.78.08-.6.33-1.02.6-1.25-2.12-.23-4.35-1.03-4.35-4.58 0-1.01.37-1.84.98-2.49-.1-.24-.43-1.2.09-2.46 0 0 .8-.25 2.62.95A9.25 9.25 0 0 1 12 7.08c.8 0 1.6.1 2.35.32 1.82-1.2 2.62-.95 2.62-.95.52 1.26.19 2.22.09 2.46.61.65.98 1.48.98 2.49 0 3.56-2.23 4.35-4.36 4.58.34.29.65.86.65 1.74v2.4c0 .25.18.54.66.45 3.79-1.22 6.51-4.7 6.51-8.8 0-5.12-4.25-9.27-9.5-9.27Z"
-                />
-              </svg>
-              View on GitHub
-            </a>
-          </div>
-        </div>
-      </section>
-    </main>
+        <!-- Terminal -->
+        <section class="term">
+          <div class="phead" id="phead">Claude Code</div>
 
-    <footer class="site-footer">
-      <div class="section-shell footer-inner">
-        <span class="footer-brand">Toastty</span>
-        <nav class="footer-links" aria-label="Footer">
-          <a href="https://github.com/figelwump/toastty">GitHub</a>
-          <a href="https://github.com/figelwump/toastty/releases">Releases</a>
-          <a href="https://github.com/figelwump/toastty/issues">Issues</a>
-        </nav>
-        <span class="footer-meta">Open source · macOS 14.0+</span>
+          <div class="view" id="view-lumen">
+            <div class="lines">
+              <div class="ln always"><span class="b">●</span> Published Scratchpad <span class="a">"Checkout mockup"</span> (rev 3).</div>
+              <div class="ln always m">  Summary card moves above payment; totals stay</div>
+              <div class="ln always m">  pinned while scrolling on mobile.</div>
+              <div class="ln always gap"></div>
+              <div class="ln always"><span class="b">●</span> Plan agreed. Ready to build when you are.</div>
+              <div class="ln gap" data-at="3.2"></div>
+              <div class="ln m" data-at="3.2">› hand this off to a worktree and verify it visually</div>
+              <div class="ln gap" data-at="3.6"></div>
+              <div class="ln" data-at="3.6"><span class="b">●</span> <span class="b">Skill</span>(worktree-create)</div>
+              <div class="ln m" data-at="4.1">  ⎿ Wrote WORKTREE_HANDOFF.md</div>
+              <div class="ln m" data-at="4.5">  ⎿ Created worktree on <span class="a">feat/checkout-redesign</span></div>
+              <div class="ln m" data-at="4.9">  ⎿ Forked this session into a new subspace</div>
+              <div class="ln m" data-at="5.3">  ⎿ Copied the checkout mockup to its right panel</div>
+              <div class="ln gap" data-at="5.9"></div>
+              <div class="ln" data-at="5.9"><span class="b">●</span> Handed off. The subspace owns the build and the PR.</div>
+            </div>
+            <div class="prompt"><span class="gt">›</span><span id="typed"></span><span class="caret"></span></div>
+          </div>
+
+          <div class="view" id="view-child">
+            <div class="lines">
+              <div class="ln" data-at="7.6"><span class="b">●</span> <span class="b">Read</span> WORKTREE_HANDOFF.md</div>
+              <div class="ln m" data-at="7.9">  ⎿ Goal, 4 decisions, 3 checks, mockup rev 3</div>
+              <div class="ln gap" data-at="8.5"></div>
+              <div class="ln" data-at="8.5"><span class="b">●</span> <span class="b">Edit</span> src/checkout/SummaryCard.tsx <span class="g">+86</span> <span style="color:#e2766a">−41</span></div>
+              <div class="ln" data-at="9.1"><span class="b">●</span> <span class="b">Edit</span> src/checkout/CheckoutPage.tsx <span class="g">+12</span> <span style="color:#e2766a">−30</span></div>
+              <div class="ln gap" data-at="9.8"></div>
+              <div class="ln" data-at="9.8"><span class="b">●</span> <span class="b">Bash</span>(npm test)</div>
+              <div class="ln" data-at="10.3">  ⎿ <span class="g">✓ 214 passing</span> <span class="m">(38s)</span></div>
+              <div class="ln gap" data-at="11.6"></div>
+              <div class="ln" data-at="11.6"><span class="b">●</span> <span class="b">Screenshot</span> checkout at 390px and 1280px</div>
+              <div class="ln m" data-at="12.0">  ⎿ Opened the handoff in the right panel</div>
+              <div class="ln gap" data-at="13.2"></div>
+              <div class="ln" data-at="13.2"><span class="b">●</span> Published verification report: <span class="g">3/3 checks passed</span></div>
+              <div class="ln gap" data-at="15.2"></div>
+              <div class="ln" data-at="15.2"><span class="b">●</span> Opened PR <span class="a">#128</span> feat/checkout-redesign → main</div>
+              <div class="ln" data-at="16.0"><span class="b">●</span> Ready for your review.</div>
+            </div>
+            <div class="prompt"><span class="gt">›</span><span class="caret"></span></div>
+          </div>
+
+          <div class="view" id="view-docs">
+            <div class="lines">
+              <div class="ln always"><span class="b">●</span> <span class="b">Bash</span>(npm run dev)</div>
+              <div class="ln always m">  ⎿ Docs preview at localhost:3000</div>
+              <div class="ln always gap"></div>
+              <div class="ln always"><span class="b">●</span> Preview is open in the right panel.</div>
+              <div class="ln gap" data-at="13.3"></div>
+              <div class="ln a" data-at="13.3">› Annotation 1 on localhost:3000/docs/webhooks</div>
+              <div class="ln m" data-at="13.3">  "Still shows the v1 payload. Update for v2."</div>
+              <div class="ln m" data-at="13.3">  [screenshot of the marked region]</div>
+              <div class="ln gap" data-at="13.7"></div>
+              <div class="ln" data-at="13.7"><span class="b">●</span> <span class="b">Edit</span> docs/api/webhooks.md <span class="g">+34</span> <span style="color:#e2766a">−12</span></div>
+              <div class="ln" data-at="14.4"><span class="b">●</span> Reloaded the preview. The payload section is v2.</div>
+            </div>
+            <div class="prompt"><span class="gt">›</span><span class="caret"></span></div>
+          </div>
+        </section>
+
+        <!-- Right panel -->
+        <aside class="rp">
+          <div class="rtabs" id="rtabs">
+            <span class="rtab" data-tab="mock" data-ws="lumen child">◧ Checkout mockup</span>
+            <span class="rtab" data-tab="handoff" data-ws="child" data-at="10.5">¶ WORKTREE_HANDOFF.md</span>
+            <span class="rtab" data-tab="verify" data-ws="child" data-at="12.0">◧ Verification</span>
+            <span class="rtab" data-tab="pr" data-ws="child" data-at="19.5">◎ PR #128</span>
+            <span class="rtab" data-tab="docsweb" data-ws="docs">◎ localhost:3000</span>
+          </div>
+          <div class="rbody">
+
+            <div class="rv" data-view="mock">
+              <div class="doc">
+                <div class="sp-head"><b>Checkout mockup</b><span class="bind">Bound to Claude Code</span></div>
+                <div class="devices wire">
+                  <div class="phone">
+                    <div class="summary"><div class="r"><span>Subtotal</span><span>$76.00</span></div><div class="r"><span>Shipping</span><span>$8.00</span></div><div class="r tot"><span>Total</span><span>$84.00</span></div></div>
+                    <div class="item"><i></i><span></span></div><div class="item"><i></i><span></span></div><div class="item"><i></i><span></span></div>
+                    <div class="pay">Pay</div>
+                  </div>
+                  <div class="desk"><div class="bar"></div><div class="cols"><div><div class="item"><i></i><span></span></div><div class="item"><i></i><span></span></div><div class="item"><i></i><span></span></div></div><div><div class="summary"><div class="r"><span>Subtotal</span><span>$76</span></div><div class="r tot"><span>Total</span><span>$84</span></div></div><div class="pay">Pay</div></div></div></div>
+                </div>
+                <div class="anno">① Summary card first on mobile &nbsp; ② Totals stay pinned while scrolling &nbsp; ③ One primary action</div>
+              </div>
+            </div>
+
+            <div class="rv" data-view="docsweb">
+              <div class="url"><i></i><i></i><span>localhost:3000/docs/webhooks</span><b class="pencil" id="anno-btn" title="Annotate">✎</b></div>
+              <div class="site" id="site">
+                <div class="site-top"><b>lumen</b> docs<span>v2</span></div>
+                <div class="site-body">
+                  <nav class="site-nav"><span>Getting started</span><span>Authentication</span><span class="on">Webhooks</span><span>Errors</span><span>Changelog</span></nav>
+                  <article class="site-main">
+                    <h3>Webhooks</h3>
+                    <p>Lumen sends an HTTPS POST to your endpoint whenever something happens in your store.</p>
+                    <h4>Payload</h4>
+                    <p id="para"><span id="para-v1">Each event sends <code>event</code>, <code>timestamp</code>, and a flat <code>payload</code> map.</span><span id="para-v2">Each event includes <code>id</code>, <code>type</code>, <code>created_at</code>, and a nested <code>data</code> object.</span></p>
+                    <pre id="code-block"><span id="code-v1">{ "event": "order.paid",
+  "timestamp": 1727712000,
+  "payload": { ... } }</span><span id="code-v2">{ "id": "evt_91f",
+  "type": "order.paid",
+  "created_at": "2026-09-30T16:00:00Z",
+  "data": { ... } }</span></pre>
+                    <h4>Retries</h4>
+                    <p>Failed deliveries retry with exponential backoff for up to 24 hours.</p>
+                  </article>
+                </div>
+                <div class="anno-bar" id="anno-bar"><span class="ab-title"><i>✎</i>Annotating<em class="ab-count" id="ab-count">1</em></span><span class="ab-div"></span><span class="ab-send" id="ab-send">➤ Send to Agent</span><span class="ab-div"></span><span class="ab-clear">Clear</span></div>
+                <div class="anno-menu" id="anno-menu"><span id="anno-item">Codex · docs-site</span></div>
+                <div class="anno-rect" id="anno-rect"><span class="anno-pin">1</span></div>
+                <div class="anno-pop" id="anno-pop">
+                  <div class="ap-head"><span class="anno-num">1</span>Add comment</div>
+                  <div class="anno-q"><span id="anno-typed"></span><span class="caret"></span></div>
+                  <div class="anno-actions"><span>↩ Save&nbsp;&nbsp; ⇧↩ Newline&nbsp;&nbsp; esc Cancel</span><b id="anno-add">Add</b></div>
+                </div>
+                <div class="anno-toast" id="anno-toast">Sent 1 annotation to Codex</div>
+              </div>
+            </div>
+
+            <div class="rv" data-view="handoff">
+              <div class="doc">
+                <h3>Checkout redesign: handoff</h3>
+                <div class="dm">feat/checkout-redesign · base main @ 9f3c2e1 · draft PR</div>
+                <h4>Goal</h4>
+                <div>Move the order summary above payment and keep totals visible on small screens, matching mockup rev 3.</div>
+                <h4>Decisions</h4>
+                <ul><li>Summary card is a sticky header on mobile only</li><li>Keep the existing Pay button and payment form</li><li>No new dependencies</li><li>Follow the repo's verification guide</li></ul>
+                <h4>Checks</h4>
+                <ul class="cb" id="cb"><li>Summary above payment at 390px</li><li>Totals pinned while scrolling</li><li><code>npm test</code> passes</li></ul>
+              </div>
+            </div>
+
+            <div class="rv" data-view="verify">
+              <div class="doc">
+                <div class="rep-top"><h3>Verification</h3><span class="okpill">3/3 passed</span></div>
+                <div class="dm">checkout-redesign · 2 screenshots · npm test</div>
+                <div class="shots">
+                  <div class="shot"><div class="phone" style="width:112px">
+                    <div class="summary"><div class="r"><span>Subtotal</span><span>$76.00</span></div><div class="r"><span>Shipping</span><span>$8.00</span></div><div class="r tot"><span>Total</span><span>$84.00</span></div></div>
+                    <div class="item"><i style="background:#f3c77e"></i><span></span></div><div class="item"><i style="background:#9fc6e8"></i><span></span></div><div class="item"><i style="background:#c9a2dc"></i><span></span></div>
+                    <div class="pay">Pay $84.00</div>
+                  </div><div class="cap">390px</div></div>
+                  <div class="shot" style="flex:1"><div class="desk" style="border:0;padding:0"><div class="bar"></div><div class="cols"><div><div class="item"><i style="background:#f3c77e"></i><span></span></div><div class="item"><i style="background:#9fc6e8"></i><span></span></div><div class="item"><i style="background:#c9a2dc"></i><span></span></div></div><div><div class="summary"><div class="r"><span>Subtotal</span><span>$76</span></div><div class="r tot"><span>Total</span><span>$84</span></div></div><div class="pay">Pay $84.00</div></div></div></div><div class="cap">1280px</div></div>
+                </div>
+                <ul class="checks"><li>Summary card sits above payment at 390px</li><li>Totals stay pinned while scrolling</li><li>npm test: 214 passing</li></ul>
+              </div>
+            </div>
+
+            <div class="rv" data-view="pr">
+              <div class="url"><i></i><i></i><span>github.com/lumen-app/lumen/pull/128</span></div>
+              <div class="prpage">
+                <h3>Redesign checkout summary card <span>#128</span></h3>
+                <div class="prmeta"><span class="open">Open</span><span><span class="mono">feat/checkout-redesign</span> → <span class="mono">main</span></span></div>
+                <div class="box"><div class="h"><span class="okc">✓</span>All checks have passed</div><div class="c">4 successful checks</div></div>
+                <div class="box"><div class="h">Summary</div><div class="c"><p>Moves the order summary above payment and pins totals on mobile.</p><p>Verification: <span class="lnk">3/3 checks with screenshots</span></p><p class="m" style="color:#59636e">3 files changed · +98 −71</p></div></div>
+              </div>
+            </div>
+
+          </div>
+        </aside>
       </div>
-    </footer>
+
+      <div class="cursor" id="cursor">
+        <span class="ring"></span>
+        <svg viewBox="0 0 22 22" width="22" height="22"><path d="M3 2l14 9.2-6.3 1.2 3.7 7-2.8 1.4-3.7-7L3 18z" fill="#111" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
+      </div>
+      </div>
+      <div class="notif" data-at="15.2" data-until="17.2">
+        <svg aria-hidden="true"><use href="#icon-full"/></svg>
+        <div><small>Toastty · now</small><b>checkout-redesign is ready for review</b><br><span style="color:#cfcac1">PR #128 · 3/3 checks passed</span></div>
+      </div>
+      <div class="fade" id="fade"></div>
+     </div>
+    </div>
+  </div>
+
+  <div class="example-cap">Example: hand off a task, fix a docs page while it works, come back to a PR.</div>
+  <div class="beats" id="beats" aria-label="Video steps">
+    <button type="button" class="pp" id="pp" aria-label="Pause"><svg viewBox="0 0 24 24" id="pp-ic"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
+    <button type="button" class="beat" data-t="0" aria-label="Step 1: Hand off a task to a worktree"><span class="bar"><i></i></span><span class="n">01</span><span class="l">Hand off a task to a worktree</span></button>
+    <button type="button" class="beat" data-t="3.5" aria-label="Step 2: It becomes a subspace in the sidebar"><span class="bar"><i></i></span><span class="n">02</span><span class="l">It becomes a subspace in the sidebar</span></button>
+    <button type="button" class="beat" data-t="8.0" aria-label="Step 3: Meanwhile, annotate a preview and send it to an agent"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Meanwhile, annotate a preview and send it to an agent</span></button>
+    <button type="button" class="beat" data-t="15.0" aria-label="Step 4: The subspace turns green when it's ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">The subspace turns green when it's ready</span></button>
+    <button type="button" class="beat" data-t="17.6" aria-label="Step 5: Open the PR right from the sidebar"><span class="bar"><i></i></span><span class="n">05</span><span class="l">Open the PR right from the sidebar</span></button>
+  </div>
+</section>
+
+<section class="shell block-sec" id="building-blocks">
+  <div class="sec-eyebrow">Building blocks</div>
+  <h2>Everything on screen is something your agent can use.</h2>
+  <p class="lead">Toastty is a terminal multiplexer at its core, so it works with Claude Code, Codex, Cursor, OpenCode, Pi, or any CLI you run. What it adds is a set of pieces your agents can arrange for you.</p>
+  <div class="blocks">
+    <div>
+      <div class="schem" aria-hidden="true">
+        <div class="s-side"><span class="w"></span><span></span><span></span><span class="sub"></span><em>PR #128</em><span class="sub"></span><span class="w" style="margin-top:14px"></span><span></span><span></span><span class="w" style="margin-top:14px"></span><span></span></div>
+        <div class="s-top"><span></span><span></span></div>
+        <div class="s-main"><i></i><i style="border:0"></i></div>
+        <div class="s-rp"></div>
+        <span class="badge" style="left:21.5%;top:4%">1</span>
+        <span class="badge" style="left:50%;top:1.5%">2</span>
+        <span class="badge" style="left:36%;top:52%">2</span>
+        <span class="badge" style="right:14%;top:40%">3</span>
+        <span class="badge" style="left:21.5%;top:27%">4</span>
+      </div>
+      <div class="cli"><span class="badge" style="position:static;display:inline-block;width:20px;height:20px;line-height:20px;font-size:11px;margin-right:8px">5</span>toastty action run workspace.create  ·  panel.create.local-document  ·  workspace.set-annotation</div>
+    </div>
+    <ol class="blist">
+      <li><b>Workspaces and subspaces</b><span>One per project or task, in the sidebar. A subspace nests new work under the session that started it.</span></li>
+      <li><b>Tabs and splits</b><span>Any terminal layout, with any agent or command in each pane. Layouts persist across restarts.</span></li>
+      <li><b>Right panel</b><span>Scratchpad pages, local files, and a browser beside the terminal: plans, mockups, handoffs, previews.</span></li>
+      <li><b>Status and chips</b><span>Live agent status and notifications, plus links like PR #128 or ENG-412 pinned to a workspace.</span></li>
+      <li><b>The toastty CLI</b><span>Every piece above, callable from a skill or a script. Skills in <code>~/.toastty/skills</code> reach every supported agent you launch.</span></li>
+    </ol>
+  </div>
+</section>
+
+<section class="shell block-sec" id="workflows">
+  <div class="sec-eyebrow">Workflows</div>
+  <h2>Put the pieces together however you work.</h2>
+  <p class="lead">A workflow is a short skill file that tells your agent which pieces to use and when. Start from the worktree examples, or describe how you work and let your agent write one.</p>
+  <div class="flows">
+    <div class="flow"><div><h4>Worktree handoff</h4><span class="ask">"hand this off"</span><a class="tag" href="https://github.com/figelwump/toastty/tree/main/examples/skills">Example included</a></div><p>Packages the conversation into a handoff, opens a worktree in a new subspace, and comes back with a screenshot report and a PR chip.</p><div class="tools">git · GitHub</div></div>
+    <div class="flow"><div><h4>Issue to PR</h4><span class="ask">"start ENG-412"</span></div><p>Reads the issue, names a workspace after it with a chip linking back, drafts the plan in a Scratchpad, and links the PR on the issue when it's up.</p><div class="tools">Linear · GitHub Issues</div></div>
+    <div class="flow"><div><h4>Review queue</h4><span class="ask">"review my PRs"</span></div><p>Opens a subspace per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies you as each one is ready.</p><div class="tools">GitHub</div></div>
+    <div class="flow"><div><h4>Spec to tasks</h4><span class="ask">"build from this spec"</span></div><p>Opens the spec beside the terminal, splits it into tasks, starts a subspace for each, and keeps a progress page up to date.</p><div class="tools">Google Docs · Notion · Markdown</div></div>
+    <div class="flow"><div><h4>Crash to fix</h4><span class="ask">"fix this crash"</span></div><p>Reproduces the report in a worktree with the dev server in a split the agent can read, then shows before and after screenshots.</p><div class="tools">Sentry · logs</div></div>
+    <div class="flow"><div><h4>Second opinion</h4><span class="ask">"ask another model"</span></div><p>Runs two agents side by side on the same question and compares their answers in a Scratchpad.</p><div class="tools">Any two CLI agents</div></div>
+  </div>
+  <p class="fine">The worktree handoff ships as <a href="https://github.com/figelwump/toastty/tree/main/examples/skills">example skills</a>; the others are ideas to describe to your agent. Issue trackers and documents are reached through your agent's own tools, such as MCP servers or <code>gh</code>. Toastty provides the workspace around them.</p>
+</section>
+
+<section class="shell block-sec" id="features">
+  <div class="sec-eyebrow">Sidebar</div>
+  <h2>See which agent needs you next.</h2>
+  <p class="lead">Every workspace is a card in the sidebar. Sessions report live status, and the rows that want you are tinted: green when ready, amber when waiting for approval, red on an error.</p>
+  <div class="split2">
+    <div>
+      <ul class="feats">
+        <li><b>Subspaces</b><span>Task workspaces nest under the session that started them, each with its own status and PR chip.</span></li>
+        <li><b>Jump to what's next</b><span><kbd>⌘⇧A</kbd> cycles through unread, approval, and active sessions.</span></li>
+        <li><b>Mark for later</b><span><kbd>⌘⇧L</kbd> flags a session; the flag clears when it moves forward.</span></li>
+        <li><b>Watch any command</b><span><kbd>⌘⇧M</kbd> turns a long build or test run into a row that notifies you when it exits.</span></li>
+        <li><b>Notifications</b><span>Native macOS notifications and unread badges, so you can look away.</span></li>
+      </ul>
+      <p class="agents-line">Live status for Claude Code, Codex, Cursor, OpenCode, MiMo Code, and Pi. Any other CLI runs in a normal pane.</p>
+    </div>
+    <div class="sbdemo" aria-hidden="true">
+      <div class="card sel">
+        <div class="wsn"><span>lumen</span><span class="pill"><span class="spin"></span>2/6</span></div>
+        <span class="branch">main</span>
+        <div class="row working"><span class="ic"><span class="spin"></span></span><div class="t">Refactor cart totals</div><div class="s">Running tests…</div><span class="elapsed">2m 10s</span></div>
+        <div class="row ready"><span class="ic"><span class="mk dot ready"></span></span><div class="t">Plan checkout redesign</div><div class="s">Plan agreed. Ready to build.</div></div>
+        <div class="row approval has-chip"><span class="ic"><span class="mk dot appr"></span></span><div class="t">Migrate orders table</div><div class="s">Needs approval: run migration</div><span class="chip appr">approval</span></div>
+        <div class="grp">⌄ SUBSPACES 3</div>
+        <div class="row working"><span class="ic"><span class="spin"></span></span><div class="t">search-filters</div><div class="s">Editing FilterBar.tsx</div><span class="elapsed">6m 41s</span></div>
+        <div class="row ready has-chip"><span class="ic"><span class="mk sq ready"></span></span><div class="t">checkout-redesign</div><div class="s">Ready for review</div><span class="chip pr show">PR #128</span></div>
+        <div class="row has-chip"><span class="ic"><span class="mk done">✓</span></span><div class="t muted">sidebar-icons</div><div class="s">Merged</div><span class="chip pr show">PR #121</span></div>
+      </div>
+      <div class="card">
+        <div class="wsn"><span>docs-site</span><span class="pill quiet">0/1</span></div>
+        <div class="row"><span class="ic"></span><div class="t">Update API reference</div><div class="s">Waiting for your input</div><span class="flag">⚑</span></div>
+      </div>
+      <div class="card">
+        <div class="wsn"><span>infra</span><span class="pill quiet">0/1</span></div>
+        <div class="row error has-chip"><span class="ic"><span class="mk dot errd"></span></span><div class="t">Rotate staging keys</div><div class="s">terraform plan failed</div><span class="chip errc">error</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="shell block-sec" id="right-panel">
+  <div class="sec-eyebrow">Right panel</div>
+  <h2>Context beside the terminal.</h2>
+  <p class="lead">Each tab keeps its own right panel. Agents open what you need to see, and you can open things there too.</p>
+  <div class="trio">
+    <div>
+      <div class="mini"><span class="mtab">◧ Architecture</span><div class="mbody diag"><i></i><em></em><i></i><em></em><i></i></div></div>
+      <h3>Scratchpad</h3>
+      <p>Agents publish HTML pages for plans, mockups, diagrams, and reports. Each one stays linked to the session that made it.</p>
+    </div>
+    <div>
+      <div class="mini"><span class="mtab">¶ webhooks.md</span><div class="mbody code"><div><span>1</span><b class="h"># Webhooks</b></div><div><span>2</span></div><div><span>3</span>Lumen sends an HTTPS POST</div><div><span>4</span>whenever something happens.</div><div><span>5</span></div><div><span>6</span><b class="h">## Payload</b></div><div><span>7</span>Each event includes `id`…</div></div></div>
+      <h3>Local files</h3>
+      <p>Markdown, code, configs, logs, and CSV open in an editable view with line numbers, right next to the agent working on them.</p>
+    </div>
+    <div>
+      <div class="mini"><span class="mtab">◎ localhost:3000</span><div class="mbody webm"><div class="wl" style="width:40%"></div><div class="wl"></div><div class="wl" style="width:80%"></div><div class="wl" style="width:90%;margin-top:18px"></div><div class="wl" style="width:70%"></div><div class="wl" style="width:85%"></div><div class="wbox"><b>1</b></div></div></div>
+      <h3>Browser</h3>
+      <p>Previews, dashboards, and PRs. Mark up a page and send your notes to an agent along with a screenshot.</p>
+    </div>
+  </div>
+</section>
+
+<section class="shell block-sec" id="get-started">
+  <div class="sec-eyebrow">Get started</div>
+  <h2>Set up in a few minutes.</h2>
+  <div class="steps">
+    <div><h3>Download Toastty</h3><p>Open the <a href="https://github.com/figelwump/toastty/releases/latest">latest release</a> and drag Toastty to Applications. Your Ghostty config carries over.</p></div>
+    <div><h3>Paste the setup prompt</h3><p>Copy it from <b>Toastty ▸ Get Started with Toastty…</b> and give it to any agent in a Toastty pane. It previews every change before writing anything.</p></div>
+    <div><h3>Pick a workflow</h3><p>Copy the <a href="https://github.com/figelwump/toastty/tree/main/examples/skills">worktree handoff examples</a> into <code>~/.toastty/skills</code>, or describe how you work and let your agent write a skill there.</p></div>
+  </div>
+  <div class="promptbox"><button type="button" class="copy" id="copy-prompt">Copy</button><span id="setup-prompt">You are helping me set up Toastty. Please run:
+
+"$TOASTTY_CLI_PATH" setup guide
+
+Read the guide, narrate each step, dry-run every setup installer first (pass --dry-run), show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.</span></div>
+</section>
+
+<section class="shell block-sec" id="foundations">
+  <div class="sec-eyebrow">Foundations</div>
+  <h2>A real terminal underneath.</h2>
+  <div class="found">
+    <div><b>Ghostty rendering</b><span>GPU-accelerated, and your existing <a href="https://ghostty.org">Ghostty</a> config just works.</span></div>
+    <div><b>Keyboard first</b><span><kbd>⌘⇧P</kbd> command palette, <kbd>⌘D</kbd> to split, <kbd>⌥1</kbd>–<kbd>9</kbd> to switch workspaces.</span></div>
+    <div><b>Terminal profiles</b><span>One-key launchers for tmux, zmx, SSH, or any startup command.</span></div>
+    <div><b>Layouts that persist</b><span>Workspaces, tabs, and splits come back after a restart, and with shell integration, so does each pane's history.</span></div>
+    <div><b>Local first</b><span>No usage analytics or telemetry. Beyond update checks, Toastty only connects out for features you use, such as Remote Access or a diagnostics report you choose to send.</span></div>
+    <div><b>Toastty Mobile <em class="beta">TestFlight beta</em></b><span>Check on sessions and reply from your iPhone over your private tailnet. Available through TestFlight for now; see <a href="https://github.com/figelwump/toastty/blob/main/docs/remote-access.md">Remote Access</a>.</span></div>
+  </div>
+</section>
+
+<section class="shell cta" aria-labelledby="cta-title">
+  <h2 id="cta-title">Make Toastty work your way.</h2>
+  <p>Free and open source for macOS 14 and later.</p>
+  <div class="ctas"><a class="btn btn-dark" href="https://github.com/figelwump/toastty/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg>Download for macOS</a><a class="btn btn-ghost" href="https://github.com/figelwump/toastty">View on GitHub</a></div>
+</section>
+</main>
+
+<footer class="shell foot">
+  <div class="brand foot-brand"><svg aria-hidden="true"><use href="#icon-toast"/></svg><span>Toastty</span></div>
+  <nav aria-label="Footer"><a href="https://github.com/figelwump/toastty">GitHub</a><a href="https://github.com/figelwump/toastty/releases">Releases</a><a href="https://github.com/figelwump/toastty/tree/main/docs">Docs</a></nav>
+  <span>Built on Ghostty</span>
+</footer>
+<script src="./hero.js"></script>
+<script>
+  // Copy button for the setup prompt.
+  (function () {
+    var button = document.getElementById('copy-prompt');
+    var text = document.getElementById('setup-prompt');
+    if (!button || !text || !navigator.clipboard) { if (button) button.hidden = true; return; }
+    button.addEventListener('click', function () {
+      navigator.clipboard.writeText(text.textContent).then(function () {
+        button.textContent = 'Copied';
+        setTimeout(function () { button.textContent = 'Copy'; }, 1600);
+      }, function () { button.textContent = 'Copy failed'; });
+    });
+  })();
+</script>
   </body>
 </html>

@@ -5,7 +5,11 @@ import UIKit
 struct ToasttyComposerTextView: UIViewRepresentable {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    @Binding var text: String
+    let text: String
+    let onTextChange: (String, UInt64) -> Void
+    var editRevision: UInt64 = 0
+    var replacement: ToasttyComposerReplacement? = nil
+    var onReplacementCompleted: (ToasttyComposerReplacementResult) -> Void = { _ in }
     @Binding var isFocused: Bool
 
     let placeholder: String
@@ -38,6 +42,13 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         textView.autocapitalizationType = .sentences
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textView.text = text
+        textView.selectedRange = NSRange(location: text.utf16.count, length: 0)
+        textView.onCompositionEnded = { [weak coordinator = context.coordinator, weak textView] in
+            guard let textView else { return }
+            coordinator?.applyPendingReplacement(to: textView)
+        }
+        textView.textDidChange()
         synchronize(textView)
         return textView
     }
@@ -49,23 +60,7 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         context.coordinator.parent = self
         synchronize(textView)
 
-        if textView.text != text, textView.markedTextRange == nil {
-            let uiKitText = textView.text ?? ""
-            let isStaleEcho = textView.isFirstResponder
-                && text.isEmpty == false
-                && uiKitText.hasPrefix(text)
-                && uiKitText.utf16.count > text.utf16.count
-            if isStaleEcho == false {
-                let selection = textView.selectedRange
-                textView.text = text
-                textView.selectedRange = Self.clampedSelection(
-                    selection,
-                    utf16Count: text.utf16.count
-                )
-                textView.textDidChange()
-                textView.requestSelectionVisibility()
-            }
-        }
+        context.coordinator.receiveReplacement(replacement, in: textView)
 
         if isFocused, isEnabled {
             if textView.isFirstResponder == false {
@@ -108,6 +103,8 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         _ textView: ToasttyComposerUIKitTextView,
         coordinator: Coordinator
     ) {
+        coordinator.isActive = false
+        textView.onCompositionEnded = nil
         textView.delegate = nil
         if textView.isFirstResponder {
             textView.resignFirstResponder()
@@ -160,14 +157,6 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         return max(fittingHeight, textKitHeight)
     }
 
-    static func clampedSelection(_ selection: NSRange, utf16Count: Int) -> NSRange {
-        let location = min(selection.location, utf16Count)
-        return NSRange(
-            location: location,
-            length: min(selection.length, utf16Count - location)
-        )
-    }
-
     private func synchronize(_ textView: ToasttyComposerUIKitTextView) {
         textView.placeholder = placeholder
         textView.isEditable = isEnabled
@@ -181,9 +170,77 @@ struct ToasttyComposerTextView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ToasttyComposerTextView
+        var lastReplacementRevision: UInt64 = 0
+        var isActive = true
+        private var pendingReplacement: ToasttyComposerReplacement?
+        private var isReplacingText = false
+        private var editRevision: UInt64
+        private var lastNativeText: String
+
+        func receiveReplacement(_ replacement: ToasttyComposerReplacement?, in textView: ToasttyComposerUIKitTextView) {
+            guard let replacement else {
+                pendingReplacement = nil
+                return
+            }
+            if replacement.revision > lastReplacementRevision {
+                lastReplacementRevision = replacement.revision
+                pendingReplacement = replacement
+            }
+            applyPendingReplacement(to: textView)
+        }
+
+        func applyPendingReplacement(to textView: ToasttyComposerUIKitTextView) {
+            guard isActive, !isReplacingText, textView.markedTextRange == nil,
+                  let replacement = pendingReplacement else { return }
+            // Selection callbacks can precede textViewDidChange. Account for
+            // the actual native text before deciding whether this request won.
+            recordNativeEdit(in: textView)
+            pendingReplacement = nil
+            // A clear followed by restoration can coalesce into one render.
+            guard !(textView.text ?? "").utf16.elementsEqual(replacement.text.utf16) else {
+                reportCompletion(replacement, in: textView, rejected: false)
+                return
+            }
+            guard editRevision == replacement.expectedEditRevision else {
+                reportCompletion(replacement, in: textView, rejected: true)
+                return
+            }
+            isReplacingText = true
+            textView.text = replacement.text
+            lastNativeText = replacement.text
+            textView.selectedRange = NSRange(location: replacement.text.utf16.count, length: 0)
+            isReplacingText = false
+            reportCompletion(replacement, in: textView, rejected: false)
+            textView.textDidChange()
+            textView.requestSelectionVisibility()
+        }
+
+        func reportCompletion(_ replacement: ToasttyComposerReplacement, in textView: ToasttyComposerUIKitTextView, rejected: Bool) {
+            // updateUIView cannot synchronously mutate SwiftUI state. On a
+            // completion, publish the latest native text when the callback runs.
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView, self.isActive,
+                      self.lastReplacementRevision == replacement.revision else { return }
+                self.recordNativeEdit(in: textView)
+                self.parent.onReplacementCompleted(ToasttyComposerReplacementResult(
+                    revision: replacement.revision, nativeText: textView.text ?? "",
+                    nativeEditRevision: self.editRevision, wasApplied: !rejected
+                ))
+            }
+        }
 
         init(parent: ToasttyComposerTextView) {
             self.parent = parent
+            self.editRevision = parent.editRevision
+            self.lastNativeText = parent.text
+        }
+
+        private func recordNativeEdit(in textView: UITextView) {
+            let text = textView.text ?? ""
+            if !text.utf16.elementsEqual(lastNativeText.utf16) {
+                editRevision += 1
+                lastNativeText = text
+            }
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -200,11 +257,11 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            guard let textView = textView as? ToasttyComposerUIKitTextView else { return }
+            guard !isReplacingText, let textView = textView as? ToasttyComposerUIKitTextView else { return }
             textView.textDidChange()
-            if parent.text != textView.text {
-                parent.text = textView.text
-            }
+            recordNativeEdit(in: textView)
+            applyPendingReplacement(to: textView)
+            parent.onTextChange(textView.text ?? "", editRevision)
             guard textView.markedTextRange == nil else { return }
             textView.requestSelectionVisibility()
         }
@@ -214,6 +271,7 @@ struct ToasttyComposerTextView: UIViewRepresentable {
                   textView.markedTextRange == nil else {
                 return
             }
+            applyPendingReplacement(to: textView)
             textView.requestSelectionVisibility()
         }
     }
@@ -235,6 +293,13 @@ final class ToasttyComposerUIKitTextView: UITextView {
     private var deferredSelectionRevealScheduled = false
     private var lastLayoutSize = CGSize.zero
     private var layoutMeasurement: LayoutMeasurement?
+
+    var onCompositionEnded: (() -> Void)?
+
+    override func unmarkText() {
+        super.unmarkText()
+        onCompositionEnded?()
+    }
 
     var placeholder = "" {
         didSet {

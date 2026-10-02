@@ -382,6 +382,14 @@ If you do not want a persistent log file:
 
 You can also redirect logs to a custom path with `TOASTTY_LOG_FILE=/path/to/file.log`.
 
+Each log line is one JSON object. To follow the default log:
+
+```bash
+tail -f ~/Library/Logs/Toastty/toastty.log | jq
+```
+
+`TOASTTY_LOG_LEVEL` sets the minimum level, and `TOASTTY_LOG_STDERR=1` also mirrors logs to stderr. See [Environment and Launch Flags](environment-and-build-flags.md#logging) for every logging variable and its default.
+
 ## Ghostty note
 
 Toastty embeds Ghostty through a locally supplied `GhosttyKit.xcframework`. That artifact is built outside this repository.

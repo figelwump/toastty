@@ -45,6 +45,7 @@ enum SidebarSubspacePresentation {
         let panelID: UUID
         var agentLabel: String? = nil
         let statusKind: SessionStatusKind
+        let isWaiting: Bool
         var showsUnreadSessionAccent = false
         let summary: String?
         var turnStartedAt: Date? = nil
@@ -78,7 +79,15 @@ enum SidebarSubspacePresentation {
         /// `path(sessionCWDs:workspace:)`.
         var path: String? = nil
 
-        /// The one chip the row shows: the workspace's primary annotation,
+        /// A subspace is waiting only when none of its working sessions is
+        /// actively making progress. Attention and unread ready states win.
+        var isWaiting: Bool {
+            guard status == .working else { return false }
+            let workingSessions = sessions.filter { $0.statusKind == .working }
+            return workingSessions.isEmpty == false && workingSessions.allSatisfy(\.isWaiting)
+        }
+
+        /// The one annotation chip the row shows: the workspace's primary annotation,
         /// or its `github-pr` annotation when none is marked primary.
         var rowAnnotation: (key: String, annotation: WorkspaceAnnotation)? {
             for key in [primaryAnnotationKey, SidebarSubspacePresentation.annotationKeyPullRequest] {
@@ -342,7 +351,7 @@ enum SidebarSubspacePresentation {
         case .ready: components.append("ready")
         case .needsApproval: components.append("needs approval")
         case .error: components.append("error")
-        case .working: components.append("working")
+        case .working: components.append(row.isWaiting ? "waiting" : "working")
         case .done: components.append("done")
         case .idle: break
         }
@@ -402,6 +411,7 @@ enum SidebarSubspacePresentation {
                     badgeKind: session.statusKind == .needsApproval || session.statusKind == .error
                         ? session.statusKind
                         : nil,
+                    isWaiting: session.isWaiting,
                     turnStartedAt: session.turnStartedAt,
                     summary: session.summary
                 )

@@ -8,7 +8,7 @@ struct SetupCommandRunnerTests {
     func setupGuideParsesDefaultTextFormat() throws {
         let invocation = try ToasttyCLI.parse(arguments: ["setup", "guide"], environment: [:])
 
-        guard case .setup(.guide(let format)) = invocation.command else {
+        guard case .setup(.guide(.onboarding, let format)) = invocation.command else {
             Issue.record("expected setup guide command")
             return
         }
@@ -22,7 +22,7 @@ struct SetupCommandRunnerTests {
             environment: [:]
         )
 
-        guard case .setup(.guide(let format)) = invocation.command else {
+        guard case .setup(.guide(.onboarding, let format)) = invocation.command else {
             Issue.record("expected setup guide command")
             return
         }
@@ -107,6 +107,37 @@ struct SetupCommandRunnerTests {
                 return
             }
             #expect(message.contains("either --dry-run or --apply"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func setupGuideParsesWorkflowsTopic() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["setup", "guide", "--topic", "workflows", "--format", "md"],
+            environment: [:]
+        )
+
+        guard case .setup(.guide(let topic, let format)) = invocation.command else {
+            Issue.record("expected setup guide command")
+            return
+        }
+        #expect(topic == .workflows)
+        #expect(format == .md)
+    }
+
+    @Test
+    func setupGuideRejectsUnknownTopic() {
+        do {
+            _ = try ToasttyCLI.parse(arguments: ["setup", "guide", "--topic", "recipes"], environment: [:])
+            Issue.record("expected parse failure")
+        } catch let error as ToasttyCLIError {
+            guard case .usage(let message) = error else {
+                Issue.record("expected usage error")
+                return
+            }
+            #expect(message.contains("--topic must be one of: onboarding, workflows"))
         } catch {
             Issue.record("unexpected error: \(error)")
         }
@@ -241,29 +272,59 @@ struct SetupCommandRunnerTests {
     func setupRunnerRendersGuideFromResourceStore() throws {
         let setupURL = try makeTemporarySetupResources()
         defer { try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent()) }
-        let store = SetupResourceStore(setupDirectoryURL: setupURL)
+        let store = SetupResourceStore(setupDirectoryURL: setupURL, workflowExamplesDirectoryURL: setupURL)
 
         let guideText = try SetupCommandRunner.render(
-            command: .guide(format: .text),
+            command: .guide(topic: .onboarding, format: .text),
             jsonOutput: false,
             store: store
         )
         #expect(guideText.trimmingCharacters(in: .newlines) == "Guide Title\n\necho setup")
 
         let guideMarkdown = try SetupCommandRunner.render(
-            command: .guide(format: .md),
+            command: .guide(topic: .onboarding, format: .md),
             jsonOutput: false,
             store: store
         )
         #expect(guideMarkdown.contains("# Guide Title"))
 
         let jsonGuide = try SetupCommandRunner.render(
-            command: .guide(format: .md),
+            command: .guide(topic: .onboarding, format: .md),
             jsonOutput: true,
             store: store
         )
         #expect(jsonGuide.contains("\"content\""))
         #expect(jsonGuide.contains("\"format\" : \"md\""))
+    }
+
+    @Test
+    func setupRunnerRendersWorkflowGuideTopic() throws {
+        let setupURL = try makeTemporarySetupResources()
+        defer { try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent()) }
+        try "# Workflow Guide\n\nExamples live in {{WORKFLOW_EXAMPLES_DIR}}.\n".write(
+            to: setupURL.appendingPathComponent("workflow-guide.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        let examplesURL = URL(fileURLWithPath: "/Applications/Toastty.app/Contents/Resources/WorkflowExamples/skills", isDirectory: true)
+        let store = SetupResourceStore(setupDirectoryURL: setupURL, workflowExamplesDirectoryURL: examplesURL)
+
+        let text = try SetupCommandRunner.render(
+            command: .guide(topic: .workflows, format: .text),
+            jsonOutput: false,
+            store: store
+        )
+        #expect(text.hasPrefix("Workflow Guide"))
+        #expect(text.contains("Examples live in \(examplesURL.path)."))
+        #expect(text.contains("{{") == false)
+
+        let json = try SetupCommandRunner.render(
+            command: .guide(topic: .workflows, format: .md),
+            jsonOutput: true,
+            store: store
+        )
+        #expect(json.contains("\"topic\" : \"workflows\""))
+        #expect(json.contains("# Workflow Guide"))
     }
 
     @Test
@@ -283,7 +344,7 @@ struct SetupCommandRunnerTests {
         let environment = [
             ToasttyLaunchContextEnvironment.userSkillsRootKey: skillsRoot.path,
         ]
-        let store = SetupResourceStore(setupDirectoryURL: setupURL)
+        let store = SetupResourceStore(setupDirectoryURL: setupURL, workflowExamplesDirectoryURL: setupURL)
 
         let text = try SetupCommandRunner.render(
             command: .skillsList,
@@ -339,7 +400,7 @@ struct SetupCommandRunnerTests {
         let text = try SetupCommandRunner.render(
             command: .skillsList,
             jsonOutput: false,
-            store: SetupResourceStore(setupDirectoryURL: setupURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL, workflowExamplesDirectoryURL: setupURL),
             environment: [
                 ToasttyLaunchContextEnvironment.userSkillsRootKey: missingRoot.path,
             ]

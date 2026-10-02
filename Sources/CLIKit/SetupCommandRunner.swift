@@ -7,28 +7,49 @@ enum SetupGuideFormat: String, CaseIterable, Codable, Equatable {
     case md
 }
 
+enum SetupGuideTopic: String, CaseIterable, Codable, Equatable {
+    case onboarding
+    case workflows
+
+    var resourceFileName: String {
+        switch self {
+        case .onboarding:
+            return "onboarding-guide.md"
+        case .workflows:
+            return "workflow-guide.md"
+        }
+    }
+}
+
 enum SetupCommand: Equatable {
-    case guide(format: SetupGuideFormat)
+    case guide(topic: SetupGuideTopic, format: SetupGuideFormat)
     case skillsList
     case installShellIntegration(shell: ProfileShellIntegrationShell?, apply: Bool)
     case installHooks(agent: AgentKind, apply: Bool)
 }
 
 struct SetupResourceStore {
+    /// Placeholder in guide text for the bundled example skills directory,
+    /// replaced with its absolute path when a guide is printed.
+    static let workflowExamplesPlaceholder = "{{WORKFLOW_EXAMPLES_DIR}}"
+
     let setupDirectoryURL: URL
+    let workflowExamplesDirectoryURL: URL
 
     static func live(environment: [String: String]) -> Self {
         SetupResourceStore(
-            setupDirectoryURL: SetupResourceResolver.setupDirectoryURL(environment: environment)
+            setupDirectoryURL: SetupResourceResolver.setupDirectoryURL(environment: environment),
+            workflowExamplesDirectoryURL: SetupResourceResolver.workflowExamplesDirectoryURL(environment: environment)
         )
     }
 
-    func guideMarkdown() throws -> String {
-        try readUTF8(setupDirectoryURL.appendingPathComponent("onboarding-guide.md", isDirectory: false))
+    func guideMarkdown(topic: SetupGuideTopic) throws -> String {
+        try readUTF8(setupDirectoryURL.appendingPathComponent(topic.resourceFileName, isDirectory: false))
+            .replacingOccurrences(of: Self.workflowExamplesPlaceholder, with: workflowExamplesDirectoryURL.path)
     }
 
-    func guide(format: SetupGuideFormat) throws -> String {
-        let markdown = try guideMarkdown()
+    func guide(topic: SetupGuideTopic, format: SetupGuideFormat) throws -> String {
+        let markdown = try guideMarkdown(topic: topic)
         switch format {
         case .md:
             return markdown
@@ -80,10 +101,10 @@ enum SetupCommandRunner {
         fileManager: FileManager = .default
     ) throws -> String {
         switch command {
-        case .guide(let format):
-            let content = try store.guide(format: format)
+        case .guide(let topic, let format):
+            let content = try store.guide(topic: topic, format: format)
             if jsonOutput {
-                return try renderJSON(GuidePayload(format: format, content: content))
+                return try renderJSON(GuidePayload(topic: topic, format: format, content: content))
             }
             return content
 
@@ -156,6 +177,7 @@ private enum SetupGuideTextRenderer {
 }
 
 private struct GuidePayload: Codable {
+    var topic: SetupGuideTopic
     var format: SetupGuideFormat
     var content: String
 }

@@ -23,7 +23,8 @@ struct ClaudeQuestionBroker {
         var leaseExpiry: Date?
         var submission: RemoteQuestionAnswerRequest?
         var delivered = false
-        var closed = false
+        var closedAt: Date?
+        var closed: Bool { closedAt != nil }
         var resolved = false
     }
     struct Change {
@@ -36,17 +37,19 @@ struct ClaudeQuestionBroker {
     private var changes: [Change] = []
     static let maximumEntries = 256
     static let registrationTTL: TimeInterval = 60
-    static let responseLifetime: TimeInterval = 300
-    static let leaseLifetime: TimeInterval = 10
+    static let responseLifetime = ClaudeQuestionValidation.maximumWaitSeconds
+    static let leaseLifetime = ClaudeQuestionValidation.leaseSeconds
+    static let confirmationLifetime: TimeInterval = 300
+    static let closedRetention: TimeInterval = 360
 
     mutating func drainChanges() -> [Change] {
         defer { changes.removeAll() }
         return changes
     }
 
-    mutating func invalidate(sessionID: String, reason: RemoteQuestionAnswerRejectionReason) {
+    mutating func invalidate(sessionID: String, reason: RemoteQuestionAnswerRejectionReason, at now: Date = Date()) {
         for index in entries.indices where entries[index].identity.sessionID == sessionID {
-            close(index, reason: reason)
+            close(index, reason: reason, at: now)
         }
     }
 
@@ -58,12 +61,12 @@ struct ClaudeQuestionBroker {
         for index in entries.indices where !entries[index].closed && entries[index].responseID != nil {
             if entries[index].deadline.map({ $0 <= now }) == true ||
                 (!entries[index].delivered && entries[index].leaseExpiry.map({ $0 <= now }) == true) {
-                close(index, reason: .expired)
+                close(index, reason: entries[index].delivered ? .notPending : .expired, at: now)
             }
         }
         entries.removeAll {
             ($0.responseID == nil && now.timeIntervalSince($0.registeredAt) > Self.registrationTTL) ||
-                ($0.closed && now.timeIntervalSince($0.registeredAt) > Self.responseLifetime + 60)
+                ($0.closedAt.map { now.timeIntervalSince($0) > Self.closedRetention } == true)
         }
     }
 
@@ -81,7 +84,7 @@ struct ClaudeQuestionBroker {
                       ClaudeQuestionValidation.validateQuestions(questions) else { return .init(status: .unavailable) }
                 if let index = entries.firstIndex(where: { $0.identity == identity && $0.providerCallID == callID }) {
                     guard entries[index].promptID == event.promptID, entries[index].questions == questions else {
-                        close(index, reason: .notPending)
+                        close(index, reason: .notPending, at: now)
                         return .init(status: .unavailable)
                     }
                 } else {
@@ -97,7 +100,7 @@ struct ClaudeQuestionBroker {
                     ClaudeQuestionValidation.answersFromProvider($0, for: entries[index].questions)
                 }
                 entries[index].resolved = true
-                entries[index].closed = true
+                entries[index].closedAt = entries[index].closedAt ?? now
                 changes.append(Change(identity: identity, providerCallID: callID, responseID: entries[index].responseID,
                     payload: .transcript(.interactionResolved(.init(
                         interactionID: .init(rawValue: "claude:call:\(callID)"),
@@ -105,7 +108,7 @@ struct ClaudeQuestionBroker {
                         answers: answers)))))
             case .userPromptSubmit, .stop, .sessionEnd:
                 for index in entries.indices where entries[index].identity == identity {
-                    close(index, reason: .notPending)
+                    close(index, reason: .notPending, at: now)
                 }
                 entries.removeAll { $0.identity == identity && $0.responseID == nil }
             case .permissionRequest:
@@ -139,12 +142,17 @@ struct ClaudeQuestionBroker {
                 return .init(status: .unavailable)
             }
             if request.phase == .end {
-                close(index, reason: .notPending)
+                close(index, reason: request.endReason == .expired ? .expired : .notPending, at: now)
                 return .init(status: .finished, responseID: responseID)
             }
             guard !entries[index].closed else { return .init(status: .finished, responseID: responseID) }
             entries[index].leaseExpiry = now.addingTimeInterval(Self.leaseLifetime)
             if let submission = entries[index].submission {
+                if !entries[index].delivered, let deadline = entries[index].deadline {
+                    // Once the hook has the answer, only provider confirmation
+                    // remains. Do not retain an abandoned delivery for a day.
+                    entries[index].deadline = min(deadline, now.addingTimeInterval(Self.confirmationLifetime))
+                }
                 entries[index].delivered = true
                 return .init(status: .answer, responseID: responseID, providerCallID: entries[index].providerCallID,
                              answers: submission.answers, expiresAt: entries[index].deadline)
@@ -153,16 +161,16 @@ struct ClaudeQuestionBroker {
         }
     }
 
-    mutating func reconcile(_ observations: [ProviderTranscriptObservation], identity: Identity) {
+    mutating func reconcile(_ observations: [ProviderTranscriptObservation], identity: Identity, at now: Date) {
         for observation in observations {
             guard observation.providerIdentity == nil || observation.providerIdentity == identity.nativeSessionID else { continue }
             for index in entries.indices where entries[index].identity == identity && !entries[index].closed &&
                 observation.timestamp >= entries[index].registeredAt {
                 switch observation.payload {
                 case .transcript(.toolFinished(let finished)) where finished.callID == entries[index].providerCallID:
-                    close(index, reason: .notPending)
+                    close(index, reason: .notPending, at: now)
                 case .turnStarted, .turnEnded:
-                    close(index, reason: .notPending)
+                    close(index, reason: .notPending, at: now)
                 default:
                     break
                 }
@@ -194,9 +202,9 @@ struct ClaudeQuestionBroker {
         event.nativeSessionID == identity.nativeSessionID && event.transcriptPath == identity.transcriptPath
     }
 
-    private mutating func close(_ index: Int, reason: RemoteQuestionAnswerRejectionReason) {
+    private mutating func close(_ index: Int, reason: RemoteQuestionAnswerRejectionReason, at now: Date) {
         guard !entries[index].closed else { return }
-        entries[index].closed = true
+        entries[index].closedAt = now
         guard entries[index].responseID != nil else { return }
         let entry = entries[index]
         changes.append(Change(identity: entry.identity, providerCallID: entry.providerCallID, responseID: entry.responseID,

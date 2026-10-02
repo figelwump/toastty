@@ -17,6 +17,8 @@ public enum ToasttyMobileFixture {
 
     public static let olderDocumentPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000006")!
     public static let undatedDocumentPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000007")!
+    public static let smokeReportPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000008")!
+    public static let remoteReportPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000009")!
 
     /// Fixed identities let UI fixtures exercise the same selection across reloads.
     public static let previewPanels: [RemoteWorkspacePanel] = [
@@ -160,6 +162,13 @@ public enum ToasttyMobileFixture {
             panels: [
                 previewPanel(5, panelID: navigationScratchpadPanelID, kind: "scratchpad",
                              title: "Navigation sketch", tabNumber: 3, tabTitle: "Navigation", revision: 1),
+                // Same-titled reports from two runs, told apart by folder.
+                previewPanel(8, panelID: smokeReportPanelID, kind: "localDocument", title: "report.json",
+                             tabNumber: 3, tabTitle: "Navigation",
+                             filePath: "/fixtures/playground/artifacts/smoke/report.json"),
+                previewPanel(9, panelID: remoteReportPanelID, kind: "localDocument", title: "report.json",
+                             tabNumber: 3, tabTitle: "Navigation",
+                             filePath: "/fixtures/playground/artifacts/remote/report.json"),
             ]
         )
 
@@ -238,7 +247,16 @@ public enum ToasttyMobileFixture {
                         availability: .unavailable(reason: "working"),
                         age: "now", last: "Editing ToasttyHomeView.swift"
                     ),
-                ],
+                ] + (14...18).map { number in
+                    // Enough idle sessions that its page caps the list.
+                    conversation(
+                        number, workspaceID: workingSubspaceID, workspaceTitle: "ios-subspaces",
+                        cwd: "~/GiantThings/repos/toastty-ios-subspaces", agent: .codex,
+                        title: "Subspace follow-up \(number - 13)", status: .idle,
+                        availability: .unavailable(reason: "prompt not open"),
+                        age: "\(number - 12)h", last: "Done."
+                    )
+                },
                 parentWorkspaceID: parentID,
                 spawningConversationID: secondSpawner
             ),

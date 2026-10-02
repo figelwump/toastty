@@ -53,8 +53,17 @@ base merges.
 
 ## Install or migrate
 
-Copy `worktree-create/`, `worktree-done/`, and `worktree-cleanup/` from this
-directory to `~/.toastty/skills/`. Preserve any personal model preferences or
+Toastty bundles these packages with the app. Ask an agent in a Toastty pane to
+set up the worktree handoff workflow, during the onboarding's "Pick a workflow"
+step or any time later. It reads `"$TOASTTY_CLI_PATH" setup guide --topic
+workflows`, which prints where the bundled copies are, asks what to adapt (base
+branch, PR flow, verification commands, models), and copies the adapted packages
+into `~/.toastty/skills/` after you approve. It does not overwrite an existing
+copy without asking.
+
+You can also copy `worktree-create/`, `worktree-done/`, and `worktree-cleanup/`
+from this directory to `~/.toastty/skills/` by hand, for example to pick up
+changes newer than your installed app. Preserve any personal model preferences or
 repository customizations when replacing an existing package. The earlier
 `coordinator` package and its `~/.toastty/task-state/` queue are retired; remove
 them from the discovery directory.

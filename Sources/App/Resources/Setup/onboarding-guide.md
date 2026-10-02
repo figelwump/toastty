@@ -22,11 +22,13 @@ Tell the user what will happen:
 - You will dry-run, show the plan, then ask before writing files.
 - Codex may need global status hooks; other supported managed agents get status integration at launch. Cursor receives a launch-scoped plugin, so Toastty does not change `~/.cursor/hooks.json`.
 - Toastty makes five shipped skills available automatically to new supported managed agent launches. User-authored skills can be added under `~/.toastty/skills`.
+- After setup, you can help them pick a workflow: a skill that has agents use Toastty's workspaces, panels, and agent launches the way they work.
 
 ## Available Setup Commands In This Build
 
 - `toastty setup guide` prints this guide as readable text.
 - `toastty setup guide --format md` prints this guide as Markdown.
+- `toastty setup guide --topic workflows` prints the workflow guide: building blocks, example workflows, where Toastty's bundled example skills are, and rules for writing a workflow skill.
 - `toastty setup skills list` lists the shipped and user-authored skills available to new supported managed launches, including diagnostics for excluded user packages.
 - `toastty setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]` installs shell integration.
 - `toastty setup install-hooks --agent codex [--dry-run | --apply]` installs Codex status hooks.
@@ -71,7 +73,25 @@ To add a user skill, create `~/.toastty/skills/<name>/SKILL.md` with `name` and 
 
 Running sessions keep the skills they launched with; editing or adding a skill takes effect on the next supported managed launch. Unsupported launch shapes and provisioning failures deliberately proceed without Toastty skills. If old unnamespaced Toastty copies appear alongside the `toastty:` skills, remove those separately installed copies manually; Toastty never inspects or changes global skill folders.
 
-## Phase 3: Optional Tour
+## Phase 3: Pick a Workflow
+
+Ask whether the user wants to set up a workflow now. Skipping is fine; they can ask any agent in Toastty for this later.
+
+Read the workflow guide first:
+
+```bash
+"$TOASTTY_CLI_PATH" setup guide --topic workflows --format md
+```
+
+Ask what they work on and which tools they use, such as an issue tracker, documents, code review, or CI. Suggest two or three ideas from the guide that match, then offer one of:
+
+- **Set up the worktree handoff workflow.** Follow the guide's worked example: copy Toastty's bundled example skills into the user skills directory, adapting them to how the user works, and write them only after an explicit OK. Never overwrite an existing copy without asking.
+- **Write a workflow skill with them.** Follow the guide's steps: draft the skill, show it, and write it into the user skills directory (`$TOASTTY_USER_SKILLS_ROOT`, normally `~/.toastty/skills`) only after an explicit OK.
+- **Skip.**
+
+After writing any skill, run `"$TOASTTY_CLI_PATH" setup skills list` to confirm it is accepted. It loads in newly launched sessions, so offer to try it in a fresh session on a small task.
+
+## Phase 4: Optional Tour
 
 Ask whether the user wants a short tour. Keep it cancel-friendly and stop after any step if the user says to stop.
 
