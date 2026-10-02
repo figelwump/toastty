@@ -112,7 +112,7 @@ private enum AgentCommandShim {
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
                 environment: resolvedLaunchEnvironment,
-                recordsManagedArtifactOwner: invocation.agent == .codex
+                recordsManagedArtifactOwner: (invocation.agent == .codex || invocation.agent == .grok)
                     && passThroughReasons.contains("managed_agent_shim_bypass")
             )
         }
@@ -135,6 +135,9 @@ private enum AgentCommandShim {
                 panelID: panelID,
                 argv: invocation.argv,
                 cwd: cwd,
+                environment: invocation.agent == .grok
+                    ? resolvedLaunchEnvironment.filter { $0.key == "GROK_HOME" || $0.key == "HOME" }
+                    : [:],
                 preflightPolicy: .interactive,
                 codexCapabilityHint: invocation.agent == .codex
                     && ["codex", "cdx"].contains(commandName.lowercased())
@@ -211,7 +214,7 @@ private enum AgentCommandShim {
             executablePath: realBinaryPath,
             argv: plan.argv,
             environment: childEnvironment,
-            recordsManagedArtifactOwner: invocation.agent == .codex
+            recordsManagedArtifactOwner: invocation.agent == .codex || invocation.agent == .grok
         )
         stopSession(
             cliPath: cliPath,
@@ -620,7 +623,7 @@ private enum AgentCommandShim {
         childEnvironment.removeValue(forKey: "CODEX_TUI_RECORD_SESSION")
         childEnvironment.removeValue(forKey: "CODEX_TUI_SESSION_LOG_PATH")
 
-        guard invocation.agent == .codex else { return childEnvironment }
+        guard invocation.agent == .codex || invocation.agent == .grok else { return childEnvironment }
 
         let parentSessionKeys = [
             ToasttyLaunchContextEnvironment.agentKey,

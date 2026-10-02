@@ -326,15 +326,15 @@ Notable action-specific behavior:
     cannot be overridden. Environment keys must use shell variable syntax,
     values must not contain NUL bytes, and duplicate definitions across
     `env.NAME`, `env`, and `environment` payloads are rejected.
-  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor automation
-    profiles, built-in Codex/Claude/Cursor profiles whose argv is exactly one direct
+  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor/Grok automation
+    profiles, built-in Codex/Claude/Cursor/Grok profiles whose argv is exactly one direct
     first-party command, or profiles that declare
     `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
     prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
-    A direct Cursor launch inserts `--` before a prompt that begins
-    with `-`, preventing the prompt from being parsed as a Cursor CLI option.
-  - `model` is supported for `codex`, `claude`, `cursor`, `opencode`, `mimocode`, and
-    `pi`. `reasoningEffort` is supported for `codex`, `claude`, and `pi`.
+    A direct Cursor or Grok launch inserts `--` before a prompt that begins
+    with `-`, preventing the prompt from being parsed as a CLI option.
+  - `model` is supported for `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, and
+    `pi`. `reasoningEffort` is supported for `codex`, `claude`, `grok`, and `pi`.
     OpenCode and MiMo Code reject `reasoningEffort` before target or panel
     mutation and never map it to `variant`.
   - omitted selections preserve the configured argv. Explicit selections
@@ -907,7 +907,7 @@ Validation:
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
 - if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
-- explicit `profileID=codex`, `profileID=claude`, `profileID=cursor`, `profileID=opencode`,
+- explicit `profileID=codex`, `profileID=claude`, `profileID=cursor`, `profileID=grok`, `profileID=opencode`,
   `profileID=mimocode`, and `profileID=pi` can be launched by automation even
   when no `agents.toml` profile exists.
 - `initialCommands` entries must be non-blank single-line strings with no NUL

@@ -311,6 +311,49 @@ struct AgentLaunchArgumentOverrideAdapterTests {
     }
 
     @Test
+    func grokOverridesReplaceAllModelAndEffortAliasesPreservingWrapperAndPrompt() throws {
+        let result = try AgentLaunchArgumentOverrideAdapter.applying(
+            model: "grok-code-next",
+            reasoningEffort: "high",
+            to: [
+                "agent-safehouse", "--cwd", "/tmp/repo", "/opt/homebrew/bin/grok",
+                "-m", "profile-model", "--model=another-model",
+                "--effort", "low", "--reasoning-effort=medium", "--no-plan",
+                "--", "--model", "literal-prompt-token",
+            ],
+            agent: .grok,
+            profileID: "grok"
+        )
+
+        #expect(result == [
+            "agent-safehouse", "--cwd", "/tmp/repo", "/opt/homebrew/bin/grok",
+            "--model", "grok-code-next", "--reasoning-effort", "high", "--no-plan",
+            "--", "--model", "literal-prompt-token",
+        ])
+    }
+
+    @Test
+    func grokOverridesKeepUnrequestedSelectionsAndRejectMalformedFlags() throws {
+        let configuredArgv = ["grok", "--model", "profile-model", "--effort", "low"]
+        #expect(try AgentLaunchArgumentOverrideAdapter.applying(
+            model: nil, reasoningEffort: nil, to: configuredArgv, agent: .grok, profileID: "grok"
+        ) == configuredArgv)
+        #expect(try AgentLaunchArgumentOverrideAdapter.applying(
+            model: nil, reasoningEffort: "high", to: configuredArgv, agent: .grok, profileID: "grok"
+        ) == ["grok", "--reasoning-effort", "high", "--model", "profile-model"])
+        #expect(try AgentLaunchArgumentOverrideAdapter.applying(
+            model: "replacement", reasoningEffort: nil, to: configuredArgv, agent: .grok, profileID: "grok"
+        ) == ["grok", "--model", "replacement", "--effort", "low"])
+        for argv in [["grok", "--effort"], ["grok", "--reasoning-effort="], ["grok", "--effort", "--no-plan"]] {
+            #expect(throws: (any Error).self) {
+                _ = try AgentLaunchArgumentOverrideAdapter.applying(
+                    model: nil, reasoningEffort: "high", to: argv, agent: .grok, profileID: "grok"
+                )
+            }
+        }
+    }
+
+    @Test
     func piOverridesReplaceModelAndThinking() throws {
         let result = try AgentLaunchArgumentOverrideAdapter.applying(
             model: "provider/pi-next",

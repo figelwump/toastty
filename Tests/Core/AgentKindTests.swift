@@ -8,6 +8,7 @@ struct AgentKindTests {
         #expect(AgentKind.codex.displayName == "Codex")
         #expect(AgentKind.claude.displayName == "Claude Code")
         #expect(AgentKind.cursor.displayName == "Cursor")
+        #expect(AgentKind.grok.displayName == "Grok Build")
         #expect(AgentKind.opencode.displayName == "OpenCode")
         #expect(AgentKind.mimocode.displayName == "MiMo Code")
         #expect(AgentKind.pi.displayName == "Pi")
@@ -16,6 +17,7 @@ struct AgentKindTests {
     @Test
     func cursorUsesStagedSkillsTree() {
         #expect(AgentKind.cursor.usesStagedSkillsTree)
+        #expect(AgentKind.grok.usesStagedSkillsTree == false)
     }
 
     @Test
@@ -26,6 +28,12 @@ struct AgentKindTests {
 
     @Test
     func managedCommandResolverPrefersWrappedBuiltInExecutableForInsertion() {
+        #expect(
+            ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .grok,
+                argv: ["agent-safehouse", "--cwd", "/tmp/repo", "/opt/homebrew/bin/grok", "--model", "grok-code"]
+            ) == 3
+        )
         let wrapperArgv = [
             "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh",
             "--workdir=/tmp/repo",
@@ -89,6 +97,18 @@ struct AgentKindTests {
 
     @Test
     func managedCommandResolverInfersWrappedBuiltInsFromCommandNameOrPrefixArguments() {
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "/opt/homebrew/bin/grok",
+                argv: ["/opt/homebrew/bin/grok"]
+            ) == .grok
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "agent-safehouse",
+                argv: ["agent-safehouse", "--cwd", "/tmp/repo", "grok"]
+            ) == .grok
+        )
         #expect(
             ManagedAgentCommandResolver.inferManagedAgent(
                 commandName: "cdx",
@@ -244,6 +264,12 @@ struct AgentKindTests {
                     manualCommandNames: ["safe-cursor"]
                 ),
                 AgentProfile(
+                    id: "grok",
+                    displayName: "Grok Build",
+                    argv: ["safe-grok", "grok"],
+                    manualCommandNames: ["safe-grok"]
+                ),
+                AgentProfile(
                     id: "gemini",
                     displayName: "Gemini",
                     argv: ["sandbox-wrapper", "gemini"],
@@ -266,6 +292,8 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("safe-mimo"))
         #expect(shimCommandNames.contains("cursor-agent"))
         #expect(shimCommandNames.contains("safe-cursor"))
+        #expect(shimCommandNames.contains("grok"))
+        #expect(shimCommandNames.contains("safe-grok"))
         #expect(shimCommandNames.contains("agent-safehouse"))
         #expect(shimCommandNames.contains("sandbox-wrapper") == false)
     }
@@ -284,6 +312,7 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("mimo"))
         #expect(shimCommandNames.contains("mimocode"))
         #expect(shimCommandNames.contains("pi"))
+        #expect(shimCommandNames.contains("grok"))
     }
 
     @Test

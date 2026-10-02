@@ -9,7 +9,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/config-reference`
   - Generated commented reference for every supported Toastty config key. Toastty rewrites this file on launch and when you open `Toastty > Open Config Reference…`.
 - `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/run/managed-agent-helpers/instance-<uuid>/` for each runtime-isolated app process when agent command shims are enabled
-  - Managed `codex`, `cdx`, `claude`, `cursor-agent`, `opencode`, `mimo`, `mimocode`, and `pi` wrapper symlinks used to track manual agent invocations inside Toastty terminals. Toastty never creates a generic `agent` wrapper. Runtime-isolated processes also refresh compatibility wrappers under `<runtime-home>/bin/`, while their terminals use the immutable per-instance directory.
+  - Managed `codex`, `cdx`, `claude`, `cursor-agent`, `grok`, `opencode`, `mimo`, `mimocode`, and `pi` wrapper symlinks used to track manual agent invocations inside Toastty terminals. Toastty never creates a generic `agent` wrapper. Runtime-isolated processes also refresh compatibility wrappers under `<runtime-home>/bin/`, while their terminals use the immutable per-instance directory.
 - macOS `UserDefaults` for Toastty
   - Small UI-managed settings such as the post-agent-launch sidebar default latch, plus any one-time legacy migration state.
 - `~/.toastty/terminal-profiles.toml`
@@ -23,7 +23,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
     annotation chips (`key`, chip text, and optional `http`/`https` URL per
     workspace, written by `workspace.set-annotation` callers such as agents and
     hook scripts), and managed agent
-    native-resume metadata for restored Codex, Claude, OpenCode, MiMo Code, and Pi panels. Native-resume
+    native-resume metadata for restored Codex, Claude, Grok, OpenCode, MiMo Code, and Pi panels. Native-resume
     metadata can include the provider, provider-native session ID, provider
     session file path or Toastty-owned marker path, working directory, capture
     timestamp, and any explicit workspace-scope identifiers needed to restore a
@@ -98,22 +98,31 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/codex-hooks/` (created by `Toastty > Set Up Agent Status Hooks…`)
   - A stable Codex hook forwarder script plus `telemetry-failures.log` when the forwarder cannot deliver hook events back to Toastty.
 - `~/.toastty/run/managed-agent-launches/`
-  - Owner-only per-launch directories for Claude and Codex files that their
+  - Owner-only per-launch directories for Claude, Codex, and Grok files that their
     processes can revisit after startup. Claude directories contain the merged
     settings JSON, hook script, and any helper failure log. Codex directories
     contain the TUI session record, a fallback notification script when needed,
-    and any helper failure log. These files contain launch configuration and
+    and any helper failure log. Grok directories contain hook configuration,
+    forwarding and launch scripts, and any helper failure log. These files contain launch configuration and
     bounded telemetry context, but not a separate copy of the provider
     transcript.
   - Toastty records the owning process ID in a private marker: the launch shim
-    records the exact spawned Codex process, while Claude's launch helper uses
+    records the exact spawned Codex or Grok process; Grok UI launches also use
+    an exec wrapper to record absolute-path launches. Claude's launch helper uses
     Claude's reported process ID. Toastty removes a directory only after its
     managed session is inactive, a grace period has elapsed, and the recorded
     process ID is no longer present. A live or ambiguous PID is preserved rather
     than guessed about, including possible PID reuse. If this durable location
     cannot be used safely,
     Toastty falls back to the system temporary directory and then, if
-    preparation still fails, launches without instrumentation.
+    preparation still fails, launches without instrumentation. Grok requires
+    durable storage and skips hooks when it is unavailable.
+- `$GROK_HOME/hooks/toastty-<session-uuid>.json` (defaults to `~/.grok/hooks/`)
+  - A per-launch symlink to Grok hook configuration in the private launch
+    directory. Each hook checks the managed session and producer PID before
+    forwarding metadata. Existing settings and hooks are preserved. Once the
+    session is inactive and its owner is proven dead, Toastty removes only a
+    symlink whose target still matches that launch; unlink failures are retried.
 - Toastty-owned files inside `$CODEX_HOME` (written automatically for supported managed Codex launches)
   - `$CODEX_HOME/plugins/cache/toastty/toastty/` and, when user skills are accepted, `$CODEX_HOME/plugins/cache/toastty-user/toastty-user/`: Toastty's plugin cache subtrees, produced by installing the plugin into a throwaway Codex home with the local Codex CLI, digest-verifying the bytes, and swapping them in atomically. User-authored skill content is copied into the `toastty-user` subtree.
   - `$CODEX_HOME/toastty-managed.config.toml`: a Toastty-owned profile overlay that enables those cached plugins only for processes launched with `--profile toastty-managed`. Its exact full-line ownership marker may appear anywhere because Codex can prepend profile-scoped settings. Toastty preserves those settings and unrelated TOML content when it refreshes its plugin entries; an existing file without the marker is treated as foreign and is never overwritten. The user's `config.toml` is never written by skills delivery (the only exception is the one-time legacy cleanup edit below), and ordinary Codex sessions are unaffected.
@@ -218,6 +227,10 @@ running on your Mac.
   interaction transitions, and Toastty reads the local Claude transcript file
   associated with the exact provider-native session to project normalized
   conversation history for Remote Access. Toastty does not modify that file.
+- For managed Grok sessions, Toastty forwards bounded event names, session and
+  prompt IDs, timestamps, notification types, working directory, and transcript
+  path for status and native resume. Prompt text, tool payloads, and transcript
+  content are not forwarded or projected to Remote Access.
 - For managed Claude, Codex, and Cursor sessions, Toastty reads the short
   session name the provider CLI generated, so the sidebar and Remote Access
   clients can label a session with it. For Claude that is the newest `ai-title`

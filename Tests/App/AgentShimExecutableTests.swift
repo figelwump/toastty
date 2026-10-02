@@ -49,9 +49,9 @@ struct AgentShimExecutableTests {
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
-    @Test
-    func managedBypassCodexShimRecordsSpawnedProcessAsArtifactOwner() throws {
-        let fixture = try AgentShimExecutableFixture.make()
+    @Test(arguments: ["cdx", "grok"])
+    func managedBypassShimRecordsSpawnedProcessAsArtifactOwner(shimCommandName: String) throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: shimCommandName)
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
 
         let result = try fixture.run(
@@ -62,6 +62,7 @@ struct AgentShimExecutableTests {
             extraEnvironment: [
                 "CODEX_TUI_RECORD_SESSION": "1",
                 "CODEX_TUI_SESSION_LOG_PATH": "/tmp/parent-codex-session.jsonl",
+                "GROK_HOME": "/tmp/user-grok-home",
             ]
         )
 
@@ -78,6 +79,7 @@ struct AgentShimExecutableTests {
         #expect(agentLog.contains("record_session=1"))
         #expect(agentLog.contains("session_log=/tmp/parent-codex-session.jsonl"))
         #expect(agentLog.contains("shim_bypass=\n"))
+        #expect(agentLog.contains("grok_home=/tmp/user-grok-home"))
     }
 
     @Test
@@ -132,9 +134,9 @@ struct AgentShimExecutableTests {
         #expect(agentLog.contains("session=sess-preflight"))
     }
 
-    @Test
-    func inheritedCodexSessionTracksBackgroundActivityWithoutParentSessionContext() throws {
-        let fixture = try AgentShimExecutableFixture.make()
+    @Test(arguments: ["cdx", "grok"])
+    func inheritedShimTracksBackgroundActivityWithoutParentSessionContext(shimCommandName: String) throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: shimCommandName)
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
 
         let result = try fixture.run(
@@ -149,6 +151,7 @@ struct AgentShimExecutableTests {
                 ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey: "/tmp/parent-owner",
                 "CODEX_TUI_RECORD_SESSION": "1",
                 "CODEX_TUI_SESSION_LOG_PATH": "/tmp/parent-codex-session.jsonl",
+                "GROK_HOME": "/tmp/user-grok-home",
             ]
         )
 
@@ -160,7 +163,7 @@ struct AgentShimExecutableTests {
         #expect(cliLog.contains("session background-activity start --session sess-parent"))
         #expect(cliLog.contains("--panel \(fixture.panelID.uuidString)"))
         #expect(cliLog.contains("--kind child_agent"))
-        #expect(cliLog.contains("--display-name Codex"))
+        #expect(cliLog.contains("--display-name \(shimCommandName == "grok" ? "Grok Build" : "Codex")"))
         #expect(cliLog.contains("--pid "))
         #expect(cliLog.contains("session background-activity finish --session sess-parent"))
 
@@ -177,6 +180,7 @@ struct AgentShimExecutableTests {
         #expect(agentLog.contains("owner_file=\n"))
         #expect(agentLog.contains("record_session=\n"))
         #expect(agentLog.contains("session_log=\n"))
+        #expect(agentLog.contains("grok_home=/tmp/user-grok-home"))
     }
 
     @Test
@@ -555,6 +559,7 @@ private struct AgentShimExecutableFixture {
           printf 'shim_bypass=%s\\n' "${TOASTTY_MANAGED_AGENT_SHIM_BYPASS:-}"
           printf 'record_session=%s\\n' "${CODEX_TUI_RECORD_SESSION:-}"
           printf 'session_log=%s\\n' "${CODEX_TUI_SESSION_LOG_PATH:-}"
+          printf 'grok_home=%s\\n' "${GROK_HOME:-}"
           printf 'pid=%s\\n' "$$"
           printf 'owner_file=%s\\n' "${TOASTTY_MANAGED_ARTIFACT_OWNER_FILE:-}"
         } >> "$TOASTTY_FAKE_AGENT_LOG"

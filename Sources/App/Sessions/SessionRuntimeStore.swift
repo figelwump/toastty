@@ -74,6 +74,7 @@ final class SessionRuntimeStore: ObservableObject {
     }
     private var cursorHookCorrelationBySessionID: [String: CursorHookCorrelationState] = [:]
     private var pendingCursorPromptBySessionID: [String: CursorHookEvent] = [:]
+    private var grokHookStatesBySessionID: [String: GrokHookState] = [:]
     private var nativeBindingConfirmationBySessionID: [
         String: ManagedNativeSessionBindingConfirmation
     ] = [:]
@@ -2064,6 +2065,18 @@ final class SessionRuntimeStore: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func handleGrokHookEvent(sessionID: String, event: GrokHookEvent, at now: Date) -> GrokHookState.Update? {
+        guard sessionRegistry.activeSession(sessionID: sessionID)?.agent == .grok else { return nil }
+        var state = grokHookStatesBySessionID[sessionID] ?? GrokHookState()
+        guard let update = state.apply(event) else { return nil }
+        grokHookStatesBySessionID[sessionID] = state
+        if let status = update.status {
+            updateStatus(sessionID: sessionID, status: status, at: now)
+        }
+        return update
+    }
+
     /// Reconciles Cursor's process-global hook stream with one managed root
     /// session. Cursor invokes each hook in a fresh process, and nested Cursor
     /// launches inherit the parent's Toastty environment, so session and panel
@@ -2535,6 +2548,7 @@ final class SessionRuntimeStore: ObservableObject {
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
         pendingCursorPromptBySessionID.removeValue(forKey: sessionID)
+        grokHookStatesBySessionID.removeValue(forKey: sessionID)
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)

@@ -109,6 +109,16 @@ enum AgentLaunchInstrumentation {
         stagedSkillsIntegration: ClaudeSkillsLaunchConfiguration? = nil,
         deliveredUserSkillsRootPath: String? = nil
     ) throws -> PreparedAgentLaunchCommand {
+        if agent == .grok {
+            return try GrokLaunchInstrumentation.prepare(
+                argv: argv,
+                cliExecutablePath: cliExecutablePath,
+                sessionID: sessionID,
+                fileManager: fileManager,
+                artifactStore: artifactStore,
+                launchEnvironment: launchEnvironment
+            )
+        }
         if agent == .claude {
             return try prepareClaudeLaunch(
                 argv: argv,
@@ -558,7 +568,7 @@ enum AgentLaunchInstrumentation {
 }
 
 private extension AgentLaunchInstrumentation {
-    enum TelemetryInputMode {
+    internal enum TelemetryInputMode {
         case none
         case stdinOrFirstArgument
     }
@@ -845,7 +855,7 @@ private extension AgentLaunchInstrumentation {
         hooks[eventName] = entries
     }
 
-    static func writeExecutableScript(
+    internal static func writeExecutableScript(
         _ script: String,
         to url: URL,
         fileManager: FileManager
@@ -864,7 +874,7 @@ private extension AgentLaunchInstrumentation {
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    static func telemetryErrorLogURL(in artifactsDirectoryURL: URL) -> URL {
+    internal static func telemetryErrorLogURL(in artifactsDirectoryURL: URL) -> URL {
         artifactsDirectoryURL.appendingPathComponent("telemetry-failures.log", isDirectory: false)
     }
 
@@ -2244,7 +2254,7 @@ private extension AgentLaunchInstrumentation {
         """
     }
 
-    static func makeTelemetryForwarderScript(
+    internal static func makeTelemetryForwarderScript(
         cliExecutablePath: String,
         source: String,
         telemetryErrorLogURL: URL,
@@ -2351,7 +2361,7 @@ private extension AgentLaunchInstrumentation {
         return string
     }
 
-    static func shellQuote(_ value: String) -> String {
+    internal static func shellQuote(_ value: String) -> String {
         guard value.isEmpty == false else { return "''" }
         let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
         return "'\(escaped)'"

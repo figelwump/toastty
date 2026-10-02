@@ -45,6 +45,7 @@ enum AgentLaunchArgumentOverrideAdapter {
         .codex,
         .claude,
         .cursor,
+        .grok,
         .opencode,
         .mimocode,
         .pi,
@@ -53,6 +54,7 @@ enum AgentLaunchArgumentOverrideAdapter {
     static let reasoningEffortSupportedAgents: [AgentKind] = [
         .codex,
         .claude,
+        .grok,
         .pi,
     ]
 
@@ -143,6 +145,32 @@ enum AgentLaunchArgumentOverrideAdapter {
             }
             if let validatedReasoningEffort {
                 arguments += ["--effort", validatedReasoningEffort]
+            }
+            return editor.inserting(arguments)
+
+        case .grok:
+            if validatedModel != nil {
+                try editor.removeValueFlags(
+                    longName: "--model",
+                    shortName: "-m",
+                    parameter: "model"
+                )
+            }
+            if validatedReasoningEffort != nil {
+                for flag in ["--reasoning-effort", "--effort"] {
+                    try editor.removeValueFlags(
+                        longName: flag,
+                        shortName: nil,
+                        parameter: "reasoningEffort"
+                    )
+                }
+            }
+            var arguments: [String] = []
+            if let validatedModel {
+                arguments += ["--model", validatedModel]
+            }
+            if let validatedReasoningEffort {
+                arguments += ["--reasoning-effort", validatedReasoningEffort]
             }
             return editor.inserting(arguments)
 

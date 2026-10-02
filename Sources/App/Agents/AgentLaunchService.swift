@@ -424,8 +424,11 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         }
         var commandEnvironment = plan.environment
         commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
+        let dispatchArgv = preparation.agent == .grok
+            ? GrokLaunchInstrumentation.argvForDispatch(plan.argv, environment: plan.environment)
+            : plan.argv
         let commandLine = ShellCommandRenderer.render(
-            argv: plan.argv,
+            argv: dispatchArgv,
             environment: commandEnvironment,
             workingDirectory: preparation.explicitCWD,
             initialCommands: preparation.initialCommands
@@ -598,6 +601,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         agent == .codex
             || agent == .claude
             || agent == .cursor
+            || agent == .grok
             || agent == .mimocode
             || agent == .opencode
             || agent == .pi
@@ -608,7 +612,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             id: agent.rawValue,
             displayName: agent.displayName,
             argv: [implicitExecutableName(for: agent)],
-            initialPromptPlacement: (agent == .codex || agent == .claude || agent == .cursor)
+            initialPromptPlacement: (agent == .codex || agent == .claude || agent == .cursor || agent == .grok)
                 ? .trailing
                 : nil
         )
@@ -790,7 +794,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         if forkRecord != nil || !additionalDirectories.isEmpty {
             return overrideArgv + ["--", prompt]
         }
-        if agent == .cursor,
+        if agent == .cursor || agent == .grok,
            Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent),
            prompt.hasPrefix("-") {
             return overrideArgv + ["--", prompt]
@@ -823,7 +827,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         if let placement = profile.initialPromptPlacement {
             return placement
         }
-        guard agent == .codex || agent == .claude || agent == .cursor else {
+        guard agent == .codex || agent == .claude || agent == .cursor || agent == .grok else {
             return nil
         }
         return Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent) ? .trailing : nil
@@ -842,6 +846,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             commandNames = ["claude"]
         case .cursor:
             commandNames = ["cursor-agent"]
+        case .grok:
+            commandNames = ["grok"]
         default:
             return false
         }
