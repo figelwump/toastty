@@ -1,4 +1,5 @@
 @testable import ToasttyApp
+import CoreState
 import Foundation
 import XCTest
 
@@ -221,6 +222,7 @@ final class SetupResourcesDriftTests: XCTestCase {
             "toastty setup skills list",
             "toastty setup install-shell-integration",
             "toastty setup install-hooks",
+            "toastty setup guide --topic workflows",
         ] {
             XCTAssertTrue(guide.contains(command), "Guide is missing \(command)")
         }
@@ -261,10 +263,12 @@ final class SetupResourcesDriftTests: XCTestCase {
     }
 
     func testOnboardingGuideDoesNotReintroduceSupersededSkillMatrix() throws {
-        let guide = try String(
-            contentsOf: setupResourcesURL().appendingPathComponent("onboarding-guide.md", isDirectory: false),
-            encoding: .utf8
-        )
+        let guide = try ["onboarding-guide.md", "workflow-guide.md"].map { fileName in
+            try String(
+                contentsOf: setupResourcesURL().appendingPathComponent(fileName, isDirectory: false),
+                encoding: .utf8
+            )
+        }.joined(separator: "\n")
 
         for supersededText in [
             "toastty-orchestrator-builder",
@@ -285,6 +289,52 @@ final class SetupResourcesDriftTests: XCTestCase {
             tailorRegex.firstMatch(in: guide, range: guideRange),
             "Guide reintroduced the superseded interview/tailor matrix concept"
         )
+    }
+
+    func testWorkflowGuideMentionsOnlyKnownAppControlIDsAndBundledExamples() throws {
+        let guide = try String(
+            contentsOf: setupResourcesURL().appendingPathComponent("workflow-guide.md", isDirectory: false),
+            encoding: .utf8
+        )
+        let knownIDs = Set(AppControlActionID.allCases.map(\.rawValue))
+            .union(AppControlQueryID.allCases.map(\.rawValue))
+        let mentionedIDs = try mentionedAppControlIDs(in: guide)
+
+        XCTAssertTrue(mentionedIDs.contains(AppControlActionID.agentLaunch.rawValue))
+        XCTAssertTrue(
+            mentionedIDs.subtracting(knownIDs).isEmpty,
+            "Workflow guide mentions unknown app-control IDs: \(mentionedIDs.subtracting(knownIDs).sorted().joined(separator: ", "))"
+        )
+        // The CLI replaces this with the bundled examples directory when it prints the guide.
+        XCTAssertTrue(guide.contains("{{WORKFLOW_EXAMPLES_DIR}}"))
+        for packageName in ["worktree-create", "worktree-done", "worktree-cleanup"] {
+            XCTAssertTrue(guide.contains("`\(packageName)`"), "Workflow guide is missing \(packageName)")
+        }
+        for rule in ["`ok`", "`scope_denied`", "merging"] {
+            XCTAssertTrue(guide.contains(rule), "Workflow guide is missing rule: \(rule)")
+        }
+    }
+
+    /// The app bundles `examples/skills`, and the workflow guide tells agents
+    /// to copy these packages onto user machines, where the user skill catalog
+    /// must accept them as they ship.
+    func testBundledExamplePackagesAreAcceptedUserSkills() throws {
+        let examplesURL = repoRootURL().appendingPathComponent("examples/skills", isDirectory: true)
+        let state = ToasttyUserSkillValidator().scan(userSkillsDirectoryURL: examplesURL).state
+        XCTAssertTrue(state.globalDiagnostics.isEmpty, "\(state.globalDiagnostics)")
+        XCTAssertEqual(
+            state.packages.map(\.name).sorted(),
+            ["worktree-cleanup", "worktree-create", "worktree-done"]
+        )
+
+        for package in state.packages {
+            XCTAssertEqual(package.status, .accepted, package.name)
+            for fileURL in try regularFiles(under: package.sourceURL) {
+                let content = try String(contentsOf: fileURL, encoding: .utf8)
+                XCTAssertFalse(content.contains("/Users/vishal"), fileURL.path)
+                XCTAssertFalse(content.contains("TOASTTY_DEV_WORKTREE_ROOT"), fileURL.path)
+            }
+        }
     }
 
     private func setupResourcesURL() -> URL {

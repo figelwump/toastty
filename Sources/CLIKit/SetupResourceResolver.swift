@@ -28,6 +28,21 @@ enum SetupResourceResolver {
         .appendingPathComponent("Setup", isDirectory: true)
     }
 
+    /// Example skill packages copied from the repository's `examples/skills`
+    /// by `Project.swift`. The workflow guide points agents here.
+    static let workflowExamplesSubpath = "WorkflowExamples/skills"
+
+    static func workflowExamplesDirectoryURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executableURL: URL? = nil
+    ) -> URL {
+        resourcesDirectoryURL(
+            environment: environment,
+            executableURL: executableURL
+        )
+        .appendingPathComponent(workflowExamplesSubpath, isDirectory: true)
+    }
+
     private static func normalizedPath(_ rawValue: String?) -> String? {
         guard let rawValue,
               rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {

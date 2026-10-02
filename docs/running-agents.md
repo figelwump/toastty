@@ -382,8 +382,11 @@ Capability evidence: `docs/plans/evidence/pi-session-scoped-skills-2026-08-05.md
 ## Worktree tasks
 
 The optional [personal workflow skills](../examples/skills/README.md) show how to
-build your own development workflow with Toastty. Copy them into `~/.toastty/skills`
-and customize them. `worktree-create` continues an agreed task in its own Git
+build your own development workflow with Toastty. Toastty bundles them with the
+app: ask an agent to set up the worktree handoff, during onboarding or later, and
+it reads `"$TOASTTY_CLI_PATH" setup guide --topic workflows`, then copies and
+adapts the packages into `~/.toastty/skills`. You can also copy them by hand.
+The same guide gives an agent ideas and rules for writing a workflow of your own. `worktree-create` continues an agreed task in its own Git
 worktree and background Toastty workspace. It preserves the plan and local task
 identity; the child session then designs, implements, reviews, and verifies the
 change there under the repository's review and testing instructions, and
@@ -450,7 +453,8 @@ Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions.
 
 See [examples/skills/](../examples/skills/README.md) for the complete worktree
 packages, installation instructions, and guidance on customizing
-their workflow. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
+their workflow. Toastty bundles them with the app, and the workflow guide
+(`setup guide --topic workflows`) tells agents where they are. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
 it is no longer included in the shipped plugin. Existing custom copies are yours
 to keep and edit. `worktree-done` and `worktree-cleanup` are also personal examples.
 

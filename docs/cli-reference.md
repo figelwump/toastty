@@ -53,18 +53,28 @@ automatic fixes. It exits non-zero only when at least one check fails.
 
 ### `setup guide`
 
-Print the bundled agent-guided Getting Started guide.
+Print a bundled guide for an agent to follow.
 
 ```
-toastty setup guide [--format text|md]
+toastty setup guide [--topic onboarding|workflows] [--format text|md]
 ```
+
+The default `onboarding` topic is the agent-guided Getting Started guide. The
+`workflows` topic explains how to turn a user's way of working into a workflow
+skill: the Toastty building blocks, example workflows, and rules for writing
+one. It also prints the absolute path of the example skills bundled with the
+app (`Contents/Resources/WorkflowExamples/skills`, copied from this
+repository's `examples/skills`), which the agent copies and adapts into the
+user skills directory. The onboarding guide's "Pick a workflow" step reads it.
 
 The default `text` format is optimized for terminal reading. Use `--format md`
 when another agent or tool should preserve Markdown headings and code fences.
+With `--json`, the response contains `topic`, `format`, and `content`.
 
 ```bash
 "$TOASTTY_CLI_PATH" setup guide
 "$TOASTTY_CLI_PATH" setup guide --format md
+"$TOASTTY_CLI_PATH" setup guide --topic workflows --format md
 ```
 
 ### `setup skills list`
