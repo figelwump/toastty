@@ -95,6 +95,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
                 title: "Agent",
                 panelID: UUID(),
                 statusKind: kind,
+                isWaiting: false,
                 showsUnreadSessionAccent: unread,
                 summary: summary,
                 statusUpdatedAt: seconds.map { Date(timeIntervalSince1970: $0) }
@@ -145,6 +146,59 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             ]),
             "First"
         )
+    }
+
+    func testWaitingRequiresAllWorkingSessionsToWaitAndPreservesAttentionPrecedence() {
+        typealias Presentation = SidebarSubspacePresentation
+        func line(_ kind: SessionStatusKind, projection: SessionStatusProjection = .none) -> Presentation.SessionLine {
+            .init(
+                title: "Agent", panelID: UUID(), statusKind: kind,
+                isWaiting: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: projection) != nil,
+                summary: nil
+            )
+        }
+        let waiting = line(.working, projection: .waitingOnChildren(childCount: 0, pendingBackgroundTaskCount: 1))
+        func isWaiting(_ sessions: [Presentation.SessionLine]) -> Bool {
+            let status = Presentation.rowStatus(sessionStatuses: sessions.map {
+                (kind: $0.statusKind, showsUnreadSessionAccent: $0.showsUnreadSessionAccent)
+            })
+            return Presentation.Row(
+                id: UUID(), title: "task", status: status, annotations: [:], summary: nil,
+                spawningSessionID: nil, spawnerName: nil, sessions: sessions, creationIndex: 0
+            ).isWaiting
+        }
+
+        XCTAssertTrue(isWaiting([waiting]))
+        XCTAssertTrue(isWaiting([waiting, line(.working, projection: .waitingOnChildren(childCount: 2, pendingBackgroundTaskCount: 0))]))
+        XCTAssertTrue(isWaiting([waiting, line(.idle), line(.ready)]))
+        XCTAssertFalse(isWaiting([]))
+        XCTAssertFalse(isWaiting([waiting, line(.working)]))
+        XCTAssertFalse(isWaiting([waiting, line(.working, projection: .resuming)]))
+        XCTAssertFalse(isWaiting([waiting, line(.needsApproval)]))
+        XCTAssertFalse(isWaiting([waiting, line(.error)]))
+        var unread = line(.ready)
+        unread.showsUnreadSessionAccent = true
+        XCTAssertFalse(isWaiting([waiting, unread]))
+    }
+
+    func testWaitingRemainsAvailableInAccessibilityAndHoverDetails() {
+        let row = SidebarSubspacePresentation.Row(
+            id: UUID(), title: "website-redesign", status: .working,
+            annotations: ["github-pr": WorkspaceAnnotation(text: "PR #58")],
+            summary: "Review still running", spawningSessionID: nil, spawnerName: nil,
+            sessions: [.init(
+                title: "Claude", panelID: UUID(), statusKind: .working,
+                isWaiting: true,
+                summary: "Review still running"
+            )], creationIndex: 0
+        )
+        XCTAssertEqual(
+            SidebarSubspacePresentation.rowAccessibilityLabel(row, showsSpawnerTag: false),
+            "website-redesign, subspace, waiting, PR #58, Review still running"
+        )
+        let hover = SidebarSubspacePresentation.hoverTipModel(row) { _ in .named(.green) }
+        XCTAssertTrue(hover.sessions[0].isWaiting)
+        XCTAssertEqual(hover.annotations[0].text, "PR #58")
     }
 
     func testSortedRowsRankByStatusAndKeepCreationOrderWithinAStatus() {
@@ -319,12 +373,12 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             summary: "Rebasing onto main",
             spawningSessionID: "a", spawnerName: "Test EmptyOS beta experience",
             sessions: [
-                .init(title: "Rebase fixture", panelID: UUID(), statusKind: .working, summary: "Rebasing onto main"),
-                .init(title: "Screenshot pass", panelID: UUID(), statusKind: .idle, summary: nil),
-                .init(title: "Collect logs", panelID: UUID(), statusKind: .ready, showsUnreadSessionAccent: true, summary: "Saved 3 logs"),
+                .init(title: "Rebase fixture", panelID: UUID(), statusKind: .working, isWaiting: false, summary: "Rebasing onto main"),
+                .init(title: "Screenshot pass", panelID: UUID(), statusKind: .idle, isWaiting: false, summary: nil),
+                .init(title: "Collect logs", panelID: UUID(), statusKind: .ready, isWaiting: false, showsUnreadSessionAccent: true, summary: "Saved 3 logs"),
                 .init(
                     title: "Fix nav drawer focus", panelID: approvalPanelID, agentLabel: "claude",
-                    statusKind: .needsApproval, summary: "pnpm db:migrate"
+                    statusKind: .needsApproval, isWaiting: false, summary: "pnpm db:migrate"
                 ),
             ],
             creationIndex: 0,

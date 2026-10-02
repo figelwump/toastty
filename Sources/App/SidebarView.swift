@@ -1993,7 +1993,7 @@ struct SidebarView: View {
             }
 
             if model.waitingChipLabel != nil, showsWaitingChip {
-                sessionWaitingChip()
+                Self.sessionWaitingChip()
             }
 
             if let turnStartedAt = model.turnStartedAt {
@@ -2662,7 +2662,7 @@ struct SidebarView: View {
             }
     }
 
-    private func sessionWaitingChip() -> some View {
+    static func sessionWaitingChip() -> some View {
         Text("waiting")
             .font(ToastyTheme.fontWorkspaceSessionChip)
             .foregroundStyle(ToastyTheme.sessionWaitingText)
@@ -2677,6 +2677,11 @@ struct SidebarView: View {
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(ToastyTheme.sessionWaitingChipRing, lineWidth: 1)
             )
+            .background {
+                SidebarSemanticTextBridge(text: "waiting")
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
     }
 
     private func sessionWorkspaceScopeHelpText(
@@ -3117,6 +3122,7 @@ struct SidebarView: View {
                     // An unnamed session's title is already the agent's name.
                     agentLabel: status.sessionName == nil ? nil : SidebarSessionPresentation.sessionAgentLabel(for: status.agent),
                     statusKind: status.status.kind,
+                    isWaiting: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: status.projection) != nil,
                     showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace),
                     summary: normalizedSessionDetail(status.status.detail) ?? normalizedSessionDetail(status.status.summary),
                     turnStartedAt: status.turnStartedAt,
@@ -3402,7 +3408,8 @@ struct SidebarView: View {
     private func subspaceRowTitleLine(
         _ row: SidebarSubspacePresentation.Row,
         isEmphasized: Bool,
-        showsAnnotation: Bool
+        showsAnnotation: Bool,
+        showsWaitingChip: Bool
     ) -> some View {
         HStack(spacing: 6) {
             // The ideal width is what the fit check reserves for the title;
@@ -3423,6 +3430,9 @@ struct SidebarView: View {
             HStack(spacing: 6) {
                 if let chipKind = Self.subspaceStatusChipKind(row.status) {
                     sessionStatusChip(kind: chipKind)
+                }
+                if showsWaitingChip {
+                    Self.sessionWaitingChip()
                 }
                 if showsAnnotation, let rowAnnotation = row.rowAnnotation {
                     // No ↗ glyph here to save width; the chip still opens
@@ -3492,14 +3502,25 @@ struct SidebarView: View {
             subspaceRailMark(row)
 
             VStack(alignment: .leading, spacing: 1) {
-                // Like a session row, a narrow sidebar drops the annotation
-                // chip before the title would get shorter than its reserved
-                // width; the hover card still lists every annotation.
+                // Status takes priority over the annotation at narrow widths.
+                // Both remain available in the hover card and spoken label.
                 ViewThatFits(in: .horizontal) {
                     if row.rowAnnotation != nil {
-                        subspaceRowTitleLine(row, isEmphasized: attentionKind != nil, showsAnnotation: true)
+                        subspaceRowTitleLine(
+                            row, isEmphasized: attentionKind != nil,
+                            showsAnnotation: true, showsWaitingChip: row.isWaiting
+                        )
                     }
-                    subspaceRowTitleLine(row, isEmphasized: attentionKind != nil, showsAnnotation: false)
+                    if row.isWaiting {
+                        subspaceRowTitleLine(
+                            row, isEmphasized: attentionKind != nil,
+                            showsAnnotation: false, showsWaitingChip: true
+                        )
+                    }
+                    subspaceRowTitleLine(
+                        row, isEmphasized: attentionKind != nil,
+                        showsAnnotation: false, showsWaitingChip: false
+                    )
                 }
                 .frame(minHeight: Self.sessionRowLineMinHeight)
 

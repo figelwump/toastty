@@ -419,14 +419,19 @@ was supplied or verified; do not guess one from the label. Validation rules:
 - Setting an identical annotation again reports `didMutateState=false`, unless
   `primary` changes which annotation is primary.
 
-A subspace's row in its parent's Subspaces group has room for one chip. It
-shows the workspace's primary annotation, or its `github-pr` annotation when
+A subspace's row in its parent's Subspaces group shows one annotation chip:
+the workspace's primary annotation, or its `github-pr` annotation when
 none is marked primary. Pass `primary=true` to make an annotation primary; a
 workspace has at most one, so this replaces any earlier choice. `primary=false`
 removes the role only when this key holds it, and omitting `primary` leaves it
 unchanged. Clearing the primary annotation clears the role. The row chip
 truncates past about 12 characters, so keep primary text short, such as
 `PR #1234` or `ENG-512`; the chip's tooltip shows the full text.
+
+When all working sessions in a subspace are waiting on background work, its row
+shows a `waiting` status pill. At narrow widths, the row drops the annotation
+before the waiting pill to keep room for the title. The hover card keeps both
+the session's waiting status and every annotation.
 
 Prefer `action list --json` to discover the current canonical IDs. Common actions include:
 
