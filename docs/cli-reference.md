@@ -279,18 +279,27 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
 printf '%s' "$html" | "$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
   --stdin content \
   sessionID="$TOASTTY_SESSION_ID" \
-  createPolicy=new \
+  createPolicy=additional \
+  purpose="Independent comparison" \
   title="Separate artifact"
+"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.list \
+  sessionID="$TOASTTY_SESSION_ID"
 printf '%s' "$html" | "$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
   --stdin content \
-  sessionID="$TOASTTY_SESSION_ID"
+  sessionID="$TOASTTY_SESSION_ID" \
+  documentID="$DOCUMENT_ID"
 printf '%s' "$patch" | "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.patch-content \
   --stdin patch \
   sessionID="$TOASTTY_SESSION_ID" \
+  documentID="$DOCUMENT_ID" \
   expectedRevision=3
 "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
-  sessionID="$TOASTTY_SESSION_ID"
+  sessionID="$TOASTTY_SESSION_ID" \
+  documentID="$DOCUMENT_ID"
 ```
+
+Set `DOCUMENT_ID` from the `documentID` returned by the creation action or
+from the matching entry in `panel.scratchpad.list`.
 
 `workspace.create` accepts optional `title`, `activate`, and `parent`
 arguments. When `activate=false`, Toastty appends the workspace without
@@ -475,6 +484,9 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `panel.create.local-document`
 - `panel.scratchpad.set-content`
 - `panel.scratchpad.patch-content`
+- `panel.scratchpad.update-metadata`
+- `panel.scratchpad.make-default`
+- `panel.scratchpad.unbind`
 - `panel.scratchpad.rebind`
 - `panel.scratchpad.export`
 - `panel.focus-mode.toggle`
@@ -514,12 +526,15 @@ return `CONFIRMATION_REQUIRED` or `CLOSE_BLOCKED` without showing a modal. If
 Toastty cannot assess the terminal runtime, the default close also fails closed
 with `CLOSE_BLOCKED`; explicit process termination remains available.
 
-Scratchpad actions are intended for agent and automation integrations:
+Scratchpad actions are intended for agent and automation integrations. A managed session can bind several open Scratchpads in its workspace tab, while each document belongs to at most one live session. Closing a panel removes its active binding but preserves its content for later reopening. Closed documents are not available to agent actions.
 
-- `panel.scratchpad.set-content` creates or updates the Scratchpad linked to an active managed session. It requires `sessionID` plus either `filePath` or `content`, accepts optional `title`, `expectedRevision`, and `createPolicy`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`. Session-linked Scratchpads open the source session's right panel and make the Scratchpad active there without activating another window, workspace, or workspace tab, and without moving keyboard focus into the Scratchpad. No CLI flag is needed for background creation. `createPolicy` defaults to `reuse`; set `createPolicy=new` to create a fresh session-linked Scratchpad and leave the previous one open but unbound.
-- `panel.scratchpad.patch-content` updates the existing Scratchpad linked to an active managed session without sending a full HTML snapshot. It requires `sessionID`, `expectedRevision`, and `patch` as a JSON string, returns `windowID`, `workspaceID`, `panelID`, `documentID`, `previousRevision`, `revision`, `appliedEdits`, and `created=false`, and does not create a Scratchpad when none is linked. Patch JSON is limited to 262,144 UTF-8 bytes. The top-level patch object only accepts `replacements`; each replacement object only accepts `oldText` and `newText`, and unknown fields are rejected. Patch replacements apply sequentially; each `oldText` must be non-empty and occur exactly once in the current intermediate HTML. Successful patches still reload the generated Scratchpad iframe from the updated full HTML snapshot.
-- `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
-- `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
+- `panel.scratchpad.set-content` requires `sessionID` plus either `filePath` or `content`. It accepts optional `title`, `purpose`, `expectedRevision`, `documentID`, and `createPolicy`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`. A supplied `documentID` selects an open document bound to the same session and tab; it cannot be combined with `createPolicy=new` or `additional`. `createPolicy=reuse` updates the explicit default or sole bound document, or creates one when the session has no bindings. `createPolicy=additional` creates another bound Scratchpad without changing the default. Legacy `createPolicy=new` creates a fresh default and unbinds only the previous default, preserving other bindings and documents. Updates without a document ID fail if several documents are bound with no explicit default; `additional` creation still works. New Scratchpads open the source session's right panel without activating another window, workspace, or tab or moving keyboard focus to the Scratchpad.
+- `panel.scratchpad.patch-content` requires `sessionID`, `expectedRevision`, and `patch` as a JSON string, and accepts optional `documentID` to select a bound document. It returns `windowID`, `workspaceID`, `panelID`, `documentID`, `previousRevision`, `revision`, `appliedEdits`, and `created=false`, and never creates a Scratchpad. Patch JSON is limited to 262,144 UTF-8 bytes. The top-level object only accepts nonempty `replacements`; each replacement only accepts `oldText` and `newText`. Replacements apply sequentially; each `oldText` must be non-empty and occur exactly once in the current intermediate HTML. Successful patches reload the generated iframe.
+- `panel.scratchpad.update-metadata` requires `sessionID`, `documentID`, and at least one of `title` or `purpose`; it accepts optional `expectedRevision`. Omitted fields stay unchanged, empty `purpose` clears it, and empty `title` becomes `Scratchpad`. A successful metadata change increments the document revision.
+- `panel.scratchpad.make-default` requires `sessionID` and a bound `documentID`. The first binding becomes default automatically; after the default is removed, the sole remaining binding becomes default. With several remaining bindings, call this action to choose one explicitly.
+- `panel.scratchpad.unbind` requires `sessionID` and `documentID`. It removes the binding while keeping the open panel and its persisted content.
+- `panel.scratchpad.rebind` binds an existing open Scratchpad panel to another active managed session in the same workspace tab. It requires destination `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad. Existing destination bindings remain intact.
+- `panel.scratchpad.export` writes an open Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. With `sessionID`, optional `documentID` or `panelID` selects a member of that session's bindings rather than asserting the default. Panel-only export also works for an open unbound Scratchpad.
 - `agent.launch` starts a managed agent profile in a resolved terminal panel. It
   requires `profileID` and accepts optional `cwd`, repeatable
   `initialCommands=<command>`, repeatable `env.NAME=value`, `model`,
@@ -662,6 +677,7 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.local-document.state`
 - `panel.browser.state`
 - `panel.scratchpad.lookup`
+- `panel.scratchpad.list`
 - `panel.scratchpad.state`
 
 `terminal.visible-text` may target any terminal panel in a workspace the
@@ -743,13 +759,21 @@ limit; do not change selection or focus to obtain a stronger result.
 
 `panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 
-`panel.scratchpad.lookup` requires `sessionID` and returns metadata for the
-Scratchpad linked to that active session without exporting its content. A
-successful lookup with no linked Scratchpad returns `linked: false` with null
-panel, document, revision, and title fields; a linked result returns
-`linked: true`, the panel and document identifiers, revision, title, and the
-source session metadata. The query does not scan other Scratchpad panels or
-infer a link from focus state.
+`panel.scratchpad.list` requires `sessionID` and returns metadata for all open
+Scratchpads bound to that active session: `sessionID`, `defaultDocumentID` (or
+null), and `scratchpads`. Each entry includes `windowID`, `workspaceID`,
+`tabID`, `panelID`, `documentID`, `sessionID`, `title`, `purpose` (or null),
+`revision`, `updatedAt`, and `isDefault`. This query does not create, export,
+focus, or expose document content. Use `documentID` from the list to select
+an artifact for subsequent actions.
+
+`panel.scratchpad.lookup` requires `sessionID` and accepts optional
+`documentID`. It preserves its single-object shape and returns metadata for
+the selected bound document, including `purpose`, `updatedAt`, `isDefault`,
+`bindingCount`, and `defaultDocumentID`. Without `documentID`, it returns the
+explicit default or sole bound document, or `linked: false` when none are bound. If several documents
+are bound without a default, session-only lookup fails instead of choosing an
+arbitrary document. It does not infer a link from focus state.
 
 ### Internal managed-agent commands
 

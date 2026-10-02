@@ -43,6 +43,24 @@ struct ScratchpadDocumentStoreTests {
     }
 
     @Test
+    func olderSavedDocumentWithoutPurposeLoadsAndCanBeUpdated() throws {
+        let fixture = try ScratchpadDocumentStoreFixture()
+        let document = try fixture.store.createDocument(title: "Existing", content: "<p>Saved</p>", sessionLink: nil)
+        let url = fixture.store.documentURL(for: document.documentID)
+        var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        json.removeValue(forKey: "purpose")
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+        #expect(try fixture.store.load(documentID: document.documentID)?.purpose == nil)
+        let updated = try fixture.store.updateMetadata(
+            documentID: document.documentID, title: nil, purpose: "Design notes", expectedRevision: 1
+        )
+        #expect(updated.title == "Existing")
+        #expect(updated.content == "<p>Saved</p>")
+        #expect(updated.purpose == "Design notes")
+        #expect(try fixture.store.load(documentID: document.documentID) == updated)
+    }
+
+    @Test
     func updateSessionLinkPersistsWithoutChangingContentRevision() throws {
         let fixture = try ScratchpadDocumentStoreFixture()
         let created = try fixture.store.createDocument(

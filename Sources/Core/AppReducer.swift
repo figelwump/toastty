@@ -2191,8 +2191,10 @@ public struct AppReducer {
             terminalState.resumeRecord = nil
             terminalState.remoteConversationID = nil
             return .terminal(terminalState)
-        case .web:
-            return panelState
+        case .web(var webState):
+            // Reopening saved content does not revive a binding removed by closing it.
+            webState.scratchpad?.sessionLink = nil
+            return .web(webState)
         }
     }
 

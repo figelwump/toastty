@@ -77,7 +77,7 @@ See [Running Agents](docs/running-agents.md) for agent profiles, instrumentation
 
 <img src="docs/assets/readme/right-panel.png" alt="A Checkout mockup Scratchpad in the right panel, bound to a Claude Code session" width="300" align="right">
 
-- **Scratchpad:** agents publish HTML pages for plans, mockups, diagrams, and reports, each linked to the session that made it.
+- **Scratchpad:** agents publish HTML pages for plans, mockups, diagrams, and reports. A session can bind several Scratchpads and choose which receives commands that do not name a document.
 - **Local files:** Markdown, code, configs, logs, and CSV open in an editable view with line numbers.
 - **Browser:** previews, dashboards, and PRs beside the terminal.
 - **Annotate and send:** mark up a page or Scratchpad and send numbered comments with screenshots to an agent.

@@ -123,11 +123,14 @@ enum LocalDocumentPanelOpenOutcome: Equatable {
 enum ScratchpadPanelCreatePolicy: String, CaseIterable, Equatable, Sendable {
     case reuse
     case new
+    case additional
 }
 
 struct ScratchpadPanelSetContentRequest: Equatable, Sendable {
     var sessionID: String
+    var documentID: UUID?
     var title: String?
+    var purpose: String?
     var content: String
     var expectedRevision: Int?
     var createPolicy: ScratchpadPanelCreatePolicy
@@ -137,10 +140,14 @@ struct ScratchpadPanelSetContentRequest: Equatable, Sendable {
         title: String? = nil,
         content: String,
         expectedRevision: Int? = nil,
-        createPolicy: ScratchpadPanelCreatePolicy = .reuse
+        createPolicy: ScratchpadPanelCreatePolicy = .reuse,
+        documentID: UUID? = nil,
+        purpose: String? = nil
     ) {
         self.sessionID = sessionID
+        self.documentID = documentID
         self.title = WebPanelState.normalizedTitle(title)
+        self.purpose = purpose
         self.content = content
         self.expectedRevision = expectedRevision
         self.createPolicy = createPolicy
@@ -160,6 +167,16 @@ struct ScratchpadPanelPatchContentRequest: Equatable, Sendable {
     var sessionID: String
     var patch: String
     var expectedRevision: Int
+    var documentID: UUID? = nil
+}
+
+struct ScratchpadPanelReference {
+    let windowID: UUID
+    let workspaceID: UUID
+    let tabID: UUID
+    let panelID: UUID
+    let documentID: UUID
+    let webState: WebPanelState
 }
 
 struct ScratchpadPanelPatchContentOutcome: Equatable, Sendable {
@@ -222,8 +239,12 @@ enum ScratchpadPanelError: LocalizedError, Equatable {
     case missingScratchpadState(UUID)
     case missingDocument(UUID)
     case missingLinkedScratchpad(String)
+    case documentNotLinkedToSession(UUID, String)
+    case missingDefaultScratchpad(String)
+    case incompatibleDocumentSelector
+    case scratchpadIsUnbound(UUID)
+    case sessionHeaderContextChanged
     case targetSessionOutsideScratchpadTab(String)
-    case sessionAlreadyLinkedToScratchpad(String, UUID)
 
     var errorDescription: String? {
         switch self {
@@ -243,10 +264,18 @@ enum ScratchpadPanelError: LocalizedError, Equatable {
             return "scratchpad document is missing: \(documentID.uuidString)"
         case .missingLinkedScratchpad(let sessionID):
             return "no Scratchpad is linked to active session: \(sessionID)"
+        case .documentNotLinkedToSession(let documentID, let sessionID):
+            return "Scratchpad document \(documentID.uuidString) is not bound to session \(sessionID) in its current tab"
+        case .missingDefaultScratchpad(let sessionID):
+            return "session \(sessionID) has multiple Scratchpads and no default; specify documentID or use panel.scratchpad.make-default"
+        case .incompatibleDocumentSelector:
+            return "documentID cannot be combined with createPolicy=new or additional"
+        case .scratchpadIsUnbound(let panelID):
+            return "Scratchpad panel is not bound to an active session: \(panelID.uuidString)"
+        case .sessionHeaderContextChanged:
+            return "The session or Scratchpad changed while the menu was open. Open the menu again."
         case .targetSessionOutsideScratchpadTab(let sessionID):
             return "target session is not in the Scratchpad tab: \(sessionID)"
-        case .sessionAlreadyLinkedToScratchpad(let sessionID, let panelID):
-            return "target session \(sessionID) is already linked to Scratchpad panel: \(panelID.uuidString)"
         }
     }
 }

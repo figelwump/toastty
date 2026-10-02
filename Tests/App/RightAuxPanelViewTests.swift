@@ -500,25 +500,177 @@ final class RightAuxPanelViewTests: XCTestCase {
         XCTAssertGreaterThan(longWidth, shortWidth)
     }
 
-    func testScratchpadActionsMenuContainsDocumentActionsOnly() throws {
+    @MainActor
+    func testScratchpadTerminalMenuChecksBindingsSeparatelyFromDefaultAndOffersOwnershipTransfer() throws {
+        let firstPadID = UUID()
+        let secondPadID = UUID()
+        let firstDocumentID = UUID()
+        let secondDocumentID = UUID()
+        let availablePadID = UUID()
+        let availableDocumentID = UUID()
+        let otherPadID = UUID()
+        let otherDocumentID = UUID()
+        let context = ScratchpadSessionHeaderContext(
+            sessionID: "current-session", sourcePanelID: UUID(), tabID: UUID()
+        )
+        let currentLink = ScratchpadSessionLink(
+            sessionID: context.sessionID, agent: .codex,
+            sourcePanelID: context.sourcePanelID, sourceWorkspaceID: UUID()
+        )
+        let otherLink = ScratchpadSessionLink(
+            sessionID: "other-session", agent: .claude,
+            sourcePanelID: UUID(), sourceWorkspaceID: currentLink.sourceWorkspaceID
+        )
+        let recorder = ScratchpadTerminalMenuActionRecorder()
+        let menu = ScratchpadTerminalBindingMenuBuilder.menu(
+            state: ScratchpadTerminalBindingIndicatorState(context: context, entries: [
+                ScratchpadTerminalBindingMenuEntry(
+                    panelID: firstPadID, documentID: firstDocumentID, title: "Implementation",
+                    isBound: true, isDefault: true, ownerLabel: nil, sessionLink: currentLink
+                ),
+                ScratchpadTerminalBindingMenuEntry(
+                    panelID: secondPadID, documentID: secondDocumentID, title: "Review Notes",
+                    isBound: true, isDefault: false, ownerLabel: nil, sessionLink: currentLink
+                ),
+                ScratchpadTerminalBindingMenuEntry(
+                    panelID: availablePadID, documentID: availableDocumentID, title: "UI Explorations",
+                    isBound: false, isDefault: false, ownerLabel: nil, sessionLink: nil
+                ),
+                ScratchpadTerminalBindingMenuEntry(
+                    panelID: otherPadID, documentID: otherDocumentID, title: "Test Checklist",
+                    isBound: false, isDefault: false, ownerLabel: "Claude · Tests", sessionLink: otherLink
+                ),
+            ]),
+            target: recorder,
+            action: #selector(ScratchpadTerminalMenuActionRecorder.performAction(_:))
+        )
+
+        XCTAssertEqual(menu.items.map(\.title), [
+            "Scratchpads in This Tab", "Implementation (default)", "Review Notes", "UI Explorations",
+            "Test Checklist — Move from Claude · Tests", "", "New Scratchpad",
+        ])
+        XCTAssertEqual(Array(menu.items[1...4]).map(\.state), [.on, .on, .off, .off])
+        XCTAssertTrue(menu.items[4].isEnabled)
+        menu.performActionForItem(at: 1)
+        XCTAssertEqual(recorder.request, ScratchpadSessionHeaderActionRequest(
+            context: context,
+            action: .setBinding(panelID: firstPadID, documentID: firstDocumentID, expectedSessionLink: currentLink, isBound: false)
+        ))
+        menu.performActionForItem(at: 3)
+        XCTAssertEqual(recorder.request, ScratchpadSessionHeaderActionRequest(
+            context: context,
+            action: .setBinding(panelID: availablePadID, documentID: availableDocumentID, expectedSessionLink: nil, isBound: true)
+        ))
+        menu.performActionForItem(at: 4)
+        XCTAssertEqual(recorder.request, ScratchpadSessionHeaderActionRequest(
+            context: context,
+            action: .setBinding(panelID: otherPadID, documentID: otherDocumentID, expectedSessionLink: otherLink, isBound: true)
+        ))
+        menu.performActionForItem(at: 6)
+        XCTAssertEqual(recorder.request, ScratchpadSessionHeaderActionRequest(context: context, action: .createScratchpad))
+    }
+
+    @MainActor
+    func testScratchpadSessionHeaderMenuRefreshesAtOpenAndRetainsCapturedActionContext() throws {
+        let padID = UUID()
+        let documentID = UUID()
+        let sourcePanelID = UUID()
+        let tabID = UUID()
+        let firstContext = ScratchpadSessionHeaderContext(sessionID: "first-session", sourcePanelID: sourcePanelID, tabID: tabID)
+        let secondContext = ScratchpadSessionHeaderContext(sessionID: "second-session", sourcePanelID: sourcePanelID, tabID: tabID)
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: secondContext.sessionID, agent: .codex,
+            sourcePanelID: sourcePanelID, sourceWorkspaceID: UUID()
+        )
+        var state = ScratchpadTerminalBindingIndicatorState(context: firstContext, entries: [])
+        let controller = ScratchpadSessionHeaderMenuController()
+        controller.menuState = { state }
+        var request: ScratchpadSessionHeaderActionRequest?
+        controller.performAction = { request = $0 }
+
+        let firstMenu = try XCTUnwrap(controller.makeMenu())
+        XCTAssertEqual(firstMenu.items.map(\.title), [
+            "Scratchpads in This Tab", "No Scratchpads in This Tab", "", "New Scratchpad",
+        ])
+        XCTAssertFalse(firstMenu.items[1].isEnabled)
+        state = ScratchpadTerminalBindingIndicatorState(context: secondContext, entries: [
+            ScratchpadTerminalBindingMenuEntry(
+                panelID: padID, documentID: documentID, title: "New Notes",
+                isBound: true, isDefault: true, ownerLabel: nil, sessionLink: sessionLink
+            )
+        ])
+        let secondMenu = try XCTUnwrap(controller.makeMenu())
+        XCTAssertEqual(secondMenu.items[1].title, "New Notes (default)")
+        XCTAssertEqual(secondMenu.items[1].state, .on)
+        firstMenu.performActionForItem(at: 3)
+        XCTAssertEqual(request?.context, firstContext)
+        secondMenu.performActionForItem(at: 1)
+        XCTAssertEqual(request, ScratchpadSessionHeaderActionRequest(
+            context: secondContext,
+            action: .setBinding(panelID: padID, documentID: documentID, expectedSessionLink: sessionLink, isBound: false)
+        ))
+
+        controller.menuState = { nil }
+        XCTAssertNil(controller.makeMenu())
+    }
+
+    @MainActor
+    func testScratchpadSessionBindingMenuButtonKeepsExistingKeyboardResponder() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
+        let button = ScratchpadSessionBindingMenuButton(frame: NSRect(x: 240, y: 0, width: 20, height: 20))
+        let recorder = ScratchpadTerminalMenuActionRecorder()
+        button.target = recorder
+        button.action = #selector(ScratchpadTerminalMenuActionRecorder.buttonAction(_:))
+        window.contentView?.addSubview(textView)
+        window.contentView?.addSubview(button)
+        XCTAssertTrue(window.makeFirstResponder(textView))
+
+        XCTAssertFalse(button.acceptsFirstResponder)
+        XCTAssertFalse(button.becomeFirstResponder())
+        XCTAssertTrue(button.refusesFirstResponder)
+        button.performClick(nil)
+
+        XCTAssertEqual(recorder.buttonActionCount, 1)
+        XCTAssertTrue(window.firstResponder === textView)
+    }
+
+    func testScratchpadActionsMenuIncludesDetailsAndDefaultAlongsideDocumentActions() throws {
         let documentID = UUID()
 
         let menu = ScratchpadActionsMenuBuilder.menu(
             documentID: documentID,
-            target: nil,
+            isBound: true,
+            isDefault: false,
+            target: self,
+            makeDefaultAction: #selector(scratchpadMakeDefaultAction(_:)),
+            editDetailsAction: #selector(scratchpadEditDetailsAction(_:)),
             exportAction: nil,
             openInBrowserAction: nil
         )
 
-        XCTAssertEqual(menu.items.map(\.title), ["Export to File...", "Open in Browser"])
+        XCTAssertEqual(menu.items.map(\.title), [
+            "Edit Details...", "Make Default", "", "Export to File...", "Open in Browser",
+        ])
         XCTAssertTrue(menu.items.allSatisfy { $0.submenu == nil })
+        XCTAssertEqual(menu.items[0].action, #selector(scratchpadEditDetailsAction(_:)))
+        XCTAssertTrue(menu.items[0].isEnabled)
+        XCTAssertEqual(menu.items[1].action, #selector(scratchpadMakeDefaultAction(_:)))
+        XCTAssertTrue(menu.items[1].isEnabled)
+        XCTAssertEqual(menu.items[1].state, .off)
+        XCTAssertTrue(menu.items[2].isSeparatorItem)
 
         let exportPayload = try XCTUnwrap(
-            menu.items[0].representedObject as? ScratchpadDocumentMenuPayload
+            menu.items[3].representedObject as? ScratchpadDocumentMenuPayload
         )
         XCTAssertEqual(exportPayload.documentID, documentID)
         let openPayload = try XCTUnwrap(
-            menu.items[1].representedObject as? ScratchpadDocumentMenuPayload
+            menu.items[4].representedObject as? ScratchpadDocumentMenuPayload
         )
         XCTAssertEqual(openPayload.documentID, documentID)
     }
@@ -526,21 +678,81 @@ final class RightAuxPanelViewTests: XCTestCase {
     func testScratchpadActionsMenuDisablesDocumentActionsWithoutDocumentID() {
         let menu = ScratchpadActionsMenuBuilder.menu(
             documentID: nil,
+            isBound: false,
+            isDefault: false,
             target: nil,
+            makeDefaultAction: nil,
+            editDetailsAction: nil,
             exportAction: nil,
             openInBrowserAction: nil
         )
 
-        XCTAssertEqual(menu.items.map(\.title), ["Export to File...", "Open in Browser"])
-        XCTAssertFalse(menu.items[0].isEnabled)
-        XCTAssertNil(menu.items[0].representedObject)
-        XCTAssertFalse(menu.items[1].isEnabled)
-        XCTAssertNil(menu.items[1].representedObject)
+        XCTAssertEqual(menu.items.map(\.title), [
+            "Edit Details...", "Make Default", "", "Export to File...", "Open in Browser",
+        ])
+        for item in menu.items where item.isSeparatorItem == false {
+            XCTAssertFalse(item.isEnabled)
+            XCTAssertNil(item.representedObject)
+        }
+    }
+
+    func testScratchpadActionsMenuDisablesMakeDefaultForUnboundAndCurrentDefaultPads() {
+        for isBound in [false, true] {
+            let menu = ScratchpadActionsMenuBuilder.menu(
+                documentID: UUID(),
+                isBound: isBound,
+                isDefault: isBound,
+                target: nil,
+                makeDefaultAction: nil,
+                editDetailsAction: nil,
+                exportAction: nil,
+                openInBrowserAction: nil
+            )
+            XCTAssertFalse(menu.items[1].isEnabled)
+            XCTAssertEqual(menu.items[1].state, isBound ? .on : .off)
+            XCTAssertTrue(menu.items[0].isEnabled)
+        }
+    }
+
+    @MainActor
+    func testScratchpadDetailsEditorSavesEditedTitleAndPurpose() throws {
+        let editor = ScratchpadDetailsEditor(title: "Implementation", purpose: "Track changes")
+        let details = try XCTUnwrap(editor.present { alert in
+            XCTAssertEqual(alert.buttons.map(\.title), ["Save", "Cancel"])
+            XCTAssertEqual(editor.titleField.stringValue, "Implementation")
+            XCTAssertEqual(editor.purposeField.stringValue, "Track changes")
+            editor.titleField.stringValue = "Review Notes"
+            editor.purposeField.stringValue = "Find regressions"
+            return .alertFirstButtonReturn
+        })
+
+        XCTAssertEqual(details, ScratchpadDetailsDraft(title: "Review Notes", purpose: "Find regressions"))
+    }
+
+    @MainActor
+    func testScratchpadDetailsEditorAllowsClearingDetailsAndCancelDiscardsChanges() {
+        let editor = ScratchpadDetailsEditor(title: "Implementation", purpose: "Track changes")
+        let cleared = editor.present { _ in
+            editor.titleField.stringValue = ""
+            editor.purposeField.stringValue = ""
+            return .alertFirstButtonReturn
+        }
+        XCTAssertEqual(cleared, ScratchpadDetailsDraft(title: "", purpose: ""))
+
+        XCTAssertNil(editor.present { _ in
+            editor.titleField.stringValue = "Discarded title"
+            editor.purposeField.stringValue = "Discarded purpose"
+            return .alertSecondButtonReturn
+        })
     }
 
     @objc private func scratchpadBindingCandidateAction(_ sender: NSMenuItem) {}
 
     @objc private func scratchpadBindingUnbindAction(_ sender: NSMenuItem) {}
+
+    @objc private func scratchpadMakeDefaultAction(_ sender: NSMenuItem) {}
+
+    @objc private func scratchpadEditDetailsAction(_ sender: NSMenuItem) {}
 
     private func makeRightAuxPanelTab(
         id: UUID = UUID(),
@@ -576,6 +788,20 @@ private final class ScratchpadBindingMenuControlActionRecorder: NSObject {
 
     @objc func recordAction(_ sender: Any) {
         invocationCount += 1
+    }
+}
+
+@MainActor
+private final class ScratchpadTerminalMenuActionRecorder: NSObject {
+    var request: ScratchpadSessionHeaderActionRequest?
+    var buttonActionCount = 0
+
+    @objc func performAction(_ sender: NSMenuItem) {
+        request = (sender.representedObject as? ScratchpadSessionHeaderMenuPayload)?.request
+    }
+
+    @objc func buttonAction(_ sender: NSButton) {
+        buttonActionCount += 1
     }
 }
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: publish-scratchpad-outline.sh [--new] [title]
+usage: publish-scratchpad-outline.sh [--purpose <purpose>] [--document-id <id> | --additional | --new] [title]
 
 Publishes a minimal animated loading screen before deeper analysis.
 The loading screen contains only the title and an animated indicator —
@@ -14,12 +14,44 @@ EOF
 title="Scratchpad Draft"
 title_set=0
 create_policy=""
+document_id=""
+purpose=""
+purpose_set=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --new)
+      if [[ "$create_policy" == "additional" ]]; then
+        echo "error: --new and --additional are mutually exclusive" >&2
+        exit 64
+      fi
       create_policy="new"
       shift
+      ;;
+    --additional)
+      if [[ "$create_policy" == "new" ]]; then
+        echo "error: --new and --additional are mutually exclusive" >&2
+        exit 64
+      fi
+      create_policy="additional"
+      shift
+      ;;
+    --document-id)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "error: --document-id requires a value" >&2
+        exit 64
+      fi
+      document_id="$2"
+      shift 2
+      ;;
+    --purpose)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --purpose requires a value" >&2
+        exit 64
+      fi
+      purpose="$2"
+      purpose_set=1
+      shift 2
       ;;
     -h|--help)
       usage
@@ -37,6 +69,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$document_id" && -n "$create_policy" ]]; then
+  echo "error: --document-id cannot be combined with --new or --additional" >&2
+  exit 64
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "error: python3 is required" >&2
@@ -60,6 +97,14 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 publish_args=(--title "$title")
 if [[ "$create_policy" == "new" ]]; then
   publish_args+=(--new)
+elif [[ "$create_policy" == "additional" ]]; then
+  publish_args+=(--additional)
+fi
+if [[ -n "$document_id" ]]; then
+  publish_args+=(--document-id "$document_id")
+fi
+if [[ "$purpose_set" == "1" ]]; then
+  publish_args+=(--purpose "$purpose")
 fi
 
 python3 - "$title" <<'PY' | "$script_dir/publish-scratchpad-html.sh" "${publish_args[@]}"
