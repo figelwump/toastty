@@ -1,6 +1,7 @@
 <!doctype html>
 <!-- 1200x630 social preview card for toastty.dev, rendered by render-hero-video.mjs --social.
-     It reuses the site's stylesheet and places the video's poster frame beside the tagline. -->
+     It reuses the site's stylesheet and places a sidebar close-up (the video poster's, or a
+     real capture passed with --social-image) beside the tagline. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -45,6 +46,10 @@
   // Scale the crop to fill the box width (or height, whichever is tighter), anchored top-left.
   const scale = Math.min(box.clientWidth / w, box.clientHeight / h);
   img.style.transform = `translate(${-x * scale}px, ${-y * scale}px) scale(${scale})`;
+  // End the box at the crop's bottom edge so a partly cut row never shows.
+  const height = Math.min(box.clientHeight, h * scale);
+  box.style.height = `${height}px`;
+  box.style.top = `${(630 - height) / 2}px`;
   img.src = params.get('poster');
 </script>
 </body>

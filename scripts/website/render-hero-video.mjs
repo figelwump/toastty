@@ -7,13 +7,16 @@
 // Usage:
 //   node scripts/website/render-hero-video.mjs [--out-dir DIR] [--fps 30] [--width 1600]
 //        [--stills name=seconds[@selector],...] [--no-video] [--social]
+//        [--social-image PNG --social-crop x,y,w,h]
 //
 // Outputs (default DIR: artifacts/website-hero):
 //   toastty-tour.mp4   the full loop, H.264, width --width
 //   poster.png         the reduced-motion poster frame
 //   <name>.png         one PNG per --stills entry: the padded stage at that time, or only the
 //                      element matching @selector (e.g. sidebar=0@.sbdemo, annotate=11.7@.rp)
-//   social-preview.png 1200x630 card, with --social
+//   social-preview.png 1200x630 card, with --social. Its close-up defaults to the poster's
+//                      sidebar; --social-image and --social-crop (pixels) use another image,
+//                      such as sidebar.png from capture-demo-screenshots.sh.
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -111,9 +114,11 @@ try {
   }
 
   if (args.social) {
+    const image = args['social-image'] ? resolve(args['social-image']) : join(outDir, 'poster.png');
+    const crop = args['social-crop'] ?? sidebarCrop.join(',');
     const card = await chrome.openPage(
       pathToFileURL(join(repoRoot, 'scripts/website/social-card.html')).href
-        + `?poster=${encodeURIComponent(pathToFileURL(join(outDir, 'poster.png')).href)}&crop=${sidebarCrop.join(',')}`,
+        + `?poster=${encodeURIComponent(pathToFileURL(image).href)}&crop=${crop}`,
     );
     await card.send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 630, deviceScaleFactor: 1, mobile: false });
     await card.evaluate(`Promise.all([document.fonts.ready, document.querySelector('img').decode()]).then(() => true)`);
