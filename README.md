@@ -59,7 +59,7 @@ A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toas
 
 ### Sidebar and agents
 
-<img src="docs/assets/readme/sidebar.png" alt="Toastty sidebar with working, ready, approval, and error rows, a Subspaces group with PR chips, and a flagged session" width="300" align="right">
+<img src="docs/assets/readme/sidebar.png" alt="Toastty sidebar: a lumen workspace with idle and working sessions and a Subspaces group holding a ready checkout-redesign row with a PR #128 chip, a working subspace, and a done one; below, a docs-site session with an unread reply and an infra session waiting for approval" width="300" align="right">
 
 - **Live status** for Claude Code, Codex, Cursor, OpenCode, MiMo Code, and Pi. Type `claude`, `codex`, `cursor-agent`, `opencode`, `mimo`, or `pi` as usual, or launch from the `Agent` menu, top bar, or command palette. Any other CLI runs in a normal pane.
 - **Rows that need you are tinted:** green when ready, amber when waiting for approval, red on an error.
@@ -75,7 +75,7 @@ See [Running Agents](docs/running-agents.md) for agent profiles, instrumentation
 
 ### Right panel
 
-<img src="docs/assets/readme/right-panel.png" alt="A docs preview in the right panel's browser with a numbered annotation box and an Add comment dialog" width="300" align="right">
+<img src="docs/assets/readme/right-panel.png" alt="A Checkout mockup Scratchpad in the right panel, bound to a Claude Code session" width="300" align="right">
 
 - **Scratchpad:** agents publish HTML pages for plans, mockups, diagrams, and reports, each linked to the session that made it.
 - **Local files:** Markdown, code, configs, logs, and CSV open in an editable view with line numbers.
@@ -88,6 +88,10 @@ See [Right Panel](docs/right-panel.md) for shortcuts, Recently Opened, and link 
 <br clear="right">
 
 ### Workspaces, tabs, and splits
+
+<p align="center">
+  <img src="docs/assets/readme/window.png" alt="Toastty with a Claude Code session split above a second Claude Code session fixing a test, the sidebar beside them, and a Scratchpad mockup in the right panel" width="900">
+</p>
 
 - Named workspaces in the sidebar; switch with `Option+1`–`Option+9`. `Cmd+N` opens another window.
 - Tabs per workspace (`Cmd+T`) and splits (`Cmd+D`, `Cmd+Shift+D`). `Cmd+Shift+F` zooms the focused panel.
