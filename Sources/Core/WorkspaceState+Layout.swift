@@ -31,6 +31,19 @@ public extension WorkspaceState {
         }
         return subtree.slotContaining(panelID: panelID) != nil
     }
+
+    /// Whether the selected tab currently draws this panel's content: it is the
+    /// active tab of the open right panel outside focus mode, or a split slot focus
+    /// mode does not hide. Callers decide separately whether this workspace is the
+    /// one on screen.
+    func panelIsDisplayedInSelectedTab(_ panelID: UUID) -> Bool {
+        if rightAuxPanel.activePanelID == panelID {
+            // Focus mode keeps `isVisible` but stops drawing the right panel's content.
+            return rightAuxPanel.isVisible && focusedPanelModeActive == false
+        }
+        return layoutTree.slotContaining(panelID: panelID) != nil &&
+            panelIsVisibleInFocusMode(panelID)
+    }
 }
 
 extension WorkspaceState {
