@@ -31,7 +31,7 @@ struct ToasttyAnnotationChipColors {
 enum ToasttyAnnotationChipSize {
     /// Home headers: sidebar-sized chips.
     case compact
-    /// The workspace page's chip block.
+    /// The workspace page's header.
     case regular
 }
 
@@ -149,9 +149,11 @@ struct ToasttyWorkspaceHeaderAnnotations: View {
     }
 }
 
-/// The workspace page's full chip list. Chips with a link open it in the
-/// in-app browser sheet that browser panel previews use.
-struct ToasttyWorkspaceAnnotationBlock: View {
+/// The workspace page's header line: what the workspace sits under, then its
+/// full chip list. Chips with a link open it in the in-app browser sheet that
+/// browser panel previews use.
+struct ToasttyWorkspaceDetailHeader: View {
+    let parentTitle: String?
     let annotations: [RemoteWorkspaceAnnotation]
     @State private var openedLink: OpenedLink?
     private static let lineSpacing: CGFloat = 6
@@ -164,22 +166,22 @@ struct ToasttyWorkspaceAnnotationBlock: View {
 
     var body: some View {
         ToasttyChipFlowLayout(spacing: 6, lineSpacing: Self.lineSpacing, maximumItemWidth: nil) {
+            if let parentTitle {
+                Text("in \(parentTitle)")
+                    .font(.caption)
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityLabel("Subspace of \(parentTitle)")
+                    .accessibilityIdentifier("toastty-mobile-workspace-breadcrumb")
+            }
             ForEach(annotations) { annotation in
                 chip(annotation)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ToasttyDesignTokens.raisedSurface, in: RoundedRectangle(
-            cornerRadius: ToasttyDesignTokens.cardCornerRadius, style: .continuous
-        ))
-        .overlay {
-            RoundedRectangle(cornerRadius: ToasttyDesignTokens.cardCornerRadius, style: .continuous)
-                .stroke(ToasttyDesignTokens.border, lineWidth: 1)
-        }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("toastty-workspace-annotations")
+        .accessibilityIdentifier("toastty-workspace-header")
         .sheet(item: $openedLink) { link in
             ToasttyWebLinkSheet(title: link.title, url: link.url)
         }

@@ -351,9 +351,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
         attachScreenshot(named: "fixture-home-annotations", of: app)
 
-        // The chip block sits above the open panels.
+        // The chips share the header line above the sessions.
         header.tap()
-        let block = app.descendants(matching: .any)["toastty-workspace-annotations"]
+        let block = app.descendants(matching: .any)["toastty-workspace-header"]
         XCTAssertTrue(block.waitForExistence(timeout: 5))
         XCTAssertEqual(
             app.descendants(matching: .any)["toastty-workspace-annotation-review"].label,
@@ -406,9 +406,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
                 .waitForExistence(timeout: 10)
         )
 
-        filter = app.segmentedControls["toastty-mobile-workspace-session-filter"]
-        XCTAssertTrue(filter.waitForExistence(timeout: 5))
-        XCTAssertTrue(filter.buttons["Active"].isSelected)
+        let detailFilter = app.buttons["toastty-mobile-workspace-detail-session-filter"]
+        XCTAssertTrue(detailFilter.waitForExistence(timeout: 5))
+        XCTAssertEqual(detailFilter.value as? String, "Active")
+        XCTAssertEqual(app.descendants(matching: .any)["toastty-mobile-workspace-context"].label, "1 of 2 sessions")
         XCTAssertTrue(app.buttons[
             "toastty-mobile-workspace-session-\(activeResearchConversationID)"
         ].exists)
@@ -416,11 +417,51 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "toastty-mobile-workspace-session-\(idleResearchConversationID)"
         ].exists)
 
-        filter.buttons["All"].tap()
+        // Only the menu's own label opens it, not the rest of the header row.
+        app.descendants(matching: .any)["toastty-mobile-workspace-context"].tap()
+        let allChoice = app.buttons["All"]
+        XCTAssertFalse(allChoice.waitForExistence(timeout: 1))
+        detailFilter.tap()
+        XCTAssertTrue(allChoice.waitForExistence(timeout: 5))
+        allChoice.tap()
+        XCTAssertEqual(detailFilter.value as? String, "All")
         let detailIdle = app.buttons[
             "toastty-mobile-workspace-session-\(idleResearchConversationID)"
         ]
         XCTAssertTrue(scrollWorkspaceTo(detailIdle, in: app))
+    }
+
+    func testWorkspaceSessionsShowFiveThenExpand() throws {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        // The working subspace has one working and five idle sessions.
+        let workspaceURL = try XCTUnwrap(URL(
+            string: "toastty-mobile-dev://workspace/\(workingSubspaceID)"
+        ))
+        app.open(workspaceURL)
+        let context = app.descendants(matching: .any)["toastty-mobile-workspace-context"]
+        XCTAssertTrue(context.waitForExistence(timeout: 10))
+        XCTAssertEqual(context.label, "6 sessions")
+        let rows = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "toastty-mobile-workspace-session-")
+        )
+        XCTAssertEqual(rows.count, 5)
+        // Activity order keeps the working session in the first five.
+        XCTAssertEqual(rows.element(boundBy: 0).identifier, "toastty-mobile-workspace-session-B1000000-0000-0000-0000-000000000011")
+        let toggle = app.buttons["toastty-workspace-sessions-toggle"]
+        XCTAssertTrue(scrollWorkspaceTo(toggle, in: app))
+        XCTAssertEqual(toggle.label, "Show 1 more")
+        attachScreenshot(named: "fixture-workspace-sessions-capped", of: app)
+        toggle.tap()
+        XCTAssertTrue(app.buttons[
+            "toastty-mobile-workspace-session-B1000000-0000-0000-0000-000000000018"
+        ].waitForExistence(timeout: 5))
+        XCTAssertEqual(rows.count, 6)
+        XCTAssertEqual(toggle.label, "Show less")
+        toggle.tap()
+        XCTAssertTrue(app.buttons[
+            "toastty-mobile-workspace-session-B1000000-0000-0000-0000-000000000018"
+        ].waitForNonExistence(timeout: 5))
     }
 
     func testFixtureWorkspaceFilterPersistsAcrossRelaunch() {

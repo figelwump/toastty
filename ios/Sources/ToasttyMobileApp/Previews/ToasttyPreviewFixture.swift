@@ -43,7 +43,8 @@ enum ToasttyPreviewFixture {
                 return scratchpad(title: "Workspace map", documentNumber: 1)
             case ToasttyMobileFixture.navigationScratchpadPanelID:
                 return scratchpad(title: "Navigation sketch", documentNumber: 2)
-            case ToasttyMobileFixture.documentPanelID, ToasttyMobileFixture.olderDocumentPanelID, ToasttyMobileFixture.undatedDocumentPanelID:
+            case ToasttyMobileFixture.documentPanelID, ToasttyMobileFixture.olderDocumentPanelID, ToasttyMobileFixture.undatedDocumentPanelID,
+                 ToasttyMobileFixture.smokeReportPanelID, ToasttyMobileFixture.remoteReportPanelID:
                 return document(line: nil)
             case ToasttyMobileFixture.htmlPanelID:
                 return html
@@ -161,8 +162,8 @@ enum ToasttyPreviewFixture {
 
     ## Workspace panels
 
-    Open panels are listed above sessions.
-    Each row includes its desktop tab.
+    Panels are listed below sessions.
+    Panels with the same name show their folder.
 
     ## Scratchpads
 
