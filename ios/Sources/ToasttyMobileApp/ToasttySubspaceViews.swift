@@ -269,7 +269,7 @@ struct ToasttySubspaceRailMark: View {
             box.strokeBorder(ToasttyDesignTokens.mutedText, lineWidth: 1.4)
                 .frame(width: Self.boxSize, height: Self.boxSize)
         case .ready:
-            box.strokeBorder(color, lineWidth: 1.6)
+            box.fill(color)
                 .frame(width: Self.boxSize, height: Self.boxSize)
         case .done:
             box.fill(color.opacity(0.22))
