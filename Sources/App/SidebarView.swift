@@ -1488,7 +1488,11 @@ struct SidebarView: View {
             workspaceSessionStatus.children
         )
         let collapsedChildNeedsAttention = childRowsNeedAttention && childRowsExpanded == false
-        let parentSessionName = parentSessionName(for: workspaceSessionStatus, in: workspace.id)
+        let launchParent = parentSession(for: workspaceSessionStatus)
+        let parentSessionName = launchParent?.displayTitleOverride
+            ?? launchParent?.providerSessionName
+            ?? launchParent?.agent.displayName
+        let parentTagName = launchParent?.workspaceID == workspace.id ? nil : parentSessionName
         let customTabTitle = SidebarSessionPresentation.sessionCustomTabTitle(
             for: workspaceSessionStatus,
             in: store.state.workspacesByID[workspaceSessionStatus.workspaceID]
@@ -1580,7 +1584,7 @@ struct SidebarView: View {
             childCount: workspaceSessionStatus.children.count,
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
-            parentSessionName: parentSessionName,
+            parentSessionName: parentTagName,
             spawnerChip: spawnerChip,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
@@ -3844,16 +3848,12 @@ struct SidebarView: View {
         expandedSessionChildrenBySessionID[sessionID] = true
     }
 
-    private func parentSessionName(
-        for workspaceSessionStatus: WorkspaceSessionStatus,
-        in workspaceID: UUID
-    ) -> String? {
+    private func parentSession(for workspaceSessionStatus: WorkspaceSessionStatus) -> SessionRecord? {
         guard let parentSessionID = workspaceSessionStatus.parentSessionID,
-              let parent = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: parentSessionID),
-              parent.workspaceID != workspaceID else {
+              parentSessionID != workspaceSessionStatus.sessionID else {
             return nil
         }
-        return parent.displayTitleOverride ?? parent.providerSessionName ?? parent.agent.displayName
+        return sessionRuntimeStore.sessionRegistry.activeSession(sessionID: parentSessionID)
     }
 
     private func childWorkspaceTagLabel(

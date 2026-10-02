@@ -675,6 +675,13 @@ as "Claude Code" or "Codex") stands in as the title, so naming a session changes
 only the first line's text. In a narrow sidebar the waiting chip drops out
 before the name gets too short, and the row's tooltip names it instead.
 
+A session launched by another session in the same workspace has its own normal
+row when it has its own terminal panel, including when both panels are in the
+same tab. Its parent relationship appears in hover details. Background agents
+without their own panels remain nested under the session that launched them.
+Child sessions in other workspaces can appear as navigation rows under their
+parent, and keep their normal row in their own workspace.
+
 A row that wants you — an unread reply, an approval request, or an error — gets
 a faint fill in its status color and a heavier name. Approval and error keep a
 short badge so the state is not carried by color alone; the spelled-out wording

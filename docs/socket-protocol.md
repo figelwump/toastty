@@ -346,9 +346,11 @@ Notable action-specific behavior:
   - the result's `command` is evidence of the fully composed invocation,
     including initial-prompt placement and managed instrumentation.
   - When an active managed session invokes `agent.launch`, Toastty records that
-    caller as the new session's parent. Same-workspace child sessions are
-    surfaced as nested sidebar rows; cross-workspace children retain their
-    canonical row and carry parent context.
+    caller as the new session's parent. Same-workspace child sessions with
+    their own terminal panels have normal sidebar rows, with parent context
+    in hover details. Background agents without their own panels remain
+    nested; cross-workspace children retain their canonical row and can
+    appear as navigation rows under the parent.
 - `panel.scratchpad.set-content`
   - requires `args.sessionID`.
   - requires exactly one of `args.filePath` or `args.content`.

@@ -1517,7 +1517,7 @@ final class SidebarViewTests: XCTestCase {
         }
     }
 
-    func testNeedsApprovalSessionChildChipRemainsSingleLineAtMinimumSidebarWidth() throws {
+    func testNeedsApprovalChildSessionRowFitsAtMinimumSidebarWidth() throws {
         let readyFrame = try measuredWorkspaceRowFrame(childStatusKind: .ready)
         let approvalFrame = try measuredWorkspaceRowFrame(childStatusKind: .needsApproval)
 
@@ -1525,7 +1525,7 @@ final class SidebarViewTests: XCTestCase {
             approvalFrame.height,
             readyFrame.height,
             accuracy: 0.5,
-            "The needs-approval child chip must not make the row taller than another single-line status chip"
+            "An approval badge must not make the child session's normal row taller"
         )
         XCTAssertLessThanOrEqual(
             approvalFrame.maxX,
@@ -1683,6 +1683,60 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.2)
 
         XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[1])
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
+    }
+
+    func testSameWorkspaceForkHasNormalRowAndFocusesItsOwnPanel() throws {
+        let window = SidebarHoverTestWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let harness = try makeMultiSessionSidebarHarness(
+            sessionCount: 2,
+            providedWindow: window,
+            secondSessionIsChild: true
+        )
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            window.orderOut(nil)
+        }
+        let parent = try sessionPointerInteractionView(in: harness.hostingView, sessionID: harness.sessionIDs[0])
+        let child = try sessionPointerInteractionView(in: harness.hostingView, sessionID: harness.sessionIDs[1])
+        XCTAssertEqual(child.bounds.height, parent.bounds.height, accuracy: 0.5)
+        XCTAssertFalse(renderedTextValues(in: harness.hostingView).contains { $0.contains("↖ Session 1") })
+        XCTAssertFalse(renderedTextValues(in: harness.hostingView).contains { $0.contains("sub-agent") })
+
+        let point = NSPoint(x: child.bounds.midX, y: child.bounds.midY)
+        window.pointerLocation = child.convert(point, to: nil)
+        child.mouseEntered(with: try XCTUnwrap(pointerMouseEvent(
+            type: .mouseMoved, view: child, at: point, timestamp: 0, eventNumber: 0
+        )))
+        pumpMainRunLoop(duration: 0.8)
+        let rowID = SidebarSessionPresentation.SidebarSessionRowID(
+            workspaceID: harness.workspaceID,
+            sessionID: harness.sessionIDs[1],
+            panelID: harness.panelIDs[1]
+        )
+        XCTAssertTrue(HoverTipPresenter.shared.isVisible(id: rowID))
+        let card = try XCTUnwrap(renderedHoverCardView())
+        for (view, name) in [(harness.hostingView, "Fork normal rows"), (card, "Fork parent hover details")] {
+            let attachment = XCTAttachment(data: try XCTUnwrap(
+                renderedBitmap(for: view).representation(using: .png, properties: [:])
+            ), uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        HoverTipPresenter.shared.hideAll()
+
+        child.usesEventTrackingLoop = false
+        try click(view: child, at: point)
+        pumpMainRunLoop(duration: 0.2)
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[1])
+        parent.usesEventTrackingLoop = false
+        try click(view: parent, at: NSPoint(x: parent.bounds.midX, y: parent.bounds.midY))
+        pumpMainRunLoop(duration: 0.2)
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[0])
         XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
     }
 
@@ -2866,7 +2920,11 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    private func makeMultiSessionSidebarHarness(sessionCount: Int, providedWindow: NSWindow? = nil) throws -> MultiSessionSidebarHarness {
+    private func makeMultiSessionSidebarHarness(
+        sessionCount: Int,
+        providedWindow: NSWindow? = nil,
+        secondSessionIsChild: Bool = false
+    ) throws -> MultiSessionSidebarHarness {
         XCTAssertGreaterThanOrEqual(sessionCount, 2)
         let panelIDs = (0..<sessionCount).map { _ in UUID() }
         let workspaceID = UUID()
@@ -2914,6 +2972,7 @@ final class SidebarViewTests: XCTestCase {
                 panelID: panelID,
                 windowID: windowID,
                 workspaceID: workspaceID,
+                parentSessionID: secondSessionIsChild && offset == 1 ? sessionIDs[0] : nil,
                 displayTitleOverride: "Session \(offset + 1)",
                 cwd: "/repo/sidebar",
                 repoRoot: "/repo",
