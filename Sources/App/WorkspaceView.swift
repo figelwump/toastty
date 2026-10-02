@@ -5,9 +5,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct WorkspaceView: View {
-    struct FocusedUnreadClearCandidate: Equatable {
+    struct UnreadClearCandidate: Equatable {
         let workspaceID: UUID
-        let panelID: UUID
+        let panelIDs: Set<UUID>
     }
 
     enum WorkspaceTabTrailingAccessory: Equatable {
@@ -95,7 +95,7 @@ struct WorkspaceView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
-    @State private var focusedUnreadClearTask: Task<Void, Never>?
+    @State private var seenUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
     @State private var hoveredTabID: UUID?
     @State private var hoveredTabCloseButtonID: UUID?
@@ -116,7 +116,7 @@ struct WorkspaceView: View {
     @State private var transientUnfocusHighlightResetWorkItem: DispatchWorkItem?
     @StateObject private var splitResizeCoordinator = WorkspaceSplitResizeCoordinator()
 
-    private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+    private static let seenUnreadClearDelayNanoseconds: UInt64 = 300_000_000
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
     private static let workspaceTabsToControlsSpacing: CGFloat = 12
     private static let workspaceTabStripSpacing: CGFloat = -1.5
@@ -210,36 +210,47 @@ struct WorkspaceView: View {
         titleOriginY + titleHeight + spacing
     }
 
-    nonisolated static func focusedUnreadClearCandidate(
-        workspace: WorkspaceState?,
-        appIsActive: Bool
-    ) -> FocusedUnreadClearCandidate? {
-        guard appIsActive,
-              let workspace,
-              let focusedPanelID = workspace.focusedPanelID,
-              workspace.unreadPanelIDs.contains(focusedPanelID) else {
-            return nil
+    /// Unread panels in the displayed workspace that count as seen: the focused
+    /// split panel, and any scratchpad on screen whether or not it has focus.
+    nonisolated static func seenUnreadPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
+        workspace.unreadPanelIDs.filter { panelID in
+            if panelID == workspace.focusedPanelID {
+                return true
+            }
+            guard case .web(let webState)? = workspace.panelState(for: panelID),
+                  webState.definition == .scratchpad else {
+                return false
+            }
+            return workspace.panelIsDisplayedInSelectedTab(panelID)
         }
-
-        return FocusedUnreadClearCandidate(
-            workspaceID: workspace.id,
-            panelID: focusedPanelID
-        )
     }
 
-    nonisolated static func shouldClearFocusedUnread(
-        currentWorkspace: WorkspaceState?,
-        candidate: FocusedUnreadClearCandidate,
+    nonisolated static func unreadClearCandidate(
+        workspace: WorkspaceState?,
         appIsActive: Bool
-    ) -> Bool {
+    ) -> UnreadClearCandidate? {
+        guard appIsActive, let workspace else {
+            return nil
+        }
+        let panelIDs = seenUnreadPanelIDs(in: workspace)
+        guard panelIDs.isEmpty == false else {
+            return nil
+        }
+        return UnreadClearCandidate(workspaceID: workspace.id, panelIDs: panelIDs)
+    }
+
+    /// Panels from `candidate` that are still unread and still seen after the clear delay.
+    nonisolated static func unreadPanelIDsToClear(
+        currentWorkspace: WorkspaceState?,
+        candidate: UnreadClearCandidate,
+        appIsActive: Bool
+    ) -> Set<UUID> {
         guard appIsActive,
               let currentWorkspace,
-              currentWorkspace.id == candidate.workspaceID,
-              currentWorkspace.focusedPanelID == candidate.panelID else {
-            return false
+              currentWorkspace.id == candidate.workspaceID else {
+            return []
         }
-
-        return currentWorkspace.unreadPanelIDs.contains(candidate.panelID)
+        return candidate.panelIDs.intersection(seenUnreadPanelIDs(in: currentWorkspace))
     }
 
     private static let panelFlashPeakDuration: Double = 0.18
@@ -573,12 +584,12 @@ struct WorkspaceView: View {
         }
         .onAppear {
             appIsActive = NSApplication.shared.isActive
-            scheduleFocusedUnreadPanelClearIfNeeded()
+            scheduleSeenUnreadPanelClearIfNeeded()
             handlePendingPanelFlashRequest()
             handlePendingBrowserLocationFocusRequest()
         }
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
-            scheduleFocusedUnreadPanelClearIfNeeded()
+            scheduleSeenUnreadPanelClearIfNeeded()
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientTabRenameState()
@@ -619,7 +630,7 @@ struct WorkspaceView: View {
         }
         .onDisappear {
             cancelWorkspaceTabDrag()
-            cancelFocusedUnreadClearTask()
+            cancelSeenUnreadClearTask()
             panelFlashClearWorkItem?.cancel()
             panelFlashResetWorkItem?.cancel()
             panelFlashClearWorkItem = nil
@@ -629,12 +640,12 @@ struct WorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
             splitResizeCoordinator.clearHover()
-            scheduleFocusedUnreadPanelClearIfNeeded()
+            scheduleSeenUnreadPanelClearIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             appIsActive = false
             cancelWorkspaceTabDrag()
-            cancelFocusedUnreadClearTask()
+            cancelSeenUnreadClearTask()
             hoveredTabID = nil
             hoveredTabCloseButtonID = nil
             splitResizeCoordinator.clearHover()
@@ -1537,8 +1548,7 @@ struct WorkspaceView: View {
         guard let workspace = selectedWorkspace else { return nil }
         return SelectedWorkspaceUnreadSignature(
             workspaceID: workspace.id,
-            focusedPanelID: workspace.focusedPanelID,
-            unreadPanelIDs: workspace.unreadPanelIDs
+            seenUnreadPanelIDs: Self.seenUnreadPanelIDs(in: workspace)
         )
     }
 
@@ -1577,38 +1587,39 @@ struct WorkspaceView: View {
         )
     }
 
-    private func scheduleFocusedUnreadPanelClearIfNeeded() {
-        cancelFocusedUnreadClearTask()
+    private func scheduleSeenUnreadPanelClearIfNeeded() {
+        cancelSeenUnreadClearTask()
 
-        guard let clearCandidate = Self.focusedUnreadClearCandidate(
+        guard let clearCandidate = Self.unreadClearCandidate(
             workspace: selectedWorkspace,
-            appIsActive: NSApplication.shared.isActive
+            appIsActive: store.isAppActive
         ) else {
             return
         }
 
-        focusedUnreadClearTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: Self.focusedUnreadClearDelayNanoseconds)
+        // The delay keeps panels the user only passes through on the way elsewhere unread.
+        seenUnreadClearTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.seenUnreadClearDelayNanoseconds)
             guard Task.isCancelled == false else { return }
-            guard Self.shouldClearFocusedUnread(
+            let panelIDs = Self.unreadPanelIDsToClear(
                 currentWorkspace: store.selectedWorkspace(in: windowID),
                 candidate: clearCandidate,
-                appIsActive: NSApplication.shared.isActive
-            ) else {
-                return
-            }
-            _ = store.send(
-                .markPanelNotificationsRead(
-                    workspaceID: clearCandidate.workspaceID,
-                    panelID: clearCandidate.panelID
-                )
+                appIsActive: store.isAppActive
             )
+            for panelID in panelIDs {
+                _ = store.send(
+                    .markPanelNotificationsRead(
+                        workspaceID: clearCandidate.workspaceID,
+                        panelID: panelID
+                    )
+                )
+            }
         }
     }
 
-    private func cancelFocusedUnreadClearTask() {
-        focusedUnreadClearTask?.cancel()
-        focusedUnreadClearTask = nil
+    private func cancelSeenUnreadClearTask() {
+        seenUnreadClearTask?.cancel()
+        seenUnreadClearTask = nil
     }
 
     private func handleSelectedWorkspaceTabChange(
@@ -3601,8 +3612,7 @@ struct WorkspaceAgentTopBarModel: Equatable {
 
 private struct SelectedWorkspaceUnreadSignature: Equatable {
     let workspaceID: UUID
-    let focusedPanelID: UUID?
-    let unreadPanelIDs: Set<UUID>
+    let seenUnreadPanelIDs: Set<UUID>
 }
 
 private struct SelectedWorkspaceTabSignature: Equatable {

@@ -149,7 +149,7 @@ Build:
 - bind, rebind, unbind, export, and open-in-browser panel affordances
 - sandboxed generated HTML/CSS/JS rendering
 - persisted scratchpad document storage outside layout snapshots
-- unread/updated indication when an unfocused scratchpad changes
+- unread/updated indication when a scratchpad changes while it is not on screen
 
 Still out of scope for v1:
 
@@ -184,9 +184,12 @@ current `TOASTTY_SESSION_ID`:
   scratchpad open with its content intact.
 - Auto-create does not leave focus in the scratchpad. If creation focuses the
   new panel internally, Toastty restores focus to the source terminal.
-- If the scratchpad is not focused when updated, Toastty marks it updated using
+- If the scratchpad is not on screen when updated, Toastty marks it updated using
   the same quiet unread/updated visual language used for panels that need
-  attention.
+  attention. On screen means the app is active, the scratchpad's workspace and
+  tab are selected, and it is the visible right-panel tab (outside focus mode)
+  or a visible split; focus is not required. The mark clears shortly after the
+  scratchpad comes on screen.
 - The agent should mention the scratchpad only after the app-control action
   succeeds. This is agent guidance, not app policy.
 
