@@ -1706,6 +1706,7 @@ struct ToasttyApp: App {
         let toasttyConfig = ToasttyConfigStore.load()
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
+        store.setPullRequestMergePrompt(toasttyConfig.pullRequestMergePrompt)
         // Only newly enqueued hook events observe the reloaded path; queued
         // and running invocations drain with their captured path.
         agentHookDispatcher.updateScriptPath(toasttyConfig.agentHookScriptPath)
@@ -2079,6 +2080,7 @@ struct ToasttyApp: App {
     ) {
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
+        store.setPullRequestMergePrompt(toasttyConfig.pullRequestMergePrompt)
         applyConfiguredDefaultTerminalProfile(
             to: store,
             terminalProfileCatalog: terminalProfileCatalog,

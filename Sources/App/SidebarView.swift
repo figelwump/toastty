@@ -529,6 +529,8 @@ struct SidebarView: View {
     // materialization immediately restyle every visible chip with that key.
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
+    /// Runs a subspace row's Merge menu item for that workspace.
+    let requestWorkspaceMerge: @MainActor (UUID) -> Void
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
@@ -693,6 +695,7 @@ struct SidebarView: View {
         sessionRuntimeStore: SessionRuntimeStore,
         annotationStyleStore: AnnotationStyleStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
+        requestWorkspaceMerge: @escaping @MainActor (UUID) -> Void = { _ in },
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
         workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
         workspaceViewportHeightObserver: ((CGFloat) -> Void)? = nil
@@ -703,6 +706,7 @@ struct SidebarView: View {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.annotationStyleStore = annotationStyleStore
         self.terminalRuntimeContext = terminalRuntimeContext
+        self.requestWorkspaceMerge = requestWorkspaceMerge
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
         self.workspaceViewportHeightObserver = workspaceViewportHeightObserver
@@ -3618,8 +3622,18 @@ struct SidebarView: View {
         .accessibilityIdentifier("sidebar.workspace.subspace.\(row.id.uuidString)")
         .id(row.id)
         .contextMenu {
+            let mergePresentation = subspaceMergeMenuPresentation(row)
+            if let mergePresentation {
+                Button(mergePresentation.title) {
+                    requestWorkspaceMerge(row.id)
+                }
+                .disabled(mergePresentation.isReady == false)
+            }
             Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
                 toggleSubspaceDone(row)
+            }
+            if mergePresentation != nil {
+                Divider()
             }
             Button("Move to top level") {
                 _ = store.send(
@@ -3677,6 +3691,24 @@ struct SidebarView: View {
                     }
                 }
         }
+    }
+
+    /// The row's Merge menu item: offered while the pull request is open,
+    /// disabled while the agent is merging it, and gone once the row is done.
+    private func subspaceMergeMenuPresentation(
+        _ row: SidebarSubspacePresentation.Row
+    ) -> WorkspaceMergePresentation? {
+        guard let workspace = store.state.workspacesByID[row.id],
+              let presentation = WorkspaceMergePresentation.make(
+                workspace: workspace,
+                request: sessionRuntimeStore.workspaceMergeRequests[row.id]
+              ) else {
+            return nil
+        }
+        if case .done = presentation {
+            return nil
+        }
+        return presentation
     }
 
     private func toggleSubspaceDone(_ row: SidebarSubspacePresentation.Row) {

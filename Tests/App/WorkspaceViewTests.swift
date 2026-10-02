@@ -12,6 +12,7 @@ final class WorkspaceViewTests: XCTestCase {
         let workspaceID: UUID
         let panelID: UUID
         let store: AppStore
+        let sessionRuntimeStore: SessionRuntimeStore
         let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
         let hostingView: NSView
         let window: NSWindow
@@ -1624,6 +1625,68 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(summary.active, 0)
     }
 
+    /// The merge control replaces the unread summary under a pull request
+    /// subspace's title: a click on it asks for the merge, and it follows the
+    /// request through to the done mark.
+    @MainActor
+    func testPullRequestSubspaceHeaderShowsMergeControlInSubtitleSlot() throws {
+        var mergeRequests: [UUID] = []
+        let harness = try makeWorkspaceHarness(
+            hostWidth: 720,
+            configureState: { state, windowID, workspaceID in
+                let parent = WorkspaceState.bootstrap(title: "toastty")
+                state.workspacesByID[parent.id] = parent
+                let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
+                state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
+                var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+                workspace.title = "fix-claude-question-lifetime"
+                workspace.parentWorkspaceID = parent.id
+                workspace.annotations["github-pr"] = try XCTUnwrap(
+                    WorkspaceAnnotation.validated(text: "PR #59", url: "https://github.com/example/toastty/pull/59")
+                )
+                // An unread panel would otherwise claim the subtitle slot.
+                workspace.unreadPanelIDs = Set([workspace.focusedPanelID].compactMap { $0 })
+                state.workspacesByID[workspaceID] = workspace
+            },
+            requestWorkspaceMerge: { mergeRequests.append($0) }
+        )
+        defer { harness.window.orderOut(nil) }
+        try writeTopBarEvidence(harness, name: "topbar-merge-ready")
+
+        // The control sits under the title: 12pt in from the leading edge,
+        // 16pt tall starting below the title line.
+        let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "task-agent",
+            agent: .claude,
+            panelID: harness.panelID,
+            windowID: harness.windowID,
+            workspaceID: harness.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        harness.sessionRuntimeStore.beginWorkspaceMergeRequest(
+            workspaceID: harness.workspaceID,
+            sessionID: "task-agent"
+        )
+        pumpMainRunLoop(duration: 0.05)
+        try writeTopBarEvidence(harness, name: "topbar-merge-merging")
+
+        // While the agent has the request the control is not a button.
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+
+        harness.store.send(.setWorkspaceDone(workspaceID: harness.workspaceID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.05)
+        try writeTopBarEvidence(harness, name: "topbar-merge-done")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+    }
+
     func testWorkspaceHeaderSubtitleAccessibilityIdentifierPreservesUnreadSelector() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: "1 unread"),
@@ -2550,7 +2613,8 @@ final class WorkspaceViewTests: XCTestCase {
         panelState overridePanelState: PanelState? = nil,
         tabCount: Int = 1,
         hostWidth: CGFloat = 900,
-        configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil
+        configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil,
+        requestWorkspaceMerge: @escaping @MainActor (UUID) -> Void = { _ in }
     ) throws -> WorkspaceHarness {
         XCTAssertGreaterThanOrEqual(tabCount, 1)
         var state = AppState.bootstrap()
@@ -2628,7 +2692,8 @@ final class WorkspaceViewTests: XCTestCase {
                 windowID: windowID,
                 runtimeRegistry: registry
             ),
-            sidebarVisible: true
+            sidebarVisible: true,
+            requestWorkspaceMerge: requestWorkspaceMerge
         )
         let hostingView = NSHostingView(rootView: workspaceView.frame(width: hostWidth, height: 600))
         let window = NSWindow(
@@ -2646,10 +2711,70 @@ final class WorkspaceViewTests: XCTestCase {
             workspaceID: workspaceID,
             panelID: panelID,
             store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             hostingView: hostingView,
             window: window
         )
+    }
+
+    /// Clicks the hosted workspace view at a point measured from its top
+    /// leading corner.
+    @MainActor
+    private func click(atTopLeadingPoint point: CGPoint, in harness: WorkspaceHarness) throws {
+        let view = harness.hostingView
+        let viewPoint = view.isFlipped ? point : CGPoint(x: point.x, y: view.bounds.height - point.y)
+        let windowPoint = view.convert(viewPoint, to: nil)
+        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: windowPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: harness.window.windowNumber,
+                context: nil,
+                eventNumber: eventNumber,
+                clickCount: 1,
+                pressure: pressure
+            ))
+            harness.window.sendEvent(event)
+            pumpMainRunLoop(duration: 0.05)
+        }
+    }
+
+    /// Writes a PNG of the hosted top bar so a review can see the rendered
+    /// merge control. The directory comes from
+    /// `TOASTTY_WORKSPACE_MERGE_EVIDENCE_DIR` (pass it as `TEST_RUNNER_…` to
+    /// xcodebuild). `scripts/remote/test.sh` forwards no environment, so a
+    /// remote run writes to `evidence/` in its run directory instead, which
+    /// the wrapper copies back with the other artifacts.
+    @MainActor
+    private func writeTopBarEvidence(_ harness: WorkspaceHarness, name: String) throws {
+        let directory: String
+        if let configured = ProcessInfo.processInfo.environment["TOASTTY_WORKSPACE_MERGE_EVIDENCE_DIR"],
+           configured.isEmpty == false {
+            directory = configured
+        } else {
+            let bundlePath = Bundle(for: Self.self).bundleURL.path
+            guard bundlePath.contains("/test-runs/"),
+                  let derivedRange = bundlePath.range(of: "/Derived/") else {
+                return
+            }
+            directory = String(bundlePath[..<derivedRange.lowerBound]) + "/evidence"
+        }
+        let bitmap = try renderedBitmap(for: harness.hostingView)
+        let scale = CGFloat(bitmap.pixelsHigh) / harness.hostingView.bounds.height
+        let cropRect = CGRect(
+            x: 0,
+            y: 0,
+            width: CGFloat(bitmap.pixelsWide),
+            height: (ToastyTheme.topBarHeight + 8) * scale
+        )
+        let cropped = NSBitmapImageRep(cgImage: try XCTUnwrap(bitmap.cgImage?.cropping(to: cropRect)))
+        let data = try XCTUnwrap(cropped.representation(using: .png, properties: [:]))
+        let directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try data.write(to: directoryURL.appendingPathComponent("\(name).png"))
     }
 
     private func makeScratchpadRightAuxPanel(

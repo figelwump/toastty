@@ -94,6 +94,8 @@ struct WorkspaceView: View {
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
+    /// Runs a click on the top bar's Merge button for a workspace.
+    var requestWorkspaceMerge: @MainActor (UUID) -> Void = { _ in }
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -695,7 +697,16 @@ struct WorkspaceView: View {
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        if let unreadText {
+        if let mergePresentation = WorkspaceMergePresentation.make(
+            workspace: workspace,
+            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id]
+        ) {
+            // A pull request subspace gives the whole slot to its merge
+            // control; the sidebar and tab dots still show unreads.
+            WorkspaceHeaderMergeControl(presentation: mergePresentation) {
+                requestWorkspaceMerge(workspace.id)
+            }
+        } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show
             // one summary, never both, so the title column never overflows.
             WorkspaceHeaderSubtitleText(text: unreadText)

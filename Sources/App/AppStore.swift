@@ -86,6 +86,9 @@ final class AppStore: ObservableObject {
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
+    /// The user's `pull-request-merge-prompt` config value: the text the Merge
+    /// button sends to a workspace's agent in place of the built-in prompt.
+    private(set) var pullRequestMergePrompt: String?
     @Published private(set) var recentRightPanelItems: [RecentRightPanelItem]
 
     /// Set by workspace rename commands; the sidebar in the target window
@@ -1957,6 +1960,10 @@ final class AppStore: ObservableObject {
 
     func setLocalDocumentRoutingPreferences(_ preferences: LocalDocumentRoutingPreferences) {
         localDocumentRoutingPreferences = preferences
+    }
+
+    func setPullRequestMergePrompt(_ prompt: String?) {
+        pullRequestMergePrompt = prompt
     }
 
     @discardableResult
