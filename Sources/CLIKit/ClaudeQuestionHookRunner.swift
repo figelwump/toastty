@@ -143,9 +143,11 @@ struct ClaudeQuestionHookRunner {
         // Once the host presents a structured question, generic permission
         // telemetry would replace it. Keep it suppressed through fallback.
         var delivered = false
+        var endReason: RemoteQuestionAnswerRejectionReason?
         defer {
             if !delivered {
-                _ = try? send(.init(phase: .end, sessionID: sessionID, panelID: panelID, responseID: responseID))
+                _ = try? send(.init(phase: .end, sessionID: sessionID, panelID: panelID,
+                                   responseID: responseID, endReason: endReason))
             }
         }
         var reply = initialReply
@@ -165,8 +167,11 @@ struct ClaudeQuestionHookRunner {
                 return Result(suppressTelemetry: true, providerResponse: response)
             case .pending:
                 sleep(min(ClaudeQuestionValidation.pollIntervalSeconds, max(0, deadline - uptime())))
-                guard uptime() < deadline,
-                      let next = try? send(.init(phase: .poll, sessionID: sessionID, panelID: panelID, responseID: responseID)) else {
+                guard uptime() < deadline else {
+                    endReason = .expired
+                    return Result(suppressTelemetry: true)
+                }
+                guard let next = try? send(.init(phase: .poll, sessionID: sessionID, panelID: panelID, responseID: responseID)) else {
                     return Result(suppressTelemetry: true)
                 }
                 reply = next

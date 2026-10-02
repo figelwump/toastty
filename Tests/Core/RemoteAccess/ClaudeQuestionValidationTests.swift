@@ -94,4 +94,14 @@ struct ClaudeQuestionValidationTests {
             #expect(try decoder.decode(ConversationEventPayload.self, from: encoder.encode(payload)) == payload)
         }
     }
+
+    @Test func hookCleanupDecodesOlderHelpersAndPreservesTimeoutReason() throws {
+        let legacy = Data(#"{"phase":"end","sessionID":"managed","panelID":"11111111-1111-1111-1111-111111111111","responseID":"response"}"#.utf8)
+        var request = try JSONDecoder().decode(ClaudeQuestionHookRequest.self, from: legacy)
+        #expect(request.endReason == nil)
+        request.endReason = .expired
+        let decoded = try JSONDecoder().decode(ClaudeQuestionHookRequest.self, from: JSONEncoder().encode(request))
+        #expect(decoded.endReason == .expired)
+        #expect(decoded.responseID == "response")
+    }
 }
