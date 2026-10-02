@@ -437,6 +437,39 @@ and marks the workspace done with `workspace.set-done`, which shows as a check
 on its subspace row. New work in the workspace clears the check; new commits
 need the user's review and a new `worktree-done` request.
 
+### Merging a task's pull request
+
+A subspace with a `github-pr` annotation shows a **Merge PR #N** button under
+its title in the top bar, and the same item in its sidebar row's context menu.
+Clicking it sends a merge prompt to an agent session in that workspace, as if
+you had typed it there. The built-in prompt says you reviewed the pull request
+and want it merged, and tells the agent to use the `worktree-done` skill if it
+has one, or otherwise to merge the pull request and run `workspace.set-done`.
+Set `pull-request-merge-prompt` in the [config file](configuration.md) to send
+your own prompt instead.
+
+- The prompt goes to the most recently active agent session that is waiting
+  for input. If you typed in that session's terminal since its last turn
+  started, Toastty asks before sending, because unsent text in the agent's
+  input would be submitted together with the merge prompt.
+- If no agent session is waiting for input, for example because the agent or
+  one of its sub-agents is still working, Toastty asks you to wait for the turn
+  to end, so that you accept finished work.
+- If no agent session is running, Toastty starts the agent that last ran in the
+  workspace, or the first profile in `agents.toml`, in a terminal that is at
+  its shell prompt, with the merge prompt as its first message. The profile
+  has to accept a first message: a built-in `codex`, `claude`, or `cursor`
+  command with no extra arguments does, and any other profile needs
+  `initialPromptPlacement = "trailing"`. Otherwise start the agent yourself and
+  click **Merge** again.
+
+While the agent works on the request the button reads **Merging PR #N…**. It
+becomes **Done · PR #N** when the workspace is marked done. If the agent's turn
+ends without the done mark, for example because it stopped to ask about a
+merge prerequisite, the button returns to **Merge PR #N**; answer the agent in
+its session and the done mark still lands when it finishes. Top-level
+workspaces do not show the button, because only a subspace holds a done mark.
+
 Run `worktree-cleanup` from an outside project workspace. Its status script lists
 each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It
 merges only PRs the user names. With `--cleanup-merged`, it closes the task

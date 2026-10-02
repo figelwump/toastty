@@ -51,6 +51,10 @@ final class SessionRuntimeStore: ObservableObject {
 
     @Published private(set) var sessionRegistry = SessionRegistry()
     @Published private(set) var providerConversationRevision: UInt64 = 0
+    /// Merges the user started with a workspace's Merge button and that the
+    /// target agent has not finished or dropped yet, by workspace.
+    @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
+    private var workspaceMergeRequestTimeoutTasks: [UUID: Task<Void, Never>] = [:]
 
     var claudeQuestionBroker = ClaudeQuestionBroker()
     private var claudeQuestionWatchdog: Task<Void, Never>?
@@ -79,6 +83,9 @@ final class SessionRuntimeStore: ObservableObject {
     ] = [:]
     private var nativeBindingIDBySessionID: [String: UUID] = [:]
     private var nativeBindingSessionIDsWithLocalInput: Set<String> = []
+    /// Sessions whose terminal took keyboard, paste, or programmatic input
+    /// since their last turn started, so their input may hold unsent text.
+    private var sessionIDsWithInputSinceTurnStart: Set<String> = []
     private struct ManagedProviderConversationFeedState {
         var snapshot: ManagedProviderConversationFeedSnapshot
         var seenFingerprints: Set<String>
@@ -230,6 +237,7 @@ final class SessionRuntimeStore: ObservableObject {
                 nextState: nextState
             )
             self?.synchronize(with: nextState)
+            self?.resolveWorkspaceMergeRequests(state: nextState)
         }
     }
 
@@ -259,6 +267,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID = [:]
         nativeBindingIDBySessionID = [:]
         nativeBindingSessionIDsWithLocalInput = []
+        sessionIDsWithInputSinceTurnStart = []
         providerConversationFeedsBySessionID = [:]
         providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
@@ -281,6 +290,11 @@ final class SessionRuntimeStore: ObservableObject {
         resumeGraceRepublishTask?.cancel()
         resumeGraceRepublishTask = nil
         resumeGraceRepublishExpiry = nil
+        for task in workspaceMergeRequestTimeoutTasks.values {
+            task.cancel()
+        }
+        workspaceMergeRequestTimeoutTasks = [:]
+        workspaceMergeRequests = [:]
     }
 
     var codexReconciliationRuntimeSessionIDsForTesting: Set<String> {
@@ -369,6 +383,15 @@ final class SessionRuntimeStore: ObservableObject {
     func noteLocalInputForActiveSession(panelID: UUID) {
         guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
         nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
+        sessionIDsWithInputSinceTurnStart.insert(activeSession.sessionID)
+    }
+
+    /// Whether the session's input may hold text the user has not sent: its
+    /// terminal took input after its last turn started. Navigation keys and
+    /// text typed and then deleted count too, so this can be true for an
+    /// empty input.
+    func mayHoldUnsentInput(sessionID: String) -> Bool {
+        sessionIDsWithInputSinceTurnStart.contains(sessionID)
     }
 
     func isNativeSessionBindingInputClean(
@@ -739,6 +762,8 @@ final class SessionRuntimeStore: ObservableObject {
            acceptedRecord.agent != .processWatch,
            let acceptedKind = acceptedRecord.status?.kind,
            Self.statusStartsNewWork(previousKind: previousRecord?.status?.kind, nextKind: acceptedKind) {
+            // Whatever was typed before this turn was submitted with it.
+            sessionIDsWithInputSinceTurnStart.remove(sessionID)
             reopenDoneWorkspaceIfNeeded(workspaceID: acceptedRecord.workspaceID, sessionID: sessionID, trigger: "turn_start")
         }
         // Turn boundaries also catch later title changes after the short
@@ -2538,6 +2563,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
+        sessionIDsWithInputSinceTurnStart.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         cancelProviderSessionNameRefresh(sessionID: sessionID)
@@ -2747,6 +2773,7 @@ final class SessionRuntimeStore: ObservableObject {
         updateBackgroundActivityReaperState()
         updateResumeGraceRepublishState(at: now)
         reevaluatePendingHookReadyEvents(at: now)
+        resolveWorkspaceMergeRequests(state: store?.state, at: now)
     }
 
     // MARK: - Agent hook transitions
@@ -4824,10 +4851,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// (`worktree-done`, which is already working when it sets the mark)
     /// does not reopen it.
     static func statusStartsNewWork(previousKind: SessionStatusKind?, nextKind: SessionStatusKind) -> Bool {
-        func isBusy(_ kind: SessionStatusKind?) -> Bool {
-            kind == .working || kind == .needsApproval
-        }
-        return isBusy(nextKind) && isBusy(previousKind) == false
+        SessionStatusKind.isBusy(nextKind) && SessionStatusKind.isBusy(previousKind) == false
     }
 
     /// A workspace marked done reopens when an agent in it starts new work,
@@ -4844,6 +4868,80 @@ final class SessionRuntimeStore: ObservableObject {
                 "trigger": trigger,
             ]
         )
+    }
+
+    // MARK: - Workspace merge requests
+
+    /// Records that the merge prompt for `workspaceID` went to `sessionID`,
+    /// or with a `nil` session that an agent is launching to receive it.
+    /// The request stays until the workspace is marked done, the session's
+    /// turn ends or the session stops, or the session never picks it up.
+    func beginWorkspaceMergeRequest(workspaceID: UUID, sessionID: String?, at now: Date = Date()) {
+        workspaceMergeRequests[workspaceID] = WorkspaceMergeRequest(sessionID: sessionID, requestedAt: now)
+        ToasttyLog.info(
+            "Started workspace merge request",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "session_id": sessionID ?? "launching",
+            ]
+        )
+        workspaceMergeRequestTimeoutTasks[workspaceID]?.cancel()
+        workspaceMergeRequestTimeoutTasks[workspaceID] = Task { [weak self] in
+            // Re-check just after the deadline; status changes resolve the
+            // request sooner on their own.
+            try? await Task.sleep(for: .seconds(WorkspaceMergeRequest.turnStartTimeout + 1))
+            guard Task.isCancelled == false else { return }
+            self?.resolveWorkspaceMergeRequests(state: self?.store?.state)
+        }
+        resolveWorkspaceMergeRequests(state: store?.state, at: now)
+    }
+
+    /// Drops a request whose agent could not be launched.
+    func cancelWorkspaceMergeRequest(workspaceID: UUID) {
+        workspaceMergeRequestTimeoutTasks.removeValue(forKey: workspaceID)?.cancel()
+        workspaceMergeRequests.removeValue(forKey: workspaceID)
+    }
+
+    private func resolveWorkspaceMergeRequests(state: AppState?, at now: Date = Date()) {
+        guard workspaceMergeRequests.isEmpty == false else { return }
+        var nextRequests = workspaceMergeRequests
+        for (workspaceID, request) in workspaceMergeRequests {
+            let end: WorkspaceMergeRequest.End?
+            if let state, state.workspacesByID[workspaceID] == nil {
+                // The workspace closed; nothing shows the request anymore.
+                end = .sessionStopped
+            } else {
+                switch request.advanced(
+                    isWorkspaceDone: state?.workspacesByID[workspaceID]?.doneAt != nil,
+                    sessionActivity: request.sessionID.map {
+                        sessionRegistry.mergeSessionActivity(sessionID: $0, at: now)
+                    },
+                    now: now
+                ) {
+                case .pending(let nextRequest):
+                    nextRequests[workspaceID] = nextRequest
+                    end = nil
+                case .ended(let reason):
+                    end = reason
+                }
+            }
+            guard let end else { continue }
+            nextRequests.removeValue(forKey: workspaceID)
+            workspaceMergeRequestTimeoutTasks.removeValue(forKey: workspaceID)?.cancel()
+            ToasttyLog.info(
+                "Ended workspace merge request",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "session_id": request.sessionID ?? "launching",
+                    "reason": end.rawValue,
+                ]
+            )
+        }
+        if nextRequests != workspaceMergeRequests {
+            workspaceMergeRequests = nextRequests
+        }
     }
 
     private func shouldClearLaterFlag(
