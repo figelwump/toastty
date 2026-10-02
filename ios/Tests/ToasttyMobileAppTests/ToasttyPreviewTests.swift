@@ -133,10 +133,53 @@ final class ToasttyPreviewTests: XCTestCase {
         panels[3].updatedAt = nil
         let sorted = ToasttyWorkspacePanels.sorted(Array(panels.prefix(4)).reversed())
         XCTAssertEqual(sorted.map(\.panelID), [panels[1], panels[2], panels[0], panels[3]].map(\.panelID))
-        XCTAssertEqual(ToasttyWorkspacePanels.age(now, now: now), "Just now")
-        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-120), now: now), "2m ago")
-        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-7200), now: now), "2h ago")
-        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-172800), now: now), "2d ago")
+        XCTAssertEqual(ToasttyWorkspacePanels.age(now, now: now), "now")
+        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-120), now: now), "2m")
+        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-7200), now: now), "2h")
+        XCTAssertEqual(ToasttyWorkspacePanels.age(now.addingTimeInterval(-172800), now: now), "2d")
+    }
+
+    func testFolderHintsUseTheShortestDistinctTrailingFolders() {
+        func panel(_ number: Int, _ title: String, _ filePath: String?) -> RemoteWorkspacePanel {
+            var panel = ToasttyMobileFixture.previewPanels[0]
+            panel.panelID = UUID(uuidString: String(format: "F1000000-0000-0000-0000-%012d", number))!
+            panel.title = title
+            panel.filePath = filePath
+            return panel
+        }
+        let panels = [
+            // Unique titles get no hint, even with a path.
+            panel(1, "notes.md", "/repo/docs/notes.md"),
+            // Different parent folders: the parent alone.
+            panel(2, "report.json", "/repo/artifacts/smoke/report.json"),
+            panel(3, "report.json", "/repo/artifacts/remote/report.json"),
+            // Same parent folder name: walk up until the paths differ.
+            panel(4, "plan.md", "/a/docs/plan.md"),
+            panel(5, "plan.md", "/b/docs/plan.md"),
+            // A path with nothing to tell it from another, a panel with no
+            // path, and a root-level file all go without.
+            panel(6, "index.html", "/site/index.html"),
+            panel(7, "index.html", "/site/index.html"),
+            panel(8, "index.html", nil),
+            panel(9, "index.html", "/index.html"),
+            // A relative path never resolves against this app's directory.
+            panel(10, "todo.md", "work/todo.md"),
+            panel(11, "todo.md", "home/todo.md"),
+        ]
+        let hints = ToasttyWorkspacePanels.folderHints(panels)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: panels.compactMap { panel in
+                hints[panel.panelID].map { (panel.title + "@" + (panel.filePath ?? ""), $0) }
+            }),
+            [
+                "report.json@/repo/artifacts/smoke/report.json": "smoke",
+                "report.json@/repo/artifacts/remote/report.json": "remote",
+                "plan.md@/a/docs/plan.md": "a/docs",
+                "plan.md@/b/docs/plan.md": "b/docs",
+                "todo.md@work/todo.md": "work",
+                "todo.md@home/todo.md": "home",
+            ]
+        )
     }
 
     func testKnownDistantPastSortsBeforeUnknownDatesWithStableUUIDTies() {

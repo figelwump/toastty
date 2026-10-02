@@ -34,7 +34,7 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
 
     func testScratchpadSessionBackReturnsToSamePreviewAndThenWorkspace() {
         let app = launchWorkspace()
-        app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000001"].tap()
+        tapPanel("C1000000-0000-0000-0000-000000000001", in: app)
         let counter = app.webViews.buttons["Tap to count"]
         XCTAssertTrue(counter.waitForExistence(timeout: 10))
         counter.tap()
@@ -53,13 +53,12 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
 
     func testWorkspaceDocumentAndHTMLPreviewReturnToWorkspace() {
         let app = launchWorkspace()
-        app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000002"].tap()
+        tapPanel("C1000000-0000-0000-0000-000000000002", in: app)
         XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(documentTargetLine(in: app).waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["Edit"].exists)
         returnToWorkspace(app)
-        XCTAssertTrue(app.staticTexts["Open panels"].waitForExistence(timeout: 5))
-        app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000003"].tap()
+        tapPanel("C1000000-0000-0000-0000-000000000003", in: app)
         let sample = app.webViews.buttons["Read a sample"]
         XCTAssertTrue(sample.waitForExistence(timeout: 10))
         for _ in 0..<4 where !sample.isHittable { app.webViews.firstMatch.swipeUp() }
@@ -67,21 +66,24 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["Notice the small things."].waitForExistence(timeout: 5))
         attach(app, name: "html-preview-interaction")
         returnToWorkspace(app)
-        XCTAssertTrue(app.staticTexts["Open panels"].waitForExistence(timeout: 5))
     }
 
     func testWorkspacePanelsShowFourThenExpandInRecencyOrder() {
         let app = launchWorkspace()
+        // Panels follow the sessions and subspaces.
+        let toggle = app.buttons["toastty-workspace-panels-toggle"]
+        for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertEqual(toggle.label, "Show 2 more")
+        attach(app, name: "workspace-panels-collapsed")
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toastty-workspace-panel-"))
         XCTAssertEqual(rows.count, 4)
         XCTAssertEqual(rows.element(boundBy: 0).identifier, "toastty-workspace-panel-C1000000-0000-0000-0000-000000000001")
         XCTAssertEqual(rows.element(boundBy: 3).identifier, "toastty-workspace-panel-C1000000-0000-0000-0000-000000000004")
-        XCTAssertTrue(app.staticTexts["2m ago"].exists)
-        app.buttons["toastty-workspace-panels-toggle"].tap()
-        XCTAssertEqual(rows.count, 6)
-        XCTAssertTrue(app.staticTexts["2d ago"].exists)
-        let toggle = app.buttons["toastty-workspace-panels-toggle"]
+        XCTAssertEqual(rows.element(boundBy: 0).label, "Workspace map, Scratchpad, updated 2m ago")
+        toggle.tap()
         for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertEqual(rows.count, 6)
+        XCTAssertEqual(rows.element(boundBy: 4).label, "Earlier notes, Document, updated 2d ago")
         XCTAssertEqual(toggle.label, "Show less")
         toggle.tap()
         XCTAssertEqual(rows.count, 4)
@@ -89,7 +91,7 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
 
     func testWorkspaceBrowserUsesBackNavigation() {
         let app = launchWorkspace()
-        app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000004"].tap()
+        tapPanel("C1000000-0000-0000-0000-000000000004", in: app)
         XCTAssertTrue(app.navigationBars["Example website"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 10))
         returnToWorkspace(app)
@@ -144,6 +146,15 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["No sessions yet"].exists)
         XCTAssertTrue(app.staticTexts["Open a session in Toastty on your Mac and it will appear here."].exists)
         XCTAssertFalse(app.staticTexts["Choose All to show idle sessions in this workspace."].exists)
+        // Two reports share a title, so each names its folder.
+        let smokeReport = app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000008"]
+        for _ in 0..<4 where !smokeReport.isHittable { app.swipeUp() }
+        XCTAssertEqual(smokeReport.label, "report.json, in smoke, Document")
+        XCTAssertEqual(
+            app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000009"].label,
+            "report.json, in remote, Document"
+        )
+        XCTAssertEqual(panel.label, "Navigation sketch, Scratchpad")
         attach(app, name: "panel-only-workspace")
         panel.tap()
         XCTAssertFalse(app.buttons["toastty-scratchpad-session"].exists)
@@ -155,7 +166,7 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
 
     func testScratchpadControlsRemainInteractiveAcrossZoomAndFit() {
         let app = launchWorkspace()
-        app.buttons["toastty-workspace-panel-C1000000-0000-0000-0000-000000000001"].tap()
+        tapPanel("C1000000-0000-0000-0000-000000000001", in: app)
         let web = app.webViews.firstMatch
         XCTAssertTrue(web.waitForExistence(timeout: 10))
         let counter = app.webViews.buttons["Tap to count"]
@@ -196,14 +207,23 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["Count: 2"].waitForExistence(timeout: 5))
         attach(app, name: "scratchpad-fit-after-zoom")
         returnToWorkspace(app)
-        XCTAssertTrue(app.staticTexts["Open panels"].waitForExistence(timeout: 5))
     }
 
     private func returnToWorkspace(_ app: XCUIApplication) {
         XCTAssertFalse(app.buttons["toastty-preview-close"].exists)
         XCTAssertFalse(app.sheets.firstMatch.exists)
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["Open panels"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["toastty-mobile-workspace-detail"].waitForExistence(timeout: 5)
+        )
+    }
+
+    /// Panels sit below the sessions and subspaces, so scroll to one first.
+    private func tapPanel(_ panelID: String, in app: XCUIApplication) {
+        let panel = app.buttons["toastty-workspace-panel-\(panelID)"]
+        for _ in 0..<8 where !panel.isHittable { app.swipeUp() }
+        XCTAssertTrue(panel.isHittable)
+        panel.tap()
     }
 
     private func documentTargetLine(in app: XCUIApplication) -> XCUIElement {
@@ -219,7 +239,9 @@ final class ToasttyMobilePreviewUITests: XCTestCase {
         XCTAssertTrue(workspace.waitForExistence(timeout: 10))
         for _ in 0..<6 where !workspace.isHittable { app.swipeUp() }
         workspace.tap()
-        XCTAssertTrue(app.staticTexts["Open panels"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["toastty-mobile-workspace-detail"].waitForExistence(timeout: 5)
+        )
         return app
     }
 

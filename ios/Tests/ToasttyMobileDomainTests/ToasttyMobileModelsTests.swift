@@ -24,7 +24,7 @@ final class ToasttyMobileModelsTests: XCTestCase {
             snapshot.activitySessions.map(\.state.bucket),
             [
                 .error, .ready, .ready, .ready, .ready, .ready, .needsApproval, .needsApproval,
-                .working, .working, .working, .idle, .idle,
+                .working, .working, .working, .idle, .idle, .idle, .idle, .idle, .idle, .idle,
             ]
         )
     }
