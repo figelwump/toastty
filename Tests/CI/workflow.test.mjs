@@ -108,7 +108,7 @@ test('main pushes and manual runs require every job to pass', () => {
     MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
 });
 
-test('PR Debug selects UI smoke while main and manual Debug retain all UI tests', () => {
+test('automatic iOS runs keep functional coverage; manual runs include full UI and budgets', () => {
   const iosJob = workflow.jobs.ios;
   const command = iosJob.steps.find((step) => step.name === 'Test native client').run;
   const prefix = 'node ios/scripts/toastty-ios.mjs test ';
@@ -123,15 +123,29 @@ test('PR Debug selects UI smoke while main and manual Debug retain all UI tests'
   };
 
   for (const [eventName, configuration, selector, timeout] of [
-    ['pull_request', 'Debug', '--ui-tests smoke', 45],
-    ['pull_request', 'Release', '', 45],
-    ['push', 'Debug', '', 60],
-    ['push', 'Release', '', 45],
+    ['pull_request', 'Debug', '--ui-tests smoke --skip-performance-budgets', 45],
+    ['pull_request', 'Release', '--skip-performance-budgets', 45],
+    ['push', 'Debug', '--ui-tests smoke --skip-performance-budgets', 45],
+    ['push', 'Release', '--skip-performance-budgets', 45],
     ['workflow_dispatch', 'Debug', '', 60],
     ['workflow_dispatch', 'Release', '', 45],
   ]) {
     assert.equal(evaluate(command.slice(prefix.length), eventName, configuration), selector);
     assert.equal(evaluate(iosJob['timeout-minutes'], eventName, configuration), timeout);
+    const result = spawnSync(process.execPath, [
+      new URL('ios/scripts/toastty-ios.mjs', root).pathname,
+      'test', ...selector.split(' ').filter(Boolean), '--dry-run',
+    ], {
+      env: { ...process.env, TOASTTY_IOS_CONFIGURATION: configuration },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const args = JSON.parse(result.stdout).steps.at(-1).args;
+    assert.equal(args.some((arg) => arg.startsWith('-skip-testing:')), eventName !== 'workflow_dispatch');
+    assert.equal(args.some((arg) => arg.startsWith('-only-testing:ToasttyMobileUITests/')),
+      configuration === 'Debug' && eventName !== 'workflow_dispatch');
+    assert.ok(!args.includes('-skip-testing:ToasttyMobileAppTests'));
+    assert.ok(!args.includes('-skip-testing:ToasttyMobileDomainTests'));
   }
 });
 
