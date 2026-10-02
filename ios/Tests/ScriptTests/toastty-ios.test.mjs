@@ -447,6 +447,34 @@ test("Release tests exercise app and domain branches without Debug fixture UI la
   }
 });
 
+test("performance budget exclusion preserves functional suites in Debug and Release", () => {
+  const excluded = "-skip-testing:ToasttyMobileDomainTests/ConversationRuntimePerformanceTests/testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets";
+  const source = readFileSync(path.join(iosRoot, "Tests/ToasttyMobileDomainTests/Performance/ConversationRuntimePerformanceTests.swift"), "utf8");
+  assert.match(source, /func testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets\(/);
+  assert.match(source, /func testFiveThousandEventDecodeAndReducePreservesEventsAndCursor\(/);
+
+  for (const configuration of ["Debug", "Release"]) {
+    const toolchain = createStubToolchain();
+    const environment = {
+      ...toolchain.environment,
+      TOASTTY_IOS_CONFIGURATION: configuration,
+      TOASTTY_IOS_DESTINATION: "platform=iOS Simulator,id=EXPLICIT-UDID",
+    };
+    const result = runDispatcher(["test", "--skip-performance-budgets"], environment);
+    assert.equal(result.status, 0, result.stderr);
+    const args = readLog(toolchain.logPath).find(({ tool }) => tool === "xcodebuild").args;
+    assert.deepEqual(args.filter((arg) => arg.startsWith("-skip-testing:")), [excluded]);
+
+    const plan = runDispatcher(["test", "--skip-performance-budgets", "--dry-run"], environment);
+    assert.equal(plan.status, 0, plan.stderr);
+    assert.deepEqual(JSON.parse(plan.stdout).steps.at(-1).args, args);
+
+    const fullPlan = runDispatcher(["test", "--dry-run"], environment);
+    assert.equal(fullPlan.status, 0, fullPlan.stderr);
+    assert.deepEqual(JSON.parse(fullPlan.stdout).steps.at(-1).args.filter((arg) => arg.startsWith("-skip-testing:")), []);
+  }
+});
+
 test("Debug smoke runs app/domain tests and exactly two fixture UI methods", () => {
   const toolchain = createStubToolchain();
   const result = runDispatcher(["test", "--ui-tests", "smoke"], {
@@ -491,7 +519,7 @@ test("explicit all UI tests keeps the full Debug suite", () => {
   assert.deepEqual(args.filter((arg) => arg.startsWith("-only-testing:")), []);
 });
 
-test("invalid UI selectors fail before starting Tuist or a simulator", () => {
+test("invalid test selectors fail before starting Tuist or a simulator", () => {
   for (const [args, environment, expectedError] of [
     [["test", "--ui-tests"], {}, /--ui-tests requires smoke or all/],
     [["test", "--ui-tests", "none"], {}, /--ui-tests requires smoke or all/],
@@ -499,6 +527,8 @@ test("invalid UI selectors fail before starting Tuist or a simulator", () => {
     [["build", "--ui-tests", "smoke"], {}, /unexpected build argument: --ui-tests/],
     [["test", "--ui-tests", "smoke"], { TOASTTY_IOS_CONFIGURATION: "Release" }, /--ui-tests requires Debug configuration/],
     [["test", "--ui-tests", "all"], { TOASTTY_IOS_CONFIGURATION: "Release" }, /--ui-tests requires Debug configuration/],
+    [["test", "--skip-performance-budgets", "--skip-performance-budgets"], {}, /unexpected test argument: --skip-performance-budgets/],
+    [["build", "--skip-performance-budgets"], {}, /unexpected build argument: --skip-performance-budgets/],
   ]) {
     const toolchain = createStubToolchain();
     const result = runDispatcher(args, { ...toolchain.environment, ...environment });
