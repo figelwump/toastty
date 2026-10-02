@@ -79,6 +79,7 @@ local-document-opening-alternate-placement = newTab
 - new windows also inherit the source window's current local-document text size
 - duplicated or restored browser panels keep their own saved zoom level
 - runtime-isolated dev/test runs keep `config`, `config-reference`, and related UI-managed state inside the active runtime home instead of the shared user locations
+- UI changes never rewrite config files: window-local terminal and local-document text-size overrides, plus per-browser zoom overrides, are saved with workspace and window layout snapshots, and a small amount of UI behavior state lives in macOS `UserDefaults` (see [Privacy and Local Data](privacy-and-local-data.md))
 
 ## Related docs
 
