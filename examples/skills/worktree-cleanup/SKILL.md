@@ -1,6 +1,6 @@
 ---
 name: worktree-cleanup
-description: Use when the user asks which pull requests or task worktrees are ready to merge, asks to merge specific ready PRs, or asks to clean up merged worktrees, branches, and their Toastty workspaces. Run it from outside the task workspaces.
+description: Use when the user asks which pull requests or task worktrees are ready to merge, asks to merge specific ready PRs, or asks to clean up merged worktrees, branches, and their Toastty workspaces or subspaces. Run it from outside the task workspaces.
 ---
 
 # Worktree Cleanup
