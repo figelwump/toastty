@@ -20,8 +20,6 @@ enum SetupInstallerOutcome: String, Codable, Equatable {
     case dryRun
     case applied
     case noChanges
-    /// `--apply` found a conflict and changed nothing.
-    case refused
     case failed
 }
 
@@ -81,22 +79,6 @@ enum SetupInstallerCommandRunner {
                 environment: environment,
                 fileManager: fileManager
             )
-
-        case .installWorkflow(let name, let apply):
-            guard let workflow = ToasttyWorkflowCatalog.workflow(named: name) else {
-                throw ToasttyCLIError.usage("unknown workflow: \(name)")
-            }
-            let runtimePaths = ToasttyRuntimePaths.resolve(
-                homeDirectoryPath: homeDirectoryPath(environment: environment),
-                environment: environment
-            )
-            return try SetupWorkflowInstaller(
-                workflow: workflow,
-                packagesDirectoryURL: SetupResourceResolver.workflowPackagesDirectoryURL(environment: environment),
-                userSkillsDirectoryURL: runtimePaths.userSkillsDirectoryURL,
-                fileManager: fileManager
-            )
-            .result(apply: apply)
 
         case .guide, .skillsList:
             throw ToasttyCLIError.runtime("not an installer command")
@@ -258,12 +240,8 @@ enum SetupInstallerCommandRunner {
             summary = "Applied setup changes."
         case .noChanges:
             summary = "No setup changes were needed."
-        case .refused:
-            summary = "Setup apply refused; no files were changed."
         case .failed:
-            summary = result.changedFiles.isEmpty
-                ? "Setup apply failed; no files were changed."
-                : "Setup apply failed after changing some files."
+            summary = "Setup apply failed; no files were changed."
         }
         var lines: [String] = [summary]
         appendSection("Planned changes", result.plannedChanges, to: &lines)

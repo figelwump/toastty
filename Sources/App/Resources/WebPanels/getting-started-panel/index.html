@@ -266,12 +266,11 @@ Read the guide, narrate each step, dry-run every setup installer first (pass --d
 
       <div class="setup">
         <div class="rowhead">
-          <div><b>Worktree handoff workflow</b>
-          <div class="why">Optional skills that hand a task to its own Git worktree and subspace, then help you accept and clean up its PR. Installs into <span style="font-family:var(--mono);font-size:11px">~/.toastty/skills</span> and never overwrites an existing copy.</div></div>
+          <div><b>Workflows</b>
+          <div class="why">Toastty bundles example workflow skills, such as a worktree handoff that gives a task its own Git worktree and subspace. Ask an agent to set one up: it reads the workflow guide below, then copies and adapts the skills into <span style="font-family:var(--mono);font-size:11px">~/.toastty/skills</span>.</div></div>
           <button class="copy" data-copy-target="cmd-workflow">Copy</button>
         </div>
-        <pre class="snippet" id="cmd-workflow">"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --dry-run</pre>
-        <p class="small">To design your own workflow, have an agent read <span style="font-family:var(--mono)">"$TOASTTY_CLI_PATH" setup guide --topic workflows</span>.</p>
+        <pre class="snippet" id="cmd-workflow">"$TOASTTY_CLI_PATH" setup guide --topic workflows</pre>
       </div>
 
       <div class="setup">

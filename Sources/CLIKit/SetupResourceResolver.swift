@@ -28,7 +28,11 @@ enum SetupResourceResolver {
         .appendingPathComponent("Setup", isDirectory: true)
     }
 
-    static func workflowPackagesDirectoryURL(
+    /// Example skill packages copied from the repository's `examples/skills`
+    /// by `Project.swift`. The workflow guide points agents here.
+    static let workflowExamplesSubpath = "WorkflowExamples/skills"
+
+    static func workflowExamplesDirectoryURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         executableURL: URL? = nil
     ) -> URL {
@@ -36,7 +40,7 @@ enum SetupResourceResolver {
             environment: environment,
             executableURL: executableURL
         )
-        .appendingPathComponent(ToasttyWorkflowCatalog.bundledPackagesSubpath, isDirectory: true)
+        .appendingPathComponent(workflowExamplesSubpath, isDirectory: true)
     }
 
     private static func normalizedPath(_ rawValue: String?) -> String? {

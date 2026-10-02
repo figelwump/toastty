@@ -477,8 +477,8 @@ let project = Project(
                     subpath: "ToasttyAgentPluginBundle/plugins",
                     files: [.folderReference(path: "plugins/toastty")]
                 ),
-                // Installable workflow skills for `toastty setup install-workflow`;
-                // ToasttyWorkflowCatalog.bundledPackagesSubpath names this location.
+                // Example workflow skills that the workflow guide tells agents to copy
+                // and adapt; SetupResourceResolver.workflowExamplesSubpath names this location.
                 .resources(
                     name: "Bundle Workflow Example Skills",
                     subpath: "WorkflowExamples",

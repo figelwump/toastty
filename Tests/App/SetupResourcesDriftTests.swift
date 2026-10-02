@@ -222,7 +222,6 @@ final class SetupResourcesDriftTests: XCTestCase {
             "toastty setup skills list",
             "toastty setup install-shell-integration",
             "toastty setup install-hooks",
-            "toastty setup install-workflow",
             "toastty setup guide --topic workflows",
         ] {
             XCTAssertTrue(guide.contains(command), "Guide is missing \(command)")
@@ -292,7 +291,7 @@ final class SetupResourcesDriftTests: XCTestCase {
         )
     }
 
-    func testWorkflowGuideMentionsOnlyKnownAppControlIDsAndBundledWorkflows() throws {
+    func testWorkflowGuideMentionsOnlyKnownAppControlIDsAndBundledExamples() throws {
         let guide = try String(
             contentsOf: setupResourcesURL().appendingPathComponent("workflow-guide.md", isDirectory: false),
             encoding: .utf8
@@ -306,37 +305,34 @@ final class SetupResourcesDriftTests: XCTestCase {
             mentionedIDs.subtracting(knownIDs).isEmpty,
             "Workflow guide mentions unknown app-control IDs: \(mentionedIDs.subtracting(knownIDs).sorted().joined(separator: ", "))"
         )
-        for workflow in ToasttyWorkflowCatalog.workflows {
-            XCTAssertTrue(
-                guide.contains("setup install-workflow \(workflow.name) --dry-run"),
-                "Workflow guide is missing the install command for \(workflow.name)"
-            )
+        // The CLI replaces this with the bundled examples directory when it prints the guide.
+        XCTAssertTrue(guide.contains("{{WORKFLOW_EXAMPLES_DIR}}"))
+        for packageName in ["worktree-create", "worktree-done", "worktree-cleanup"] {
+            XCTAssertTrue(guide.contains("`\(packageName)`"), "Workflow guide is missing \(packageName)")
         }
         for rule in ["`ok`", "`scope_denied`", "merging"] {
             XCTAssertTrue(guide.contains(rule), "Workflow guide is missing rule: \(rule)")
         }
     }
 
-    /// `setup install-workflow` copies these packages onto user machines, where
-    /// the user skill catalog must accept them as they ship.
-    func testWorkflowCatalogPackagesAreAcceptedUserSkills() throws {
+    /// The app bundles `examples/skills`, and the workflow guide tells agents
+    /// to copy these packages onto user machines, where the user skill catalog
+    /// must accept them as they ship.
+    func testBundledExamplePackagesAreAcceptedUserSkills() throws {
         let examplesURL = repoRootURL().appendingPathComponent("examples/skills", isDirectory: true)
         let state = ToasttyUserSkillValidator().scan(userSkillsDirectoryURL: examplesURL).state
         XCTAssertTrue(state.globalDiagnostics.isEmpty, "\(state.globalDiagnostics)")
+        XCTAssertEqual(
+            state.packages.map(\.name).sorted(),
+            ["worktree-cleanup", "worktree-create", "worktree-done"]
+        )
 
-        for workflow in ToasttyWorkflowCatalog.workflows {
-            for packageName in workflow.packageNames {
-                let package = try XCTUnwrap(
-                    state.packages.first { $0.name == packageName },
-                    "\(workflow.name) lists \(packageName), which is missing from examples/skills"
-                )
-                XCTAssertEqual(package.status, .accepted, packageName)
-                let packageURL = examplesURL.appendingPathComponent(packageName, isDirectory: true)
-                for fileURL in try regularFiles(under: packageURL) {
-                    let content = try String(contentsOf: fileURL, encoding: .utf8)
-                    XCTAssertFalse(content.contains("/Users/vishal"), fileURL.path)
-                    XCTAssertFalse(content.contains("TOASTTY_DEV_WORKTREE_ROOT"), fileURL.path)
-                }
+        for package in state.packages {
+            XCTAssertEqual(package.status, .accepted, package.name)
+            for fileURL in try regularFiles(under: package.sourceURL) {
+                let content = try String(contentsOf: fileURL, encoding: .utf8)
+                XCTAssertFalse(content.contains("/Users/vishal"), fileURL.path)
+                XCTAssertFalse(content.contains("TOASTTY_DEV_WORKTREE_ROOT"), fileURL.path)
             }
         }
     }

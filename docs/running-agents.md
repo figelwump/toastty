@@ -379,11 +379,11 @@ Capability evidence: `docs/plans/evidence/pi-session-scoped-skills-2026-08-05.md
 ## Worktree tasks
 
 The optional [personal workflow skills](../examples/skills/README.md) show how to
-build your own development workflow with Toastty. Install them with
-`"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --dry-run`, then
-`--apply`, or copy them into `~/.toastty/skills` by hand, and customize them.
-`"$TOASTTY_CLI_PATH" setup guide --topic workflows` gives an agent ideas and rules
-for writing a workflow of your own. `worktree-create` continues an agreed task in its own Git
+build your own development workflow with Toastty. Toastty bundles them with the
+app: ask an agent to set up the worktree handoff, during onboarding or later, and
+it reads `"$TOASTTY_CLI_PATH" setup guide --topic workflows`, then copies and
+adapts the packages into `~/.toastty/skills`. You can also copy them by hand.
+The same guide gives an agent ideas and rules for writing a workflow of your own. `worktree-create` continues an agreed task in its own Git
 worktree and background Toastty workspace. It preserves the plan and local task
 identity; the child uses its runtime's native persistent goal when available and
 permitted to implement, review, and verify the change. The child uses subagents
@@ -439,8 +439,8 @@ Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions.
 
 See [examples/skills/](../examples/skills/README.md) for the complete worktree
 packages, installation instructions, and guidance on customizing
-their workflow. Toastty bundles them as the `worktree-handoff` workflow for
-`setup install-workflow`, which never overwrites an existing package. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
+their workflow. Toastty bundles them with the app, and the workflow guide
+(`setup guide --topic workflows`) tells agents where they are. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
 it is no longer included in the shipped plugin. Existing custom copies are yours
 to keep and edit. `worktree-done` and `worktree-cleanup` are also personal examples.
 

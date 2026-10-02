@@ -33,7 +33,7 @@ The shipped `toastty-capabilities` skill covers these actions in more depth, inc
 
 Match these to what the user works on and which tools they use. Issue trackers, documents, and monitoring are reached through the agent's own tools, such as MCP servers or the `gh` CLI; Toastty provides the workspace around them. If a workflow needs a tool the user's agent lacks, say so.
 
-- **Worktree handoff** ("hand this off"): packages the conversation into a handoff, opens a Git worktree in a new subspace, and comes back with a screenshot report and a PR chip. Installable; see below.
+- **Worktree handoff** ("hand this off"): packages the conversation into a handoff, opens a Git worktree in a new subspace, and comes back with a screenshot report and a PR chip. Toastty bundles it; see below.
 - **Issue to PR** ("start ENG-412"): reads a Linear or GitHub issue, names a workspace after it with a chip linking back, drafts the plan in a Scratchpad, and links the PR on the issue when it is up.
 - **Review queue** ("review my PRs"): opens a subspace per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies the user as each one is ready.
 - **Spec to tasks** ("build from this spec"): opens a spec from Google Docs, Notion, or a Markdown file beside the terminal, splits it into tasks, starts a subspace for each, and keeps a progress page current.
@@ -42,18 +42,23 @@ Match these to what the user works on and which tools they use. Issue trackers, 
 
 ## Worked example: worktree handoff
 
-Toastty bundles the worktree handoff workflow. Preview the install, show the user the planned packages, and apply only after an explicit OK:
+Toastty bundles example workflow skills, read-only, at:
 
-```bash
-"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --dry-run
-"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --apply
+```text
+{{WORKFLOW_EXAMPLES_DIR}}
 ```
 
-It installs three packages. `worktree-create` hands a task to its own worktree and subspace, forking the conversation when the task was already discussed. `worktree-done` accepts the reviewed PR and turns on auto-merge. `worktree-cleanup` reports which task PRs are ready and removes merged worktrees. The PR steps need an authenticated `gh` CLI, and `worktree-done` relies on the repository's auto-merge setting.
+The worktree handoff is three packages there that work together. `worktree-create` hands a task to its own Git worktree and subspace, forking the conversation when the task was already discussed. `worktree-done` accepts the reviewed PR and turns on auto-merge. `worktree-cleanup` reports which task PRs are ready and removes merged worktrees. The PR steps need an authenticated `gh` CLI, and `worktree-done` relies on the repository's auto-merge setting. The `README.md` beside them explains the flow.
 
-The installer never overwrites an existing package. If one differs from the bundled version, it changes nothing and reports the conflict; ask the user whether to keep their copy or move it aside first.
+To set it up for the user:
 
-After installing, read `worktree-create/SKILL.md` in the user skills directory as a model for a custom workflow. It checks its inputs, creates the worktree with a bundled script, launches the child agent with `agent.launch`, opens the related documents in the new workspace's right panel, and records every ID it creates. The installed copies belong to the user to edit.
+1. Read the three `SKILL.md` files and the README.
+2. Ask what to adapt: the landing branch and remote, how PRs are reviewed and merged, the commands that verify a change, preferred agent models, and how task workspaces should be named. Keep anything they do not want to change.
+3. Copy each package folder into the user skills directory as real files, keeping its subfolders and the executable permission on its scripts (for example, `cp -R`). Then make the agreed edits. Show the planned folders and edits first, and write only after an explicit OK.
+4. If a package with the same name already exists, do not overwrite it. Show how it differs from the bundled copy and ask whether to keep it, merge the changes, or move it aside.
+5. Install all three packages together; they refer to each other.
+
+The examples are also a model for a custom workflow. `worktree-create` checks its inputs, creates the worktree with a script in its own folder, launches the child agent with `agent.launch`, opens the related documents in the new workspace's right panel, and records every ID it creates.
 
 ## Rules for workflow skills
 

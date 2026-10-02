@@ -28,11 +28,10 @@ Tell the user what will happen:
 
 - `toastty setup guide` prints this guide as readable text.
 - `toastty setup guide --format md` prints this guide as Markdown.
-- `toastty setup guide --topic workflows` prints the workflow guide: building blocks, example workflows, and rules for writing a workflow skill.
+- `toastty setup guide --topic workflows` prints the workflow guide: building blocks, example workflows, where Toastty's bundled example skills are, and rules for writing a workflow skill.
 - `toastty setup skills list` lists the shipped and user-authored skills available to new supported managed launches, including diagnostics for excluded user packages.
 - `toastty setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]` installs shell integration.
 - `toastty setup install-hooks --agent codex [--dry-run | --apply]` installs Codex status hooks.
-- `toastty setup install-workflow worktree-handoff [--dry-run | --apply]` installs the bundled worktree handoff workflow skills into `~/.toastty/skills`.
 
 Prefer `"$TOASTTY_CLI_PATH"` over a shell-resolved `toastty`; it targets the running app that launched the pane. Add `--json` when structured output is more useful than text.
 
@@ -86,16 +85,11 @@ Read the workflow guide first:
 
 Ask what they work on and which tools they use, such as an issue tracker, documents, code review, or CI. Suggest two or three ideas from the guide that match, then offer one of:
 
-- **Install the worktree handoff workflow.** Dry-run it, show the planned packages, and apply only after an explicit OK. If a package already exists and differs, the installer changes nothing; ask whether to keep their copy or move it aside.
-
-  ```bash
-  "$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --dry-run
-  ```
-
+- **Set up the worktree handoff workflow.** Follow the guide's worked example: copy Toastty's bundled example skills into the user skills directory, adapting them to how the user works, and write them only after an explicit OK. Never overwrite an existing copy without asking.
 - **Write a workflow skill with them.** Follow the guide's steps: draft the skill, show it, and write it into the user skills directory (`$TOASTTY_USER_SKILLS_ROOT`, normally `~/.toastty/skills`) only after an explicit OK.
 - **Skip.**
 
-After installing or writing a skill, run `"$TOASTTY_CLI_PATH" setup skills list` to confirm it is accepted. It loads in newly launched sessions, so offer to try it in a fresh session on a small task.
+After writing any skill, run `"$TOASTTY_CLI_PATH" setup skills list` to confirm it is accepted. It loads in newly launched sessions, so offer to try it in a fresh session on a small task.
 
 ## Phase 4: Optional Tour
 

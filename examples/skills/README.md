@@ -53,18 +53,13 @@ base merges.
 
 ## Install or migrate
 
-Toastty bundles these packages as the `worktree-handoff` workflow. From a Toastty
-terminal pane, preview the install, then apply it:
-
-```bash
-"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --dry-run
-"$TOASTTY_CLI_PATH" setup install-workflow worktree-handoff --apply
-```
-
-The installer copies all three packages into `~/.toastty/skills/` or none of
-them. It never overwrites an existing package: one that already matches is left
-alone, and one that differs blocks the install until you move it aside. The
-onboarding guide's "Pick a workflow" step runs the same command.
+Toastty bundles these packages with the app. Ask an agent in a Toastty pane to
+set up the worktree handoff workflow, during the onboarding's "Pick a workflow"
+step or any time later. It reads `"$TOASTTY_CLI_PATH" setup guide --topic
+workflows`, which prints where the bundled copies are, asks what to adapt (base
+branch, PR flow, verification commands, models), and copies the adapted packages
+into `~/.toastty/skills/` after you approve. It does not overwrite an existing
+copy without asking.
 
 You can also copy `worktree-create/`, `worktree-done/`, and `worktree-cleanup/`
 from this directory to `~/.toastty/skills/` by hand, for example to pick up
