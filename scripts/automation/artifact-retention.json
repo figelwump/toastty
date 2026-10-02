@@ -41,6 +41,7 @@
     "tmp": { "strategy": "manual" },
     "ui": { "strategy": "manual" },
     "validation": { "strategy": "manual" },
-    "validation-worktrees": { "strategy": "manual" }
+    "validation-worktrees": { "strategy": "manual" },
+    "website-hero": { "strategy": "manual" }
   }
 }

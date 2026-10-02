@@ -312,6 +312,18 @@ sv exec -- env \
 
 Add `--dry-run` to print the exact `git tag`, `git push`, and `gh release create ...` commands without creating anything. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly. Pass `--notes-file` only when you want to override the default notes path.
 
+## Website and README images
+
+The landing page in `website/` is static HTML with no build step. Its hero is an HTML recreation of the app driven by one timeline in `website/hero.js`; when the UI it imitates changes, update that markup and timeline. The README hero, the README workflow images, and the social preview card are all rendered from that page, so they stay consistent with it:
+
+```bash
+node scripts/website/render-hero-video.mjs \
+  --stills 'workflow-1=6.0,workflow-2=15.9,workflow-3=20.8,right-panel=11.7@.rp,sidebar=0@.sbdemo' \
+  --social
+```
+
+The script uses local Google Chrome (or `CHROME_PATH`) and `ffmpeg`, reads only local files, and writes to `artifacts/website-hero/`: `toastty-tour.mp4`, `poster.png`, one PNG per still, and `social-preview.png`. Copy `poster.png` to `docs/assets/toastty-hero.png`, the stills to `docs/assets/readme/` (the workflow stills downscaled to 1600px wide), and `social-preview.png` to `website/assets/social-preview.png`. The GitHub repository's own social preview is set separately under the repository's Settings.
+
 ## Related docs
 
 - [Environment and Launch Flags](environment-and-build-flags.md)
