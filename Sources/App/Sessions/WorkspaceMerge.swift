@@ -105,10 +105,6 @@ struct WorkspaceMergeController {
         _ panelID: UUID,
         _ prompt: String
     ) async throws -> String
-    /// Asks whether to send when the agent's input may hold unsent text,
-    /// which would be submitted together with the merge prompt.
-    var confirmSendOverPossibleDraft: @MainActor (_ pullRequest: String) -> Bool =
-        WorkspaceMergeController.presentPossibleDraftConfirmation
     var presentProblem: @MainActor (_ problem: Problem, _ pullRequest: String) -> Void =
         WorkspaceMergeController.presentAlert
 
@@ -164,10 +160,8 @@ struct WorkspaceMergeController {
 
         switch sessionRuntimeStore.sessionRegistry.mergeTarget(workspaceID: workspaceID) {
         case .session(let session):
-            if sessionRuntimeStore.mayHoldUnsentInput(sessionID: session.sessionID),
-               confirmSendOverPossibleDraft(pullRequest) == false {
-                return nil
-            }
+            // Typed into the agent's input as the user would type it, so any
+            // text already sitting there is submitted with it.
             guard sendPrompt(prompt, session.panelID) else {
                 presentProblem(.terminalUnavailable, pullRequest)
                 return nil
@@ -267,16 +261,5 @@ struct WorkspaceMergeController {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
-    }
-
-    private static func presentPossibleDraftConfirmation(pullRequest: String) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = "Send the Merge Request for \(pullRequest)?"
-        alert.informativeText = "You typed in the agent's terminal since its last turn. "
-            + "If its input still holds text you have not sent, that text is sent together with the merge request."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Send")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
     }
 }

@@ -18,8 +18,6 @@ private final class WorkspaceMergeFixture {
     var sentPrompts: [(prompt: String, panelID: UUID)] = []
     var launches: [(profileID: String, panelID: UUID, prompt: String)] = []
     var problems: [WorkspaceMergeController.Problem] = []
-    var draftConfirmationCount = 0
-    var confirmsSendOverPossibleDraft = true
     var launchError: Error?
     var profiles = [
         AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"]),
@@ -77,10 +75,6 @@ private final class WorkspaceMergeFixture {
                 // A just-launched agent has not reported a status yet.
                 startAgent(sessionID: sessionID, agent: try #require(AgentKind(rawValue: profileID)), status: nil)
                 return sessionID
-            },
-            confirmSendOverPossibleDraft: { [unowned self] _ in
-                draftConfirmationCount += 1
-                return confirmsSendOverPossibleDraft
             },
             presentProblem: { [unowned self] problem, _ in problems.append(problem) }
         )
@@ -163,7 +157,6 @@ struct WorkspaceMergeTests {
         fixture.report(.ready, at: 5)
         #expect(fixture.presentation?.title == "Done · PR #59")
         #expect(fixture.problems.isEmpty)
-        #expect(fixture.draftConfirmationCount == 0)
     }
 
     @Test
@@ -276,35 +269,6 @@ struct WorkspaceMergeTests {
 
         #expect(fixture.problems == [.agentBusy])
         #expect(fixture.sentPrompts.isEmpty)
-    }
-
-    @Test
-    func mergeAsksBeforeSendingOverInputTheUserMayNotHaveSent() throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent()
-        fixture.report(.working, at: 1)
-        fixture.report(.ready, at: 2)
-        // The user typed in the agent's terminal after its turn ended.
-        fixture.sessionRuntimeStore.noteLocalInputForActiveSession(panelID: fixture.taskPanelID)
-
-        fixture.confirmsSendOverPossibleDraft = false
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
-        #expect(fixture.draftConfirmationCount == 1)
-        #expect(fixture.sentPrompts.isEmpty)
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59"))
-
-        fixture.confirmsSendOverPossibleDraft = true
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
-        #expect(fixture.draftConfirmationCount == 2)
-        #expect(fixture.sentPrompts.count == 1)
-
-        // Input sent as a turn is no longer a draft: once the next turn has
-        // started and ended, merging needs no confirmation.
-        fixture.report(.working, at: 3)
-        fixture.report(.ready, at: 4)
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
-        #expect(fixture.draftConfirmationCount == 2)
-        #expect(fixture.sentPrompts.count == 2)
     }
 
     @Test

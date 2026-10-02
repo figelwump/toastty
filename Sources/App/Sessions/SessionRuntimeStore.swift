@@ -83,9 +83,6 @@ final class SessionRuntimeStore: ObservableObject {
     ] = [:]
     private var nativeBindingIDBySessionID: [String: UUID] = [:]
     private var nativeBindingSessionIDsWithLocalInput: Set<String> = []
-    /// Sessions whose terminal took keyboard, paste, or programmatic input
-    /// since their last turn started, so their input may hold unsent text.
-    private var sessionIDsWithInputSinceTurnStart: Set<String> = []
     private struct ManagedProviderConversationFeedState {
         var snapshot: ManagedProviderConversationFeedSnapshot
         var seenFingerprints: Set<String>
@@ -267,7 +264,6 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID = [:]
         nativeBindingIDBySessionID = [:]
         nativeBindingSessionIDsWithLocalInput = []
-        sessionIDsWithInputSinceTurnStart = []
         providerConversationFeedsBySessionID = [:]
         providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
@@ -383,15 +379,6 @@ final class SessionRuntimeStore: ObservableObject {
     func noteLocalInputForActiveSession(panelID: UUID) {
         guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
         nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
-        sessionIDsWithInputSinceTurnStart.insert(activeSession.sessionID)
-    }
-
-    /// Whether the session's input may hold text the user has not sent: its
-    /// terminal took input after its last turn started. Navigation keys and
-    /// text typed and then deleted count too, so this can be true for an
-    /// empty input.
-    func mayHoldUnsentInput(sessionID: String) -> Bool {
-        sessionIDsWithInputSinceTurnStart.contains(sessionID)
     }
 
     func isNativeSessionBindingInputClean(
@@ -762,8 +749,6 @@ final class SessionRuntimeStore: ObservableObject {
            acceptedRecord.agent != .processWatch,
            let acceptedKind = acceptedRecord.status?.kind,
            Self.statusStartsNewWork(previousKind: previousRecord?.status?.kind, nextKind: acceptedKind) {
-            // Whatever was typed before this turn was submitted with it.
-            sessionIDsWithInputSinceTurnStart.remove(sessionID)
             reopenDoneWorkspaceIfNeeded(workspaceID: acceptedRecord.workspaceID, sessionID: sessionID, trigger: "turn_start")
         }
         // Turn boundaries also catch later title changes after the short
@@ -2563,7 +2548,6 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
-        sessionIDsWithInputSinceTurnStart.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         cancelProviderSessionNameRefresh(sessionID: sessionID)

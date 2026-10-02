@@ -449,9 +449,8 @@ Set `pull-request-merge-prompt` in the [config file](configuration.md) to send
 your own prompt instead.
 
 - The prompt goes to the most recently active agent session that is waiting
-  for input. If you typed in that session's terminal since its last turn
-  started, Toastty asks before sending, because unsent text in the agent's
-  input would be submitted together with the merge prompt.
+  for input, typed as you would type it. Text already sitting unsent in that
+  agent's input is submitted together with the prompt, so clear it first.
 - If no agent session is waiting for input, for example because the agent or
   one of its sub-agents is still working, Toastty asks you to wait for the turn
   to end, so that you accept finished work.
