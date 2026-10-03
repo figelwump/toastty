@@ -293,16 +293,22 @@ final class RemoteSessionStarter {
                 },
                 beforeDispatch: { [store, deviceMayStart] in
                     guard deviceMayStart(deviceID) else { throw DispatchRefused.permission }
-                    guard store.send(.updateTerminalPanelRemoteConversationID(
+                    // A retried attempt finds the ID already stored.
+                    _ = store.send(.updateTerminalPanelRemoteConversationID(
                         panelID: panelID,
                         remoteConversationID: conversationID
-                    )) else { throw DispatchRefused.conversation }
+                    ))
+                    guard case .terminal(let terminal)? = store.state
+                        .workspacesByID[request.workspaceID]?.panelState(for: panelID),
+                        terminal.remoteConversationID == conversationID else {
+                        throw DispatchRefused.conversation
+                    }
                 }
             )
         } catch {
-            if case .terminalUnavailable? = error as? AgentLaunchError {
-                // The terminal took some of the command but did not confirm
-                // it. The tab stays, so the person can see what arrived.
+            if case .commandDeliveryUncertain? = error as? AgentLaunchError {
+                // The terminal may hold part of the command. The tab stays,
+                // so the person can see what arrived.
             } else if tabWasSelected == false {
                 closeCreatedTabIfUnused(workspaceID: request.workspaceID, tabID: tabID, panelID: panelID)
             }
@@ -328,7 +334,8 @@ final class RemoteSessionStarter {
         guard let launchError = error as? AgentLaunchError else { return "unexpected_error" }
         switch launchError {
         case .panelBusy: return "terminal_not_ready"
-        case .terminalUnavailable: return "command_delivery_unconfirmed"
+        case .terminalUnavailable: return "terminal_not_accepting_input"
+        case .commandDeliveryUncertain: return "command_delivery_unconfirmed"
         case .cliUnavailable: return "toastty_cli_unavailable"
         case .invalidWorkingDirectory: return "invalid_working_directory"
         case .launchOverrideUnsupported, .invalidLaunchOverride, .unsafeLaunchOverrideArgv:
@@ -338,11 +345,12 @@ final class RemoteSessionStarter {
         }
     }
 
-    /// A new terminal reports itself busy until its shell prints the first
-    /// prompt, and the launcher refuses a busy terminal before it sends
-    /// anything. Retry that refusal until the prompt appears or the readiness
-    /// timeout passes. No other failure is retried: once the launcher has
-    /// tried to send the command, part of it may be in the terminal.
+    /// A new terminal is not ready at once: it reports itself busy until its
+    /// shell prints the first prompt, and its surface can refuse input for a
+    /// moment after that. Both refusals happen before any text is sent, so
+    /// they are retried until the readiness timeout passes. A delivery the
+    /// terminal did not confirm is never retried, because part of the
+    /// command may already be in the terminal.
     private func launchWhenTerminalIsReady(
         launcher: any RemoteSessionLaunching,
         request: RemoteSessionStartRequest,
@@ -366,9 +374,14 @@ final class RemoteSessionStarter {
                     initialPrompt: request.text,
                     beforeDispatch: beforeDispatch
                 )
-            } catch AgentLaunchError.panelBusy {
-                guard clock.now < deadline else { throw AgentLaunchError.panelBusy(runningCommand: nil) }
-                try await Task.sleep(for: Self.terminalReadinessRetryInterval)
+            } catch let error as AgentLaunchError {
+                switch error {
+                case .panelBusy, .terminalUnavailable:
+                    guard clock.now < deadline else { throw error }
+                    try await Task.sleep(for: Self.terminalReadinessRetryInterval)
+                default:
+                    throw error
+                }
             }
         }
     }

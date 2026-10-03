@@ -262,13 +262,32 @@ struct RemoteSessionStarterTests {
     @Test func aCommandTheTerminalDidNotConfirmIsNotSentAgainAndItsTabStays() async throws {
         let fixture = try Fixture()
         fixture.router.sendSucceeds = false
+        fixture.router.sendFailure = .uncertain
 
         let result = await fixture.start(fixture.request())
 
         #expect(result == .rejected(reason: .launchFailed))
         // One delivery attempt, and the tab remains for the person to see.
-        #expect(fixture.router.sentTextByPanelID.count == 1)
+        #expect(fixture.router.sendAttemptCount == 1)
         #expect(fixture.workspace.tabIDs.count == 2)
+    }
+
+    @MainActor
+    @Test func aTerminalThatRefusesInputBeforeTakingAnyIsTriedAgain() async throws {
+        let fixture = try Fixture()
+        // The surface exists and shows a prompt but is not accepting input yet.
+        fixture.router.failingSendCount = 2
+
+        let result = await fixture.start(fixture.request())
+
+        guard case .started(let conversationID) = result else {
+            Issue.record("expected the start to succeed on a later attempt, got \(result)")
+            return
+        }
+        #expect(fixture.router.sendAttemptCount == 3)
+        #expect(fixture.workspace.tabIDs.count == 2)
+        let panelID = try #require(fixture.newPanelIDs.first)
+        #expect(fixture.conversationID(ofPanel: panelID) == conversationID)
     }
 
     @MainActor

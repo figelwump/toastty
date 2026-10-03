@@ -10,6 +10,14 @@ protocol TerminalCommandRouting: AnyObject {
         panelID: UUID,
         focusPolicy: TerminalInputFocusPolicy
     ) -> Bool
+    /// The same delivery, reporting whether a failure happened before any
+    /// text reached the terminal (`unavailable`) or possibly after
+    /// (`uncertain`).
+    func sendManagedAgentCommandResult(
+        _ commandLine: String,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult
     func readVisibleText(panelID: UUID) -> String?
     func promptState(panelID: UUID) -> TerminalPromptState
 }
@@ -41,6 +49,9 @@ enum AgentLaunchError: LocalizedError, Equatable {
     case panelBusy(runningCommand: String?)
     case cliUnavailable(path: String?)
     case terminalUnavailable(panelID: UUID)
+    /// Part of the command may be in the terminal, so sending it again
+    /// could run it twice.
+    case commandDeliveryUncertain(panelID: UUID)
     case invalidWorkingDirectory(path: String)
     case invalidLaunchEnvironment(message: String)
     case launchOverrideUnsupported(parameter: String, profileID: String)
@@ -86,6 +97,8 @@ enum AgentLaunchError: LocalizedError, Equatable {
                 return "Toastty could not find its CLI at \(path). Reinstall the app or rebuild the toastty target and try again."
             }
             return "Toastty could not resolve its CLI path."
+        case .commandDeliveryUncertain(let panelID):
+            return "terminal surface did not confirm the launch command for panel \(panelID.uuidString)"
         case .terminalUnavailable(let panelID):
             return "The target terminal is unavailable for panel \(panelID.uuidString)."
         case .invalidWorkingDirectory(let path):
@@ -459,13 +472,19 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             initialCommands: preparation.initialCommands
         )
 
-        guard terminalCommandRouter.sendManagedAgentCommand(
+        switch terminalCommandRouter.sendManagedAgentCommandResult(
             commandLine,
             panelID: preparation.target.panelID,
             focusPolicy: preparation.focusPolicy
-        ) else {
+        ) {
+        case .delivered:
+            break
+        case .unavailable:
             managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
             throw AgentLaunchError.terminalUnavailable(panelID: preparation.target.panelID)
+        case .uncertain:
+            managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+            throw AgentLaunchError.commandDeliveryUncertain(panelID: preparation.target.panelID)
         }
         store?.recordSuccessfulAgentLaunch()
 

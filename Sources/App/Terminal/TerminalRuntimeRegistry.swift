@@ -512,6 +512,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
     }
 
+    func sendManagedAgentCommandResult(
+        _ commandLine: String,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult {
+        sendRemoteText(commandLine, submit: true, panelID: panelID, focusPolicy: focusPolicy)
+    }
+
     /// Remote delivery bypasses the local-input observer because the caller
     /// already holds the coordinator lease for this exact prompt epoch.
     func sendRemoteText(
