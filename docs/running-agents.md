@@ -750,7 +750,7 @@ label.
 
 #### Generated session names
 
-Claude Code, Codex, Cursor, OpenCode, and MiMo Code generate a short name for
+Claude Code, Codex, Cursor, Grok Build, OpenCode, and MiMo Code generate a short name for
 an interactive session, and Toastty shows it as the row's name. Remote Access
 clients, including the iOS app, title the conversation with the same name.
 
@@ -760,7 +760,11 @@ clients, including the iOS app, title the conversation with the same name.
   rather than carried over.
 - Codex names interactive threads in `$CODEX_HOME/session_index.jsonl` (default
   `~/.codex`). Toastty reads the newest record for the bound thread.
-- For unnamed Claude Code and Codex conversations, Toastty checks for the
+- Grok Build writes automatic and manually renamed titles to `generated_title`
+  in `summary.json`, beside the transcript path reported by its hooks. Toastty
+  reads that file only for the bound native session. A custom `GROK_HOME` works
+  through the reported path.
+- For unnamed Claude Code, Codex, and Grok Build conversations, Toastty checks for the
   generated name every two seconds during the first active turn, for up to
   30 seconds. The checks stop when a name appears or the turn ends. Later
   turn boundaries still pick up title changes.
@@ -783,11 +787,12 @@ clients, including the iOS app, title the conversation with the same name.
   extension at the next turn boundary, because `/name` itself fires no
   extension event.
 
-Toastty reads the Claude, Codex, and Cursor files in the app, not in the hook
-helper, and only when a session's reported status changes — the same hooks that
-report a turn starting and stopping — or when a new Cursor conversation starts.
-Nothing polls. None of these formats is documented, so a missing file, an
-unparsable record, or a renamed key leaves the row unnamed rather than failing.
+Toastty reads the Claude, Codex, Cursor, and Grok files in the app. It reads them
+when the native session is bound or its reported status changes, when a new
+Cursor conversation starts, and during the first-turn checks described above.
+These formats can change, so a missing file, an unparsable record, or a renamed
+key leaves an unnamed row at the agent name. A failed read preserves an existing
+name.
 Like `CODEX_HOME`, Cursor's directory overrides are read from Toastty's own
 environment, not the launched shell's.
 

@@ -235,7 +235,7 @@ running on your Mac.
   forwarded or projected to Remote Access. Up to 128 active or recently completed
   tool calls are retained in memory to correlate asynchronous hook delivery;
   completed records are discarded first, and session teardown clears this state.
-- For managed Claude, Codex, and Cursor sessions, Toastty reads the short
+- For managed Claude, Codex, Cursor, and Grok sessions, Toastty reads the short
   session name the provider CLI generated, so the sidebar and Remote Access
   clients can label a session with it. For Claude that is the newest `ai-title`
   record in the bound session's transcript; for Codex it is the newest matching
@@ -245,9 +245,13 @@ running on your Mac.
   `$XDG_CONFIG_HOME/cursor`, else `~/.cursor`): Toastty lists the workspace
   folders under `chats/` to find the conversation Cursor's hooks reported and
   reads only that `meta.json`, never the chat's `store.db` or prompt history.
-  Toastty reads a bounded amount of each file, only when the session's reported
-  status changes or a new Cursor conversation starts, and never modifies these
-  files. The resolved name is stored in the local session registry snapshot and
+  For Grok, it reads `generated_title` from `summary.json` beside the confirmed
+  transcript path and checks the session ID in that file. It does not read the
+  conversation log for titles. Toastty reads a bounded amount of each file when
+  the native session is bound, its reported status changes, or a new Cursor
+  conversation starts. For unnamed Claude, Codex, and Grok sessions, it also
+  checks every two seconds during the first active turn, for up to 30 seconds.
+  It never modifies these files. The resolved name is stored in the local session registry snapshot and
   can appear in Toastty's structured local logs; no other content from those
   files is retained.
 - For managed OpenCode and MiMo Code sessions, Toastty's injected plugin

@@ -75,6 +75,7 @@ final class SessionRuntimeStore: ObservableObject {
     private var cursorHookCorrelationBySessionID: [String: CursorHookCorrelationState] = [:]
     private var pendingCursorPromptBySessionID: [String: CursorHookEvent] = [:]
     private var grokHookStatesBySessionID: [String: GrokHookState] = [:]
+    private var grokSessionNameSourceBySessionID: [String: ProviderSessionNameSource] = [:]
     private var nativeBindingConfirmationBySessionID: [
         String: ManagedNativeSessionBindingConfirmation
     ] = [:]
@@ -276,6 +277,7 @@ final class SessionRuntimeStore: ObservableObject {
         }
         providerSessionNamePollTaskBySessionID = [:]
         providerSessionNamePolledSourceBySessionID = [:]
+        grokSessionNameSourceBySessionID = [:]
         removeAllPendingCodexHookApprovals()
         backgroundActivityReaperTask?.cancel()
         backgroundActivityReaperTask = nil
@@ -817,13 +819,13 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
-    /// Codex and Claude can write their first title while a turn is still
+    /// Codex, Claude, and Grok can write their first title while a turn is still
     /// working. Retry for at most 30 seconds per bound conversation, then let
     /// the existing turn-boundary reads handle any later title changes.
     private func updateProviderSessionNamePolling(sessionID: String, source: ProviderSessionNameSource) {
         let record = sessionRegistry.activeSession(sessionID: sessionID)
         let isBusy = record?.status?.kind == .working || record?.status?.kind == .needsApproval
-        guard (record?.agent == .codex || record?.agent == .claude),
+        guard (record?.agent == .codex || record?.agent == .claude || record?.agent == .grok),
               record?.providerSessionName == nil,
               isBusy else {
             cancelProviderSessionNamePolling(sessionID: sessionID)
@@ -866,11 +868,13 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     /// Where the session's current provider conversation keeps its name.
-    /// Managed providers identify the conversation through the confirmed
-    /// native binding. Cursor is not a managed provider, so its hooks' root
-    /// `conversation_id` identifies it instead.
+    /// Transcript-supported providers use the confirmed native binding.
+    /// Grok and Cursor use the root conversation accepted by their hooks.
     private func providerSessionNameSource(sessionID: String) -> ProviderSessionNameSource? {
         guard let record = sessionRegistry.activeSession(sessionID: sessionID) else { return nil }
+        if record.agent == .grok {
+            return grokSessionNameSourceBySessionID[sessionID]
+        }
         if record.agent == .cursor {
             guard let conversationID = cursorHookCorrelationBySessionID[sessionID]?.conversationID else {
                 return nil
@@ -2069,10 +2073,35 @@ final class SessionRuntimeStore: ObservableObject {
     func handleGrokHookEvent(sessionID: String, event: GrokHookEvent, at now: Date) -> GrokHookState.Update? {
         guard sessionRegistry.activeSession(sessionID: sessionID)?.agent == .grok else { return nil }
         var state = grokHookStatesBySessionID[sessionID] ?? GrokHookState()
+        let previousNativeSessionID = state.nativeSessionID
         guard let update = state.apply(event) else { return nil }
         grokHookStatesBySessionID[sessionID] = state
+        // Grok has no Remote Access transcript binding. Use only the root
+        // identity and path accepted by its hook state for the title reader.
+        let previousSource = grokSessionNameSourceBySessionID[sessionID]
+        let source: ProviderSessionNameSource? = state.nativeSessionID.flatMap { nativeSessionID in
+            if let path = event.sessionFilePath,
+               let source = ProviderSessionNameReader.source(
+                    agent: .grok, nativeSessionID: nativeSessionID, sessionFilePath: path
+               ) {
+                return source
+            }
+            return previousNativeSessionID == nativeSessionID ? previousSource : nil
+        }
+        if previousSource != source || previousNativeSessionID != state.nativeSessionID {
+            cancelProviderSessionNameRefresh(sessionID: sessionID)
+            cancelProviderSessionNamePolling(sessionID: sessionID)
+            providerSessionNamePolledSourceBySessionID.removeValue(forKey: sessionID)
+            grokSessionNameSourceBySessionID[sessionID] = source
+            if state.nativeSessionID != nil, previousNativeSessionID != state.nativeSessionID {
+                clearProviderSessionName(sessionID: sessionID)
+            }
+        }
         if let status = update.status {
             updateStatus(sessionID: sessionID, status: status, at: now)
+        }
+        if previousSource != source {
+            refreshProviderSessionNameIfNeeded(sessionID: sessionID)
         }
         return update
     }
@@ -2549,6 +2578,7 @@ final class SessionRuntimeStore: ObservableObject {
         cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
         pendingCursorPromptBySessionID.removeValue(forKey: sessionID)
         grokHookStatesBySessionID.removeValue(forKey: sessionID)
+        grokSessionNameSourceBySessionID.removeValue(forKey: sessionID)
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)

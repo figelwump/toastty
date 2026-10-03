@@ -91,10 +91,13 @@ struct AutomationSocketServerGrokHookTests: AutomationSocketServerTestSupport {
         try waitForSocket(at: socketPath)
         let rootURL = try makeShortTemporaryDirectory(prefix: "ttg")
         defer { try? FileManager.default.removeItem(at: rootURL) }
-        let sessionFileURL = rootURL.appendingPathComponent("session.json")
+        let sessionFileURL = rootURL.appendingPathComponent("updates.jsonl")
         try Data("{}".utf8).write(to: sessionFileURL)
         let sessionID = "sess-grok-hook"
         let nativeID = UUID()
+        let sessionTitle = "Grok sidebar titles"
+        try (#"{"info":{"id":"\#(nativeID.uuidString.lowercased())"},"generated_title":"\#(sessionTitle)"}"#)
+            .write(to: rootURL.appendingPathComponent("summary.json"), atomically: true, encoding: .utf8)
         let firstPromptID = UUID()
         let secondPromptID = UUID()
         try await MainActor.run {
@@ -132,6 +135,17 @@ struct AutomationSocketServerGrokHookTests: AutomationSocketServerTestSupport {
         #expect(resumeRecord.nativeSessionID == nativeID.uuidString.lowercased())
         #expect(resumeRecord.sessionFilePath == sessionFileURL.path)
         #expect(resumeRecord.cwd == rootURL.path)
+        // Exercise the real socket -> confirmed native binding -> metadata
+        // reader -> sidebar status path, without changing the hook payload.
+        var displayedTitle: String?
+        for _ in 0 ..< 100 {
+            displayedTitle = await MainActor.run {
+                server.sessionRuntimeStore.sessionRegistry.panelStatus(for: server.panelID, at: Date())?.displayTitle
+            }
+            if displayedTitle == sessionTitle { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(displayedTitle == sessionTitle)
 
         let foreignPanel = try send(
             grokPayload(kind: .stop, nativeID: nativeID, promptID: firstPromptID, timestamp: 1_700_000_003),
