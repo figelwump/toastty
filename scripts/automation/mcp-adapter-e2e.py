@@ -197,6 +197,32 @@ def main():
         evidence['send'] = dict(status=sent['status'], repeated=repeated['status'],
                                 transcriptConfirmed=True, nonce=nonce,
                                 eventCount=len(confirmation))
+        skill_id = str(uuid.uuid4())
+        skill_epoch = wait_for('skill prompt', prompt_epoch)
+        skill = mcp.tool('toastty_request_skill', conversationID=conversation_id,
+                         clientRequestID=skill_id, expectedInputEpoch=skill_epoch,
+                         skillName='toastty-verify', task='Run the fixture check')
+        require(skill['status'] == 'accepted', skill)
+        skill_events = wait_for('skill request confirmation', lambda: (e if any(
+            item['kind'] == 'user_message' and
+            item['payload'].get('clientRequestID') == skill_id and
+            '$toastty-verify' in item['payload'].get('text', '')
+            for item in e) else None) if (e := events()) else None)
+        evidence['skill'] = dict(status=skill['status'], transcriptConfirmed=bool(skill_events))
+
+        merge_id = str(uuid.uuid4())
+        merge_epoch = wait_for('merge prompt', prompt_epoch)
+        merge = mcp.tool('toastty_request_merge', conversationID=conversation_id,
+                         clientRequestID=merge_id, expectedInputEpoch=merge_epoch,
+                         pullRequestURL='https://github.com/example/project/pull/123')
+        require(merge['status'] == 'accepted', merge)
+        merge_events = wait_for('merge request confirmation', lambda: (e if any(
+            item['kind'] == 'user_message' and
+            item['payload'].get('clientRequestID') == merge_id and
+            'prepare a merge handoff' in item['payload'].get('text', '')
+            for item in e) else None) if (e := events()) else None)
+        evidence['merge'] = dict(status=merge['status'], transcriptConfirmed=bool(merge_events),
+                                 githubMergeInvoked=False)
         evidence['status'] = 'passed'
     finally:
         if mcp: mcp.close()
