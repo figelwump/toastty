@@ -515,11 +515,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             .filter { record in
                 record.workspaceID == workspaceID &&
                 Self.projectedStatus(from: record, at: now) != nil &&
-                record.isActive &&
-                shouldSuppressTopLevelStatus(
-                    for: record,
-                    activeRecordsByID: activeRecordsByID
-                ) == false
+                record.isActive
             }
             // Keep sidebar session rows stable as tabs switch or session
             // statuses change. New sessions append by creation time.
@@ -603,8 +599,11 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             )
         }
 
+        // Sessions in this workspace have their own full rows. Keep mirrors
+        // only for child sessions whose panels live in another workspace.
         let sessionRows = activeRecordsByID.values.compactMap { candidate -> SessionChildRow? in
             guard candidate.parentSessionID == record.sessionID,
+                  candidate.workspaceID != record.workspaceID,
                   candidate.sessionID != record.sessionID,
                   ancestorIDs.contains(candidate.sessionID) == false else {
                 return nil
@@ -630,22 +629,6 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             }
             return lhs.id < rhs.id
         }
-    }
-
-    private func shouldSuppressTopLevelStatus(
-        for record: SessionRecord,
-        activeRecordsByID: [String: SessionRecord]
-    ) -> Bool {
-        guard let parentSessionID = record.parentSessionID,
-              let parent = activeRecordsByID[parentSessionID],
-              parent.workspaceID == record.workspaceID,
-              Self.parentChainHasCycle(
-                  startingAt: record.sessionID,
-                  activeRecordsByID: activeRecordsByID
-              ) == false else {
-            return false
-        }
-        return true
     }
 
     private func activeRecordsByID() -> [String: SessionRecord] {
@@ -843,23 +826,6 @@ private extension SessionRegistry {
         }
 
         return ancestors
-    }
-
-    static func parentChainHasCycle(
-        startingAt sessionID: String,
-        activeRecordsByID: [String: SessionRecord]
-    ) -> Bool {
-        var visited = Set<String>([sessionID])
-        var nextParentID = activeRecordsByID[sessionID]?.parentSessionID
-
-        while let parentID = nextParentID {
-            guard visited.insert(parentID).inserted else {
-                return true
-            }
-            nextParentID = activeRecordsByID[parentID]?.parentSessionID
-        }
-
-        return false
     }
 }
 

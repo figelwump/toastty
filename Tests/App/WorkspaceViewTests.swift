@@ -13,6 +13,7 @@ final class WorkspaceViewTests: XCTestCase {
         let panelID: UUID
         let store: AppStore
         let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+        let terminalRuntimeRegistry: TerminalRuntimeRegistry
         let hostingView: NSView
         let window: NSWindow
     }
@@ -1635,70 +1636,196 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
-    func testFocusedUnreadClearCandidateRequiresActiveApp() throws {
+    func testUnreadClearCandidateRequiresActiveApp() throws {
         let workspace = try makeFocusedUnreadWorkspace()
 
         XCTAssertNil(
-            WorkspaceView.focusedUnreadClearCandidate(
+            WorkspaceView.unreadClearCandidate(
                 workspace: workspace,
                 appIsActive: false
             )
         )
         XCTAssertEqual(
-            WorkspaceView.focusedUnreadClearCandidate(
+            WorkspaceView.unreadClearCandidate(
                 workspace: workspace,
                 appIsActive: true
             ),
-            WorkspaceView.FocusedUnreadClearCandidate(
+            WorkspaceView.UnreadClearCandidate(
                 workspaceID: workspace.id,
-                panelID: try XCTUnwrap(workspace.focusedPanelID)
+                panelIDs: [try XCTUnwrap(workspace.focusedPanelID)]
             )
         )
     }
 
-    func testShouldClearFocusedUnreadRequiresMatchingFocusedUnreadPanelInActiveApp() throws {
+    func testUnreadPanelIDsToClearRequiresSameWorkspaceStillSeenAndActiveApp() throws {
         var workspace = try makeFocusedUnreadWorkspace()
+        let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
         let candidate = try XCTUnwrap(
-            WorkspaceView.focusedUnreadClearCandidate(
+            WorkspaceView.unreadClearCandidate(
                 workspace: workspace,
                 appIsActive: true
             )
         )
 
-        XCTAssertTrue(
-            WorkspaceView.shouldClearFocusedUnread(
+        XCTAssertEqual(
+            WorkspaceView.unreadPanelIDsToClear(
                 currentWorkspace: workspace,
                 candidate: candidate,
                 appIsActive: true
-            )
+            ),
+            [focusedPanelID]
         )
-
-        XCTAssertFalse(
-            WorkspaceView.shouldClearFocusedUnread(
+        XCTAssertEqual(
+            WorkspaceView.unreadPanelIDsToClear(
                 currentWorkspace: workspace,
                 candidate: candidate,
                 appIsActive: false
-            )
+            ),
+            []
+        )
+        XCTAssertEqual(
+            WorkspaceView.unreadPanelIDsToClear(
+                currentWorkspace: try makeFocusedUnreadWorkspace(),
+                candidate: candidate,
+                appIsActive: true
+            ),
+            []
         )
 
         workspace.unreadPanelIDs = []
-        XCTAssertFalse(
-            WorkspaceView.shouldClearFocusedUnread(
+        XCTAssertEqual(
+            WorkspaceView.unreadPanelIDsToClear(
                 currentWorkspace: workspace,
                 candidate: candidate,
                 appIsActive: true
+            ),
+            []
+        )
+
+        workspace.unreadPanelIDs = [focusedPanelID]
+        workspace.focusedPanelID = UUID()
+        XCTAssertEqual(
+            WorkspaceView.unreadPanelIDsToClear(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: true
+            ),
+            []
+        )
+    }
+
+    func testSeenUnreadPanelIDsIncludesUnfocusedScratchpadOnlyWhileItIsTheVisibleRightPanelTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let terminalPanelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        XCTAssertTrue(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .scratchpad, title: "Plan"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let scratchpadPanelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        let scratchpadTabID = try XCTUnwrap(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        XCTAssertTrue(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: terminalPanelID), state: &state))
+        XCTAssertTrue(
+            reducer.send(
+                .recordDesktopNotification(workspaceID: workspaceID, panelID: scratchpadPanelID),
+                state: &state
             )
         )
 
-        workspace = try makeFocusedUnreadWorkspace()
-        workspace.focusedPanelID = UUID()
-        XCTAssertFalse(
-            WorkspaceView.shouldClearFocusedUnread(
-                currentWorkspace: workspace,
-                candidate: candidate,
-                appIsActive: true
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        XCTAssertNil(workspace.rightAuxPanel.focusedPanelID)
+        XCTAssertEqual(WorkspaceView.seenUnreadPanelIDs(in: workspace), [scratchpadPanelID])
+
+        XCTAssertTrue(
+            reducer.send(.setRightAuxPanelVisibility(workspaceID: workspaceID, isVisible: false), state: &state)
+        )
+        workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        XCTAssertEqual(WorkspaceView.seenUnreadPanelIDs(in: workspace), [])
+
+        // A browser tab in front of the scratchpad hides it. Visibility alone does not
+        // clear the browser's own unread mark, because only scratchpads use that rule.
+        XCTAssertTrue(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
             )
         )
+        let browserPanelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        XCTAssertTrue(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: terminalPanelID), state: &state))
+        XCTAssertTrue(
+            reducer.send(
+                .recordDesktopNotification(workspaceID: workspaceID, panelID: browserPanelID),
+                state: &state
+            )
+        )
+        workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        XCTAssertTrue(workspace.rightAuxPanel.isVisible)
+        XCTAssertEqual(workspace.unreadPanelIDs, [scratchpadPanelID, browserPanelID])
+        XCTAssertEqual(WorkspaceView.seenUnreadPanelIDs(in: workspace), [])
+
+        XCTAssertTrue(
+            reducer.send(
+                .selectRightAuxPanelTab(workspaceID: workspaceID, tabID: scratchpadTabID, focus: false),
+                state: &state
+            )
+        )
+        workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        XCTAssertEqual(WorkspaceView.seenUnreadPanelIDs(in: workspace), [scratchpadPanelID])
+
+        // Focus mode keeps the right panel open but does not draw its content.
+        XCTAssertTrue(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        XCTAssertTrue(workspace.focusedPanelModeActive)
+        XCTAssertTrue(workspace.rightAuxPanel.isVisible)
+        XCTAssertEqual(WorkspaceView.seenUnreadPanelIDs(in: workspace), [])
+    }
+
+    func testSeenUnreadPanelIDsExcludesSplitScratchpadHiddenByFocusMode() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let terminalPanelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        XCTAssertTrue(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .scratchpad, title: "Plan"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
+        let scratchpadPanelID = try XCTUnwrap(
+            state.workspacesByID[workspaceID]?.panels.keys.first { $0 != terminalPanelID }
+        )
+        XCTAssertTrue(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: terminalPanelID), state: &state))
+        XCTAssertTrue(
+            reducer.send(
+                .recordDesktopNotification(workspaceID: workspaceID, panelID: scratchpadPanelID),
+                state: &state
+            )
+        )
+
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        XCTAssertEqual(WorkspaceView.seenUnreadPanelIDs(in: workspace), [scratchpadPanelID])
+
+        XCTAssertTrue(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        XCTAssertTrue(workspace.focusedPanelModeActive)
+        XCTAssertEqual(WorkspaceView.seenUnreadPanelIDs(in: workspace), [])
     }
 
     func testWorkspaceTabFocusIndicatorStyleKeepsFullLabelAtIdealWidth() {
@@ -2458,6 +2585,111 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
+    func testSwitchingToWorkspaceClearsUnreadScratchpadOnlyWhileRightPanelShowsIt() throws {
+        let scratchpadPanelID = UUID()
+        var scratchpadWorkspaceID: UUID?
+        let harness = try makeWorkspaceHarness(appIsActive: true) { state, windowID, _ in
+            var scratchpadWorkspace = WorkspaceState.bootstrap(title: "Workspace 2")
+            var scratchpadTab = try XCTUnwrap(scratchpadWorkspace.selectedTab)
+            scratchpadTab.rightAuxPanel = self.makeScratchpadRightAuxPanel(
+                panelID: scratchpadPanelID,
+                isVisible: false
+            )
+            scratchpadTab.unreadPanelIDs = [scratchpadPanelID]
+            scratchpadWorkspace.tabsByID[scratchpadTab.id] = scratchpadTab
+            state.workspacesByID[scratchpadWorkspace.id] = scratchpadWorkspace
+            scratchpadWorkspaceID = scratchpadWorkspace.id
+
+            let windowIndex = try XCTUnwrap(state.windows.firstIndex(where: { $0.id == windowID }))
+            state.windows[windowIndex].workspaceIDs.append(scratchpadWorkspace.id)
+        }
+        defer { harness.window.orderOut(nil) }
+        let workspaceID = try XCTUnwrap(scratchpadWorkspaceID)
+        func scratchpadIsUnread() throws -> Bool {
+            try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]).unreadPanelIDs.contains(scratchpadPanelID)
+        }
+
+        // The scratchpad's workspace is on screen, but its right panel is closed.
+        XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: workspaceID)))
+        pumpMainRunLoop(duration: 0.6)
+        XCTAssertTrue(try scratchpadIsUnread())
+
+        // Opening the right panel shows the scratchpad. The reducer does not clear
+        // unread here; the view's delayed clear does.
+        XCTAssertTrue(
+            harness.store.send(.setRightAuxPanelVisibility(workspaceID: workspaceID, isVisible: true))
+        )
+        XCTAssertTrue(try scratchpadIsUnread())
+        pumpMainRunLoop(duration: 0.6)
+        XCTAssertFalse(try scratchpadIsUnread())
+
+        // An update while another workspace is on screen stays unread until the user
+        // switches back to the scratchpad's workspace.
+        XCTAssertTrue(
+            harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: harness.workspaceID))
+        )
+        XCTAssertTrue(
+            harness.store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: scratchpadPanelID))
+        )
+        pumpMainRunLoop(duration: 0.6)
+        XCTAssertTrue(try scratchpadIsUnread())
+
+        XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: workspaceID)))
+        pumpMainRunLoop(duration: 0.6)
+        XCTAssertFalse(try scratchpadIsUnread())
+    }
+
+    @MainActor
+    func testBackgroundSplitInFocusModeKeepsTerminalMountedAcrossTabAndModeChanges() throws {
+        for targetIsSelected in [true, false] {
+            var targetTabID: UUID?
+            var sourcePanelID: UUID?
+            let harness = try makeWorkspaceHarness(tabCount: 2) { state, _, workspaceID in
+                var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+                let tabID = try XCTUnwrap(targetIsSelected ? workspace.tabIDs.first : workspace.tabIDs.last)
+                var tab = try XCTUnwrap(workspace.tabsByID[tabID])
+                tab.focusedPanelModeActive = true
+                tab.focusModeRootNodeID = tab.layoutTree.allSlotInfos.first?.slotID
+                targetTabID = tabID
+                sourcePanelID = tab.focusedPanelID
+                workspace.tabsByID[tabID] = tab
+                state.workspacesByID[workspaceID] = workspace
+            }
+            defer { harness.window.orderOut(nil) }
+            let tabID = try XCTUnwrap(targetTabID)
+            let sourceID = try XCTUnwrap(sourcePanelID)
+            let before = try XCTUnwrap(harness.store.selectedWorkspace)
+            XCTAssertTrue(harness.store.send(.splitPanel(
+                workspaceID: harness.workspaceID, tabID: tabID, panelID: sourceID,
+                direction: .right, profileBinding: nil, activate: false
+            )))
+            pumpMainRunLoop(duration: 0.6)
+            harness.hostingView.layoutSubtreeIfNeeded()
+            let after = try XCTUnwrap(harness.store.selectedWorkspace)
+            let created = try XCTUnwrap(Set(after.allPanelsByID.keys).subtracting(before.allPanelsByID.keys).first)
+            let attachment = harness.terminalRuntimeRegistry.automationRenderSnapshot(panelID: created)
+            XCTAssertTrue(attachment.isRenderable, "A terminal outside the focus root needs a mounted host")
+            XCTAssertEqual(after.selectedTabID, before.selectedTabID)
+            XCTAssertEqual(after.tab(id: tabID)?.focusModeRootNodeID, before.tab(id: tabID)?.focusModeRootNodeID)
+            XCTAssertEqual(after.tab(id: tabID)?.focusedPanelID, sourceID)
+            let controller = harness.terminalRuntimeRegistry.controller(
+                for: created, workspaceID: harness.workspaceID, windowID: harness.windowID
+            )
+
+            if !targetIsSelected {
+                XCTAssertTrue(harness.store.send(.selectWorkspaceTab(workspaceID: harness.workspaceID, tabID: tabID)))
+            }
+            XCTAssertTrue(harness.store.send(.toggleFocusedPanelMode(workspaceID: harness.workspaceID)))
+            pumpMainRunLoop(duration: 0.1)
+            harness.hostingView.layoutSubtreeIfNeeded()
+            XCTAssertTrue(harness.terminalRuntimeRegistry.automationRenderSnapshot(panelID: created).isRenderable)
+            XCTAssertTrue(controller === harness.terminalRuntimeRegistry.controller(
+                for: created, workspaceID: harness.workspaceID, windowID: harness.windowID
+            ))
+        }
+    }
+
+    @MainActor
     func testRightPanelRuntimeSurvivesWorkspaceTabSwitch() throws {
         let rightPanelID = UUID()
         var visibleTabID: UUID?
@@ -2550,6 +2782,7 @@ final class WorkspaceViewTests: XCTestCase {
         panelState overridePanelState: PanelState? = nil,
         tabCount: Int = 1,
         hostWidth: CGFloat = 900,
+        appIsActive: Bool? = nil,
         configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil
     ) throws -> WorkspaceHarness {
         XCTAssertGreaterThanOrEqual(tabCount, 1)
@@ -2577,7 +2810,16 @@ final class WorkspaceViewTests: XCTestCase {
         try configureState?(&state, windowID, workspaceID)
         let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
         let panelID = try XCTUnwrap(workspace.focusedPanelID)
-        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let store: AppStore
+        if let appIsActive {
+            store = AppStore(
+                state: state,
+                persistTerminalFontPreference: false,
+                appIsActiveProvider: { appIsActive }
+            )
+        } else {
+            store = AppStore(state: state, persistTerminalFontPreference: false)
+        }
         let registry = TerminalRuntimeRegistry()
         registry.bind(store: store)
         registry.synchronize(with: store.state)
@@ -2647,6 +2889,7 @@ final class WorkspaceViewTests: XCTestCase {
             panelID: panelID,
             store: store,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            terminalRuntimeRegistry: registry,
             hostingView: hostingView,
             window: window
         )

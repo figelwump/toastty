@@ -565,8 +565,10 @@ Scratchpad actions are intended for agent and automation integrations. A managed
   `agent.launch` preserves the current AppKit first responder; focus the target
   workspace or panel separately when it should become the interactive keyboard
   target. When an active managed session invokes `agent.launch`, Toastty records
-  that caller as the new session's parent so the child can appear nested in the
-  sidebar and contribute to the parent's orchestration status.
+  that caller as the new session's parent. Same-workspace sessions with their
+  own terminal panels have normal sidebar rows, with parent context in hover
+  details. Background agents without their own panels remain nested;
+  cross-workspace child sessions can also appear as navigation rows under the parent.
   The result's `command` is the composed invocation evidence, including managed
   instrumentation and environment assignments; inspect it without printing or
   logging unrelated environment values.

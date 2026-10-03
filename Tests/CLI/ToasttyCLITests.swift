@@ -184,10 +184,15 @@ struct ToasttyCLITests {
     @Test
     func actionRunParsesRepeatableInitialCommands() throws {
         let workspaceID = UUID()
+        let tabID = UUID()
+        let panelID = UUID()
         let invocation = try ToasttyCLI.parse(
             arguments: [
                 "action", "run", "agent.launch",
                 "--workspace", workspaceID.uuidString,
+                "--tab", tabID.uuidString,
+                "--panel", panelID.uuidString,
+                "background=true",
                 "profileID=codex",
                 "cwd=/tmp/worktree",
                 "model=gpt-5.6-codex",
@@ -207,6 +212,9 @@ struct ToasttyCLITests {
         #expect(kind == .action)
         #expect(id == "agent.launch")
         #expect(args["workspaceID"] == .string(workspaceID.uuidString))
+        #expect(args["tabID"] == .string(tabID.uuidString))
+        #expect(args["panelID"] == .string(panelID.uuidString))
+        #expect(args["background"] == .string("true"))
         #expect(args["profileID"] == .string("codex"))
         #expect(args["cwd"] == .string("/tmp/worktree"))
         #expect(args["model"] == .string("gpt-5.6-codex"))
@@ -217,10 +225,12 @@ struct ToasttyCLITests {
 
     @Test
     func queryRunParsesStructuredCommand() throws {
+        let tabID = UUID()
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(
             arguments: [
                 "query", "run", "terminal.visible-text",
+                "--tab", tabID.uuidString,
                 "--panel", panelID.uuidString,
                 "contains=needle",
             ],
@@ -234,8 +244,56 @@ struct ToasttyCLITests {
 
         #expect(kind == .query)
         #expect(id == "terminal.visible-text")
+        #expect(args["tabID"] == .string(tabID.uuidString))
         #expect(args["panelID"] == .string(panelID.uuidString))
         #expect(args["contains"] == .string("needle"))
+    }
+
+    @Test(arguments: ["action", "query"])
+    func appControlRunPreservesTabIDKeyValueArgument(command: String) throws {
+        let tabID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [command, "run", "tab.select", "tabID=\(tabID.uuidString)"],
+            environment: [:]
+        )
+
+        guard case .appControlRun(let kind, let id, let args) = invocation.command else {
+            Issue.record("expected app control run command")
+            return
+        }
+
+        #expect(kind.rawValue == command)
+        #expect(id == "tab.select")
+        #expect(args["tabID"] == .string(tabID.uuidString))
+    }
+
+    @Test(arguments: ["action", "query"])
+    func appControlRunRejectsConflictingTabIDs(command: String) {
+        let firstTabID = UUID().uuidString
+        let secondTabID = UUID().uuidString
+        let conflictingArguments = [
+            ["--tab", firstTabID, "tabID=\(secondTabID)"],
+            ["tabID=\(firstTabID)", "tabID=\(secondTabID)"],
+            ["--tab", firstTabID, "--tab", secondTabID],
+        ]
+
+        for arguments in conflictingArguments {
+            do {
+                _ = try ToasttyCLI.parse(
+                    arguments: [command, "run", "tab.select"] + arguments,
+                    environment: [:]
+                )
+                Issue.record("expected parse failure for conflicting tab IDs")
+            } catch let error as ToasttyCLIError {
+                guard case .usage(let message) = error else {
+                    Issue.record("expected usage error")
+                    continue
+                }
+                #expect(message.contains("tabID must be supplied only once"))
+            } catch {
+                Issue.record("unexpected error: \(error)")
+            }
+        }
     }
 
     @Test
@@ -297,13 +355,13 @@ struct ToasttyCLITests {
         }
     }
 
-    @Test
-    func actionRunRejectsMalformedUUIDSelectors() {
-        for selector in ["--window", "--workspace", "--panel"] {
+    @Test(arguments: ["action", "query"])
+    func appControlRunRejectsMalformedUUIDSelectors(command: String) {
+        for selector in ["--window", "--workspace", "--tab", "--panel"] {
             do {
                 _ = try ToasttyCLI.parse(
                     arguments: [
-                        "action", "run", "agent.launch",
+                        command, "run", "agent.launch",
                         selector, "undefined",
                         "profileID=codex",
                     ],

@@ -376,7 +376,7 @@ struct ScratchpadAppControlTests {
         #expect(result.int("revision") == 1)
         #expect(result.bool("created") == true)
         #expect(workspace.focusedPanelID == fixture.sourcePanelID)
-        #expect(workspace.unreadPanelIDs.contains(scratchpadPanelID))
+        #expect(workspace.unreadPanelIDs.contains(scratchpadPanelID) == false)
         #expect(selectedTab.panels[scratchpadPanelID] == nil)
         #expect(selectedTab.rightAuxPanel.isVisible)
         #expect(selectedTab.rightAuxPanel.activePanelID == scratchpadPanelID)
@@ -533,7 +533,61 @@ struct ScratchpadAppControlTests {
         #expect(sourceTab.rightAuxPanel.isVisible)
         #expect(sourceTab.rightAuxPanel.activePanelID == scratchpadPanelID)
         #expect(sourceTab.rightAuxPanel.focusedPanelID == nil)
-        #expect(sourceTab.unreadPanelIDs.contains(scratchpadPanelID))
+        // The source workspace is still the one shown in its own window, so the
+        // scratchpad is on screen even though another window is in front.
+        #expect(sourceTab.unreadPanelIDs.contains(scratchpadPanelID) == false)
+
+        try StateValidator.validate(fixture.store.state)
+    }
+
+    @Test
+    func setContentMarksVisibleScratchpadUnreadOnlyWhileAppIsInactive() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>First</p>"),
+            ]
+        )
+        let panelIDString = try #require(first.result?.string("panelID"))
+        let panelID = try #require(UUID(uuidString: panelIDString))
+        #expect(try #require(fixture.store.state.workspacesByID[fixture.workspaceID]).unreadPanelIDs.isEmpty)
+
+        // An update reveals the scratchpad in the right panel without focusing it.
+        // While the app is active that is enough to count as seen.
+        #expect(
+            fixture.store.send(
+                .createWebPanel(
+                    workspaceID: fixture.workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                )
+            )
+        )
+        #expect(fixture.store.send(.focusPanel(workspaceID: fixture.workspaceID, panelID: fixture.sourcePanelID)))
+        _ = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Second</p>"),
+            ]
+        )
+        var workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        #expect(workspace.rightAuxPanel.activePanelID == panelID)
+        #expect(workspace.rightAuxPanel.focusedPanelID == nil)
+        #expect(workspace.unreadPanelIDs.isEmpty)
+
+        fixture.appActivity.isActive = false
+        _ = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Third</p>"),
+            ]
+        )
+        workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        #expect(workspace.unreadPanelIDs == [panelID])
 
         try StateValidator.validate(fixture.store.state)
     }
@@ -1631,6 +1685,11 @@ private func patchJSON(_ replacements: [ScratchpadContentReplacement]) throws ->
 }
 
 @MainActor
+private final class ScratchpadTestAppActivity {
+    var isActive = true
+}
+
+@MainActor
 private final class ScratchpadAppControlFixture {
     let tempURL: URL
     let store: AppStore
@@ -1642,12 +1701,19 @@ private final class ScratchpadAppControlFixture {
     let sourcePanelID: UUID
     let sessionID = "sess-scratchpad"
 
+    let appActivity: ScratchpadTestAppActivity
+
     init() throws {
         tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempURL, withIntermediateDirectories: true)
 
-        store = AppStore(persistTerminalFontPreference: false)
+        let appActivity = ScratchpadTestAppActivity()
+        self.appActivity = appActivity
+        store = AppStore(
+            persistTerminalFontPreference: false,
+            appIsActiveProvider: { appActivity.isActive }
+        )
         let selection = try #require(store.state.selectedWorkspaceSelection())
         windowID = selection.windowID
         workspaceID = selection.workspaceID

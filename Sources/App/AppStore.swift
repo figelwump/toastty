@@ -62,6 +62,7 @@ final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
     typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
     typealias WindowActivationHandler = @MainActor (UUID) -> Void
+    typealias AppIsActiveProvider = @MainActor () -> Bool
     private static let newWindowCascadeOffset: Double = 30
     static let nextUnreadOrActionRequiredFallbackStatusKinds: Set<SessionStatusKind> = [
         .needsApproval,
@@ -110,6 +111,7 @@ final class AppStore: ObservableObject {
     private let persistUserSettings: Bool
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private let windowActivationHandler: WindowActivationHandler
+    private let appIsActiveProvider: AppIsActiveProvider
     private let recentRightPanelItemsStore: RightPanelRecentItemsStore
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
     private var nextActiveCycleState: NextActiveCycleState?
@@ -124,6 +126,7 @@ final class AppStore: ObservableObject {
         initialAskBeforeQuitting: Bool = true,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit,
+        appIsActiveProvider: @escaping AppIsActiveProvider = { NSApplication.shared.isActive },
         recentRightPanelItemsStore: RightPanelRecentItemsStore = .inMemory()
     ) {
         self.state = state
@@ -134,6 +137,7 @@ final class AppStore: ObservableObject {
         persistUserSettings = persistTerminalFontPreference
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
         self.windowActivationHandler = windowActivationHandler
+        self.appIsActiveProvider = appIsActiveProvider
         self.recentRightPanelItemsStore = recentRightPanelItemsStore
         navigationOriginPanelID = resolvedNavigationPanelID
     }
@@ -995,7 +999,7 @@ final class AppStore: ObservableObject {
                     throw ScratchpadPanelError.updatePanelFailed(existing.panelID)
                 }
             }
-            markScratchpadUpdatedIfUnfocused(
+            markScratchpadUpdatedIfNotVisible(
                 workspaceID: existing.workspaceID,
                 panelID: existing.panelID
             )
@@ -1066,7 +1070,7 @@ final class AppStore: ObservableObject {
             throw ScratchpadPanelError.createPanelFailed
         }
 
-        markScratchpadUpdatedIfUnfocused(
+        markScratchpadUpdatedIfNotVisible(
             workspaceID: createdSelection.workspaceID,
             panelID: panelID
         )
@@ -1155,7 +1159,7 @@ final class AppStore: ObservableObject {
         ) else {
             throw ScratchpadPanelError.updatePanelFailed(existing.panelID)
         }
-        markScratchpadUpdatedIfUnfocused(
+        markScratchpadUpdatedIfNotVisible(
             workspaceID: existing.workspaceID,
             panelID: existing.panelID
         )
@@ -2553,15 +2557,30 @@ final class AppStore: ObservableObject {
         return workspace.tabID(containingPanelID: panelID)
     }
 
-    private func markScratchpadUpdatedIfUnfocused(workspaceID: UUID, panelID: UUID) {
-        guard let workspace = state.workspacesByID[workspaceID] else {
-            return
-        }
-        guard workspace.focusedPanelID != panelID,
-              workspace.rightAuxPanel.focusedPanelID != panelID else {
+    /// Scratchpad unread means "updated where you could not see it". An update to a
+    /// scratchpad that is on screen, focused or not, stays read; WorkspaceView clears
+    /// the unread mark once a background-updated scratchpad comes on screen.
+    private func markScratchpadUpdatedIfNotVisible(workspaceID: UUID, panelID: UUID) {
+        guard state.workspacesByID[workspaceID] != nil,
+              scratchpadIsVisible(workspaceID: workspaceID, panelID: panelID) == false else {
             return
         }
         _ = send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
+    }
+
+    /// Whether Toastty is the frontmost app. Unread marking and clearing both read
+    /// this so they agree on when on-screen content counts as seen.
+    var isAppActive: Bool {
+        appIsActiveProvider()
+    }
+
+    private func scratchpadIsVisible(workspaceID: UUID, panelID: UUID) -> Bool {
+        guard isAppActive,
+              let selection = state.workspaceSelection(containingWorkspaceID: workspaceID),
+              state.selectedWorkspaceID(in: selection.windowID) == workspaceID else {
+            return false
+        }
+        return selection.workspace.panelIsDisplayedInSelectedTab(panelID)
     }
 
     private func recordRecentRightPanelItemIfNeeded(

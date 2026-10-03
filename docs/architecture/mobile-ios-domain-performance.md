@@ -2,11 +2,11 @@
 
 ## Status
 
-The native domain performance budget is provisional until it has repeatable evidence from the remote iOS Simulator used by Toastty's agent-driven test workflow. Budget changes require recorded target, toolchain, and measurement evidence; a noisy or isolated run is not sufficient justification by itself.
+The native domain performance budget is provisional until it has repeatable evidence from the remote iOS Simulator used by Toastty's agent-driven test workflow. Automatic `Toastty CI` PR and `main` jobs exclude its numeric assertions because hosted simulator load makes the threshold unreliable. Manual CI, the default dispatcher, and controlled remote runs retain them. Budget changes require recorded target, toolchain, and measurement evidence; a noisy or isolated run is not sufficient justification by itself.
 
 ## Budget
 
-`ios/Tests/ToasttyMobileDomainTests/Performance/ConversationRuntimePerformanceTests.swift` enforces these initial budgets for one 5,000-event snapshot:
+`ios/Tests/ToasttyMobileDomainTests/Performance/ConversationRuntimePerformanceTests.swift` keeps large-page event/cursor correctness in an always-running test and enforces these initial budgets in a separate test for one 5,000-event snapshot:
 
 - Decode and reduce elapsed time: at most 1 second.
 - Incremental resident memory: at most 100 × 1,024 × 1,024 bytes.
@@ -47,6 +47,8 @@ The hardware and toolchain records were captured separately through the required
 
 Use repeated clean remote runs when calibrating this provisional gate. Keep the input and measurement boundaries stable so later results remain comparable.
 
+Run the budget test before TestFlight and after changes to event decoding or reduction. Automatic `Toastty CI` jobs pass `--skip-performance-budgets` to exclude only `testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets`; `testFiveThousandEventDecodeAndReducePreservesEventsAndCursor` still verifies catch-up completion, retained events, unknown-event handling, and cursor advancement. Manual dispatch of `Toastty CI` retains the budget test in Debug and Release. The separate `iOS TestFlight` workflow also retains these checks, including when its optional push trigger is enabled.
+
 During the September 2026 CI investigation, one GitHub Release run measured
 1.0715 seconds while another run of the same commit passed. The failing test
 took 3.492 seconds overall, including fixture preparation outside the measured
@@ -60,6 +62,16 @@ of incremental resident memory in each iteration. Evidence is retained under
 `artifacts/remote-tests/ios-ci-performance-repeat/`. The one-second and 100 MiB
 budgets remain unchanged; these simulator measurements do not establish timing
 on every GitHub runner or physical device.
+
+On 2026-10-02, hosted failures measured 1.5053 seconds in Debug and 2.0195
+seconds in Release. The CI cleanup's split correctness/budget tests then passed
+three Release iterations on `toastty-mini`: measured decode/reduce time was
+0.0696–0.0722 seconds across the six executions. Net resident growth was about
+30.2 MiB for the correctness method and 2.5 MiB for the following budget method;
+the lower second measurement reflects allocator reuse, not reduced peak memory.
+Evidence is under `artifacts/remote-tests/ci-reliable-benchmark/`. These results
+support moving hosted numeric enforcement to manual runs without raising the
+provisional thresholds.
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \

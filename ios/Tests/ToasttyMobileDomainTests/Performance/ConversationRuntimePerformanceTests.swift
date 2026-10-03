@@ -10,7 +10,27 @@ final class ConversationRuntimePerformanceTests: XCTestCase {
     private static let elapsedTimeBudget = Duration.seconds(1)
     private static let incrementalResidentMemoryBudget: UInt64 = 100 * 1_024 * 1_024
 
+    func testFiveThousandEventDecodeAndReducePreservesEventsAndCursor() async throws {
+        _ = try await decodeAndReduceSnapshot()
+    }
+
+    // Automatic hosted CI excludes only this method; correctness runs above.
+    // Manual CI and controlled remote runs retain the provisional budgets.
     func testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets() async throws {
+        let (elapsed, incrementalResidentMemory) = try await decodeAndReduceSnapshot()
+        XCTAssertLessThanOrEqual(
+            elapsed,
+            Self.elapsedTimeBudget,
+            "Decode + reduce took \(elapsed); budget is \(Self.elapsedTimeBudget)"
+        )
+        XCTAssertLessThanOrEqual(
+            incrementalResidentMemory,
+            Self.incrementalResidentMemoryBudget,
+            "Decode + reduce retained \(incrementalResidentMemory) bytes; budget is \(Self.incrementalResidentMemoryBudget) bytes"
+        )
+    }
+
+    private func decodeAndReduceSnapshot() async throws -> (Duration, UInt64) {
         let envelopeData = try autoreleasepool {
             try makeCanonicalEventsEnvelope()
         }
@@ -26,7 +46,7 @@ final class ConversationRuntimePerformanceTests: XCTestCase {
         case .page(let decodedPage):
             page = decodedPage
         case .resnapshotRequired, .conversationNotFound:
-            return XCTFail("Expected a decoded event page")
+            page = try XCTUnwrap(nil as CompatibleConversationEventPage?, "Expected a decoded event page")
         }
 
         let beganCatchUp = await runtime.beginCatchUp(connectionGeneration: 1)
@@ -52,16 +72,7 @@ final class ConversationRuntimePerformanceTests: XCTestCase {
         XCTAssertEqual(state.latestSequence, UInt64(Self.eventCount))
         XCTAssertEqual(state.events.count, Self.eventCount - 1)
         XCTAssertFalse(state.events.contains { $0.sequence == UInt64(Self.unknownEventSequence) })
-        XCTAssertLessThanOrEqual(
-            elapsed,
-            Self.elapsedTimeBudget,
-            "Decode + reduce took \(elapsed); budget is \(Self.elapsedTimeBudget)"
-        )
-        XCTAssertLessThanOrEqual(
-            incrementalResidentMemory,
-            Self.incrementalResidentMemoryBudget,
-            "Decode + reduce retained \(incrementalResidentMemory) bytes; budget is \(Self.incrementalResidentMemoryBudget) bytes"
-        )
+        return (elapsed, incrementalResidentMemory)
     }
 
     private func makeCanonicalEventsEnvelope() throws -> Data {
