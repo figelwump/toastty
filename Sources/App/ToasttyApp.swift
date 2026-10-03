@@ -1197,13 +1197,14 @@ struct ToasttyApp: App {
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _webPanelRuntimeRegistry = StateObject(wrappedValue: webPanelRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
-        _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
+        let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths
-        ))
+        )
+        _remoteAccessService = StateObject(wrappedValue: remoteAccessService)
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
@@ -1265,6 +1266,7 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
+                remoteAccessService: remoteAccessService,
                 annotationStyleStore: annotationStyleStore,
                 inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
                 reloadConfigurationAction: {

@@ -342,6 +342,8 @@ final class RemoteAccessService: ObservableObject {
     private let deviceStore: RemoteDeviceStore
     private let auditLog: RemoteAccessAuditLog
     private let projectionStore = RemoteConversationProjectionStore()
+    private var localMCPTrackingEnabled = false
+    private var isConversationTrackingActive: Bool { isEnabled || localMCPTrackingEnabled }
     private let facadeBridge = RemoteAccessFacadeBridge()
     private let attachmentStore: RemoteMessageAttachmentStore
     private let sendBridge = RemoteAccessSendBridge()
@@ -581,7 +583,7 @@ final class RemoteAccessService: ObservableObject {
             server.stop()
             invalidatePairingCode()
             cancelNativePairingOffer()
-            endConversationTracking()
+            if !localMCPTrackingEnabled { endConversationTracking() }
             connectedClientCount = 0
             connectedNativeClientCount = 0
             if shouldAudit {
@@ -600,7 +602,7 @@ final class RemoteAccessService: ObservableObject {
         server.stop()
         invalidatePairingCode()
         cancelNativePairingOffer()
-        endConversationTracking()
+        if !localMCPTrackingEnabled { endConversationTracking() }
         connectedClientCount = 0
         connectedNativeClientCount = 0
     }
@@ -629,7 +631,7 @@ final class RemoteAccessService: ObservableObject {
             .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self,
-                      self.isEnabled,
+                      self.isConversationTrackingActive,
                       self.conversationTrackingGeneration == generation else { return }
                 self.syncConversations()
             }
@@ -639,7 +641,7 @@ final class RemoteAccessService: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in
                 guard let self,
-                      self.isEnabled,
+                      self.isConversationTrackingActive,
                       self.conversationTrackingGeneration == generation else { return }
                 self.syncConversations()
             }
@@ -653,7 +655,7 @@ final class RemoteAccessService: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] _ in
                 guard let self,
-                      self.isEnabled,
+                      self.isConversationTrackingActive,
                       self.conversationTrackingGeneration == generation else { return }
                 self.scheduleSessionListBroadcast()
             }
@@ -664,7 +666,7 @@ final class RemoteAccessService: ObservableObject {
         // rollout-path change would never restart the transcript tailer.
         storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
             guard let self,
-                  self.isEnabled,
+                  self.isConversationTrackingActive,
                   self.conversationTrackingGeneration == generation else { return }
             // Passing the claimed colors skips deriving a fallback for every
             // key on every action; color changes have their own trigger.
@@ -878,6 +880,15 @@ final class RemoteAccessService: ObservableObject {
 
     // MARK: - Facade surface (main-actor entry points for the bridge)
 
+    /// Starts the existing conversation projection for same-user socket clients
+    /// without enabling the HTTP gateway or persisting Remote Access settings.
+    func ensureLocalMCPTracking() {
+        guard !localMCPTrackingEnabled else { return }
+        localMCPTrackingEnabled = true
+        beginConversationTracking()
+        syncConversations(broadcast: false)
+    }
+
     func facadeSessionList(at date: Date) -> RemoteSessionListSnapshot {
         refreshPanelMetadata()
         return makeSessionList(at: date)
@@ -1054,7 +1065,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func refreshPanelMetadata() {
-        guard isEnabled else { return }
+        guard isConversationTrackingActive else { return }
         panelMetadataCache.updateInputs(Self.panelMetadataInputs(
             state: store.state, recentItems: store.recentRightPanelItems,
             scratchpadDirectory: previewScratchpadDirectory
@@ -1465,7 +1476,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func syncConversations(broadcast: Bool = true) {
-        guard isEnabled else { return }
+        guard isConversationTrackingActive else { return }
         let candidates = scanConversationCandidates(mintingIDs: true)
         var seenConversationIDs: Set<RemoteConversationID> = []
         var listChanged = false
@@ -1726,7 +1737,7 @@ final class RemoteAccessService: ObservableObject {
                 return
             }
             guard Task.isCancelled == false,
-                  self.isEnabled,
+                  self.isConversationTrackingActive,
                   self.promptStabilizationWorkByConversationID[conversationID]?.token == token else {
                 return
             }
@@ -2233,7 +2244,7 @@ final class RemoteAccessService: ObservableObject {
         // A detached tailer can deliver one final callback after cancellation.
         // Once the kill switch is off — or a later activation has begun — it
         // must not rebuild projection state from the previous transcript.
-        guard isEnabled, generation == conversationTrackingGeneration else { return }
+        guard isConversationTrackingActive, generation == conversationTrackingGeneration else { return }
         switch event {
         case .observations(let observations, let linkedFileReferences):
             // Stamp the confirming user message for any pending remote send
@@ -2415,11 +2426,11 @@ final class RemoteAccessService: ObservableObject {
     /// Performs a remote send synchronously on the main actor. The gate check
     /// and terminal delivery share this one call, so no epoch can change
     /// between `evaluate` and `markDelivered`.
-    func performRemoteSend(_ request: RemoteMessageSendRequest, device: RemoteDeviceRecord, deliveredText: String? = nil) -> RemoteMessageSendResult {
+    func performRemoteSend(_ request: RemoteMessageSendRequest, device: RemoteDeviceRecord, deliveredText: String? = nil, allowWhenGatewayDisabled: Bool = false) -> RemoteMessageSendResult {
         guard request.attachments.isEmpty || deliveredText != nil else {
             return .rejected(reason: .invalidAttachments)
         }
-        guard isReady else {
+        guard isReady || (allowWhenGatewayDisabled && localMCPTrackingEnabled) else {
             return .rejected(reason: .notBound)
         }
         let conversationID = request.conversationID
@@ -2590,7 +2601,7 @@ final class RemoteAccessService: ObservableObject {
                 return
             }
             guard Task.isCancelled == false,
-                  self.isEnabled,
+                  self.isConversationTrackingActive,
                   let work = self.pendingSendConfirmationWork.removeValue(forKey: key) else {
                 return
             }
