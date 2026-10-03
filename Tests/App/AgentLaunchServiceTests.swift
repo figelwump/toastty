@@ -928,6 +928,46 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func leadingDashPromptIsSeparatedFromOptionsForFirstPartyCommandsWithArguments() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(profiles: [
+                AgentProfile(
+                    id: "claude",
+                    displayName: "Claude Code",
+                    argv: ["claude", "--permission-mode", "plan"],
+                    initialPromptPlacement: .trailing
+                ),
+                // A wrapper may not accept the boundary, so it gets none.
+                AgentProfile(
+                    id: "codex",
+                    displayName: "Codex",
+                    argv: ["scodex"],
+                    initialPromptPlacement: .trailing
+                ),
+            ]),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+
+        let claude = try service.launch(profileID: "claude", initialPrompt: "--help me refactor")
+        let claudeCommand = try #require(terminalRouter.sentTextByPanelID[claude.panelID])
+        #expect(claudeCommand.contains(" --permission-mode plan -- '--help me refactor'"))
+
+        let summaries = service.launchProfileSummaries()
+        #expect(summaries.map(\.acceptsLeadingDashPrompt) == [true, false])
+        #expect(summaries.map(\.acceptsInitialPrompt) == [true, true])
+    }
+
+    @Test
     func launchWithExplicitCWDAndEnvironmentRendersStructuredShellPrefix() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()

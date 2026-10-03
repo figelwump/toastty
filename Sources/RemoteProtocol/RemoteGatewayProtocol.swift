@@ -43,6 +43,10 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     case workspaceDone = "workspace_done"
     /// A client may set or clear a session's "Flag for Later" mark.
     case conversationFlag = "conversation_flag"
+    /// A native client may start a new agent session in an existing
+    /// workspace. Whether one device may do so is a per-device permission
+    /// that the start options report.
+    case sessionStart = "session_start"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -66,6 +70,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .messageAttachments,
             .workspaceDone,
             .conversationFlag,
+            .sessionStart,
         ]
     ) {
         self.protocolVersion = protocolVersion

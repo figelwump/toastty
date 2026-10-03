@@ -639,6 +639,37 @@ public actor ConnectionCoordinator {
         return try await gateway.setConversationFlag(request)
     }
 
+    /// Asks what this device can start in a workspace, only while live
+    /// against a host that advertises session starts. `nil` is a
+    /// capability/lifecycle refusal, not a transport failure.
+    public func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest
+    ) async throws -> RemoteSessionStartOptionsResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.sessionStart) else {
+            return nil
+        }
+        return try await gateway.sessionStartOptions(request)
+    }
+
+    /// Starts a new agent session, with the same gating as the options.
+    /// `nil` means nothing was sent, so the caller may repeat the request
+    /// with the same `clientRequestID`.
+    public func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.sessionStart) else {
+            return nil
+        }
+        // The first message is a send. When this device is known to have
+        // lost send access, answer as the Mac would without asking it.
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return RemoteSessionStartResponse(result: .rejected(reason: .permissionDenied))
+        }
+        return try await gateway.startSession(request)
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.

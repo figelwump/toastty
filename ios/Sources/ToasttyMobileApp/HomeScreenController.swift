@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import RemoteProtocol
 import ToasttyMobileDomain
 
 struct SelectedConversationPresentation: Identifiable, Equatable {
@@ -22,6 +23,8 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
     enum Kind: Equatable {
         case changed(workspaceID: UUID, isDone: Bool)
         case flagChanged(conversationID: UUID, isFlagged: Bool)
+        /// A session started on the Mac but has not reached the list yet.
+        case sessionStarted
         case failed
     }
 
@@ -32,7 +35,7 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
     var canUndo: Bool {
         switch kind {
         case .changed, .flagChanged: true
-        case .failed: false
+        case .sessionStarted, .failed: false
         }
     }
 }
@@ -50,6 +53,8 @@ final class HomeScreenController {
     private(set) var hostSupportsSubspaceDone: Bool
     /// Whether the connected Mac accepts flag changes from this device.
     private(set) var hostSupportsConversationFlag: Bool
+    /// Whether the connected Mac accepts new sessions from this device.
+    private(set) var hostSupportsSessionStart: Bool
     private(set) var subspaceDoneNotice: SubspaceDoneNotice?
     var connectionState: MobileConnectionState
     var freshness: LiveProjectionFreshness
@@ -60,6 +65,8 @@ final class HomeScreenController {
     private var onConversationClosed: @MainActor (UUID) -> Void = { _ in }
     private var sendSubspaceDone: (@MainActor (UUID, Bool) async -> SubspaceDoneOutcome)?
     private var sendConversationFlag: (@MainActor (UUID, Bool) async -> SubspaceDoneOutcome)?
+    private var loadSessionStartOptions: (@MainActor (UUID) async -> ToasttySessionStartOptionsOutcome)?
+    private var sendSessionStart: (@MainActor (RemoteSessionStartRequest) async -> ToasttySessionStartOutcome)?
     /// Flag states the user asked for that the Mac's snapshot does not show
     /// yet, by conversation, with the same rules as `pendingSubspaceDone`.
     private var pendingConversationFlag: [UUID: PendingSubspaceDone] = [:]
@@ -105,6 +112,7 @@ final class HomeScreenController {
         // locally.
         hostSupportsSubspaceDone = runtimeMode == .fixture
         hostSupportsConversationFlag = runtimeMode == .fixture
+        hostSupportsSessionStart = runtimeMode == .fixture
         self.connectionState = connectionState
         self.freshness = freshness ?? Self.freshness(for: connectionState)
         self.latestTransportFailure = latestTransportFailure
@@ -132,6 +140,7 @@ final class HomeScreenController {
         latestTransportFailure: NativeTransportFailure? = nil,
         hostSupportsSubspaceDone: Bool? = nil,
         hostSupportsConversationFlag: Bool? = nil,
+        hostSupportsSessionStart: Bool? = nil,
         hostSnapshotStamp: Date? = nil
     ) {
         let removedConversation = selectedConversationID.flatMap { conversation(id: $0) }
@@ -140,6 +149,9 @@ final class HomeScreenController {
         }
         if let hostSupportsConversationFlag {
             self.hostSupportsConversationFlag = hostSupportsConversationFlag
+        }
+        if let hostSupportsSessionStart {
+            self.hostSupportsSessionStart = hostSupportsSessionStart
         }
         // The same Mac snapshot is presented again whenever the connection
         // state changes, with fresh ages, so equality cannot tell a new one.
@@ -285,6 +297,80 @@ final class HomeScreenController {
         )
     }
 
+    // MARK: - New session
+
+    /// New sessions start only against a live Mac that accepts them from
+    /// this device. Whether this device's start permission is on is a
+    /// separate answer that the start options carry.
+    var canStartSessions: Bool {
+        hostSupportsSessionStart && freshness == .live
+    }
+
+    func setHostSupportsSessionStart(_ isSupported: Bool) {
+        hostSupportsSessionStart = isSupported
+    }
+
+    func installSessionStart(
+        options: @escaping @MainActor (UUID) async -> ToasttySessionStartOptionsOutcome,
+        start: @escaping @MainActor (RemoteSessionStartRequest) async -> ToasttySessionStartOutcome
+    ) {
+        loadSessionStartOptions = options
+        sendSessionStart = start
+    }
+
+    func sessionStartOptions(workspaceID: UUID) async -> ToasttySessionStartOptionsOutcome {
+        if let loadSessionStartOptions {
+            return await loadSessionStartOptions(workspaceID)
+        }
+        guard runtimeMode == .fixture else { return .unreachable }
+        return .loaded(ToasttyMobileFixture.sessionStartOptions(for: workspace(id: workspaceID)))
+    }
+
+    func startSession(_ request: RemoteSessionStartRequest) async -> ToasttySessionStartOutcome {
+        if let sendSessionStart {
+            return await sendSessionStart(request)
+        }
+        guard runtimeMode == .fixture else { return .unconfirmed }
+        return await startFixtureSession(request)
+    }
+
+    /// Says that a started session has not reached the list yet, for when
+    /// the phone gives up waiting to open it.
+    func announceStartedSessionPending(agentName: String) {
+        subspaceDoneNotice = SubspaceDoneNotice(
+            kind: .sessionStarted,
+            message: "\(agentName) started on your Mac. The session will appear in the list."
+        )
+    }
+
+    /// Fixture mode has no Mac, so a start adds the session to the snapshot
+    /// itself after a short pause that stands in for the launch.
+    private func startFixtureSession(_ request: RemoteSessionStartRequest) async -> ToasttySessionStartOutcome {
+        try? await Task.sleep(for: .milliseconds(600))
+        let options = ToasttyMobileFixture.sessionStartOptions(for: workspace(id: request.workspaceID))
+        guard let workspace = hostSnapshot.workspaces.first(where: { $0.id == request.workspaceID }) else {
+            return .answered(.rejected(reason: .workspaceNotFound))
+        }
+        guard let agent = options.agents.first(where: { $0.profileID == request.profileID }),
+              agent.availability == .available else {
+            return .answered(.rejected(reason: .agentUnavailable))
+        }
+        let conversation = ToasttyMobileFixture.startedConversation(
+            id: UUID(),
+            request: request,
+            agentDisplayName: agent.displayName,
+            workspace: workspace
+        )
+        hostSnapshot = MobileHomeSnapshot(
+            hostName: hostSnapshot.hostName,
+            workspaces: hostSnapshot.workspaces.map {
+                $0.id == workspace.id ? $0.withConversations([conversation] + $0.conversations) : $0
+            }
+        )
+        presentSnapshot()
+        return .answered(.started(conversationID: RemoteConversationID(rawValue: conversation.id)))
+    }
+
     func installSubspaceDone(
         _ send: @escaping @MainActor (UUID, Bool) async -> SubspaceDoneOutcome
     ) {
@@ -384,7 +470,7 @@ final class HomeScreenController {
         case .flagChanged(let conversationID, let isFlagged)?:
             subspaceDoneNotice = nil
             setConversationFlag(conversationID, isFlagged: !isFlagged, announces: false)
-        case .failed?, nil:
+        case .sessionStarted?, .failed?, nil:
             break
         }
     }

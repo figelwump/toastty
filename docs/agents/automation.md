@@ -65,6 +65,31 @@ visual correctness, HTTP success, SPA readiness, or video playback. Persisted
 restoration, superseded navigation callbacks, and detached screenshot rejection
 require the separate runtime tests.
 
+### Remote session start
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote \
+  --validation-command 'python3 scripts/automation/remote-session-start-check.py'
+```
+
+This checks a session start from a paired device end to end on the remote
+host. Remote Access and the paired device must exist before Toastty launches,
+so the check starts its own second instance of the wrapper's build and stops it
+afterward. That instance uses a throwaway runtime home, a throwaway user home
+whose `agents.toml` names a fake `claude` script, two seeded test devices, and
+a loopback gateway port. It does not use a real agent, a real pairing, or
+Tailscale, and it does not touch the installed production app.
+
+The check acts as the phone over HTTP: it reads the start options, starts a
+session whose message begins with a dash, and repeats the request. It verifies
+that the new terminal ran the command with the chosen model, effort, and
+message; that the workspace's selected tab and focused panel did not change;
+that the session list shows the conversation under the returned ID; that the
+repeat started nothing; and that a device with **Start sessions** off is
+refused. It writes `remote-session-start.json` under the run's artifacts
+directory. This is state evidence from the automation socket and the gateway.
+It is not a screenshot, and it does not cover the iOS screens.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.
