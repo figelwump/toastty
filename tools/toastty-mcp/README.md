@@ -14,6 +14,23 @@ then configure an MCP client to execute:
 node /path/to/toastty/tools/toastty-mcp/server.mjs
 ```
 
+For a private MCP client or tunnel that launches stdio servers, the equivalent
+server entry is:
+
+```json
+{
+  "command": "node",
+  "args": ["/path/to/toastty/tools/toastty-mcp/server.mjs"],
+  "env": { "TOASTTY_SOCKET_PATH": "<resolved socketPath from the target instance>" }
+}
+```
+
+For a runtime-isolated Toastty instance, read `socketPath` from its
+`$TOASTTY_RUNTIME_HOME/instance.json`; do not reconstruct it from the runtime
+home because a live instance can fall back to a per-process socket. The client
+or tunnel must run as the same macOS user. This entry only defines the local
+process; connecting a cloud dot to a private tunnel is a separate setup step.
+
 The adapter uses Toastty's mode-0600 Unix socket. It does not use iOS device
 credentials, require Tailscale, start the Remote Access HTTP listener, or open a
 network port. Cloud assistants need a separately authorized transport to this
@@ -49,3 +66,6 @@ sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
 That check launches a second runtime-isolated Toastty process, a fake Claude
 CLI in a throwaway home, and the actual MCP stdio server. It leaves the user's
 production app and real sessions untouched.
+
+Run the socket-framing and malformed-request regressions with
+`node --test tools/toastty-mcp/server.test.mjs`.

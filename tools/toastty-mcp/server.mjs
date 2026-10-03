@@ -12,7 +12,8 @@ function socketRequest(command, payload = {}) {
   if (!socketPath) throw new Error('TOASTTY_SOCKET_PATH is required');
   return new Promise((resolve, reject) => {
     const client = createConnection(socketPath);
-    let reply = '';
+    const chunks = [];
+    let byteCount = 0;
     let done = false;
     const finish = (error, value) => {
       if (done) return;
@@ -26,12 +27,14 @@ function socketRequest(command, payload = {}) {
       protocolVersion: '1.0', kind: 'request', requestID: randomUUID(), command, payload,
     }) + '\n'));
     client.on('data', chunk => {
-      reply += chunk.toString('utf8');
-      if (reply.length > 2_000_000) return finish(new Error('Toastty response exceeded 2 MB'));
-      const end = reply.indexOf('\n');
-      if (end < 0) return;
+      chunks.push(chunk);
+      byteCount += chunk.length;
+      if (byteCount > 2_000_000) return finish(new Error('Toastty response exceeded 2 MB'));
+      if (chunk.indexOf(0x0a) < 0) return;
       try {
-        const envelope = JSON.parse(reply.slice(0, end));
+        const reply = Buffer.concat(chunks, byteCount);
+        const end = reply.indexOf(0x0a);
+        const envelope = JSON.parse(reply.subarray(0, end).toString('utf8'));
         if (!envelope.ok) return finish(new Error(`${envelope.error?.code ?? 'ERROR'}: ${envelope.error?.message ?? 'Toastty refused request'}`));
         finish(null, envelope.result ?? {});
       } catch (error) { finish(error); }
@@ -147,6 +150,10 @@ const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of lines) {
   let message;
   try { message = JSON.parse(line); } catch { continue; }
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) {
+    write({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+    continue;
+  }
   if (message.id === undefined) continue;
   const reply = { jsonrpc: '2.0', id: message.id };
   try {

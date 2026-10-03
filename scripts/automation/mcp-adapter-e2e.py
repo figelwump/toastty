@@ -124,7 +124,7 @@ def main():
     app = subprocess.Popen([str(bundle / 'Contents/MacOS/Toastty')], env=environment,
                            stdout=app_log, stderr=subprocess.STDOUT)
     evidence = dict(status='failed', host='disposable Toastty app', provider='fake Claude PTY',
-                    gatewayEnabled=False)
+                    gatewayEnablementRequested=False)
     mcp = None
     try:
         instance = wait_for('instance.json', lambda: json.loads((runtime / 'instance.json').read_text())
@@ -137,7 +137,20 @@ def main():
                                                clientInfo=dict(name='fixture', version='1')))
         names = [tool['name'] for tool in mcp.request('tools/list')['tools']]
         require('toastty_start_session' in names and 'toastty_send_message' in names, names)
-        evidence['mcp'] = dict(protocol=hello['protocolVersion'], toolCount=len(names))
+        evidence['mcp'] = dict(protocol=hello['protocolVersion'], toolNames=names,
+                               transport='JSON-RPC stdio to Unix socket')
+
+        offline = MCP(source / 'tools/toastty-mcp/server.mjs', socket_path + '.absent')
+        try:
+            offline.request('initialize')
+            try:
+                offline.tool('toastty_list_sessions')
+                raise AssertionError('offline Toastty socket was accepted')
+            except RuntimeError as error:
+                require('ENOENT' in str(error), str(error))
+        finally:
+            offline.close()
+        evidence['offlineSocketRejected'] = True
 
         initial = mcp.tool('toastty_list_sessions')
         workspace_id = initial['workspaces'][0]['id']
@@ -181,6 +194,11 @@ def main():
             availability = row['inputAvailability'] if row else {}
             return availability.get('epoch') if availability.get('kind') == 'open_prompt' else None
         epoch = wait_for('open prompt', prompt_epoch)
+        wrong_target = mcp.tool('toastty_send_message', conversationID=str(uuid.uuid4()),
+                                clientRequestID=str(uuid.uuid4()), expectedInputEpoch=epoch,
+                                text='wrong target fixture')
+        require(wrong_target['status'] == 'rejected', wrong_target)
+        evidence['wrongConversationRejected'] = True
         nonce = 'mcp-nonce-' + uuid.uuid4().hex[:10]
         send_id = str(uuid.uuid4())
         sent = mcp.tool('toastty_send_message', conversationID=conversation_id,
@@ -221,8 +239,7 @@ def main():
             item['payload'].get('clientRequestID') == merge_id and
             'prepare a merge handoff' in item['payload'].get('text', '')
             for item in e) else None) if (e := events()) else None)
-        evidence['merge'] = dict(status=merge['status'], transcriptConfirmed=bool(merge_events),
-                                 githubMergeInvoked=False)
+        evidence['merge'] = dict(status=merge['status'], transcriptConfirmed=bool(merge_events))
         evidence['status'] = 'passed'
     finally:
         if mcp: mcp.close()
