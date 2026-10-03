@@ -823,6 +823,57 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func launchUsesImplicitOrDirectConfiguredGrokProfileWithOverridesAndTrailingPrompt() throws {
+        for profiles in [
+            [AgentProfile](),
+            [AgentProfile(id: "grok", displayName: "Grok Build", argv: ["/opt/homebrew/bin/grok"])],
+        ] {
+            let store = AppStore(persistTerminalFontPreference: false)
+            let sessionRuntimeStore = SessionRuntimeStore()
+            sessionRuntimeStore.bind(store: store)
+            let terminalRouter = TestTerminalCommandRouter()
+            terminalRouter.defaultPromptState = .idleAtPrompt
+            let service = AgentLaunchService(
+                store: store,
+                terminalCommandRouter: terminalRouter,
+                sessionRuntimeStore: sessionRuntimeStore,
+                agentCatalogProvider: TestAgentCatalogProvider(profiles: profiles),
+                cliExecutablePathProvider: { "/bin/sh" },
+                socketPathProvider: { "/tmp/toastty-tests.sock" }
+            )
+
+            let result = try service.launch(
+                profileID: "grok", model: "grok-code-next", reasoningEffort: "high",
+                initialPrompt: "Review this change"
+            )
+            let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+            #expect(result.agent == .grok)
+            #expect(result.displayName == "Grok Build")
+            #expect(command.contains("grok --model grok-code-next --reasoning-effort high 'Review this change'"))
+        }
+    }
+
+    @Test
+    func implicitGrokProfileSeparatesLeadingDashPromptFromOptions() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store, terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(profiles: []),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let result = try service.launch(profileID: "grok", initialPrompt: "--help me refactor")
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+        #expect(command.contains("grok -- '--help me refactor'"))
+    }
+
+    @Test
     func launchUsesImplicitCursorProfileWithModelAndTrailingPrompt() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -1147,6 +1198,12 @@ struct AgentLaunchServiceTests {
             _ = try service.launch(
                 profileID: "codex",
                 environment: ["TOASTTY_USER_SKILLS_ROOT": "/tmp/user-controlled"]
+            )
+        }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_GROK_SKILLS_OVERLAY' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "grok",
+                environment: ["TOASTTY_GROK_SKILLS_OVERLAY": "/tmp/user-controlled"]
             )
         }
         #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_AGENT' is managed by Toastty")) {

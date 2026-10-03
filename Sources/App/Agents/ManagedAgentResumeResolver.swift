@@ -68,6 +68,26 @@ enum ManagedAgentResumeResolver {
             // native conversation. Never bind the child to the source ID.
             guard !argv.contains("--fork-session") else { return nil }
             resumeToken = "--resume"
+        case .grok:
+            // Grok forks create a new conversation even when --resume names
+            // the source. Only UUID resume arguments identify this launch.
+            let providerArguments = Array(argv.dropFirst(
+                ManagedAgentCommandResolver.launchInsertionIndex(for: agent, argv: argv) + 1
+            ).prefix(while: { $0 != "--" }))
+            guard !providerArguments.contains("--fork-session") else { return nil }
+            for (index, argument) in providerArguments.enumerated() {
+                let value: String
+                if argument == "--resume" || argument == "-r" {
+                    guard index + 1 < providerArguments.count else { return nil }
+                    value = providerArguments[index + 1]
+                } else if argument.hasPrefix("--resume=") || argument.hasPrefix("-r=") {
+                    value = String(argument.drop(while: { $0 != "=" }).dropFirst())
+                } else {
+                    continue
+                }
+                return UUID(uuidString: value)?.uuidString.lowercased()
+            }
+            return nil
         default:
             return nil
         }
@@ -89,7 +109,7 @@ enum ManagedAgentResumeResolver {
         switch record.agent {
         case .codex:
             resumeArguments = ["resume", record.nativeSessionID]
-        case .claude:
+        case .claude, .grok:
             resumeArguments = ["--resume", record.nativeSessionID]
         case .opencode, .mimocode:
             resumeArguments = ["--session", record.nativeSessionID]

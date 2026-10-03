@@ -76,7 +76,7 @@ public enum AgentProfilesFile {
         #   argv         — the exact command Toastty runs for that profile.
         #   manualCommandNames — (optional) extra executable basenames Toastty
         #                        should shim for typed launches of built-in
-        #                        Codex/Claude/Cursor/OpenCode/MiMo/Pi wrappers.
+        #                        Codex/Claude/Cursor/Grok/OpenCode/MiMo/Pi wrappers.
         #                        Toastty uses Cursor's collision-safe cursor-agent
         #                        executable; never add the generic agent alias or
         #                        the desktop cursor command.
@@ -102,6 +102,10 @@ public enum AgentProfilesFile {
         # [cursor]
         # displayName = "Cursor"
         # argv = ["cursor-agent"]
+        #
+        # [grok]
+        # displayName = "Grok Build"
+        # argv = ["grok"]
         #
         # [opencode]
         # displayName = "OpenCode"
@@ -503,7 +507,7 @@ private enum AgentProfilesParser {
             guard rawNames.isEmpty else {
                 throw AgentProfilesParseError(
                     line: line,
-                    message: "[\(profileID)] manualCommandNames is supported only for [codex], [claude], [cursor], [opencode], [mimocode], and [pi]"
+                    message: "[\(profileID)] manualCommandNames is supported only for [codex], [claude], [cursor], [grok], [opencode], [mimocode], and [pi]"
                 )
             }
             return []
@@ -557,6 +561,7 @@ private enum AgentProfilesParser {
         AgentKind.codex.rawValue,
         AgentKind.claude.rawValue,
         AgentKind.cursor.rawValue,
+        AgentKind.grok.rawValue,
         AgentKind.opencode.rawValue,
         AgentKind.mimocode.rawValue,
         AgentKind.pi.rawValue,

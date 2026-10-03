@@ -26,6 +26,9 @@ enum ProviderSessionNameSource: Equatable, Sendable {
     /// conversation but not the workspace directory, whose name is a hash of
     /// Cursor's canonical cwd, so the reader scans the workspaces for the chat.
     case cursorChatMetadata(chatsDirectoryPath: String, conversationID: String)
+    /// Grok stores automatic and manually renamed titles in `generated_title`
+    /// in `summary.json`, beside the hook's `updates.jsonl` transcript.
+    case grokSessionSummary(path: String, nativeSessionID: String)
 }
 
 /// Parsing, separated from file access so the tolerated-malformation rules are
@@ -43,6 +46,9 @@ enum ProviderSessionNameParser {
     /// Cursor's `meta.json` is a single object of a few hundred bytes. A file
     /// past this is not one Cursor wrote, and reads as unnamed.
     static let maximumCursorChatMetadataBytes = 64 * 1024
+    /// Grok's summary also contains session recap text. Oversized objects read
+    /// as unnamed; the title reader never reads the conversation log.
+    static let maximumGrokSummaryBytes = 512 * 1024
     /// Provider names are short. The cap counts scalars, not grapheme
     /// clusters, so a combining-mark payload cannot slip past it.
     static let maximumNameScalarCount = 200
@@ -89,6 +95,15 @@ enum ProviderSessionNameParser {
     static func cursorChatTitle(inMetadata metadata: String) -> String? {
         guard let object = jsonObject(metadata) else { return nil }
         return normalized(object["title"] as? String)
+    }
+
+    static func grokSessionTitle(inSummary summary: String, nativeSessionID: String) -> String? {
+        guard let expectedID = UUID(uuidString: nativeSessionID),
+              let object = jsonObject(summary),
+              let info = object["info"] as? [String: Any],
+              let recordedID = info["id"] as? String,
+              UUID(uuidString: recordedID) == expectedID else { return nil }
+        return normalized(object["generated_title"] as? String)
     }
 
     /// Validates a name a provider reported through Toastty's plugin (opencode,
@@ -168,6 +183,18 @@ actor ProviderSessionNameReader {
                 ).path,
                 conversationID: trimmedSessionID
             )
+        case .grok:
+            // Use the accepted hook transcript path, including a shell's custom
+            // GROK_HOME, without reconstructing Grok's encoded cwd directory.
+            guard UUID(uuidString: trimmedSessionID) != nil,
+                  sessionFilePath.hasPrefix("/") else { return nil }
+            let transcriptURL = URL(fileURLWithPath: sessionFilePath)
+            guard transcriptURL.lastPathComponent == "updates.jsonl" else { return nil }
+            return .grokSessionSummary(
+                path: transcriptURL.deletingLastPathComponent()
+                    .appendingPathComponent("summary.json").path,
+                nativeSessionID: trimmedSessionID
+            )
         default:
             return nil
         }
@@ -246,6 +273,13 @@ actor ProviderSessionNameReader {
                 maximumBytes: ProviderSessionNameParser.maximumCursorChatMetadataBytes
             ) else { return nil }
             return ProviderSessionNameParser.cursorChatTitle(inMetadata: metadata)
+        case .grokSessionSummary(let path, let nativeSessionID):
+            guard let summary = readTail(
+                atPath: path,
+                maximumBytes: ProviderSessionNameParser.maximumGrokSummaryBytes,
+                requiresWholeFile: true
+            ) else { return nil }
+            return ProviderSessionNameParser.grokSessionTitle(inSummary: summary, nativeSessionID: nativeSessionID)
         }
     }
 
@@ -275,9 +309,9 @@ actor ProviderSessionNameReader {
 
     /// Reads at most `maximumBytes` from the end of a file, discarding a
     /// leading partial line whenever the read did not reach the start of the
-    /// file. Every source stores one JSON object per line, so a fragment is
-    /// never parsable and always belongs to a record outside the window.
-    private func readTail(atPath path: String, maximumBytes: Int) -> String? {
+    /// file. Line-delimited sources discard an incomplete leading record.
+    /// A whole-object source instead rejects files that exceed the limit.
+    private func readTail(atPath path: String, maximumBytes: Int, requiresWholeFile: Bool = false) -> String? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
 
@@ -295,6 +329,7 @@ actor ProviderSessionNameReader {
         do {
             let size = try handle.seekToEnd()
             guard size > 0 else { return nil }
+            guard !requiresWholeFile || size <= UInt64(maximumBytes) else { return nil }
             let readLength = min(UInt64(maximumBytes), size)
             try handle.seek(toOffset: size - readLength)
             guard let data = try handle.read(upToCount: Int(readLength)),
