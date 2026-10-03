@@ -5,6 +5,49 @@ import Testing
 
 struct AgentShimExecutableTests {
     @Test
+    func grokShimIgnoresEmptySkillsOverlay() throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: "grok")
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-grok-empty-skills",
+            managedShimBypass: true,
+            ownerRecordInInitialEnvironment: true,
+            extraEnvironment: [ToasttyLaunchContextEnvironment.grokSkillsOverlayKey: ""]
+        )
+        #expect(result.exitStatus == 7)
+        let log = try fixture.agentLogContents()
+        #expect(log.contains("xai_root=\n"))
+        #expect(log.contains("xai_user=\n"))
+        #expect(log.contains("skills_overlay=\n"))
+    }
+
+    @Test(arguments: [false, true])
+    func grokShimConsumesSkillsOverlayAndPreservesCallerWorkspace(hasCallerWorkspace: Bool) throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: "grok")
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let overlay = fixture.rootURL.appendingPathComponent("skills overlay")
+        let shipped = overlay.appendingPathComponent("x/toastty/.grok/skills/shipped")
+        try FileManager.default.createDirectory(at: shipped, withIntermediateDirectories: true)
+        var environment = [ToasttyLaunchContextEnvironment.grokSkillsOverlayKey: overlay.path]
+        if hasCallerWorkspace { environment["XAI_USER"] = "caller" }
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-grok-skills",
+            managedShimBypass: true,
+            ownerRecordInInitialEnvironment: true,
+            extraEnvironment: environment
+        )
+        #expect(result.exitStatus == 7)
+        let log = try fixture.agentLogContents()
+        #expect(log.contains("xai_root=\(hasCallerWorkspace ? "" : overlay.path)\n"))
+        #expect(log.contains("xai_user=\(hasCallerWorkspace ? "caller" : "toastty")\n"))
+        #expect(log.contains("skills_root=\(hasCallerWorkspace ? "" : shipped.path)\n"))
+        #expect(log.contains("skills_overlay=\n"))
+        #expect(result.stderr.contains("already set") == hasCallerWorkspace)
+    }
+
+    @Test
     func typedCodexShimPreflightRunAnywayReissuesPrepareWithSkipAndLaunchesPlan() throws {
         let fixture = try AgentShimExecutableFixture.make()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -49,9 +92,9 @@ struct AgentShimExecutableTests {
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
-    @Test
-    func managedBypassCodexShimRecordsSpawnedProcessAsArtifactOwner() throws {
-        let fixture = try AgentShimExecutableFixture.make()
+    @Test(arguments: ["cdx", "grok"])
+    func managedBypassShimRecordsSpawnedProcessAsArtifactOwner(shimCommandName: String) throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: shimCommandName)
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
 
         let result = try fixture.run(
@@ -62,6 +105,7 @@ struct AgentShimExecutableTests {
             extraEnvironment: [
                 "CODEX_TUI_RECORD_SESSION": "1",
                 "CODEX_TUI_SESSION_LOG_PATH": "/tmp/parent-codex-session.jsonl",
+                "GROK_HOME": "/tmp/user-grok-home",
             ]
         )
 
@@ -78,6 +122,7 @@ struct AgentShimExecutableTests {
         #expect(agentLog.contains("record_session=1"))
         #expect(agentLog.contains("session_log=/tmp/parent-codex-session.jsonl"))
         #expect(agentLog.contains("shim_bypass=\n"))
+        #expect(agentLog.contains("grok_home=/tmp/user-grok-home"))
     }
 
     @Test
@@ -132,9 +177,9 @@ struct AgentShimExecutableTests {
         #expect(agentLog.contains("session=sess-preflight"))
     }
 
-    @Test
-    func inheritedCodexSessionTracksBackgroundActivityWithoutParentSessionContext() throws {
-        let fixture = try AgentShimExecutableFixture.make()
+    @Test(arguments: ["cdx", "grok"])
+    func inheritedShimTracksBackgroundActivityWithoutParentSessionContext(shimCommandName: String) throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: shimCommandName)
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
 
         let result = try fixture.run(
@@ -149,6 +194,7 @@ struct AgentShimExecutableTests {
                 ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey: "/tmp/parent-owner",
                 "CODEX_TUI_RECORD_SESSION": "1",
                 "CODEX_TUI_SESSION_LOG_PATH": "/tmp/parent-codex-session.jsonl",
+                "GROK_HOME": "/tmp/user-grok-home",
             ]
         )
 
@@ -160,7 +206,7 @@ struct AgentShimExecutableTests {
         #expect(cliLog.contains("session background-activity start --session sess-parent"))
         #expect(cliLog.contains("--panel \(fixture.panelID.uuidString)"))
         #expect(cliLog.contains("--kind child_agent"))
-        #expect(cliLog.contains("--display-name Codex"))
+        #expect(cliLog.contains("--display-name \(shimCommandName == "grok" ? "Grok Build" : "Codex")"))
         #expect(cliLog.contains("--pid "))
         #expect(cliLog.contains("session background-activity finish --session sess-parent"))
 
@@ -177,6 +223,7 @@ struct AgentShimExecutableTests {
         #expect(agentLog.contains("owner_file=\n"))
         #expect(agentLog.contains("record_session=\n"))
         #expect(agentLog.contains("session_log=\n"))
+        #expect(agentLog.contains("grok_home=/tmp/user-grok-home"))
     }
 
     @Test
@@ -366,6 +413,9 @@ private struct AgentShimExecutableFixture {
         environment[ToasttyLaunchContextEnvironment.cliPathKey] = fakeCLIURL.path
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.sessionIDKey] = inheritedSessionID
+        for key in ["XAI_ROOT", "XAI_USER", ToasttyLaunchContextEnvironment.skillsRootKey, ToasttyLaunchContextEnvironment.grokSkillsOverlayKey] {
+            environment.removeValue(forKey: key)
+        }
         environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = nil
         environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryURL.path
         environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = managedShimBypass ? "1" : nil
@@ -555,6 +605,11 @@ private struct AgentShimExecutableFixture {
           printf 'shim_bypass=%s\\n' "${TOASTTY_MANAGED_AGENT_SHIM_BYPASS:-}"
           printf 'record_session=%s\\n' "${CODEX_TUI_RECORD_SESSION:-}"
           printf 'session_log=%s\\n' "${CODEX_TUI_SESSION_LOG_PATH:-}"
+          printf 'grok_home=%s\\n' "${GROK_HOME:-}"
+          printf 'xai_root=%s\\n' "${XAI_ROOT:-}"
+          printf 'xai_user=%s\\n' "${XAI_USER:-}"
+          printf 'skills_root=%s\\n' "${TOASTTY_SKILLS_ROOT:-}"
+          printf 'skills_overlay=%s\\n' "${TOASTTY_GROK_SKILLS_OVERLAY:-}"
           printf 'pid=%s\\n' "$$"
           printf 'owner_file=%s\\n' "${TOASTTY_MANAGED_ARTIFACT_OWNER_FILE:-}"
         } >> "$TOASTTY_FAKE_AGENT_LOG"

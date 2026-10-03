@@ -53,7 +53,7 @@ If the agent is Codex, dry-run status hooks next and warn that Codex may ask the
 "$TOASTTY_CLI_PATH" setup install-hooks --agent codex --dry-run
 ```
 
-After approval, apply with `--apply`. For Claude Code, Cursor, OpenCode, MiMo Code, and Pi, explain that Toastty injects status integration when those agents are launched through Toastty; no global hook install is needed. For Cursor, use the unique `cursor-agent` command rather than the generic `agent` alias.
+After approval, apply with `--apply`. For Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi, explain that Toastty injects status integration when those agents are launched through Toastty; no global hook install is needed. For Cursor, use the unique `cursor-agent` command rather than the generic `agent` alias.
 
 Offer Terminal profiles as optional manual setup. Ask whether the user wants quick launchers for common terminal actions such as tmux, zellij, ssh, or REPLs with environment loaded. Do not block the setup flow if the user skips profiles.
 
@@ -61,7 +61,7 @@ Confirm that setup is live by launching an agent in a fresh Toastty pane. Suppor
 
 ## Phase 2: Review Automatic Skills
 
-No skills installation is required. List what Toastty will make available to new supported managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi launches:
+No skills installation is required. List what Toastty will make available to new supported managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches:
 
 ```bash
 "$TOASTTY_CLI_PATH" setup skills list

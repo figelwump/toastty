@@ -14,7 +14,7 @@ Toastty keeps up to 20 local Recently Opened items for browsers, local documents
 
 `Cmd+Ctrl+S` starts an unbound manual Scratchpad. A live managed session's terminal-header link menu lists the Scratchpads in its workspace tab. Check several titles to bind them to that session, or choose **New Scratchpad** to create another bound document. A Scratchpad can belong to only one session; selecting a row labeled **Move from [session]** transfers its binding to this session. The binding chip in the Scratchpad header also lets you attach it to an active Toastty-managed agent session in the same workspace tab.
 
-Use **Edit Details…** to give each Scratchpad a title and optional purpose. **Make Default** chooses which document receives session-only agent commands; selecting a visible panel does not change that default. Closing a Scratchpad removes its binding while retaining its saved content, and reopening starts it unbound. Supported managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions receive the `toastty-scratchpad` skill automatically, so you can usually ask the agent for a visual and let it create and bind its own Scratchpad on demand.
+Use **Edit Details…** to give each Scratchpad a title and optional purpose. **Make Default** chooses which document receives session-only agent commands; selecting a visible panel does not change that default. Closing a Scratchpad removes its binding while retaining its saved content, and reopening starts it unbound. Supported managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi sessions receive the `toastty-scratchpad` skill automatically, so you can usually ask the agent for a visual and let it create and bind its own Scratchpad on demand.
 
 ## Browser header actions
 

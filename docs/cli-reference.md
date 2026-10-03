@@ -92,7 +92,7 @@ Toastty Skills…`. A missing user-skills directory is an empty catalog and is
 not created by this command.
 
 Running sessions keep the skills they launched with. Supported managed Codex,
-Claude Code, Cursor, OpenCode, MiMo Code, and Pi launches receive the current inventory
+Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches receive the current inventory
 when they start; unsupported launch shapes or provisioning failures proceed
 without Toastty skills.
 
@@ -545,9 +545,9 @@ Scratchpad actions are intended for agent and automation integrations. A managed
   single-line shell snippets rendered after `cd <cwd>` and before the final
   agent command; `env.NAME` entries are injected before Toastty's managed launch
   context on the final agent command and are not exported to
-  `initialCommands`; `model` selects a model for `codex`, `claude`, `cursor`, `opencode`,
-  `mimocode`, or `pi`; `reasoningEffort` selects reasoning for `codex`, `claude`,
-  or `pi`; and `initialPrompt` is appended only for supported profiles.
+  `initialCommands`; `model` selects a model for `codex`, `claude`, `cursor`, `grok`,
+  `opencode`, `mimocode`, or `pi`; `reasoningEffort` selects reasoning for
+  `codex`, `claude`, `grok`, or `pi`; and `initialPrompt` is appended only for supported profiles.
   OpenCode and MiMo Code reject `reasoningEffort` atomically and do not map it
   to `variant`. Omit either selection to retain the configured argv/provider
   default. Explicit selections replace safely parseable equivalent profile
@@ -560,7 +560,7 @@ Scratchpad actions are intended for agent and automation integrations. A managed
   characters, and no leading dash), while the provider CLI makes the final
   upstream validity decision after delivery.
   Callers own side effects and trust changes in `initialCommands`, such as
-  `direnv allow`. Built-in `codex`, `claude`, `cursor`, `opencode`, `mimocode`, and `pi` automation launches work
+  `direnv allow`. Built-in `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, and `pi` automation launches work
   even when the user has not created `~/.toastty/agents.toml`. CLI/app-control
   `agent.launch` preserves the current AppKit first responder; focus the target
   workspace or panel separately when it should become the interactive keyboard
@@ -984,7 +984,7 @@ additional workspaces the user explicitly assigned.
 
 ### `session ingest-agent-event`
 
-Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, Cursor, OpenCode, MiMo Code, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, correlated Cursor hook events, Codex hook/notify events, and provider-native resume-record updates when the source supports them. Cursor hook input is capped at 65,536 bytes; oversized input is drained without being retained and then rejected so the provider's hook pipe can close cleanly.
+Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, correlated Cursor hook events, Codex hook/notify events, and provider-native resume-record updates when the source supports them. Cursor hook input is capped at 65,536 bytes; oversized input is drained without being retained and then rejected so the provider's hook pipe can close cleanly.
 
 ```
 toastty session ingest-agent-event --source <source> [--session <id>] [--panel <id>]
@@ -992,13 +992,13 @@ toastty session ingest-agent-event --source <source> [--session <id>] [--panel <
 
 | Option | Required | Env var fallback | Description |
 |---|---|---|---|
-| `--source <source>` | yes | — | `claude-hooks`, `codex-hooks`, `codex-notify`, `cursor-hooks`, `opencode-plugin`, `mimocode-plugin`, or `pi-extension` |
+| `--source <source>` | yes | — | `claude-hooks`, `codex-hooks`, `codex-notify`, `cursor-hooks`, `grok-hooks`, `opencode-plugin`, `mimocode-plugin`, or `pi-extension` |
 | `--session <id>` | no | `TOASTTY_SESSION_ID` | Session ID |
 | `--panel <id>` | no | `TOASTTY_PANEL_ID` | Panel UUID |
 
 This command is not intended for third-party integrations. Custom agents should use `session status` and `session stop` directly.
 
-Toastty's built-in Claude, Codex, Cursor, OpenCode, MiMo Code, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If a helper cannot reach the app, it keeps the agent process alive. Cursor's launch-scoped forwarder suppresses delivery failures and writes no separate log; Codex's installed status-hook forwarder writes to `~/.toastty/codex-hooks/telemetry-failures.log`; Claude and Codex per-launch helpers write under `~/.toastty/run/managed-agent-launches/` (or the runtime-isolated equivalent), where files remain available until Toastty can prove the owning process exited. OpenCode and MiMo Code helper failures remain in their temporary per-session launch directories, and Pi writes its compact telemetry there while the session is active.
+Toastty's built-in Claude, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If a helper cannot reach the app, it keeps the agent process alive. Cursor's launch-scoped forwarder suppresses delivery failures and writes no separate log; Codex's installed status-hook forwarder writes to `~/.toastty/codex-hooks/telemetry-failures.log`; Claude and Codex per-launch helpers write under `~/.toastty/run/managed-agent-launches/` (or the runtime-isolated equivalent), where files remain available until Toastty can prove the owning process exited. OpenCode and MiMo Code helper failures remain in their temporary per-session launch directories, and Pi writes its compact telemetry there while the session is active.
 
 ## Environment variables
 

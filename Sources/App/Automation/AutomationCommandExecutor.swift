@@ -1145,6 +1145,37 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.grok_hook_event":
+            guard let sessionID = event.sessionID, !sessionID.isEmpty else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let activeSession = try resolveActiveSession(sessionID: sessionID, rawPanelID: event.panelID)
+            let hookEvent = try GrokHookEventPayloadDecoder.decode(event.payload)
+            let update = sessionRuntimeStore.handleGrokHookEvent(sessionID: sessionID, event: hookEvent, at: now)
+            if update != nil {
+                if let path = hookEvent.sessionFilePath, path.hasPrefix("/"),
+                   let cwd = hookEvent.cwd ?? activeSession.cwd, cwd.hasPrefix("/") {
+                    _ = updateManagedAgentResumeRecordFromHook(
+                        sessionID: sessionID,
+                        activeSession: activeSession,
+                        resumeRecord: ManagedAgentResumeRecord(
+                            agent: .grok,
+                            nativeSessionID: hookEvent.nativeSessionID,
+                            sessionFilePath: path,
+                            cwd: cwd,
+                            capturedAt: now
+                        ),
+                        captureSource: "grok_hook_event"
+                    )
+                }
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(update == nil ? "ignored" : "accepted"),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.cursor_hook_event":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
