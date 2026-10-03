@@ -110,6 +110,45 @@ final class ManagedAgentLaunchArtifactStore {
         }
     }
 
+    /// Records ownership before exposing the hook file in Grok's shared hook
+    /// directory. Temporary fallback artifacts cannot own a persistent link.
+    func registerGrokHookLink(
+        artifacts: ManagedAgentLaunchArtifactDirectory,
+        linkURL: URL
+    ) throws {
+        guard artifacts.storage == .durable,
+              var metadata = validatedMetadata(for: artifacts.directoryURL),
+              metadata.agent == AgentKind.grok.rawValue,
+              metadata.grokHookLinkPath == nil,
+              let validatedLinkURL = validatedGrokHookLinkURL(linkURL.path, metadata: metadata),
+              linkURL.isFileURL,
+              linkURL == validatedLinkURL else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        var info = stat()
+        guard lstat(validatedLinkURL.path, &info) != 0, errno == ENOENT else {
+            throw CocoaError(.fileWriteFileExists)
+        }
+
+        let metadataURL = artifacts.directoryURL.appendingPathComponent(Self.metadataFileName)
+        let originalMetadata = try JSONEncoder().encode(metadata)
+        metadata.grokHookLinkPath = validatedLinkURL.path
+        do {
+            try JSONEncoder().encode(metadata).write(to: metadataURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: metadataURL.path)
+            try fileManager.createSymbolicLink(
+                atPath: validatedLinkURL.path,
+                withDestinationPath: artifacts.directoryURL.appendingPathComponent("hooks.json").path
+            )
+        } catch {
+            // Link creation never replaces an existing entry. If creation
+            // failed, restore the record without touching that entry.
+            try? originalMetadata.write(to: metadataURL, options: .atomic)
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: metadataURL.path)
+            throw error
+        }
+    }
+
     /// Removes a launch that was prepared but never dispatched. This is the
     /// only forced cleanup path; normal session-stop cleanup always uses
     /// `sweep(activeSessionIDs:)` and process-liveness proof.
@@ -122,6 +161,7 @@ final class ManagedAgentLaunchArtifactStore {
                   metadata.sessionID == sessionID(fromDirectoryName: artifacts.directoryURL.lastPathComponent) else {
                 return
             }
+            guard removeOwnedGrokHookLink(metadata: metadata, directoryURL: artifacts.directoryURL) else { return }
             try? fileManager.removeItem(at: artifacts.directoryURL)
         }
     }
@@ -140,13 +180,16 @@ final class ManagedAgentLaunchArtifactStore {
         for directoryURL in childURLs {
             guard let metadata = validatedMetadata(for: directoryURL),
                   activeSessionIDs.contains(metadata.sessionID) == false,
-                  let owner = validatedOwnerRecord(in: directoryURL),
-                  now.timeIntervalSince(owner.observedAt) >= cleanupGraceInterval else {
+                  let owner = validatedOwnerRecord(in: directoryURL) else {
                 continue
             }
 
             switch ownerProcessStateProvider(owner.processID) {
             case .dead:
+                // Dead Grok launches no longer need a globally discovered
+                // hook link. Their private files still get the usual grace.
+                guard removeOwnedGrokHookLink(metadata: metadata, directoryURL: directoryURL),
+                      now.timeIntervalSince(owner.observedAt) >= cleanupGraceInterval else { continue }
                 try? fileManager.removeItem(at: directoryURL)
             case .alive, .unknown:
                 continue
@@ -181,7 +224,8 @@ final class ManagedAgentLaunchArtifactStore {
                 schemaVersion: 1,
                 sessionID: sessionID,
                 agent: agent.rawValue,
-                createdAt: nowProvider()
+                createdAt: nowProvider(),
+                grokHookLinkPath: nil
             )
             let metadataURL = directoryURL.appendingPathComponent(Self.metadataFileName)
             try JSONEncoder().encode(metadata).write(to: metadataURL, options: .atomic)
@@ -241,7 +285,10 @@ final class ManagedAgentLaunchArtifactStore {
     }
 
     private func validatedMetadata(for directoryURL: URL) -> Metadata? {
-        guard directoryURL.deletingLastPathComponent().standardizedFileURL == rootDirectoryURL,
+        // A root supplied before it exists may lack URL's directory suffix.
+        // Compare filesystem paths rather than that representational hint.
+        guard validateExistingRootDirectory(),
+              directoryURL.deletingLastPathComponent().standardizedFileURL.path == rootDirectoryURL.path,
               (try? validateOwnedDirectory(directoryURL)) != nil,
               let expectedSessionID = sessionID(fromDirectoryName: directoryURL.lastPathComponent),
               let file = readOwnedRegularFile(
@@ -255,6 +302,36 @@ final class ManagedAgentLaunchArtifactStore {
             return nil
         }
         return metadata
+    }
+
+    private func validatedGrokHookLinkURL(_ path: String, metadata: Metadata) -> URL? {
+        guard metadata.agent == AgentKind.grok.rawValue,
+              path.hasPrefix("/") else { return nil }
+        let url = URL(fileURLWithPath: path)
+        guard url.standardizedFileURL.path == path,
+              url.lastPathComponent == "toastty-\(metadata.sessionID).json",
+              url.deletingLastPathComponent().lastPathComponent == "hooks",
+              (try? validateOwnedDirectory(url.deletingLastPathComponent())) != nil else {
+            return nil
+        }
+        return url
+    }
+
+    private func removeOwnedGrokHookLink(metadata: Metadata, directoryURL: URL) -> Bool {
+        guard let path = metadata.grokHookLinkPath,
+              let url = validatedGrokHookLinkURL(path, metadata: metadata) else { return true }
+        // Directory enumeration can canonicalize /var to /private/var. Build
+        // the expected literal target from the same root used at creation.
+        let expectedTarget = rootDirectoryURL
+            .appendingPathComponent(directoryURL.lastPathComponent, isDirectory: true)
+            .appendingPathComponent("hooks.json").path
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { return errno == ENOENT }
+        guard (info.st_mode & S_IFMT) == S_IFLNK, info.st_uid == getuid() else { return true }
+        guard let target = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else { return false }
+        guard target == expectedTarget else { return true }
+        // unlink cannot recursively remove a replacement directory.
+        return unlink(url.path) == 0 || errno == ENOENT
     }
 
     private func validatedOwnerRecord(in directoryURL: URL) -> OwnerRecord? {
@@ -311,7 +388,7 @@ final class ManagedAgentLaunchArtifactStore {
     }
 
     private func sessionID(fromDirectoryName name: String) -> String? {
-        for agent in [AgentKind.claude, .codex] {
+        for agent in [AgentKind.claude, .codex, .grok] {
             let prefix = "toastty-\(agent.rawValue)-launch-"
             guard name.hasPrefix(prefix) else { continue }
             let sessionID = String(name.dropFirst(prefix.count))
@@ -335,6 +412,7 @@ private extension ManagedAgentLaunchArtifactStore {
         let sessionID: String
         let agent: String
         let createdAt: Date
+        var grokHookLinkPath: String?
     }
 
     struct OwnerRecord {

@@ -775,3 +775,56 @@ final class HomeScreenControllerTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class SessionStartControllerTests: XCTestCase {
+    func testStartingSessionsNeedsALiveMacThatAcceptsThem() {
+        let controller = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.example")!),
+            snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        XCTAssertFalse(controller.canStartSessions)
+        controller.update(
+            snapshot: ToasttyMobileFixture.home, connectionState: .live, freshness: .live,
+            hostSupportsSessionStart: true
+        )
+        XCTAssertTrue(controller.canStartSessions)
+        controller.update(snapshot: ToasttyMobileFixture.home, connectionState: .offline, freshness: .stale)
+        XCTAssertFalse(controller.canStartSessions)
+    }
+
+    func testWithoutAConnectionNothingIsSentAndTheStartIsUnconfirmed() async {
+        let controller = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.example")!),
+            snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        let options = await controller.sessionStartOptions(workspaceID: ToasttyMobileFixture.previewWorkspaceID)
+        let outcome = await controller.startSession(RemoteSessionStartRequest(
+            clientRequestID: "request-1", workspaceID: ToasttyMobileFixture.previewWorkspaceID,
+            profileID: "claude", text: "Hi"
+        ))
+        XCTAssertEqual(options, .unreachable)
+        XCTAssertEqual(outcome, .unconfirmed)
+    }
+
+    func testFixtureStartAddsTheSessionToItsWorkspace() async throws {
+        let controller = HomeScreenController(
+            runtimeMode: .fixture, snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        XCTAssertTrue(controller.canStartSessions)
+
+        let outcome = await controller.startSession(RemoteSessionStartRequest(
+            clientRequestID: "request-1", workspaceID: ToasttyMobileFixture.previewWorkspaceID,
+            profileID: "codex", model: "gpt-6.1-sol", text: "Fix the flaky test"
+        ))
+
+        guard case .answered(.started(let conversationID)) = outcome else {
+            return XCTFail("Expected a start, got \(outcome)")
+        }
+        let conversation = try XCTUnwrap(controller.conversation(id: conversationID.rawValue))
+        XCTAssertEqual(conversation.workspaceID, ToasttyMobileFixture.previewWorkspaceID)
+        XCTAssertEqual(conversation.agent, .codex)
+        XCTAssertEqual(conversation.executionProfile?.modelIdentifier, "gpt-6.1-sol")
+        XCTAssertTrue(controller.openConversation(id: conversationID.rawValue))
+    }
+}

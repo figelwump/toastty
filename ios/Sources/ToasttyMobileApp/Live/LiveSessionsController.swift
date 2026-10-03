@@ -47,6 +47,12 @@ protocol LiveConnectionRuntime: Sendable {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse?
+    func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest
+    ) async throws -> RemoteSessionStartOptionsResponse?
+    func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse?
 }
 
 extension LiveConnectionRuntime {
@@ -59,6 +65,18 @@ extension LiveConnectionRuntime {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse? {
+        nil
+    }
+
+    func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest
+    ) async throws -> RemoteSessionStartOptionsResponse? {
+        nil
+    }
+
+    func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse? {
         nil
     }
 
@@ -178,6 +196,18 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteConversationFlagResponse? {
         try await coordinator.setConversationFlag(request)
     }
+
+    func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest
+    ) async throws -> RemoteSessionStartOptionsResponse? {
+        try await coordinator.sessionStartOptions(request)
+    }
+
+    func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse? {
+        try await coordinator.startSession(request)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -266,6 +296,28 @@ final class LiveSessionsController {
                 return .failed
             }
         }
+        homeController.installSessionStart(
+            options: { [runtime] workspaceID in
+                do {
+                    let response = try await runtime.sessionStartOptions(
+                        RemoteSessionStartOptionsRequest(workspaceID: workspaceID)
+                    )
+                    return response.map(ToasttySessionStartOptionsOutcome.loaded) ?? .unreachable
+                } catch {
+                    return .unreachable
+                }
+            },
+            start: { [runtime] request in
+                // Any failure leaves it unknown whether the Mac started the
+                // session, so the caller retries with the same request ID.
+                do {
+                    let response = try await runtime.startSession(request)
+                    return response.map { .answered($0.result) } ?? .unconfirmed
+                } catch {
+                    return .unconfirmed
+                }
+            }
+        )
         homeController.installConversationLifecycle(
             onOpen: { [weak self] conversationID in
                 Task { @MainActor [weak self] in
@@ -439,7 +491,15 @@ final class LiveSessionsController {
         deviceScopes = scopes
         homeController.setHostSupportsSubspaceDone(acceptsSubspaceDone)
         homeController.setHostSupportsConversationFlag(acceptsConversationFlag)
+        homeController.setHostSupportsSessionStart(acceptsSessionStart)
         await runtime.updateDeviceScopes(scopes)
+    }
+
+    /// A first message is a send, so only a device allowed to send sees
+    /// the entry point. The Mac's per-device start permission is checked
+    /// when the sheet loads its options.
+    private var acceptsSessionStart: Bool {
+        coordinatorState.capabilities.contains(.sessionStart) && deviceScopes.contains(.send)
     }
 
     private var acceptsConversationFlag: Bool {
@@ -559,6 +619,7 @@ final class LiveSessionsController {
             latestTransportFailure: coordinatorState.latestTransportFailure,
             hostSupportsSubspaceDone: acceptsSubspaceDone,
             hostSupportsConversationFlag: acceptsConversationFlag,
+            hostSupportsSessionStart: acceptsSessionStart,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)

@@ -630,7 +630,7 @@ struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controller.subspaceDoneNotice)
             .sensoryFeedback(trigger: controller.subspaceDoneNotice) { _, notice in
                 switch notice?.kind {
-                case .changed?, .flagChanged?: .success
+                case .changed?, .flagChanged?, .sessionStarted?: .success
                 case .failed?: .error
                 case nil: nil
                 }

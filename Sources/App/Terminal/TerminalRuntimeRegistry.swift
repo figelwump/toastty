@@ -513,6 +513,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
     }
 
+    func sendManagedAgentCommandResult(
+        _ commandLine: String,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult {
+        sendRemoteText(commandLine, submit: true, panelID: panelID, focusPolicy: focusPolicy)
+    }
+
     func isReadyForManagedAgentCommand(panelID: UUID) -> Bool {
         runtimeStore.existingController(for: panelID)?.isReadyForAutomationInput() ?? false
     }

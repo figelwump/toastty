@@ -7,9 +7,9 @@ import Testing
 
 @MainActor
 struct SessionRuntimeStoreTests {
-    /// Both providers save their generated title before the first turn ends.
+    /// Providers save their generated title before the first turn ends.
     /// The row should update while the status remains working.
-    @Test(arguments: [AgentKind.claude, .codex])
+    @Test(arguments: [AgentKind.claude, .codex, .grok])
     func generatedNameAppearsDuringFirstTurn(agent: AgentKind) async throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("provider-name-first-turn-\(UUID().uuidString)", isDirectory: true)
@@ -17,11 +17,12 @@ struct SessionRuntimeStoreTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let sessionID = "sess-first-turn"
-        let nativeSessionID = "native-first-turn"
+        let nativeSessionID = UUID().uuidString.lowercased()
         let panelID = UUID()
         let date = Date(timeIntervalSince1970: 1_786_000_000)
-        let transcript = directory.appendingPathComponent("session.jsonl")
+        let transcript = directory.appendingPathComponent(agent == .grok ? "updates.jsonl" : "session.jsonl")
         let index = directory.appendingPathComponent("session_index.jsonl")
+        let grokSummary = directory.appendingPathComponent("summary.json")
         try "".write(to: transcript, atomically: true, encoding: .utf8)
         try "".write(to: index, atomically: true, encoding: .utf8)
         let store = SessionRuntimeStore(
@@ -32,14 +33,26 @@ struct SessionRuntimeStoreTests {
             sessionID: sessionID, agent: agent, panelID: panelID,
             windowID: UUID(), workspaceID: UUID(), cwd: "/repo", repoRoot: "/repo", at: date
         )
-        #expect(store.confirmNativeSessionBinding(
-            managedSessionID: sessionID,
-            panelID: panelID,
-            record: ManagedAgentResumeRecord(
-                agent: agent, nativeSessionID: nativeSessionID,
-                sessionFilePath: transcript.path, cwd: "/repo", capturedAt: date
-            )
-        ))
+        if agent == .grok {
+            #expect(store.handleGrokHookEvent(
+                sessionID: sessionID,
+                event: GrokHookEvent(
+                    kind: .userPromptSubmit, nativeSessionID: nativeSessionID,
+                    promptID: UUID().uuidString, timestamp: date,
+                    sessionFilePath: transcript.path, cwd: "/repo"
+                ),
+                at: date
+            ) != nil)
+        } else {
+            #expect(store.confirmNativeSessionBinding(
+                managedSessionID: sessionID,
+                panelID: panelID,
+                record: ManagedAgentResumeRecord(
+                    agent: agent, nativeSessionID: nativeSessionID,
+                    sessionFilePath: transcript.path, cwd: "/repo", capturedAt: date
+                )
+            ))
+        }
         store.updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .working, summary: "Working"),
@@ -53,16 +66,75 @@ struct SessionRuntimeStoreTests {
         let title = "First turn title"
         let line = if agent == .claude {
             #"{"type":"ai-title","aiTitle":"\#(title)","sessionId":"\#(nativeSessionID)"}"#
-        } else {
+        } else if agent == .codex {
             #"{"id":"\#(nativeSessionID)","thread_name":"\#(title)"}"#
+        } else {
+            #"{"info":{"id":"\#(nativeSessionID)"},"generated_title":"\#(title)"}"#
         }
         try (line + "\n").write(
-            to: agent == .claude ? transcript : index,
+            to: agent == .claude ? transcript : (agent == .codex ? index : grokSummary),
             atomically: true,
             encoding: .utf8
         )
         try await waitForProviderSessionName(title, sessionID: sessionID, store: store)
         #expect(store.sessionRegistry.sessionsByID[sessionID]?.status?.kind == .working)
+        if agent == .grok {
+            let renamed = "Renamed Grok session"
+            try (#"{"info":{"id":"\#(nativeSessionID)"},"generated_title":"\#(renamed)","title_is_manual":true}"#)
+                .write(to: grokSummary, atomically: true, encoding: .utf8)
+            store.updateStatus(
+                sessionID: sessionID, status: SessionStatus(kind: .ready, summary: "Ready"),
+                at: date.addingTimeInterval(2)
+            )
+            try await waitForProviderSessionName(renamed, sessionID: sessionID, store: store)
+            // /clear changes identity before a new transcript path arrives.
+            // The old title must disappear immediately, and a later accepted
+            // root hook can establish the new title source.
+            let nextNativeSessionID = UUID().uuidString.lowercased()
+            let nextPromptID = UUID().uuidString.lowercased()
+            #expect(store.handleGrokHookEvent(
+                sessionID: sessionID,
+                event: GrokHookEvent(
+                    kind: .userPromptSubmit, nativeSessionID: nextNativeSessionID,
+                    promptID: nextPromptID, timestamp: date.addingTimeInterval(3)
+                ), at: date.addingTimeInterval(3)
+            ) != nil)
+            #expect(store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName == nil)
+            let nextDirectory = directory.appendingPathComponent("next")
+            try FileManager.default.createDirectory(at: nextDirectory, withIntermediateDirectories: true)
+            #expect(store.handleGrokHookEvent(
+                sessionID: sessionID,
+                event: GrokHookEvent(
+                    kind: .preToolUse, nativeSessionID: nextNativeSessionID,
+                    promptID: nextPromptID, timestamp: date.addingTimeInterval(4),
+                    toolName: "read_file", toolUseID: "next-tool",
+                    sessionFilePath: nextDirectory.appendingPathComponent("updates.jsonl").path
+                ), at: date.addingTimeInterval(4)
+            ) != nil)
+            // The path arrives while the status remains Working. The title
+            // is written later, so a single immediate read cannot find it.
+            try await Task.sleep(nanoseconds: 30_000_000)
+            try (#"{"info":{"id":"\#(nextNativeSessionID)"},"generated_title":"New conversation"}"#)
+                .write(to: nextDirectory.appendingPathComponent("summary.json"), atomically: true, encoding: .utf8)
+            try await waitForProviderSessionName("New conversation", sessionID: sessionID, store: store)
+            #expect(store.handleGrokHookEvent(
+                sessionID: sessionID,
+                event: GrokHookEvent(
+                    kind: .preToolUse, nativeSessionID: nextNativeSessionID,
+                    timestamp: date.addingTimeInterval(5), toolName: "read_file", toolUseID: "invalid-path-tool",
+                    sessionFilePath: "relative/updates.jsonl"
+                ), at: date.addingTimeInterval(5)
+            ) != nil)
+            #expect(store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName == "New conversation")
+            #expect(store.handleGrokHookEvent(
+                sessionID: sessionID,
+                event: GrokHookEvent(
+                    kind: .sessionEnd, nativeSessionID: nextNativeSessionID,
+                    timestamp: date.addingTimeInterval(6)
+                ), at: date.addingTimeInterval(6)
+            ) != nil)
+            #expect(store.sessionRegistry.sessionsByID[sessionID]?.providerSessionName == "New conversation")
+        }
     }
 
     @Test

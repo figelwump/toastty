@@ -112,7 +112,7 @@ private enum AgentCommandShim {
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
                 environment: resolvedLaunchEnvironment,
-                recordsManagedArtifactOwner: invocation.agent == .codex
+                recordsManagedArtifactOwner: (invocation.agent == .codex || invocation.agent == .grok)
                     && passThroughReasons.contains("managed_agent_shim_bypass")
             )
         }
@@ -135,6 +135,9 @@ private enum AgentCommandShim {
                 panelID: panelID,
                 argv: invocation.argv,
                 cwd: cwd,
+                environment: invocation.agent == .grok
+                    ? resolvedLaunchEnvironment.filter { $0.key == "GROK_HOME" || $0.key == "HOME" }
+                    : [:],
                 preflightPolicy: .interactive,
                 codexCapabilityHint: invocation.agent == .codex
                     && ["codex", "cdx"].contains(commandName.lowercased())
@@ -211,7 +214,7 @@ private enum AgentCommandShim {
             executablePath: realBinaryPath,
             argv: plan.argv,
             environment: childEnvironment,
-            recordsManagedArtifactOwner: invocation.agent == .codex
+            recordsManagedArtifactOwner: invocation.agent == .codex || invocation.agent == .grok
         )
         stopSession(
             cliPath: cliPath,
@@ -620,7 +623,7 @@ private enum AgentCommandShim {
         childEnvironment.removeValue(forKey: "CODEX_TUI_RECORD_SESSION")
         childEnvironment.removeValue(forKey: "CODEX_TUI_SESSION_LOG_PATH")
 
-        guard invocation.agent == .codex else { return childEnvironment }
+        guard invocation.agent == .codex || invocation.agent == .grok else { return childEnvironment }
 
         let parentSessionKeys = [
             ToasttyLaunchContextEnvironment.agentKey,
@@ -677,6 +680,19 @@ private enum AgentCommandShim {
         recordsManagedArtifactOwner: Bool = false
     ) -> pid_t {
         var childEnvironment = environment
+        if let overlay = childEnvironment.removeValue(forKey: ToasttyLaunchContextEnvironment.grokSkillsOverlayKey),
+           !overlay.isEmpty {
+            if childEnvironment["XAI_ROOT"] == nil && childEnvironment["XAI_USER"] == nil {
+                childEnvironment["XAI_ROOT"] = overlay
+                childEnvironment["XAI_USER"] = "toastty"
+                let shipped = URL(fileURLWithPath: overlay).appendingPathComponent("x/toastty/.grok/skills/shipped").path
+                if FileManager.default.fileExists(atPath: shipped) {
+                    childEnvironment[ToasttyLaunchContextEnvironment.skillsRootKey] = shipped
+                }
+            } else {
+                fputs("Toastty: Grok skills were not added because XAI_ROOT or XAI_USER is already set.\n", stderr)
+            }
+        }
         // This marker applies only to the shim invocation that consumes a
         // prepared managed launch. Forwarding it would disable interception of
         // later nested agent commands for the lifetime of the root process.

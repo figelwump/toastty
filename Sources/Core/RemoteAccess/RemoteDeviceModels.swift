@@ -10,6 +10,14 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     public var id: UUID
     public var name: String
     public var scopes: Set<RemoteDeviceScope>
+    /// True when "Start sessions" is turned off for this device on the Mac.
+    ///
+    /// This is a stored opt-out and not a `RemoteDeviceScope`, for two
+    /// reasons. Starting is allowed by default, including for devices paired
+    /// before the permission existed, so an absent value must mean allowed.
+    /// And an older Mac or an older phone that met an unknown scope value
+    /// would fail to decode the whole device record.
+    public var sessionStartDisabled: Bool
     public var authKind: RemoteDeviceAuthKind
     /// Exact Tailscale identity for a native credential. It is confined to the
     /// protected 0600 store and must never enter client responses, routine
@@ -25,6 +33,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         id: UUID = UUID(),
         name: String,
         scopes: Set<RemoteDeviceScope> = [.read],
+        sessionStartDisabled: Bool = false,
         authKind: RemoteDeviceAuthKind = .browser,
         tailscaleLogin: String? = nil,
         createdAt: Date,
@@ -34,6 +43,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         self.id = id
         self.name = name
         self.scopes = scopes
+        self.sessionStartDisabled = sessionStartDisabled
         self.authKind = authKind
         self.tailscaleLogin = tailscaleLogin
         self.createdAt = createdAt
@@ -42,7 +52,13 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, scopes, authKind, tailscaleLogin, createdAt, lastSeenAt, revokedAt
+        case id, name, scopes, sessionStartDisabled, authKind, tailscaleLogin, createdAt, lastSeenAt, revokedAt
+    }
+
+    /// Starting a session sends a first message, so it needs the send scope
+    /// as well as the start permission. Only native clients have the route.
+    public var canStartSessions: Bool {
+        isRevoked == false && authKind == .native && scopes.contains(.send) && sessionStartDisabled == false
     }
 
     public init(from decoder: any Decoder) throws {
@@ -50,6 +66,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         scopes = try container.decode(Set<RemoteDeviceScope>.self, forKey: .scopes)
+        sessionStartDisabled = try container.decodeIfPresent(Bool.self, forKey: .sessionStartDisabled) ?? false
         authKind = try container.decodeIfPresent(RemoteDeviceAuthKind.self, forKey: .authKind) ?? .browser
         tailscaleLogin = try container.decodeIfPresent(String.self, forKey: .tailscaleLogin)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
@@ -79,6 +96,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         try container.encode(id, forKey: .id)
         try container.encode(name, forKey: .name)
         try container.encode(scopes, forKey: .scopes)
+        if sessionStartDisabled { try container.encode(true, forKey: .sessionStartDisabled) }
         try container.encode(authKind, forKey: .authKind)
         try container.encodeIfPresent(tailscaleLogin, forKey: .tailscaleLogin)
         try container.encode(createdAt, forKey: .createdAt)

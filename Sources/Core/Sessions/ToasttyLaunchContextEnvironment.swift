@@ -18,5 +18,7 @@ public enum ToasttyLaunchContextEnvironment {
     public static let managedAgentShimBypassKey = "TOASTTY_MANAGED_AGENT_SHIM_BYPASS"
     public static let managedAgentArtifactOwnerFileKey = "TOASTTY_MANAGED_ARTIFACT_OWNER_FILE"
     public static let skillsRootKey = "TOASTTY_SKILLS_ROOT"
+    /// Consumed by the Grok launcher before exec; not inherited by tool commands.
+    public static let grokSkillsOverlayKey = "TOASTTY_GROK_SKILLS_OVERLAY"
     public static let userSkillsRootKey = "TOASTTY_USER_SKILLS_ROOT"
 }

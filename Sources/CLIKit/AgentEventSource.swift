@@ -5,6 +5,7 @@ enum AgentEventSource: String, Equatable {
     case codexHooks = "codex-hooks"
     case codexNotify = "codex-notify"
     case cursorHooks = "cursor-hooks"
+    case grokHooks = "grok-hooks"
     case mimocodePlugin = "mimocode-plugin"
     case opencodePlugin = "opencode-plugin"
     case piExtension = "pi-extension"

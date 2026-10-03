@@ -730,3 +730,48 @@ extension AppReducerTests {
     }
 
 }
+
+extension AppReducerTests {
+    @Test
+    func createBackgroundTerminalTabAddsAPlainTerminalWithoutSelectingIt() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let before = try #require(state.workspacesByID[workspaceID])
+        let tabID = UUID()
+        let panelID = UUID()
+
+        #expect(reducer.send(
+            .createBackgroundTerminalTab(
+                workspaceID: workspaceID, tabID: tabID, panelID: panelID, terminalCWD: "/tmp/project"
+            ),
+            state: &state
+        ))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.tabIDs == before.tabIDs + [tabID])
+        #expect(workspace.resolvedSelectedTabID == before.resolvedSelectedTabID)
+        #expect(workspace.focusedPanelID == before.focusedPanelID)
+        guard case .terminal(let terminal) = workspace.tab(id: tabID)?.panels[panelID] else {
+            Issue.record("expected the new tab to hold the requested terminal")
+            return
+        }
+        #expect(terminal.cwd == "/tmp/project")
+        #expect(terminal.profileBinding == nil)
+        try StateValidator.validate(state)
+
+        // The same IDs cannot be used twice.
+        #expect(reducer.send(
+            .createBackgroundTerminalTab(
+                workspaceID: workspaceID, tabID: tabID, panelID: UUID(), terminalCWD: "/tmp/project"
+            ),
+            state: &state
+        ) == false)
+        #expect(reducer.send(
+            .createBackgroundTerminalTab(
+                workspaceID: workspaceID, tabID: UUID(), panelID: panelID, terminalCWD: "/tmp/project"
+            ),
+            state: &state
+        ) == false)
+    }
+}

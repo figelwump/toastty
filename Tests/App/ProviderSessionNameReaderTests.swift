@@ -168,6 +168,71 @@ final class ProviderSessionNameReaderTests: XCTestCase {
         )
     }
 
+    // MARK: - Grok summary
+
+    func testGrokSummaryReadsGeneratedAndRenamedTitlesOnlyForTheBoundSession() {
+        for manual in [false, true] {
+            let metadata = #"{"info":{"id":"\#(Self.claudeSessionID)"},"generated_title":"  Sidebar work  ","title_is_manual":\#(manual),"session_summary":"First prompt text"}"#
+            XCTAssertEqual(
+                ProviderSessionNameParser.grokSessionTitle(inSummary: metadata, nativeSessionID: Self.claudeSessionID),
+                "Sidebar work"
+            )
+            XCTAssertNil(ProviderSessionNameParser.grokSessionTitle(inSummary: metadata, nativeSessionID: Self.codexThreadID))
+        }
+    }
+
+    func testGrokSummaryRejectsMissingMalformedAndInvalidTitles() {
+        let invalid = [
+            #"{"info":{"id":"\#(Self.claudeSessionID)"},"session_summary":"First prompt text"}"#,
+            #"{"generated_title":"Missing identity"}"#,
+            #"{"info":{"id":"\#(Self.claudeSessionID)"},"generated_title":12}"#,
+            #"{"info":{"id":"\#(Self.claudeSessionID)"},"generated_title":"   "}"#,
+            #"{"info":{"id":"\#(Self.claudeSessionID)"},"generated_title":"Line\n break"}"#,
+            #"{"info":{"id":"\#(Self.claudeSessionID)"},"generated_title":"\#(String(repeating: "a", count: 201))"}"#,
+            #"{"info":{"id":"\#(Self.claudeSessionID)"},"generated_title":"Truncated"#,
+        ]
+        for metadata in invalid {
+            XCTAssertNil(ProviderSessionNameParser.grokSessionTitle(inSummary: metadata, nativeSessionID: Self.claudeSessionID))
+        }
+    }
+
+    func testGrokSourceUsesSummaryBesideReportedTranscript() async throws {
+        let directory = try makeTemporaryDirectory()
+        let transcript = directory.appendingPathComponent("updates.jsonl")
+        let source = ProviderSessionNameReader.source(
+            agent: .grok, nativeSessionID: Self.claudeSessionID,
+            sessionFilePath: transcript.path,
+            environment: ["GROK_HOME": "/unused/home"]
+        )
+        let expected = ProviderSessionNameSource.grokSessionSummary(
+            path: directory.appendingPathComponent("summary.json").path,
+            nativeSessionID: Self.claudeSessionID
+        )
+        XCTAssertEqual(source, expected)
+        for path in ["relative/updates.jsonl", "/", "/sessions/session.jsonl", directory.path] {
+            XCTAssertNil(ProviderSessionNameReader.source(
+                agent: .grok, nativeSessionID: Self.claudeSessionID, sessionFilePath: path
+            ))
+        }
+
+        let reader = ProviderSessionNameReader()
+        let missing = await reader.readName(from: expected)
+        XCTAssertNil(missing)
+        _ = try write("""
+        {
+          "info": {"id": "\(Self.claudeSessionID)"},
+          "generated_title": "Sidebar session title"
+        }
+        """, named: "summary.json", in: directory)
+        let title = await reader.readName(from: expected)
+        XCTAssertEqual(title, "Sidebar session title")
+        _ = try write(String(repeating: " ", count: ProviderSessionNameParser.maximumGrokSummaryBytes) + """
+        {"info":{"id":"\(Self.claudeSessionID)"},"generated_title":"Too large"}
+        """, named: "summary.json", in: directory)
+        let oversized = await reader.readName(from: expected)
+        XCTAssertNil(oversized)
+    }
+
     // MARK: - Reader file access
 
     func testReadNameReturnsNilForMissingEmptyAndNonRegularPaths() async throws {

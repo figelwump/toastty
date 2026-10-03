@@ -442,6 +442,123 @@ final class GatewayClientTests: XCTestCase {
         )
     }
 
+    func testSessionStartOptionsPostsTheWorkspaceAndToleratesNewValues() async throws {
+        let workspaceID = try XCTUnwrap(UUID(uuidString: "33333333-3333-3333-3333-333333333333"))
+        // A newer Mac may add values and omit optional lists.
+        let body = Data("""
+        {"protocolVersion":"1.0","permission":"allowed","workspace":"available",
+         "launchDirectory":"~/repos/toastty","agents":[
+          {"profileID":"claude","displayName":"Claude","availability":"available","supportsModel":true,
+           "recentModels":["claude-opus-5-5"],"reasoningEfforts":["low","high"]},
+          {"profileID":"cursor","displayName":"Cursor","availability":"needs_login"}
+         ],"futureField":true}
+        """.utf8)
+        let transport = RecordingHTTPTransport(responses: [.json(body)])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+
+        let response = try await client.sessionStartOptions(
+            RemoteSessionStartOptionsRequest(workspaceID: workspaceID)
+        )
+
+        XCTAssertEqual(response.permission, .allowed)
+        XCTAssertEqual(response.workspace, .available)
+        XCTAssertEqual(response.launchDirectory, "~/repos/toastty")
+        XCTAssertEqual(response.agents.map(\.availability), [.available, .unknown])
+        XCTAssertEqual(response.agents.last?.supportsModel, false)
+        XCTAssertEqual(response.agents.last?.reasoningEfforts, [])
+        let recordedRequests = await transport.recordedRequests()
+        let recorded = try XCTUnwrap(recordedRequests.first)
+        XCTAssertEqual(recorded.httpMethod, "POST")
+        XCTAssertEqual(recorded.url?.path, RemoteSessionStartPolicy.optionsPath)
+        XCTAssertEqual(recorded.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertEqual(
+            try ConversationEventCoding.makeDecoder().decode(
+                RemoteSessionStartOptionsRequest.self, from: try XCTUnwrap(recorded.httpBody)
+            ),
+            RemoteSessionStartOptionsRequest(workspaceID: workspaceID)
+        )
+    }
+
+    func testStartSessionSendsOnlyChosenFieldsAndDecodesEveryOutcome() async throws {
+        let conversationID = Self.conversationID.rawValue.uuidString
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"protocolVersion":"1.0","status":"started","conversationID":"\#(conversationID)"}"#.utf8)),
+            .json(Data(#"{"protocolVersion":"1.0","status":"rejected","reason":"launch_failed"}"#.utf8)),
+            .json(Data(#"{"protocolVersion":"1.0","status":"rejected","reason":"quota_exceeded"}"#.utf8)),
+            // A status this client does not know is never a confirmed start.
+            .json(Data(#"{"protocolVersion":"1.0","status":"queued","conversationID":"\#(conversationID)"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+        let request = RemoteSessionStartRequest(
+            clientRequestID: "A1B2C3D4-0000-0000-0000-000000000001",
+            workspaceID: UUID(),
+            profileID: "claude",
+            reasoningEffort: "high",
+            text: "Fix the flaky test"
+        )
+
+        var results: [RemoteSessionStartResult] = []
+        for _ in 0..<4 {
+            results.append(try await client.startSession(request).result)
+        }
+
+        XCTAssertEqual(results, [
+            .started(conversationID: Self.conversationID),
+            .rejected(reason: .launchFailed),
+            .rejected(reason: .unknown),
+            .unrecognized,
+        ])
+        let recordedRequests = await transport.recordedRequests()
+        let recorded = try XCTUnwrap(recordedRequests.first)
+        XCTAssertEqual(recorded.httpMethod, "POST")
+        XCTAssertEqual(recorded.url?.path, RemoteSessionStartPolicy.startPath)
+        XCTAssertEqual(recorded.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        let sentBody = try XCTUnwrap(recorded.httpBody)
+        XCTAssertEqual(
+            try ConversationEventCoding.makeDecoder().decode(RemoteSessionStartRequest.self, from: sentBody),
+            request
+        )
+        // No model means the profile's default, so the key is left out.
+        let sentJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: sentBody) as? [String: Any])
+        XCTAssertNil(sentJSON["model"])
+        XCTAssertEqual(sentJSON["reasoningEffort"] as? String, "high")
+    }
+
+    func testSessionStartRejectsAnotherProtocolVersion() async throws {
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"protocolVersion":"2.0","status":"rejected","reason":"busy"}"#.utf8)),
+            .json(Data(#"{"protocolVersion":"2.0","permission":"allowed","workspace":"available"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+
+        do {
+            _ = try await client.startSession(RemoteSessionStartRequest(
+                clientRequestID: "request-1", workspaceID: UUID(), profileID: "claude", text: "Hi"
+            ))
+            XCTFail("Expected a protocol mismatch")
+        } catch let failure as GatewayFailure {
+            XCTAssertEqual(failure, .protocolMismatch(version: "2.0"))
+        }
+        do {
+            _ = try await client.sessionStartOptions(RemoteSessionStartOptionsRequest(workspaceID: UUID()))
+            XCTFail("Expected a protocol mismatch")
+        } catch let failure as GatewayFailure {
+            XCTAssertEqual(failure, .protocolMismatch(version: "2.0"))
+        }
+    }
+
     func testWorkspaceDoneUsesAuthenticatedPOSTContract() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Data(#"{"protocolVersion":"1.0","result":"updated"}"#.utf8)),

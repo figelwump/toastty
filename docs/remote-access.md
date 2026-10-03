@@ -225,6 +225,51 @@ each conversation summary. It advertises the `workspace_done` capability for
 omits them, so the phone lists every workspace at the top level and shows no
 checkbox. An older phone ignores them and keeps its flat list.
 
+### Starting a session
+
+Tap **+** on a workspace screen to start a new agent session in that
+workspace. Choose the agent, optionally a model and an effort level, and write
+the first message. A first message is required.
+
+The Mac opens a new tab in that workspace with a plain terminal, starts the
+agent there with your message, and leaves the tab you are looking at and your
+keyboard focus where they were. The session then appears in the phone's list
+and opens. If it has not appeared after 10 seconds, the sheet closes with a
+notice, and you open the session from the list when it arrives.
+
+- **Directory.** The session starts in the directory of the workspace's first
+  terminal, which the sheet shows. The phone never sends a path, a command, or
+  environment values. A workspace with no terminal directory cannot start a
+  session from the phone.
+- **Agents.** The sheet lists the profiles from `~/.toastty/agents.toml` whose
+  sessions the phone can show: Codex, Claude Code, OpenCode, MiMo Code, and Pi.
+  A profile whose command is not installed, or that cannot take a first message
+  on its command line, is listed struck through and cannot be chosen. Tap it
+  to see the reason.
+- **Model.** "Profile default" sends no model. The other choices are models
+  your sessions of that agent report now, models you chose before on this
+  phone, and **Other…** for typing a model ID. The agent's own CLI decides
+  whether the model is valid.
+- **Effort.** The Mac supplies the values each agent accepts. The picker is
+  hidden for agents with no effort setting.
+- **Permission.** Each native device has a **Start sessions** switch under
+  **Paired Devices** in Remote Access settings. It is on by default, also for
+  devices paired before this feature. Starting also needs send access, because
+  the first message is a send.
+- **Retries.** If the phone does not get an answer, **Start** sends the same
+  request again, and the Mac returns the session it already started instead of
+  starting another. The Mac remembers a started request for 10 minutes and
+  until Toastty quits. Changing the message, agent, model, or effort makes a
+  new request. You cannot cancel the sheet while the Mac is starting a
+  session.
+
+Starting needs updates on both sides. The Mac advertises the `session_start`
+capability for `POST /api/session.start.options` and `POST /api/session.start`.
+An older Mac does not, so the phone hides **+**. If you turn **Start sessions**
+off and then run an older Toastty build on the Mac, that build does not know
+the switch: it rewrites the device record without it, and the switch is on
+again when you return to a newer build.
+
 Toastty Mobile reconnects automatically after transient network loss and
 reloads from Toastty's current snapshots when it detects an event gap. Keep
 Toastty running and Remote Access enabled; Tailscale Serve alone cannot reach a
@@ -348,6 +393,12 @@ support conversations; update Toastty on the Mac to enable previews.
 - Marking a subspace done or flagging a session needs a native paired device
   with send access. Each changes only that one mark, and each change is
   recorded in the audit log with the device that made it.
+- Starting a session needs a native paired device with send access and the
+  **Start sessions** switch on. The device chooses only an existing workspace,
+  a configured agent profile, a model, an effort level, and the first message.
+  The Mac checks the permission again immediately before it sends the command
+  to the terminal. Accepted and refused starts are recorded in the audit log
+  with the device, without the message text.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These

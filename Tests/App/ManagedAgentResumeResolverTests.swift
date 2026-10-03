@@ -76,6 +76,42 @@ struct ManagedAgentResumeResolverTests {
     }
 
     @Test
+    func resolveRestoresGrokWithNativeUUIDAndConfiguredProfilePrefix() throws {
+        let fixture = try makeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let nativeID = UUID().uuidString
+        let record = ManagedAgentResumeRecord(
+            agent: .grok, nativeSessionID: nativeID,
+            sessionFilePath: fixture.sessionFileURL.path, cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let terminalState = TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "", resumeRecord: record)
+        for catalog in [
+            AgentCatalog.empty,
+            AgentCatalog(profiles: [AgentProfile(
+                id: "grok", displayName: "Grok Build",
+                argv: ["agent-safehouse", "--workdir=/tmp/repo", "/opt/homebrew/bin/grok", "--model", "grok-code"]
+            )]),
+        ] {
+            let resolution = ManagedAgentResumeResolver.resolve(
+                panelID: UUID(), terminalState: terminalState,
+                launchReason: .restore, agentCatalog: catalog
+            )
+            guard case .launch(let configuration) = resolution else {
+                Issue.record("expected Grok resume launch")
+                continue
+            }
+            let expected = catalog.profiles.isEmpty
+                ? "grok --resume \(nativeID)"
+                : "agent-safehouse --workdir=/tmp/repo /opt/homebrew/bin/grok --resume \(nativeID) --model grok-code"
+            #expect(configuration.initialInput == expected)
+            #expect(configuration.workingDirectoryOverride == fixture.cwdURL.path)
+            #expect(configuration.environmentVariables["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"] == "grok")
+            #expect(configuration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"] == nativeID)
+        }
+    }
+
+    @Test
     func resolveReturnsPiSessionLaunchForValidRestoredRecord() throws {
         let fixture = try makeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -412,6 +448,23 @@ struct ManagedAgentResumeResolverTests {
                 argv: ["claude", "--resume", sessionID]
             ) == sessionID
         )
+    }
+
+    @Test
+    func expectedNativeSessionIDParsesGrokUUIDResumesAndExcludesForksOrTitles() {
+        let nativeID = UUID().uuidString
+        for resumeArguments in [["--resume", nativeID], ["-r", nativeID], ["--resume=\(nativeID)"], ["-r=\(nativeID)"]] {
+            let argv = ["agent-safehouse", "--cwd", "/tmp/repo", "grok"] + resumeArguments
+            #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: .grok, argv: argv) == nativeID.lowercased())
+            #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: .grok, argv: argv + ["--", "--fork-session"]) == nativeID.lowercased())
+            #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: .grok, argv: argv + ["--fork-session"]) == nil)
+            #expect(ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .grok, argv: argv + ["--fork-session", "--session-id", UUID().uuidString]
+            ) == nil)
+        }
+        for arguments in [["--resume"], ["--resume", "My session title"], ["--resume="], ["--continue"], ["--session-id", nativeID], ["--", "--resume", nativeID]] {
+            #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: .grok, argv: ["grok"] + arguments) == nil)
+        }
     }
 
     @Test

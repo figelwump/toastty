@@ -391,6 +391,76 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertFalse(home.canFlagConversations)
     }
 
+    func testSessionStartNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.sessionStart]
+        ))
+        XCTAssertFalse(home.canStartSessions)
+        await subject.updateDeviceScopes([.read])
+        XCTAssertFalse(home.canStartSessions)
+        await subject.updateDeviceScopes([.read, .send])
+        XCTAssertTrue(home.canStartSessions)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .reconnecting(failureCount: 1, showsBanner: false), capabilities: [.sessionStart]
+        ))
+        XCTAssertFalse(home.canStartSessions)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: []
+        ))
+        XCTAssertFalse(home.canStartSessions)
+    }
+
+    func testSessionStartTreatsEveryUnansweredRequestAsUnconfirmed() async {
+        let runtime = LiveRuntimeSpy()
+        let conversationID = RemoteConversationID()
+        await runtime.scriptSessionStarts([
+            .success(RemoteSessionStartResponse(result: .started(conversationID: conversationID))),
+            .success(RemoteSessionStartResponse(result: .rejected(reason: .busy))),
+            // The coordinator refused to send: not live, or no capability.
+            .success(nil),
+            .failure(.network(reason: .timedOut)),
+        ])
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        let request = RemoteSessionStartRequest(
+            clientRequestID: "request-1", workspaceID: UUID(), profileID: "claude", text: "Hi"
+        )
+
+        var outcomes: [ToasttySessionStartOutcome] = []
+        for _ in 0..<4 {
+            outcomes.append(await home.startSession(request))
+        }
+
+        XCTAssertEqual(outcomes, [
+            .answered(.started(conversationID: conversationID)),
+            .answered(.rejected(reason: .busy)),
+            .unconfirmed,
+            .unconfirmed,
+        ])
+        withExtendedLifetime(subject) {}
+    }
+
     func testSubspaceDoneNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
         let home = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
@@ -652,6 +722,7 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     private var deviceScopes: [RemoteDeviceScope] = []
     private var sends: [SendCall] = []
     private var dismissals: [DismissCall] = []
+    private var sessionStartScripts: [Result<RemoteSessionStartResponse?, GatewayFailure>] = []
 
     func currentCoordinatorState() -> ConnectionCoordinator.State {
         ConnectionCoordinator.State()
@@ -746,6 +817,16 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
         _ request: RemoteConversationReadAcknowledgementRequest
     ) -> RemoteConversationReadAcknowledgementResponse? {
         nil
+    }
+
+    func scriptSessionStarts(_ scripts: [Result<RemoteSessionStartResponse?, GatewayFailure>]) {
+        sessionStartScripts = scripts
+    }
+
+    func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse? {
+        try sessionStartScripts.removeFirst().get()
     }
 
     func activeConversationIDs() -> Set<RemoteConversationID> {

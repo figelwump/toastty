@@ -398,6 +398,7 @@ struct RemoteGatewayRequestHandlerTests {
             .messageAttachments,
             .workspaceDone,
             .conversationFlag,
+            .sessionStart,
         ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))

@@ -10,6 +10,14 @@ protocol TerminalCommandRouting: AnyObject {
         panelID: UUID,
         focusPolicy: TerminalInputFocusPolicy
     ) -> Bool
+    /// The same delivery, reporting whether a failure happened before any
+    /// text reached the terminal (`unavailable`) or possibly after
+    /// (`uncertain`).
+    func sendManagedAgentCommandResult(
+        _ commandLine: String,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult
     func isReadyForManagedAgentCommand(panelID: UUID) -> Bool
     func readVisibleText(panelID: UUID) -> String?
     func promptState(panelID: UUID) -> TerminalPromptState
@@ -42,6 +50,9 @@ enum AgentLaunchError: LocalizedError, Equatable {
     case panelBusy(runningCommand: String?)
     case cliUnavailable(path: String?)
     case terminalUnavailable(panelID: UUID)
+    /// Part of the command may be in the terminal, so sending it again
+    /// could run it twice.
+    case commandDeliveryUncertain(panelID: UUID)
     case invalidWorkingDirectory(path: String)
     case invalidLaunchEnvironment(message: String)
     case launchOverrideUnsupported(parameter: String, profileID: String)
@@ -87,6 +98,8 @@ enum AgentLaunchError: LocalizedError, Equatable {
                 return "Toastty could not find its CLI at \(path). Reinstall the app or rebuild the toastty target and try again."
             }
             return "Toastty could not resolve its CLI path."
+        case .commandDeliveryUncertain(let panelID):
+            return "terminal surface did not confirm the launch command for panel \(panelID.uuidString)"
         case .terminalUnavailable(let panelID):
             return "The target terminal is unavailable for panel \(panelID.uuidString)."
         case .invalidWorkingDirectory(let path):
@@ -107,6 +120,23 @@ enum AgentLaunchError: LocalizedError, Equatable {
             return "Agent launch initialCommands is invalid: \(message)"
         }
     }
+}
+
+/// A configured profile as a launch would resolve it.
+struct AgentLaunchProfileSummary: Equatable, Sendable {
+    var profileID: String
+    var displayName: String
+    var agent: AgentKind
+    /// The profile's command resolves to an executable.
+    var isInstalled: Bool
+    /// A first prompt can be passed on the command line.
+    var acceptsInitialPrompt: Bool
+    /// A first prompt that starts with a dash is passed as text. False for a
+    /// wrapper command, where the launcher cannot know how to mark the end
+    /// of options.
+    var acceptsLeadingDashPrompt: Bool
+    var supportsModel: Bool
+    var supportsReasoningEffort: Bool
 }
 
 @MainActor
@@ -276,7 +306,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         additionalDirectories: [String] = [],
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
         parentSessionID: String? = nil,
-        focusPolicy: TerminalInputFocusPolicy = .focusTarget
+        focusPolicy: TerminalInputFocusPolicy = .focusTarget,
+        beforeDispatch: (@MainActor () throws -> Void)? = nil
     ) async throws -> AgentLaunchResult {
         let preparation = try makeLaunchPreparation(
             profileID: profileID,
@@ -305,6 +336,16 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             preparation.request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
         )
+        // The caller's last check runs here, after the final suspension, so
+        // nothing can change between it and the command reaching the shell.
+        if let beforeDispatch {
+            do {
+                try beforeDispatch()
+            } catch {
+                managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+                throw error
+            }
+        }
         return try completeLaunch(preparation, plan: plan)
     }
 
@@ -425,20 +466,29 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         }
         var commandEnvironment = plan.environment
         commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
+        let dispatchArgv = preparation.agent == .grok
+            ? GrokLaunchInstrumentation.argvForDispatch(plan.argv, environment: plan.environment)
+            : plan.argv
         let commandLine = ShellCommandRenderer.render(
-            argv: plan.argv,
+            argv: dispatchArgv,
             environment: commandEnvironment,
             workingDirectory: preparation.explicitCWD,
             initialCommands: preparation.initialCommands
         )
 
-        guard terminalCommandRouter.sendManagedAgentCommand(
+        switch terminalCommandRouter.sendManagedAgentCommandResult(
             commandLine,
             panelID: preparation.target.panelID,
             focusPolicy: preparation.focusPolicy
-        ) else {
+        ) {
+        case .delivered:
+            break
+        case .unavailable:
             managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
             throw AgentLaunchError.terminalUnavailable(panelID: preparation.target.panelID)
+        case .uncertain:
+            managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+            throw AgentLaunchError.commandDeliveryUncertain(panelID: preparation.target.panelID)
         }
         store?.recordSuccessfulAgentLaunch()
 
@@ -595,10 +645,30 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         )
     }
 
+    /// What a caller that offers profiles to a person needs to know about
+    /// each configured profile, resolved the same way a launch resolves it.
+    func launchProfileSummaries() -> [AgentLaunchProfileSummary] {
+        agentCatalogProvider.catalog.profiles.compactMap { profile in
+            guard let agent = AgentKind(rawValue: profile.id) else { return nil }
+            let executable = try? profileExecutableState(profileID: profile.id)
+            return AgentLaunchProfileSummary(
+                profileID: profile.id,
+                displayName: profile.displayName,
+                agent: agent,
+                isInstalled: executable?.executablePath != nil,
+                acceptsInitialPrompt: initialPromptPlacement(for: profile, agent: agent) == .trailing,
+                acceptsLeadingDashPrompt: Self.argvRunsFirstPartyPromptCommand(profile.argv, for: agent),
+                supportsModel: AgentLaunchArgumentOverrideAdapter.modelSupportedAgents.contains(agent),
+                supportsReasoningEffort: AgentLaunchArgumentOverrideAdapter.reasoningEffortSupportedAgents.contains(agent)
+            )
+        }
+    }
+
     private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {
         agent == .codex
             || agent == .claude
             || agent == .cursor
+            || agent == .grok
             || agent == .mimocode
             || agent == .opencode
             || agent == .pi
@@ -609,7 +679,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             id: agent.rawValue,
             displayName: agent.displayName,
             argv: [implicitExecutableName(for: agent)],
-            initialPromptPlacement: (agent == .codex || agent == .claude || agent == .cursor)
+            initialPromptPlacement: (agent == .codex || agent == .claude || agent == .cursor || agent == .grok)
                 ? .trailing
                 : nil
         )
@@ -716,6 +786,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         ToasttyLaunchContextEnvironment.managedAgentShimBypassKey,
         ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey,
         ToasttyLaunchContextEnvironment.skillsRootKey,
+        ToasttyLaunchContextEnvironment.grokSkillsOverlayKey,
         ToasttyLaunchContextEnvironment.userSkillsRootKey,
         "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT",
         "CODEX_TUI_RECORD_SESSION",
@@ -791,9 +862,14 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         if forkRecord != nil || !additionalDirectories.isEmpty {
             return overrideArgv + ["--", prompt]
         }
-        if agent == .cursor,
-           Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent),
-           prompt.hasPrefix("-") {
+        // A prompt that starts with a dash would be read as an option, so it
+        // goes after the standard end-of-options marker. Only the first-party
+        // commands are known to accept the marker.
+        if prompt.hasPrefix("-"),
+           Self.argvRunsFirstPartyPromptCommand(profile.argv, for: agent),
+           // A configured marker already ends the options; a second one
+           // would itself be read as the prompt.
+           overrideArgv.contains("--") == false {
             return overrideArgv + ["--", prompt]
         }
         return overrideArgv + [prompt]
@@ -824,15 +900,20 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         if let placement = profile.initialPromptPlacement {
             return placement
         }
-        guard agent == .codex || agent == .claude || agent == .cursor else {
+        guard agent == .codex || agent == .claude || agent == .cursor || agent == .grok else {
             return nil
         }
         return Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent) ? .trailing : nil
     }
 
     private static func argvIsDirectFirstPartyPromptCommand(_ argv: [String], for agent: AgentKind) -> Bool {
-        guard argv.count == 1,
-              let executable = argv.first else {
+        argv.count == 1 && argvRunsFirstPartyPromptCommand(argv, for: agent)
+    }
+
+    /// Whether argv[0] is the provider's own command, with or without
+    /// configured arguments after it.
+    private static func argvRunsFirstPartyPromptCommand(_ argv: [String], for agent: AgentKind) -> Bool {
+        guard let executable = argv.first else {
             return false
         }
         let commandNames: Set<String>
@@ -843,6 +924,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             commandNames = ["claude"]
         case .cursor:
             commandNames = ["cursor-agent"]
+        case .grok:
+            commandNames = ["grok"]
         default:
             return false
         }

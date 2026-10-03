@@ -326,15 +326,15 @@ Notable action-specific behavior:
     cannot be overridden. Environment keys must use shell variable syntax,
     values must not contain NUL bytes, and duplicate definitions across
     `env.NAME`, `env`, and `environment` payloads are rejected.
-  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor automation
-    profiles, built-in Codex/Claude/Cursor profiles whose argv is exactly one direct
+  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor/Grok automation
+    profiles, built-in Codex/Claude/Cursor/Grok profiles whose argv is exactly one direct
     first-party command, or profiles that declare
     `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
     prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
-    A direct Cursor launch inserts `--` before a prompt that begins
-    with `-`, preventing the prompt from being parsed as a Cursor CLI option.
-  - `model` is supported for `codex`, `claude`, `cursor`, `opencode`, `mimocode`, and
-    `pi`. `reasoningEffort` is supported for `codex`, `claude`, and `pi`.
+    A direct Cursor or Grok launch inserts `--` before a prompt that begins
+    with `-`, preventing the prompt from being parsed as a CLI option.
+  - `model` is supported for `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, and
+    `pi`. `reasoningEffort` is supported for `codex`, `claude`, `grok`, and `pi`.
     OpenCode and MiMo Code reject `reasoningEffort` before target or panel
     mutation and never map it to `variant`.
   - omitted selections preserve the configured argv. Explicit selections
@@ -868,7 +868,7 @@ Launch context environment:
   launch working directory
 - `TOASTTY_AGENT` with the managed provider ID
 - `TOASTTY_SKILLS_ROOT` for supported managed Codex, Claude Code, Cursor,
-  OpenCode, MiMo Code, and Pi launches, pointing at the delivered Toastty
+  Grok Build, OpenCode, MiMo Code, and Pi launches, pointing at the delivered Toastty
   plugin's `skills/` directory; absent when the shipped skills were not injected
 - `TOASTTY_USER_SKILLS_ROOT` with the user skill-package source directory
   (`~/.toastty/skills`, or its runtime-isolated equivalent)
@@ -909,7 +909,7 @@ Validation:
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
 - if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
-- explicit `profileID=codex`, `profileID=claude`, `profileID=cursor`, `profileID=opencode`,
+- explicit `profileID=codex`, `profileID=claude`, `profileID=cursor`, `profileID=grok`, `profileID=opencode`,
   `profileID=mimocode`, and `profileID=pi` can be launched by automation even
   when no `agents.toml` profile exists.
 - `initialCommands` entries must be non-blank single-line strings with no NUL
@@ -1423,6 +1423,34 @@ Result:
 - `eventType`
 - `status: "accepted" | "ignored"`
 - `stateVersion`
+
+### `session.grok_hook_event`
+
+Internal event produced by `session ingest-agent-event --source grok-hooks`.
+Manual wrappers should generally use `session.status` instead.
+
+Required: top-level `sessionID`, plus payload `kind` (a recognized native Grok
+event name), `nativeSessionID` (UUID), `timestamp` (finite Unix seconds), and
+`isSubagent` (boolean). Optional top-level `panelID` must match the active managed
+Grok session when provided.
+
+Optional payload fields:
+
+- `promptID`: UUID
+- `toolName`, `toolUseID`: strings, each at most 256 UTF-8 bytes
+- `notificationType`: string, at most 128 UTF-8 bytes
+- `sessionFilePath`, `cwd`: strings, each at most 4096 UTF-8 bytes
+
+Strings reject control characters. Paths preserve whitespace; other optional
+strings are trimmed. Tool arguments and output are not forwarded. Tool-call IDs
+correlate tool hooks that omit prompt IDs, within the active root conversation
+and prompt window. Nested and stale events cannot complete a newer turn.
+Working details describe the current tool category; permission notifications
+retain Needs approval until the associated call completes or the turn changes.
+`Stop` reports provisional Waiting; the later idle notification confirms Ready.
+
+The result contains `eventType`, `status: "accepted" | "ignored"`, and
+`stateVersion`.
 
 ### `session.codex_hook_event`
 

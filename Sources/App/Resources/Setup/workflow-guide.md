@@ -6,7 +6,7 @@ This guide is for an agent helping a user turn how they work into a Toastty work
 
 A workflow skill is a folder in the user skills directory, `$TOASTTY_USER_SKILLS_ROOT` (normally `~/.toastty/skills`), with a `SKILL.md` file. Its YAML frontmatter has a `name` that matches the folder name and a `description` that says when an agent should use it. The folder can also hold `scripts/` and `references/`.
 
-Toastty delivers every accepted skill in that folder to each new managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi session. Running sessions keep the skills they launched with, so test a new or edited skill in a fresh session.
+Toastty delivers every accepted skill in that folder to each new managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi session. Running sessions keep the skills they launched with, so test a new or edited skill in a fresh session.
 
 Write the skill as intended behavior and constraints, not as a fixed script of commands. The agent that runs it discovers exact parameters from the live app.
 
