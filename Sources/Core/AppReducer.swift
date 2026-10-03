@@ -109,13 +109,13 @@ public struct AppReducer {
             }
             return true
 
-        case .createWorkspaceTab(let workspaceID, let seed):
+        case .createWorkspaceTab(let workspaceID, let seed, let activate):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let tab = WorkspaceTabState.bootstrap(
                 initialTerminalCWD: seed?.terminalCWD,
                 initialTerminalProfileBinding: seed?.terminalProfileBinding ?? state.defaultTerminalProfileBinding
             )
-            workspace.appendTab(tab, select: true)
+            workspace.appendTab(tab, select: activate)
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
@@ -876,6 +876,17 @@ public struct AppReducer {
                 state: &state
             )
 
+        case .splitPanel(let workspaceID, let tabID, let panelID, let direction, let profileBinding, let activate):
+            return splitPanel(
+                workspaceID: workspaceID,
+                tabID: tabID,
+                panelID: panelID,
+                direction: direction,
+                profileBinding: profileBinding,
+                activate: activate,
+                state: &state
+            )
+
         case .focusSlot(let workspaceID, let direction):
             return focusSlot(workspaceID: workspaceID, direction: direction, state: &state)
 
@@ -1346,8 +1357,38 @@ public struct AppReducer {
         workingDirectory: String? = nil,
         state: inout AppState
     ) -> Bool {
-        guard var workspace = state.workspacesByID[workspaceID] else { return false }
-        guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
+        guard let workspace = state.workspacesByID[workspaceID],
+              let tabID = workspace.resolvedSelectedTabID,
+              let panelID = workspace.selectedTab?.resolvedFocusedPanelID else {
+            return false
+        }
+        return splitPanel(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            panelID: panelID,
+            direction: direction,
+            profileBinding: profileBinding,
+            workingDirectory: workingDirectory,
+            activate: true,
+            state: &state
+        )
+    }
+
+    @discardableResult
+    private static func splitPanel(
+        workspaceID: UUID,
+        tabID: UUID,
+        panelID: UUID,
+        direction: SlotSplitDirection,
+        profileBinding: TerminalProfileBinding?,
+        workingDirectory: String? = nil,
+        activate: Bool,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID],
+              var tab = workspace.tabsByID[tabID],
+              let sourcePanel = tab.panels[panelID],
+              let sourceSlot = tab.layoutTree.slotContaining(panelID: panelID) else {
             return false
         }
 
@@ -1357,7 +1398,7 @@ public struct AppReducer {
                 return false
             }
             inheritedCWD = normalizedWorkingDirectory
-        } else if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
+        } else if case .terminal(let focusedTerminalState) = sourcePanel {
             inheritedCWD = focusedTerminalState.workingDirectorySeed
         } else {
             inheritedCWD = NSHomeDirectory()
@@ -1367,19 +1408,23 @@ public struct AppReducer {
         let newSlotID = UUID()
         let resolvedProfileBinding = profileBinding ?? state.defaultTerminalProfileBinding
 
-        workspace.panels[newPanelID] = .terminal(
+        tab.panels[newPanelID] = .terminal(
             TerminalPanelState(
-                title: nextTerminalTitle(in: workspace),
+                title: nextTerminalTitle(in: tab.panels),
                 shell: "zsh",
                 cwd: inheritedCWD,
                 profileBinding: resolvedProfileBinding
             )
         )
 
-        let trackedRootNodeID = workspace.effectiveFocusModeRootNodeID
+        let splitTree = WorkspaceSplitTree(root: tab.layoutTree)
+        let trackedRootNodeID = tab.focusedPanelModeActive ? splitTree.effectiveFocusModeRootNodeID(
+            preferredRootNodeID: tab.focusModeRootNodeID,
+            focusedPanelID: tab.focusedPanelID
+        ) : nil
 
-        guard let splitResult = WorkspaceSplitTree(root: workspace.layoutTree).splitting(
-            slotID: focusResolution.slot.slotID,
+        guard let splitResult = splitTree.splitting(
+            slotID: sourceSlot.slotID,
             direction: direction,
             newPanelID: newPanelID,
             newSlotID: newSlotID
@@ -1387,17 +1432,24 @@ public struct AppReducer {
             return false
         }
 
-        workspace.apply(splitTree: splitResult.tree)
-        if workspace.focusedPanelModeActive,
-           trackedRootNodeID == focusResolution.slot.slotID {
-            workspace.focusModeRootNodeID = splitResult.newSplitNodeID
+        tab.layoutTree = splitResult.tree.root
+        if activate {
+            if tab.focusedPanelModeActive, let trackedRootNodeID,
+               trackedRootNodeID == sourceSlot.slotID ||
+                splitTree.root.findSubtree(nodeID: trackedRootNodeID)?.slotContaining(panelID: panelID) == nil {
+                tab.focusModeRootNodeID = splitResult.newSplitNodeID
+            }
+            tab.focusedPanelID = newPanelID
+            tab.rightAuxPanel.focusedPanelID = nil
+            tab.selectedPanelIDs.removeAll()
+            if let previousTabID = workspace.resolvedSelectedTabID, previousTabID != tabID {
+                workspace.tabsByID[previousTabID]?.selectedPanelIDs.removeAll()
+            }
+            workspace.selectedTabID = tabID
         }
-        workspace.focusedPanelID = newPanelID
-        workspace.rightAuxPanel.focusedPanelID = nil
-        workspace.selectedPanelIDs.removeAll()
+        workspace.tabsByID[tabID] = tab
         commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
-
     }
 
     private static func normalizedWorkingDirectoryValue(_ value: String?) -> String? {
@@ -2150,8 +2202,12 @@ public struct AppReducer {
     }
 
     private static func nextTerminalTitle(in workspace: WorkspaceState) -> String {
+        nextTerminalTitle(in: workspace.panels)
+    }
+
+    private static func nextTerminalTitle(in panels: [UUID: PanelState]) -> String {
         let prefix = "Terminal "
-        let currentMax = workspace.panels.values.compactMap { panelState -> Int? in
+        let currentMax = panels.values.compactMap { panelState -> Int? in
             guard case .terminal(let terminalState) = panelState else { return nil }
             guard terminalState.title.hasPrefix(prefix) else { return nil }
             let suffix = terminalState.title.dropFirst(prefix.count)

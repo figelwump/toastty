@@ -538,6 +538,16 @@ final class WorkspaceLayoutPersistenceCoordinator {
         nextEntry: WorkspaceLayoutPanelLogEntry
     ) -> UUID? {
         switch action {
+        case .splitPanel(let workspaceID, let tabID, let panelID, _, _, _):
+            guard workspaceID == nextEntry.workspaceID,
+                  tabID == nextEntry.tabID,
+                  let tab = previousLayout.workspacesByID[workspaceID]?.tabsByID[tabID],
+                  tab.panels[panelID] != nil,
+                  tab.layoutTree.slotContaining(panelID: panelID) != nil else {
+                return nil
+            }
+            return panelID
+
         case .splitFocusedSlot(let workspaceID, _),
              .splitFocusedSlotInDirection(let workspaceID, _),
              .splitFocusedSlotInDirectionWithWorkingDirectory(let workspaceID, _, _),

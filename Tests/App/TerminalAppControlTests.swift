@@ -1124,7 +1124,7 @@ private struct WorkspaceSelectUnreadScenario {
 }
 
 @MainActor
-private struct TerminalAppControlFixture {
+struct TerminalAppControlFixture {
     let store: AppStore
     let executor: AppControlExecutor
     let terminalRuntimeRegistry: TerminalRuntimeRegistry

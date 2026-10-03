@@ -289,6 +289,40 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalPanelID)
     }
 
+    func testExplicitBackgroundSplitRegistersGhosttyInheritanceThroughRuntimeStore() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let sourcePanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let sourceTabID = try XCTUnwrap(store.selectedWorkspace?.resolvedSelectedTabID)
+        XCTAssertTrue(store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+        let selectedTabID = try XCTUnwrap(store.selectedWorkspace?.resolvedSelectedTabID)
+        let previousPanelIDs = Set(try XCTUnwrap(store.selectedWorkspace).allPanelsByID.keys)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.sendSplitAction(
+                workspaceID: workspaceID,
+                action: .splitPanel(
+                    workspaceID: workspaceID,
+                    tabID: sourceTabID,
+                    panelID: sourcePanelID,
+                    direction: .right,
+                    profileBinding: nil,
+                    activate: false
+                )
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let newPanelID = try XCTUnwrap(Set(workspace.allPanelsByID.keys).subtracting(previousPanelIDs).first)
+        XCTAssertEqual(workspace.resolvedSelectedTabID, selectedTabID)
+        XCTAssertEqual(workspace.tabsByID[sourceTabID]?.focusedPanelID, sourcePanelID)
+        guard case .pending = registry.splitSourceSurfaceState(forNewPanelID: newPanelID) else {
+            return XCTFail("expected background split to keep Ghostty source inheritance")
+        }
+    }
+
     func testGhosttyMetadataAfterGoingBackPreservesForwardNavigation() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()

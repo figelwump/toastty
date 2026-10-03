@@ -1242,6 +1242,21 @@ struct WorkspaceView: View {
             dividerThickness: Self.splitDividerResizeHandleHairlineWidth,
             ratioOverrides: splitResizeCoordinator.ratioOverrides(workspaceID: workspace.id, tabID: tab.id)
         )
+        let visibleSlotIDs = Set(projection.slots.map(\.slotID))
+        let hiddenTerminalSlots: [LayoutSlotPlacement]
+        if tab.focusedPanelModeActive {
+            hiddenTerminalSlots = tab.layoutTree.projectLayout(
+                in: viewportFrame,
+                dividerThickness: Self.splitDividerResizeHandleHairlineWidth,
+                ratioOverrides: splitResizeCoordinator.ratioOverrides(workspaceID: workspace.id, tabID: tab.id)
+            ).slots.filter { placement in
+                guard !visibleSlotIDs.contains(placement.slotID),
+                      case .terminal = tab.panels[placement.panelID] else { return false }
+                return true
+            }
+        } else {
+            hiddenTerminalSlots = []
+        }
         let splitResizeDescriptors = splitDividerResizeDescriptors(
             workspaceID: workspace.id,
             tab: tab,
@@ -1251,13 +1266,14 @@ struct WorkspaceView: View {
         )
 
         return ZStack(alignment: .topLeading) {
-            ForEach(projection.slots) { placement in
+            ForEach(projection.slots + hiddenTerminalSlots) { placement in
+                let isSlotVisible = visibleSlotIDs.contains(placement.slotID)
                 SlotPlacementView(
                     placement: placement,
                     workspaceID: workspace.id,
                     tab: tab,
                     isWorkspaceSelected: isWorkspaceSelected,
-                    isTabSelected: isTabSelected,
+                    isTabSelected: isTabSelected && isSlotVisible,
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1275,6 +1291,12 @@ struct WorkspaceView: View {
                     panelSessionStatusesByPanelID: panelSessionStatusesByPanelID,
                     panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0
                 )
+                // Keep terminals outside the focus root mounted, just like
+                // inactive tabs. Zero opacity can suppress host initialization.
+                .opacity(Self.mountedContentOpacity(isVisible: isSlotVisible))
+                .allowsHitTesting(isSlotVisible)
+                .accessibilityHidden(!isSlotVisible)
+                .zIndex(isSlotVisible ? 0 : -1)
             }
 
             ForEach(projection.dividers) { placement in
