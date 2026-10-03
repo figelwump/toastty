@@ -1199,14 +1199,15 @@ struct ToasttyApp: App {
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         // A local, because the StateObject autoclosure cannot capture `self`.
         let remoteSessionLauncher = agentLaunchService
-        _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
+        let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
             sessionLauncher: remoteSessionLauncher
-        ))
+        )
+        _remoteAccessService = StateObject(wrappedValue: remoteAccessService)
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
@@ -1268,6 +1269,7 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
+                remoteAccessService: remoteAccessService,
                 annotationStyleStore: annotationStyleStore,
                 inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
                 reloadConfigurationAction: {

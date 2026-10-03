@@ -69,6 +69,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
+    private weak var remoteAccessService: RemoteAccessService?
     private let annotationStyleStore: AnnotationStyleStore?
     private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
     private let reloadConfigurationAction: (@MainActor () -> Void)?
@@ -108,6 +109,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
+        remoteAccessService: RemoteAccessService? = nil,
         annotationStyleStore: AnnotationStyleStore? = nil,
         inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
         reloadConfigurationAction: (@MainActor () -> Void)?,
@@ -122,6 +124,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
+        self.remoteAccessService = remoteAccessService
         self.annotationStyleStore = annotationStyleStore
         self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
         self.reloadConfigurationAction = reloadConfigurationAction
@@ -208,6 +211,70 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         logUnrestrictedUnknownCallerIfNeeded(context)
 
         switch command {
+        // A deliberately narrow local surface for MCP adapters. The Unix
+        // socket's same-user permissions are the authority here; no paired
+        // device credential or Tailscale identity is copied into the adapter.
+        case "mcp.session_list":
+            guard let service = remoteAccessService else {
+                throw AutomationSocketError.invalidPayload("conversation projection is offline")
+            }
+            service.ensureLocalMCPTracking()
+            return try automationObject(service.facadeSessionList(at: Date()))
+
+        case "mcp.conversation_events":
+            guard let service = remoteAccessService else {
+                throw AutomationSocketError.invalidPayload("conversation projection is offline")
+            }
+            service.ensureLocalMCPTracking()
+            guard let rawID = payload.string("conversationID"),
+                  let uuid = UUID(uuidString: rawID) else {
+                throw AutomationSocketError.invalidPayload("conversationID must be a UUID")
+            }
+            let limit = payload.int("limit") ?? 40
+            guard (1...100).contains(limit) else {
+                throw AutomationSocketError.invalidPayload("limit must be between 1 and 100")
+            }
+            let cursor: ConversationEventCursor?
+            if let cursorJSON = payload.string("cursorJSON") {
+                guard let data = cursorJSON.data(using: .utf8), data.count <= 1024,
+                      let decoded = try? JSONDecoder().decode(ConversationEventCursor.self, from: data) else {
+                    throw AutomationSocketError.invalidPayload("cursorJSON is invalid")
+                }
+                cursor = decoded
+            } else {
+                cursor = nil
+            }
+            let outcome = service.facadeConversationEvents(
+                for: RemoteConversationID(rawValue: uuid), after: cursor, limit: limit)
+            switch outcome {
+            case .page(let page): return try automationObject(RemoteGatewayEventsResponse.page(page))
+            case .resnapshotRequired: return try automationObject(RemoteGatewayEventsResponse.resnapshotRequired)
+            case .conversationNotFound: return try automationObject(RemoteGatewayEventsResponse.conversationNotFound)
+            case .invalidRequest:
+                throw AutomationSocketError.invalidPayload("event cursor is invalid")
+            }
+
+        case "mcp.message_send":
+            guard let service = remoteAccessService else {
+                throw AutomationSocketError.invalidPayload("conversation projection is offline")
+            }
+            service.ensureLocalMCPTracking()
+            guard let requestJSON = payload.string("requestJSON"),
+                  let data = requestJSON.data(using: .utf8), data.count <= 64 * 1024,
+                  let request = try? JSONDecoder().decode(RemoteMessageSendRequest.self, from: data),
+                  request.attachments.isEmpty,
+                  request.text.unicodeScalars.allSatisfy({
+                      !CharacterSet.controlCharacters.contains($0)
+                          && ![0x2028, 0x2029, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                               0x2066, 0x2067, 0x2068, 0x2069].contains($0.value)
+                  }) else {
+                throw AutomationSocketError.invalidPayload("requestJSON must be a bounded text-only send request")
+            }
+            // Local IPC calls reuse the exact prompt, binding, duplicate and
+            // terminal-delivery gate used by paired-device sends.
+            let localCaller = RemoteDeviceRecord(name: "Local MCP", scopes: [.read, .send], createdAt: Date())
+            return try automationObject(service.performRemoteSend(request, device: localCaller, allowWhenGatewayDisabled: true))
+
         case "agent.prepare_managed_launch":
             guard let agentRaw = normalizedOptionalText(payload.string("agent")),
                   let agent = AgentKind(rawValue: agentRaw) else {
