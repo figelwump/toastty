@@ -10,6 +10,7 @@ protocol TerminalCommandRouting: AnyObject {
         panelID: UUID,
         focusPolicy: TerminalInputFocusPolicy
     ) -> Bool
+    func isReadyForManagedAgentCommand(panelID: UUID) -> Bool
     func readVisibleText(panelID: UUID) -> String?
     func promptState(panelID: UUID) -> TerminalPromptState
 }
@@ -944,17 +945,22 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             guard Self.locatePanel(panelID, in: store.state) != nil else {
                 throw AgentLaunchError.panelDoesNotExist
             }
-            switch terminalCommandRouter.promptState(panelID: panelID) {
-            case .idleAtPrompt:
-                return
-            case .unavailable:
+            let promptState = terminalCommandRouter.promptState(panelID: panelID)
+            guard promptState != .exited else {
+                throw AgentLaunchError.panelBusy(runningCommand: nil)
+            }
+            if promptState == .unavailable ||
+                terminalCommandRouter.isReadyForManagedAgentCommand(panelID: panelID) == false {
                 guard clock.now < deadline else {
                     throw AgentLaunchError.panelBusy(runningCommand: nil)
                 }
                 try await Task.sleep(for: Self.asyncPromptReadinessPollInterval)
-            case .busy, .exited:
+                continue
+            }
+            guard promptState.isIdleAtPrompt else {
                 throw AgentLaunchError.panelBusy(runningCommand: nil)
             }
+            return
         }
     }
 

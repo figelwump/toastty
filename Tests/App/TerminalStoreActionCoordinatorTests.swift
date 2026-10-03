@@ -24,6 +24,129 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testSendExplicitBackgroundSplitRefreshesAndInheritsFromSourceInUnselectedTab() throws {
+        let background = try makeBackgroundSplitState()
+        var refreshedPanelIDs: [UUID] = []
+        let fixture = try makeStoreActionFixture(
+            state: background.state,
+            resolveWorkingDirectoryFromProcessOverride: { panelID in
+                refreshedPanelIDs.append(panelID)
+                return "/tmp/refreshed-source"
+            }
+        )
+        let selectedTabID = fixture.store.selectedWorkspace?.resolvedSelectedTabID
+        let selectedWindowID = fixture.store.state.selectedWindowID
+
+        XCTAssertTrue(
+            fixture.coordinator.sendSplitAction(
+                workspaceID: fixture.workspaceID,
+                action: .splitPanel(
+                    workspaceID: fixture.workspaceID,
+                    tabID: background.tabID,
+                    panelID: background.sourcePanelID,
+                    direction: .right,
+                    profileBinding: nil,
+                    activate: false
+                )
+            )
+        )
+
+        let workspace = try XCTUnwrap(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let previousWorkspace = try XCTUnwrap(background.state.workspacesByID[fixture.workspaceID])
+        let backgroundTab = try XCTUnwrap(workspace.tabsByID[background.tabID])
+        let newPanelID = try XCTUnwrap(
+            Set(workspace.allPanelsByID.keys).subtracting(previousWorkspace.allPanelsByID.keys).first
+        )
+        guard case .terminal(let newTerminalState) = backgroundTab.panels[newPanelID],
+              case .terminal(let sourceTerminalState) = backgroundTab.panels[background.sourcePanelID] else {
+            return XCTFail("expected source and split panels to remain terminal")
+        }
+        XCTAssertEqual(refreshedPanelIDs, [background.sourcePanelID])
+        XCTAssertEqual(sourceTerminalState.cwd, "/tmp/refreshed-source")
+        XCTAssertEqual(newTerminalState.cwd, "/tmp/refreshed-source")
+        XCTAssertEqual(workspace.resolvedSelectedTabID, selectedTabID)
+        XCTAssertEqual(workspace.focusedPanelID, fixture.sourcePanelID)
+        XCTAssertEqual(backgroundTab.focusedPanelID, background.focusedPanelID)
+        XCTAssertEqual(fixture.store.state.selectedWindowID, selectedWindowID)
+        XCTAssertTrue(fixture.store.navigationHistory.entries.isEmpty)
+
+        _ = fixture.controllerStore.synchronizeLivePanels([background.sourcePanelID, newPanelID])
+        guard case .pending = fixture.controllerStore.splitSourceSurfaceState(for: newPanelID) else {
+            return XCTFail("expected inheritance to retain the explicit source panel")
+        }
+    }
+
+    func testSendExplicitProfileSplitRefreshesSourceWithoutGhosttyInheritance() throws {
+        let background = try makeBackgroundSplitState()
+        var refreshedPanelIDs: [UUID] = []
+        let fixture = try makeStoreActionFixture(
+            state: background.state,
+            resolveWorkingDirectoryFromProcessOverride: { panelID in
+                refreshedPanelIDs.append(panelID)
+                return "/tmp/refreshed-source"
+            }
+        )
+
+        XCTAssertTrue(
+            fixture.coordinator.sendSplitAction(
+                workspaceID: fixture.workspaceID,
+                action: .splitPanel(
+                    workspaceID: fixture.workspaceID,
+                    tabID: background.tabID,
+                    panelID: background.sourcePanelID,
+                    direction: .right,
+                    profileBinding: TerminalProfileBinding(profileID: "zmx"),
+                    activate: false
+                )
+            )
+        )
+
+        let workspace = try XCTUnwrap(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let previousWorkspace = try XCTUnwrap(background.state.workspacesByID[fixture.workspaceID])
+        let newPanelID = try XCTUnwrap(
+            Set(workspace.allPanelsByID.keys).subtracting(previousWorkspace.allPanelsByID.keys).first
+        )
+        guard case .terminal(let newTerminalState) = workspace.panelState(for: newPanelID) else {
+            return XCTFail("expected profile split to create a terminal")
+        }
+        XCTAssertEqual(refreshedPanelIDs, [background.sourcePanelID])
+        XCTAssertEqual(newTerminalState.cwd, "/tmp/refreshed-source")
+        XCTAssertEqual(newTerminalState.profileBinding?.profileID, "zmx")
+        guard case .none = fixture.controllerStore.splitSourceSurfaceState(for: newPanelID) else {
+            return XCTFail("expected profile split to bypass Ghostty source inheritance")
+        }
+    }
+
+    func testSendExplicitSplitRejectsMismatchedTabWithoutRefreshingSource() throws {
+        let background = try makeBackgroundSplitState()
+        var refreshedPanelIDs: [UUID] = []
+        let fixture = try makeStoreActionFixture(
+            state: background.state,
+            resolveWorkingDirectoryFromProcessOverride: { panelID in
+                refreshedPanelIDs.append(panelID)
+                return "/tmp/refreshed-source"
+            }
+        )
+        let selectedTabID = try XCTUnwrap(fixture.store.selectedWorkspace?.resolvedSelectedTabID)
+
+        XCTAssertFalse(
+            fixture.coordinator.sendSplitAction(
+                workspaceID: fixture.workspaceID,
+                action: .splitPanel(
+                    workspaceID: fixture.workspaceID,
+                    tabID: selectedTabID,
+                    panelID: background.sourcePanelID,
+                    direction: .right,
+                    profileBinding: nil,
+                    activate: false
+                )
+            )
+        )
+
+        XCTAssertTrue(refreshedPanelIDs.isEmpty)
+        XCTAssertEqual(fixture.store.state, background.state)
+    }
+
     func testSendSplitActionRefreshesWorkingDirectoryBeforeProfileSplit() throws {
         var state = AppState.bootstrap()
         let workspaceID = try XCTUnwrap(state.selectedWorkspaceSelection()?.workspaceID)
@@ -51,11 +174,12 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         let controllerStore = TerminalControllerStore()
         let coordinator = TerminalStoreActionCoordinator(
             metadataService: metadataService,
-            registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState in
+            registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState, sourcePanelID in
                 controllerStore.registerPendingSplitSourceIfNeeded(
                     workspaceID: workspaceID,
                     previousState: previousState,
-                    nextState: nextState
+                    nextState: nextState,
+                    sourcePanelID: sourcePanelID
                 )
             },
             armCloseTransitionViewportDeferral: { _, _ in },
@@ -135,11 +259,12 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         var tracedPanels: [(workspaceID: UUID, panelID: UUID)] = []
         let coordinator = TerminalStoreActionCoordinator(
             metadataService: metadataService,
-            registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState in
+            registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState, sourcePanelID in
                 controllerStore.registerPendingSplitSourceIfNeeded(
                     workspaceID: workspaceID,
                     previousState: previousState,
-                    nextState: nextState
+                    nextState: nextState,
+                    sourcePanelID: sourcePanelID
                 )
             },
             armCloseTransitionViewportDeferral: { _, _ in },
@@ -191,28 +316,37 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 
 @MainActor
 private func makeStoreActionFixture(
+    state: AppState = AppState.bootstrap(),
+    resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)? = nil,
     armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void = { _, _ in },
     armFocusedPanelResizeTrace: @escaping (UUID, UUID) -> Void = { _, _ in },
     requestWorkspaceFocusRestore: @escaping (UUID) -> Void = { _ in }
 ) throws -> (
     store: AppStore,
+    registry: TerminalRuntimeRegistry,
     coordinator: TerminalStoreActionCoordinator,
     controllerStore: TerminalControllerStore,
     workspaceID: UUID,
     sourcePanelID: UUID
 ) {
-    let state = AppState.bootstrap()
     let store = AppStore(state: state, persistTerminalFontPreference: false)
+    // The fixture retains the registry because the metadata service holds it weakly.
     let registry = TerminalRuntimeRegistry()
-    let metadataService = TerminalMetadataService(store: store, registry: registry)
+    let metadataService = TerminalMetadataService(
+        store: store,
+        registry: registry,
+        resolveWorkingDirectoryFromProcessOverride: resolveWorkingDirectoryFromProcessOverride,
+        processRefreshRetryDelay: { _ in }
+    )
     let controllerStore = TerminalControllerStore()
     let coordinator = TerminalStoreActionCoordinator(
         metadataService: metadataService,
-        registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState in
+        registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState, sourcePanelID in
             controllerStore.registerPendingSplitSourceIfNeeded(
                 workspaceID: workspaceID,
                 previousState: previousState,
-                nextState: nextState
+                nextState: nextState,
+                sourcePanelID: sourcePanelID
             )
         },
         armCloseTransitionViewportDeferral: armCloseTransitionViewportDeferral,
@@ -223,7 +357,38 @@ private func makeStoreActionFixture(
 
     let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
     let sourcePanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
-    return (store, coordinator, controllerStore, workspaceID, sourcePanelID)
+    return (store, registry, coordinator, controllerStore, workspaceID, sourcePanelID)
+}
+
+private func makeBackgroundSplitState() throws -> (
+    state: AppState,
+    tabID: UUID,
+    sourcePanelID: UUID,
+    focusedPanelID: UUID
+) {
+    var state = AppState.bootstrap()
+    let workspaceID = try XCTUnwrap(state.selectedWorkspaceSelection()?.workspaceID)
+    var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+    let sourcePanelID = UUID()
+    let focusedPanelID = UUID()
+    let backgroundTab = WorkspaceTabState(
+        id: UUID(),
+        layoutTree: .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .slot(slotID: UUID(), panelID: sourcePanelID),
+            second: .slot(slotID: UUID(), panelID: focusedPanelID)
+        ),
+        panels: [
+            sourcePanelID: .terminal(TerminalPanelState(title: "Source", shell: "zsh", cwd: "/tmp/source-stale")),
+            focusedPanelID: .terminal(TerminalPanelState(title: "Focused", shell: "zsh", cwd: "/tmp/focused")),
+        ],
+        focusedPanelID: focusedPanelID
+    )
+    workspace.appendTab(backgroundTab, select: false)
+    state.workspacesByID[workspaceID] = workspace
+    return (state, backgroundTab.id, sourcePanelID, focusedPanelID)
 }
 
 private func stateWithNilFocusedPanelID() throws -> AppState {

@@ -82,6 +82,7 @@ extension AutomationSocketServerTestSupport {
         let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
         let sessionRuntimeStore = sessionRuntimeStore ?? SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
+        terminalRuntimeRegistry.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
         let resolvedAgentCatalogProvider = agentCatalogProvider ?? TestAgentCatalogProvider()
         let focusedPanelCommandController = FocusedPanelCommandController(

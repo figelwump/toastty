@@ -155,11 +155,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
         actionRouter = TerminalActionRouter(store: store, registry: self)
         let storeActionCoordinator = TerminalStoreActionCoordinator(
             metadataService: metadataService,
-            registerPendingSplitSourceIfNeeded: { [weak self] workspaceID, previousState, nextState in
+            registerPendingSplitSourceIfNeeded: { [weak self] workspaceID, previousState, nextState, sourcePanelID in
                 self?.runtimeStore.registerPendingSplitSourceIfNeeded(
                     workspaceID: workspaceID,
                     previousState: previousState,
-                    nextState: nextState
+                    nextState: nextState,
+                    sourcePanelID: sourcePanelID
                 )
             },
             armCloseTransitionViewportDeferral: { [weak self] workspaceID, panelIDs in
@@ -510,6 +511,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
             panelID: panelID,
             focusPolicy: focusPolicy
         )
+    }
+
+    func isReadyForManagedAgentCommand(panelID: UUID) -> Bool {
+        runtimeStore.existingController(for: panelID)?.isReadyForAutomationInput() ?? false
     }
 
     /// Remote delivery bypasses the local-input observer because the caller
@@ -957,6 +962,19 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 }
 
+extension TerminalRuntimeRegistry {
+    @discardableResult
+    func sendSplitAction(workspaceID: UUID, action: AppAction) -> Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        return storeActionCoordinator?.sendSplitAction(workspaceID: workspaceID, action: action) ?? false
+        #else
+        guard let store else { return false }
+        return store.sendNavigation(action)
+        #endif
+    }
+
+}
+
 private extension TerminalRuntimeRegistry {
     static func presentLocalDocumentLinkAlert(
         preferredWindowID: UUID?,
@@ -1049,15 +1067,6 @@ private extension TerminalRuntimeRegistry {
         }
     }
 
-    @discardableResult
-    func sendSplitAction(workspaceID: UUID, action: AppAction) -> Bool {
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        return storeActionCoordinator?.sendSplitAction(workspaceID: workspaceID, action: action) ?? false
-        #else
-        guard let store else { return false }
-        return store.sendNavigation(action)
-        #endif
-    }
 
     func liveTerminalPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in

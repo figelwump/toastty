@@ -13,6 +13,7 @@ final class WorkspaceViewTests: XCTestCase {
         let panelID: UUID
         let store: AppStore
         let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+        let terminalRuntimeRegistry: TerminalRuntimeRegistry
         let hostingView: NSView
         let window: NSWindow
     }
@@ -2639,6 +2640,56 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
+    func testBackgroundSplitInFocusModeKeepsTerminalMountedAcrossTabAndModeChanges() throws {
+        for targetIsSelected in [true, false] {
+            var targetTabID: UUID?
+            var sourcePanelID: UUID?
+            let harness = try makeWorkspaceHarness(tabCount: 2) { state, _, workspaceID in
+                var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+                let tabID = try XCTUnwrap(targetIsSelected ? workspace.tabIDs.first : workspace.tabIDs.last)
+                var tab = try XCTUnwrap(workspace.tabsByID[tabID])
+                tab.focusedPanelModeActive = true
+                tab.focusModeRootNodeID = tab.layoutTree.allSlotInfos.first?.slotID
+                targetTabID = tabID
+                sourcePanelID = tab.focusedPanelID
+                workspace.tabsByID[tabID] = tab
+                state.workspacesByID[workspaceID] = workspace
+            }
+            defer { harness.window.orderOut(nil) }
+            let tabID = try XCTUnwrap(targetTabID)
+            let sourceID = try XCTUnwrap(sourcePanelID)
+            let before = try XCTUnwrap(harness.store.selectedWorkspace)
+            XCTAssertTrue(harness.store.send(.splitPanel(
+                workspaceID: harness.workspaceID, tabID: tabID, panelID: sourceID,
+                direction: .right, profileBinding: nil, activate: false
+            )))
+            pumpMainRunLoop(duration: 0.6)
+            harness.hostingView.layoutSubtreeIfNeeded()
+            let after = try XCTUnwrap(harness.store.selectedWorkspace)
+            let created = try XCTUnwrap(Set(after.allPanelsByID.keys).subtracting(before.allPanelsByID.keys).first)
+            let attachment = harness.terminalRuntimeRegistry.automationRenderSnapshot(panelID: created)
+            XCTAssertTrue(attachment.isRenderable, "A terminal outside the focus root needs a mounted host")
+            XCTAssertEqual(after.selectedTabID, before.selectedTabID)
+            XCTAssertEqual(after.tab(id: tabID)?.focusModeRootNodeID, before.tab(id: tabID)?.focusModeRootNodeID)
+            XCTAssertEqual(after.tab(id: tabID)?.focusedPanelID, sourceID)
+            let controller = harness.terminalRuntimeRegistry.controller(
+                for: created, workspaceID: harness.workspaceID, windowID: harness.windowID
+            )
+
+            if !targetIsSelected {
+                XCTAssertTrue(harness.store.send(.selectWorkspaceTab(workspaceID: harness.workspaceID, tabID: tabID)))
+            }
+            XCTAssertTrue(harness.store.send(.toggleFocusedPanelMode(workspaceID: harness.workspaceID)))
+            pumpMainRunLoop(duration: 0.1)
+            harness.hostingView.layoutSubtreeIfNeeded()
+            XCTAssertTrue(harness.terminalRuntimeRegistry.automationRenderSnapshot(panelID: created).isRenderable)
+            XCTAssertTrue(controller === harness.terminalRuntimeRegistry.controller(
+                for: created, workspaceID: harness.workspaceID, windowID: harness.windowID
+            ))
+        }
+    }
+
+    @MainActor
     func testRightPanelRuntimeSurvivesWorkspaceTabSwitch() throws {
         let rightPanelID = UUID()
         var visibleTabID: UUID?
@@ -2838,6 +2889,7 @@ final class WorkspaceViewTests: XCTestCase {
             panelID: panelID,
             store: store,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            terminalRuntimeRegistry: registry,
             hostingView: hostingView,
             window: window
         )
