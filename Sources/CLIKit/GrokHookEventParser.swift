@@ -42,6 +42,8 @@ enum GrokHookEventParser {
             promptID: try uuidString(object["promptId"]),
             timestamp: timestamp,
             notificationType: try boundedString(object["notificationType"], maximumUTF8Count: 128),
+            toolName: try boundedString(object["toolName"], maximumUTF8Count: 256),
+            toolUseID: try boundedString(object["toolUseId"], maximumUTF8Count: 256),
             isSubagent: false,
             sessionFilePath: try boundedString(object["transcriptPath"], maximumUTF8Count: 4096, trimWhitespace: false),
             cwd: try boundedString(object["cwd"], maximumUTF8Count: 4096, trimWhitespace: false)

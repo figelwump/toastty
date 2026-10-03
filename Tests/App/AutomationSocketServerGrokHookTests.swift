@@ -11,6 +11,8 @@ struct AutomationSocketServerGrokHookTests: AutomationSocketServerTestSupport {
         var payload = grokPayload(kind: .notification, nativeID: nativeID, timestamp: 1_700_000_000.123456)
         payload["promptID"] = .string(promptID.uuidString)
         payload["notificationType"] = .string(" idle_prompt ")
+        payload["toolName"] = .string(" read_file ")
+        payload["toolUseID"] = .string(" call-123 ")
         payload["sessionFilePath"] = .string("/tmp/👩‍💻 session.json ")
         payload["cwd"] = .string("/tmp/👩‍💻 repo ")
         let event = try GrokHookEventPayloadDecoder.decode(payload)
@@ -19,6 +21,8 @@ struct AutomationSocketServerGrokHookTests: AutomationSocketServerTestSupport {
         #expect(event.promptID == promptID.uuidString.lowercased())
         #expect(abs(event.timestamp.timeIntervalSince1970 - 1_700_000_000.123456) < 0.000001)
         #expect(event.notificationType == "idle_prompt")
+        #expect(event.toolName == "read_file")
+        #expect(event.toolUseID == "call-123")
         #expect(event.sessionFilePath == "/tmp/👩‍💻 session.json ")
         #expect(event.cwd == "/tmp/👩‍💻 repo ")
         #expect(!event.isSubagent)
@@ -49,6 +53,10 @@ struct AutomationSocketServerGrokHookTests: AutomationSocketServerTestSupport {
             ("notificationType", .string(String(repeating: "n", count: 129))),
             ("notificationType", .string(String(repeating: "é", count: 65))),
             ("notificationType", .string("idle\nprompt")),
+            ("toolName", .string(String(repeating: "x", count: 257))),
+            ("toolUseID", .string(String(repeating: "é", count: 129))),
+            ("toolName", .string("read\nfile")),
+            ("toolUseID", .int(123)),
             ("cwd", .string(String(repeating: "x", count: 4097))),
             ("sessionFilePath", .string(String(repeating: "x", count: 4097))),
             ("sessionFilePath", .string("/tmp/session\u{0}.json")),
@@ -147,10 +155,20 @@ struct AutomationSocketServerGrokHookTests: AutomationSocketServerTestSupport {
         }
         #expect(unchangedRecord == resumeRecord)
 
-        #expect(try send(grokPayload(kind: .permissionRequest, nativeID: nativeID, promptID: firstPromptID, timestamp: 1_700_000_003)).result?.string("status") == "accepted")
-        await expectStatus(.needsApproval, sessionID: sessionID, runtime: server.sessionRuntimeStore)
-        #expect(try send(grokPayload(kind: .preToolUse, nativeID: nativeID, promptID: firstPromptID, timestamp: 1_700_000_004)).result?.string("status") == "accepted")
-        await expectStatus(.working, sessionID: sessionID, runtime: server.sessionRuntimeStore)
+        // Actual Grok tool events have a call ID but omit the prompt ID.
+        var tool = grokPayload(kind: .preToolUse, nativeID: nativeID, timestamp: 1_700_000_003)
+        tool["toolName"] = .string("run_terminal_command")
+        tool["toolUseID"] = .string("call-123")
+        #expect(try send(tool).result?.string("status") == "accepted")
+        await expectStatus(.working, detail: "Running a command", sessionID: sessionID, runtime: server.sessionRuntimeStore)
+        var permission = grokPayload(kind: .notification, nativeID: nativeID, timestamp: 1_700_000_003.5)
+        permission["notificationType"] = .string("permission_prompt")
+        #expect(try send(permission).result?.string("status") == "accepted")
+        await expectStatus(.needsApproval, detail: "Waiting for command approval", sessionID: sessionID, runtime: server.sessionRuntimeStore)
+        tool["kind"] = .string(GrokHookEvent.Kind.postToolUse.rawValue)
+        tool["timestamp"] = .double(1_700_000_004)
+        #expect(try send(tool).result?.string("status") == "accepted")
+        await expectStatus(.working, detail: "Responding to your prompt", sessionID: sessionID, runtime: server.sessionRuntimeStore)
 
         #expect(try send(grokPayload(kind: .userPromptSubmit, nativeID: nativeID, promptID: secondPromptID, timestamp: 1_700_000_005)).result?.string("status") == "accepted")
         #expect(try send(grokPayload(kind: .stop, nativeID: nativeID, promptID: firstPromptID, timestamp: 1_700_000_006)).result?.string("status") == "ignored")
@@ -183,8 +201,9 @@ struct AutomationSocketServerGrokHookTests: AutomationSocketServerTestSupport {
         return payload
     }
 
-    private func expectStatus(_ kind: SessionStatusKind, sessionID: String, runtime: SessionRuntimeStore) async {
+    private func expectStatus(_ kind: SessionStatusKind, detail: String? = nil, sessionID: String, runtime: SessionRuntimeStore) async {
         let status = await MainActor.run { runtime.sessionRegistry.activeSession(sessionID: sessionID)?.status }
         #expect(status?.kind == kind)
+        if let detail { #expect(status?.detail == detail) }
     }
 }

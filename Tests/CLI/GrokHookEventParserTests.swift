@@ -80,6 +80,84 @@ struct GrokHookEventParserTests {
     }
 
     @Test
+    func nativeToolEventsWithoutPromptIDPreserveMetadataThroughIngestorAndEnvelope() throws {
+        let panelID = UUID()
+        for kind: GrokHookEvent.Kind in [.preToolUse, .postToolUse, .postToolUseFailure, .permissionRequest] {
+            var object = validPayload(kind: kind.rawValue)
+            object["toolName"] = " shell "
+            object["toolUseId"] = " tool-123 "
+            object["prompt"] = "private prompt"
+            object["toolInput"] = ["command": "private shell command", "path": "/private/input.txt"]
+            object["command"] = "private command"
+            object["toolOutput"] = "private output"
+            object["output"] = "private result"
+            object["filePath"] = "/private/output.txt"
+            let commands = try AgentEventIngestor.commands(
+                for: .grokHooks, sessionID: "managed", panelID: panelID,
+                payload: JSONSerialization.data(withJSONObject: object)
+            )
+            #expect(commands.count == 1)
+            let command = try #require(commands.first)
+            guard case .sessionGrokHookEvent(let sessionID, let observedPanelID, let event) = command else {
+                Issue.record("expected normalized Grok tool event")
+                continue
+            }
+            #expect(sessionID == "managed")
+            #expect(observedPanelID == panelID)
+            #expect(event.kind == kind)
+            #expect(event.promptID == nil)
+            #expect(event.toolName == "shell")
+            #expect(event.toolUseID == "tool-123")
+
+            let envelope = command.makeEventEnvelope()
+            #expect(envelope.eventType == "session.grok_hook_event")
+            #expect(envelope.payload.string("toolName") == "shell")
+            #expect(envelope.payload.string("toolUseID") == "tool-123")
+            #expect(envelope.payload["promptID"] == nil)
+            #expect(envelope.payload["toolUseId"] == nil)
+            #expect(Set(envelope.payload.keys) == Set([
+                "kind", "nativeSessionID", "timestamp", "isSubagent", "toolName", "toolUseID",
+            ]))
+        }
+    }
+
+    @Test
+    func toolMetadataUsesStrictOptionalStringsAndUTF8Bounds() throws {
+        for key in ["toolName", "toolUseId"] {
+            for value: Any in [12, true, ["command": "private"], String(repeating: "x", count: 257),
+                               String(repeating: "é", count: 129), "tool\nname", "tool\u{0}id"] {
+                var object = validPayload(kind: "pre_tool_use")
+                object[key] = value
+                #expect(throws: GrokHookEventParserError.malformedPayload) {
+                    _ = try parse(object)
+                }
+            }
+            for value: Any in [NSNull(), "", "   ", String(repeating: "x", count: 256),
+                               String(repeating: "é", count: 128)] {
+                var object = validPayload(kind: "pre_tool_use")
+                object[key] = value
+                let command = try #require(parse(object).first)
+                guard case .sessionGrokHookEvent(_, _, let event) = command else {
+                    Issue.record("expected Grok tool event")
+                    continue
+                }
+                let expected = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let normalized = expected?.isEmpty == false ? expected : nil
+                let observed = key == "toolName" ? event.toolName : event.toolUseID
+                #expect(observed == normalized)
+                let envelopeKey = key == "toolName" ? "toolName" : "toolUseID"
+                #expect(command.makeEventEnvelope().payload.string(envelopeKey) == normalized)
+            }
+        }
+        guard case .sessionGrokHookEvent(_, _, let event) = try #require(parse(validPayload(kind: "pre_tool_use")).first) else {
+            Issue.record("expected Grok tool event")
+            return
+        }
+        #expect(event.toolName == nil)
+        #expect(event.toolUseID == nil)
+    }
+
+    @Test
     func largePromptPreservesMetadataAndExactUnicodePaths() throws {
         var object = validPayload(kind: "user_prompt_submit")
         object["promptId"] = promptID

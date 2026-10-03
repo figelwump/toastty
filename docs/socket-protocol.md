@@ -1422,6 +1422,34 @@ Result:
 - `status: "accepted" | "ignored"`
 - `stateVersion`
 
+### `session.grok_hook_event`
+
+Internal event produced by `session ingest-agent-event --source grok-hooks`.
+Manual wrappers should generally use `session.status` instead.
+
+Required: top-level `sessionID`, plus payload `kind` (a recognized native Grok
+event name), `nativeSessionID` (UUID), `timestamp` (finite Unix seconds), and
+`isSubagent` (boolean). Optional top-level `panelID` must match the active managed
+Grok session when provided.
+
+Optional payload fields:
+
+- `promptID`: UUID
+- `toolName`, `toolUseID`: strings, each at most 256 UTF-8 bytes
+- `notificationType`: string, at most 128 UTF-8 bytes
+- `sessionFilePath`, `cwd`: strings, each at most 4096 UTF-8 bytes
+
+Strings reject control characters. Paths preserve whitespace; other optional
+strings are trimmed. Tool arguments and output are not forwarded. Tool-call IDs
+correlate tool hooks that omit prompt IDs, within the active root conversation
+and prompt window. Nested and stale events cannot complete a newer turn.
+Working details describe the current tool category; permission notifications
+retain Needs approval until the associated call completes or the turn changes.
+`Stop` reports provisional Waiting; the later idle notification confirms Ready.
+
+The result contains `eventType`, `status: "accepted" | "ignored"`, and
+`stateVersion`.
+
 ### `session.codex_hook_event`
 
 Internal event used by Toastty's installed Codex status hook forwarder. Manual

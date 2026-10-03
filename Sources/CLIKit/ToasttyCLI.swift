@@ -442,6 +442,12 @@ enum CLICommand: Equatable {
             if let notificationType = event.notificationType {
                 payload["notificationType"] = .string(notificationType)
             }
+            if let toolName = event.toolName {
+                payload["toolName"] = .string(toolName)
+            }
+            if let toolUseID = event.toolUseID {
+                payload["toolUseID"] = .string(toolUseID)
+            }
             if let sessionFilePath = event.sessionFilePath {
                 payload["sessionFilePath"] = .string(sessionFilePath)
             }

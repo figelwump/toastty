@@ -401,8 +401,13 @@ checks the exact Toastty session ID and producer PID against the recorded owner
 before forwarding events; skipped events are drained so other sessions and
 nested Grok processes can continue normally.
 
-Prompt and tool hooks report **Working**, permission notifications report
-**Needs approval**, and failure or cancellation hooks report **Error** or
+Prompt and tool hooks report **Working**. Tool names supply activity labels such
+as “Reading files,” “Searching code,” and “Running a command”; after the tracked
+tools finish, the detail returns to “Responding to your prompt.” Toastty uses
+native tool-call IDs because Grok tool hooks can omit the prompt ID. Command
+arguments, file contents, and tool output are not displayed in these labels.
+Permission notifications report **Needs approval**, with the tool category when
+available, and failure or cancellation hooks report **Error** or
 **Stopped**. `Stop` reports provisional **Waiting**, because user stop hooks can
 continue the turn. A later idle notification confirms **Ready**; Grok's upstream
 idle notification delay defaults to 60 seconds. Idle notifications preserve a

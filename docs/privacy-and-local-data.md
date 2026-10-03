@@ -228,9 +228,13 @@ running on your Mac.
   associated with the exact provider-native session to project normalized
   conversation history for Remote Access. Toastty does not modify that file.
 - For managed Grok sessions, Toastty forwards bounded event names, session and
-  prompt IDs, timestamps, notification types, working directory, and transcript
-  path for status and native resume. Prompt text, tool payloads, and transcript
-  content are not forwarded or projected to Remote Access.
+  prompt IDs, timestamps, notification types, tool names and call IDs, working
+  directory, and transcript path for status and native resume. Tool names and
+  call IDs are each limited to 256 UTF-8 bytes. Activity labels use fixed tool
+  categories; prompt text, tool arguments/output, and transcript content are not
+  forwarded or projected to Remote Access. Up to 128 active or recently completed
+  tool calls are retained in memory to correlate asynchronous hook delivery;
+  completed records are discarded first, and session teardown clears this state.
 - For managed Claude, Codex, and Cursor sessions, Toastty reads the short
   session name the provider CLI generated, so the sidebar and Remote Access
   clients can label a session with it. For Claude that is the newest `ai-title`

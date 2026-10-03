@@ -22,6 +22,8 @@ public struct GrokHookEvent: Equatable, Sendable {
     public var promptID: String?
     public var timestamp: Date
     public var notificationType: String?
+    public var toolName: String?
+    public var toolUseID: String?
     public var isSubagent: Bool
     public var sessionFilePath: String?
     public var cwd: String?
@@ -32,6 +34,8 @@ public struct GrokHookEvent: Equatable, Sendable {
         promptID: String? = nil,
         timestamp: Date,
         notificationType: String? = nil,
+        toolName: String? = nil,
+        toolUseID: String? = nil,
         isSubagent: Bool = false,
         sessionFilePath: String? = nil,
         cwd: String? = nil
@@ -41,6 +45,8 @@ public struct GrokHookEvent: Equatable, Sendable {
         self.promptID = promptID
         self.timestamp = timestamp
         self.notificationType = notificationType
+        self.toolName = toolName
+        self.toolUseID = toolUseID
         self.isSubagent = isSubagent
         self.sessionFilePath = sessionFilePath
         self.cwd = cwd

@@ -34,6 +34,8 @@ enum GrokHookEventPayloadDecoder {
             promptID: promptID,
             timestamp: Date(timeIntervalSince1970: timestamp),
             notificationType: try text(payload, key: "notificationType", limit: 128),
+            toolName: try text(payload, key: "toolName", limit: 256),
+            toolUseID: try text(payload, key: "toolUseID", limit: 256),
             isSubagent: isSubagent,
             sessionFilePath: try text(payload, key: "sessionFilePath", limit: 4096, trimWhitespace: false),
             cwd: try text(payload, key: "cwd", limit: 4096, trimWhitespace: false)
