@@ -244,7 +244,8 @@ notice, and you open the session from the list when it arrives.
 - **Agents.** The sheet lists the profiles from `~/.toastty/agents.toml` whose
   sessions the phone can show: Codex, Claude Code, OpenCode, MiMo Code, and Pi.
   A profile whose command is not installed, or that cannot take a first message
-  on its command line, is listed but cannot be chosen.
+  on its command line, is listed struck through and cannot be chosen. Tap it
+  to see the reason.
 - **Model.** "Profile default" sends no model. The other choices are models
   your sessions of that agent report now, models you chose before on this
   phone, and **Other…** for typing a model ID. The agent's own CLI decides

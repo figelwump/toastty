@@ -105,7 +105,7 @@ struct ToasttyNewSessionSheet: View {
                 workspaceField
                 agentPicker
                 ForEach(model.unavailableAgentNotes, id: \.self) { reason in
-                    note(reason, tone: .warning, identifier: nil)
+                    note(reason, tone: .warning, identifier: "toastty-mobile-new-session-agent-note")
                 }
                 if model.showsModel || model.showsEffort {
                     HStack(alignment: .top, spacing: 10) {
@@ -186,8 +186,9 @@ struct ToasttyNewSessionSheet: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isAvailable == false)
+        // An unavailable agent stays tappable: the tap shows its reason.
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityValue(isAvailable ? "" : "Unavailable")
         .accessibilityHint(ToasttyNewSessionModel.unavailableReason(agent) ?? "")
         .accessibilityIdentifier("toastty-mobile-new-session-agent-\(agent.profileID)")
     }

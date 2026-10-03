@@ -399,8 +399,8 @@ public extension ToasttyMobileFixture {
                     reasoningEfforts: ["low", "medium", "high", "xhigh"]
                 ),
                 RemoteSessionStartAgent(
-                    profileID: "cursor",
-                    displayName: "Cursor",
+                    profileID: "pi",
+                    displayName: "Pi",
                     availability: .notInstalled,
                     supportsModel: true
                 ),

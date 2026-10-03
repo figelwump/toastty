@@ -687,7 +687,14 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(claude.waitForExistence(timeout: 5))
         // The last agent used is remembered across launches, so pick one.
         claude.tap()
-        XCTAssertFalse(app.buttons["toastty-mobile-new-session-agent-cursor"].isEnabled)
+        // An agent the Mac cannot start explains itself only when tapped.
+        let agentNote = app.descendants(matching: .any)["toastty-mobile-new-session-agent-note"]
+        XCTAssertFalse(agentNote.exists)
+        app.buttons["toastty-mobile-new-session-agent-pi"].tap()
+        XCTAssertTrue(agentNote.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-new-session-agent-unavailable", of: app)
+        claude.tap()
+        XCTAssertTrue(agentNote.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.buttons["toastty-mobile-new-session-model"].exists)
         XCTAssertTrue(app.buttons["toastty-mobile-new-session-effort"].exists)
         XCTAssertFalse(start.isEnabled)

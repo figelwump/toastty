@@ -19,13 +19,14 @@ final class ToasttyNewSessionModelTests: XCTestCase {
     // MARK: - Form state
 
     func testStartNeedsAnAvailableAgentAndANonBlankMessage() async {
-        let host = FakeNewSessionHost(options: options(agents: [claude(), cursorNotInstalled()]))
+        let host = FakeNewSessionHost(options: options(agents: [claude(), piNotInstalled()]))
         let model = makeModel(host: host)
         await model.loadOptions()
 
         XCTAssertEqual(model.phase, .form)
         XCTAssertEqual(model.selectedAgentID, "claude")
-        XCTAssertEqual(model.unavailableAgentNotes, ["Cursor isn't installed on your Mac."])
+        // An unavailable agent is quiet until it is tapped.
+        XCTAssertEqual(model.unavailableAgentNotes, [])
         XCTAssertFalse(model.canStart)
         model.updateMessage("  \n ")
         XCTAssertFalse(model.canStart)
@@ -33,14 +34,20 @@ final class ToasttyNewSessionModelTests: XCTestCase {
         XCTAssertTrue(model.canStart)
 
         // An agent that cannot start is never the selection.
-        model.selectAgent("cursor")
+        model.selectAgent("pi")
         XCTAssertEqual(model.selectedAgentID, "claude")
+        XCTAssertEqual(model.unavailableAgentNotes, ["Pi isn't installed on your Mac."])
+        XCTAssertTrue(model.canStart)
+        model.selectAgent("claude")
+        XCTAssertEqual(model.unavailableAgentNotes, [])
 
-        let noneAvailable = makeModel(host: FakeNewSessionHost(options: options(agents: [cursorNotInstalled()])))
+        let noneAvailable = makeModel(host: FakeNewSessionHost(options: options(agents: [piNotInstalled()])))
         await noneAvailable.loadOptions()
         noneAvailable.updateMessage("Fix the flaky test")
         XCTAssertNil(noneAvailable.selectedAgent)
         XCTAssertFalse(noneAvailable.canStart)
+        // With nothing to start, the reason shows without a tap.
+        XCTAssertEqual(noneAvailable.unavailableAgentNotes, ["Pi isn't installed on your Mac."])
     }
 
     func testPermissionAndWorkspaceStatesExplainThemselvesAndBlockStart() async {
@@ -399,9 +406,9 @@ final class ToasttyNewSessionModelTests: XCTestCase {
         )
     }
 
-    private func cursorNotInstalled() -> RemoteSessionStartAgent {
+    private func piNotInstalled() -> RemoteSessionStartAgent {
         RemoteSessionStartAgent(
-            profileID: "cursor", displayName: "Cursor", availability: .notInstalled, supportsModel: true
+            profileID: "pi", displayName: "Pi", availability: .notInstalled, supportsModel: true
         )
     }
 

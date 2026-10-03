@@ -162,13 +162,22 @@ final class ToasttyNewSessionModel: Identifiable {
         }
     }
 
-    /// One line per agent that cannot start, with the Mac's reason.
+    /// The unavailable agent the person last tapped, whose reason is shown.
+    private(set) var explainedAgentID: String?
+
+    /// Why agents cannot start. An unavailable agent stays quiet in the
+    /// picker until the person taps it. When no agent can start, every
+    /// reason shows, because that is why Start is off.
     var unavailableAgentNotes: [String] {
         guard options != nil else { return [] }
         guard agents.isEmpty == false else {
             return ["Your Mac has no agent profiles to start."]
         }
-        return agents.compactMap(Self.unavailableReason)
+        guard agents.contains(where: { $0.availability == .available }) else {
+            return agents.compactMap(Self.unavailableReason)
+        }
+        return agents.first { $0.profileID == explainedAgentID }
+            .flatMap(Self.unavailableReason).map { [$0] } ?? []
     }
 
     var canStart: Bool {
@@ -217,10 +226,14 @@ final class ToasttyNewSessionModel: Identifiable {
     // MARK: - Editing
 
     func selectAgent(_ profileID: String) {
-        guard profileID != selectedAgentID,
-              agents.contains(where: { $0.profileID == profileID && $0.availability == .available }) else {
+        guard let agent = agents.first(where: { $0.profileID == profileID }) else { return }
+        guard agent.availability == .available else {
+            // The agent cannot be chosen; say why instead.
+            explainedAgentID = profileID
             return
         }
+        explainedAgentID = nil
+        guard profileID != selectedAgentID else { return }
         applyAgent(profileID)
         draftDidChange()
     }
