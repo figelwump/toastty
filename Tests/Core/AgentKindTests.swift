@@ -15,9 +15,9 @@ struct AgentKindTests {
     }
 
     @Test
-    func cursorUsesStagedSkillsTree() {
+    func cursorAndGrokUseStagedSkillsTree() {
         #expect(AgentKind.cursor.usesStagedSkillsTree)
-        #expect(AgentKind.grok.usesStagedSkillsTree == false)
+        #expect(AgentKind.grok.usesStagedSkillsTree)
     }
 
     @Test

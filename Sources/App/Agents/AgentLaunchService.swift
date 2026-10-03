@@ -719,6 +719,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         ToasttyLaunchContextEnvironment.managedAgentShimBypassKey,
         ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey,
         ToasttyLaunchContextEnvironment.skillsRootKey,
+        ToasttyLaunchContextEnvironment.grokSkillsOverlayKey,
         ToasttyLaunchContextEnvironment.userSkillsRootKey,
         "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT",
         "CODEX_TUI_RECORD_SESSION",

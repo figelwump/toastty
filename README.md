@@ -53,7 +53,7 @@ To build from source, see [Building and Releasing](docs/building-and-releasing.m
   </tr>
 </table>
 
-A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toastty's pieces to use and when. Toastty delivers those skills to managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi launches. The [worktree handoff examples](examples/skills/README.md) (`worktree-create`, `worktree-done`, and `worktree-cleanup`) package a conversation into a new Git worktree and subspace, open the handoff and a verification report beside it, and pin the PR to the sidebar. Other ideas to describe to your agent: start a workspace from a Linear or GitHub issue, open a subspace per PR to review, or split a spec into tasks.
+A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toastty's pieces to use and when. Toastty delivers those skills to managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches. The [worktree handoff examples](examples/skills/README.md) (`worktree-create`, `worktree-done`, and `worktree-cleanup`) package a conversation into a new Git worktree and subspace, open the handoff and a verification report beside it, and pin the PR to the sidebar. Other ideas to describe to your agent: start a workspace from a Linear or GitHub issue, open a subspace per PR to review, or split a spec into tasks.
 
 ## Features
 

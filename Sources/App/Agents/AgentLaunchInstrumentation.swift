@@ -116,7 +116,9 @@ enum AgentLaunchInstrumentation {
                 sessionID: sessionID,
                 fileManager: fileManager,
                 artifactStore: artifactStore,
-                launchEnvironment: launchEnvironment
+                launchEnvironment: launchEnvironment,
+                skillsIntegration: stagedSkillsIntegration,
+                userSkillsRootPath: deliveredUserSkillsRootPath
             )
         }
         if agent == .claude {

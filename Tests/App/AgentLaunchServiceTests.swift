@@ -1155,6 +1155,12 @@ struct AgentLaunchServiceTests {
                 environment: ["TOASTTY_USER_SKILLS_ROOT": "/tmp/user-controlled"]
             )
         }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_GROK_SKILLS_OVERLAY' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "grok",
+                environment: ["TOASTTY_GROK_SKILLS_OVERLAY": "/tmp/user-controlled"]
+            )
+        }
         #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_AGENT' is managed by Toastty")) {
             _ = try service.launch(
                 profileID: "codex",

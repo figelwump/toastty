@@ -61,7 +61,7 @@ Confirm that setup is live by launching an agent in a fresh Toastty pane. Suppor
 
 ## Phase 2: Review Automatic Skills
 
-No skills installation is required. List what Toastty will make available to new supported managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi launches:
+No skills installation is required. List what Toastty will make available to new supported managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches:
 
 ```bash
 "$TOASTTY_CLI_PATH" setup skills list

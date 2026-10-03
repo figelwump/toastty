@@ -86,7 +86,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/hooks/agent-hook`
   - An executable but inert, fully commented starter template that Toastty creates once and never overwrites. Toastty invokes it only when the user points the `agent-hook` config key at this path or another trusted executable.
 - `~/.toastty/skills/` (created only through `Toastty > Manage Toastty Skills…` or by the user)
-  - User-authored skill packages (`<name>/SKILL.md` plus supporting files). Toastty scans this directory read-only. Anything you (or an agent acting on your request) put here becomes agent-visible instructions in managed Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi sessions, and is copied into the snapshot and cache locations below.
+  - User-authored skill packages (`<name>/SKILL.md` plus supporting files). Toastty scans this directory read-only. Anything you (or an agent acting on your request) put here becomes agent-visible instructions in managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi sessions, and is copied into the snapshot and cache locations below.
 - `~/.toastty/agent-plugins/codex/`
   - Per-Codex-home receipt sidecars under `homes/<key>/` recording the verified plugin cache identity, so later managed launches can byte-verify without running Codex. A custom `CODEX_HOME` receives its own hashed `homes/<key>/` entry.
   - These receipts validate cached plugin bytes; they do not establish ownership of the managed profile file.
@@ -103,9 +103,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
     settings JSON, hook script, and any helper failure log. Codex directories
     contain the TUI session record, a fallback notification script when needed,
     and any helper failure log. Grok directories contain hook configuration,
-    forwarding and launch scripts, and any helper failure log. These files contain launch configuration and
-    bounded telemetry context, but not a separate copy of the provider
-    transcript.
+    forwarding and launch scripts, any helper failure log, and copies of the
+    built-in and accepted user skill packages under `skills/x/toastty/.grok/skills/`.
+    Grok skill copies have the same process lifetime as the other launch files.
+    These directories contain launch configuration, skill instructions and
+    resources, and bounded telemetry context, but no separate provider transcript.
   - Toastty records the owning process ID in a private marker: the launch shim
     records the exact spawned Codex or Grok process; Grok UI launches also use
     an exec wrapper to record absolute-path launches. Claude's launch helper uses

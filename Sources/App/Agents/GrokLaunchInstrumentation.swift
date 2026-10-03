@@ -22,7 +22,9 @@ enum GrokLaunchInstrumentation {
         sessionID: String,
         fileManager: FileManager,
         artifactStore: ManagedAgentLaunchArtifactStore?,
-        launchEnvironment: [String: String]
+        launchEnvironment: [String: String],
+        skillsIntegration: ClaudeSkillsLaunchConfiguration? = nil,
+        userSkillsRootPath: String? = nil
     ) throws -> PreparedAgentLaunchCommand {
         let unchanged = PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
         guard let artifactStore, let invocation = invocation(argv: argv),
@@ -60,7 +62,23 @@ enum GrokLaunchInstrumentation {
             try fileManager.createDirectory(at: hooks, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let launchWrapper = artifacts.directoryURL.appendingPathComponent("grok-launch.sh")
             try AgentLaunchInstrumentation.writeExecutableScript(
-                "#!/bin/sh\n(umask 077 && printf '%s\\n' \"$$\" > \(AgentLaunchInstrumentation.shellQuote(ownerURL.path)))\nexec \"$@\"\n",
+                """
+                #!/bin/sh
+                (umask 077 && printf '%s\\n' "$$" > \(AgentLaunchInstrumentation.shellQuote(ownerURL.path)))
+                if [ -n "${\(ToasttyLaunchContextEnvironment.grokSkillsOverlayKey):-}" ]; then
+                  if [ "${XAI_ROOT+x}" != x ] && [ "${XAI_USER+x}" != x ]; then
+                    export XAI_ROOT="$\(ToasttyLaunchContextEnvironment.grokSkillsOverlayKey)" XAI_USER=toastty
+                    if [ -d "$XAI_ROOT/x/toastty/.grok/skills/shipped" ]; then
+                      export \(ToasttyLaunchContextEnvironment.skillsRootKey)="$XAI_ROOT/x/toastty/.grok/skills/shipped"
+                    fi
+                  else
+                    printf '%s\\n' 'Toastty: Grok skills were not added because XAI_ROOT or XAI_USER is already set.' >&2
+                  fi
+                fi
+                unset \(ToasttyLaunchContextEnvironment.grokSkillsOverlayKey)
+                exec "$@"
+
+                """,
                 to: launchWrapper,
                 fileManager: fileManager
             )
@@ -99,17 +117,66 @@ enum GrokLaunchInstrumentation {
             if !options.contains("--no-leader") {
                 preparedArgv.insert("--no-leader", at: invocation.index + 1)
             }
+            var preparedEnvironment = [
+                "GROK_HOME": home.path,
+                ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey: ownerURL.path,
+            ]
+            if environment["XAI_ROOT"] == nil, environment["XAI_USER"] == nil,
+               let overlay = prepareSkillsOverlay(
+                in: artifacts.directoryURL,
+                shippedRootPath: skillsIntegration?.skillsRootPath,
+                userRootPath: userSkillsRootPath,
+                fileManager: fileManager
+            ) {
+                // The launcher checks the actual child environment. Terminal-local
+                // XAI variables may not be visible to this app process.
+                preparedEnvironment[ToasttyLaunchContextEnvironment.grokSkillsOverlayKey] = overlay.path
+            } else if environment["XAI_ROOT"] != nil || environment["XAI_USER"] != nil {
+                ToasttyLog.info(
+                    "Grok skills were not added because XAI_ROOT or XAI_USER is already set",
+                    category: .terminal
+                )
+            }
             return PreparedAgentLaunchCommand(
                 argv: preparedArgv,
-                environment: [
-                    "GROK_HOME": home.path,
-                    ToasttyLaunchContextEnvironment.managedAgentArtifactOwnerFileKey: ownerURL.path,
-                ],
+                environment: preparedEnvironment,
                 artifacts: PreparedAgentLaunchArtifacts(directory: artifacts, codexSessionLogURL: nil, cleanupPolicy: .retainAfterSessionStop)
             )
         } catch {
             artifactStore.removeAbandoned(artifacts)
             throw error
+        }
+    }
+
+    /// Grok 1.0.46 exposes --plugin-dir only on its noninteractive backend.
+    /// The TUI can discover a workspace-user skills directory through XAI_ROOT
+    /// and XAI_USER. Keep copies for the owning process: shared staging can be
+    /// swept after later updates. Native folder trust and skill settings apply.
+    private static func prepareSkillsOverlay(
+        in directory: URL,
+        shippedRootPath: String?,
+        userRootPath: String?,
+        fileManager: FileManager
+    ) -> URL? {
+        guard shippedRootPath != nil || userRootPath != nil else { return nil }
+        let overlay = directory.appendingPathComponent("skills")
+        let skills = overlay.appendingPathComponent("x/toastty/.grok/skills")
+        do {
+            try fileManager.createDirectory(at: overlay, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try fileManager.createDirectory(at: skills, withIntermediateDirectories: true)
+            for (name, source) in [("shipped", shippedRootPath), ("user", userRootPath)] {
+                guard let source else { continue }
+                try fileManager.copyItem(atPath: source, toPath: skills.appendingPathComponent(name).path)
+            }
+            return overlay
+        } catch {
+            try? fileManager.removeItem(at: overlay)
+            ToasttyLog.warning(
+                "Grok skills preparation failed; continuing without added skills",
+                category: .terminal,
+                metadata: ["error": error.localizedDescription]
+            )
+            return nil
         }
     }
 

@@ -9,7 +9,7 @@ public extension AgentKind {
     /// managed profile overlay instead.
     var usesStagedSkillsTree: Bool {
         switch self {
-        case .claude, .cursor, .mimocode, .opencode, .pi:
+        case .claude, .cursor, .grok, .mimocode, .opencode, .pi:
             return true
         default:
             return false

@@ -92,7 +92,7 @@ Toastty Skills…`. A missing user-skills directory is an empty catalog and is
 not created by this command.
 
 Running sessions keep the skills they launched with. Supported managed Codex,
-Claude Code, Cursor, OpenCode, MiMo Code, and Pi launches receive the current inventory
+Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches receive the current inventory
 when they start; unsupported launch shapes or provisioning failures proceed
 without Toastty skills.
 

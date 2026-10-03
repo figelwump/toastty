@@ -363,6 +363,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
         userSkillSnapshot: UserSkillPluginSnapshot?
     ) {
+        // Grok discovers staged skills only after native folder trust permits
+        // it, and preserves caller-owned workspace variables at exec time.
+        // Preparation alone cannot establish that its skills are loaded.
+        guard request.agent != .grok else { return }
         let isAvailable: Bool
         if request.agent == .codex {
             isAvailable = codexSkillsDecision?.configuration != nil

@@ -441,6 +441,49 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         }
     }
 
+    func testGrokLaunchAndRestoreCopyBothSkillTreesWithoutClaimingTheyAreLoaded() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("grok-skills-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shipped = root.appendingPathComponent("shipped/skills")
+        let snapshot = makeUserSkillSnapshotFixture(rootPath: root.appendingPathComponent("snapshot").path)
+        for (tree, name) in [(shipped, "toastty-fixture"), (snapshot.skillsRootURL, "alpha-skill")] {
+            let package = tree.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+            try Data("---\nname: \(name)\ndescription: Fixture\n---\nTest\n".utf8)
+                .write(to: package.appendingPathComponent("SKILL.md"))
+        }
+        let recorder = SkillsProvisionedNoticeRecorder()
+        let observer = NotificationCenter.default.addObserver(forName: .toasttyManagedAgentSkillsProvisioned, object: nil, queue: nil) {
+            recorder.record($0.object as? ManagedAgentSkillsProvisionedNotice)
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let fixture = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: .init(
+                pluginRootPath: shipped.deletingLastPathComponent().path,
+                skillsRootPath: shipped.path, version: "test", contentDigest: "test"
+            )),
+            userSkillSnapshotProvider: RecordingUserSkillSnapshotProvider(snapshot: snapshot),
+            managedAgentLaunchArtifactStore: ManagedAgentLaunchArtifactStore(rootDirectoryURL: root.appendingPathComponent("launches"))
+        )
+        let request = ManagedAgentLaunchRequest(
+            agent: .grok, panelID: fixture.panelID, argv: ["grok", "--continue"], cwd: root.path,
+            environment: ["GROK_HOME": root.appendingPathComponent("grok-home").path]
+        )
+        let launched = try await fixture.planner.prepareManagedLaunchAsync(request)
+        fixture.sessionRuntimeStore.stopSession(sessionID: launched.sessionID, at: Date())
+        let restored = try fixture.planner.prepareRestoredManagedLaunch(request)
+        fixture.sessionRuntimeStore.stopSession(sessionID: restored.sessionID, at: Date())
+        for plan in [launched, restored] {
+            let overlay = URL(fileURLWithPath: try XCTUnwrap(plan.environment[ToasttyLaunchContextEnvironment.grokSkillsOverlayKey]))
+            let skills = overlay.appendingPathComponent("x/toastty/.grok/skills")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: skills.appendingPathComponent("shipped/toastty-fixture/SKILL.md").path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: skills.appendingPathComponent("user/alpha-skill/SKILL.md").path))
+            XCTAssertEqual(plan.argv, ["grok", "--no-leader", "--continue"])
+        }
+        XCTAssertNotEqual(launched.environment[ToasttyLaunchContextEnvironment.grokSkillsOverlayKey], restored.environment[ToasttyLaunchContextEnvironment.grokSkillsOverlayKey])
+        XCTAssertEqual(recorder.notices, [])
+    }
+
     func testRestoredManagedLaunchReusesExistingSnapshotForAdditiveRuntimes() throws {
         AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
         defer { AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil }

@@ -5,6 +5,49 @@ import Testing
 
 struct AgentShimExecutableTests {
     @Test
+    func grokShimIgnoresEmptySkillsOverlay() throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: "grok")
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-grok-empty-skills",
+            managedShimBypass: true,
+            ownerRecordInInitialEnvironment: true,
+            extraEnvironment: [ToasttyLaunchContextEnvironment.grokSkillsOverlayKey: ""]
+        )
+        #expect(result.exitStatus == 7)
+        let log = try fixture.agentLogContents()
+        #expect(log.contains("xai_root=\n"))
+        #expect(log.contains("xai_user=\n"))
+        #expect(log.contains("skills_overlay=\n"))
+    }
+
+    @Test(arguments: [false, true])
+    func grokShimConsumesSkillsOverlayAndPreservesCallerWorkspace(hasCallerWorkspace: Bool) throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: "grok")
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let overlay = fixture.rootURL.appendingPathComponent("skills overlay")
+        let shipped = overlay.appendingPathComponent("x/toastty/.grok/skills/shipped")
+        try FileManager.default.createDirectory(at: shipped, withIntermediateDirectories: true)
+        var environment = [ToasttyLaunchContextEnvironment.grokSkillsOverlayKey: overlay.path]
+        if hasCallerWorkspace { environment["XAI_USER"] = "caller" }
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-grok-skills",
+            managedShimBypass: true,
+            ownerRecordInInitialEnvironment: true,
+            extraEnvironment: environment
+        )
+        #expect(result.exitStatus == 7)
+        let log = try fixture.agentLogContents()
+        #expect(log.contains("xai_root=\(hasCallerWorkspace ? "" : overlay.path)\n"))
+        #expect(log.contains("xai_user=\(hasCallerWorkspace ? "caller" : "toastty")\n"))
+        #expect(log.contains("skills_root=\(hasCallerWorkspace ? "" : shipped.path)\n"))
+        #expect(log.contains("skills_overlay=\n"))
+        #expect(result.stderr.contains("already set") == hasCallerWorkspace)
+    }
+
+    @Test
     func typedCodexShimPreflightRunAnywayReissuesPrepareWithSkipAndLaunchesPlan() throws {
         let fixture = try AgentShimExecutableFixture.make()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -370,6 +413,9 @@ private struct AgentShimExecutableFixture {
         environment[ToasttyLaunchContextEnvironment.cliPathKey] = fakeCLIURL.path
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.sessionIDKey] = inheritedSessionID
+        for key in ["XAI_ROOT", "XAI_USER", ToasttyLaunchContextEnvironment.skillsRootKey, ToasttyLaunchContextEnvironment.grokSkillsOverlayKey] {
+            environment.removeValue(forKey: key)
+        }
         environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = nil
         environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryURL.path
         environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = managedShimBypass ? "1" : nil
@@ -560,6 +606,10 @@ private struct AgentShimExecutableFixture {
           printf 'record_session=%s\\n' "${CODEX_TUI_RECORD_SESSION:-}"
           printf 'session_log=%s\\n' "${CODEX_TUI_SESSION_LOG_PATH:-}"
           printf 'grok_home=%s\\n' "${GROK_HOME:-}"
+          printf 'xai_root=%s\\n' "${XAI_ROOT:-}"
+          printf 'xai_user=%s\\n' "${XAI_USER:-}"
+          printf 'skills_root=%s\\n' "${TOASTTY_SKILLS_ROOT:-}"
+          printf 'skills_overlay=%s\\n' "${TOASTTY_GROK_SKILLS_OVERLAY:-}"
           printf 'pid=%s\\n' "$$"
           printf 'owner_file=%s\\n' "${TOASTTY_MANAGED_ARTIFACT_OWNER_FILE:-}"
         } >> "$TOASTTY_FAKE_AGENT_LOG"
