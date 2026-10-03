@@ -302,7 +302,7 @@ final class TerminalMetadataService {
 
         case .setTerminalCWD(let cwd):
             guard let workspace = state.workspacesByID[workspaceID],
-                  let panelState = workspace.panels[panelID],
+                  let panelState = workspace.panelState(for: panelID),
                   case .terminal(let terminalState) = panelState else {
                 return false
             }

@@ -43,7 +43,7 @@ public enum AppAction: Equatable, Sendable {
     case moveWorkspaceTab(workspaceID: UUID, fromIndex: Int, toIndex: Int)
     case moveSidebarSession(workspaceID: UUID, panelID: UUID, targetPanelID: UUID, placeAfter: Bool, visiblePanelIDs: [UUID])
     case createWorkspace(windowID: UUID, title: String?, activate: Bool)
-    case createWorkspaceTab(workspaceID: UUID, seed: WindowLaunchSeed?)
+    case createWorkspaceTab(workspaceID: UUID, seed: WindowLaunchSeed?, activate: Bool = true)
     /// Appends a tab holding one plain terminal, without selecting it. The
     /// caller chooses the IDs so it can address the terminal afterward. The
     /// terminal takes no profile binding: a profile's startup command would
@@ -115,6 +115,15 @@ public enum AppAction: Equatable, Sendable {
         workspaceID: UUID,
         direction: SlotSplitDirection,
         profileBinding: TerminalProfileBinding
+    )
+    /// Splits a specific main-layout panel without depending on the selected tab.
+    case splitPanel(
+        workspaceID: UUID,
+        tabID: UUID,
+        panelID: UUID,
+        direction: SlotSplitDirection,
+        profileBinding: TerminalProfileBinding?,
+        activate: Bool
     )
     case focusSlot(workspaceID: UUID, direction: SlotFocusDirection)
     case resizeFocusedSlotSplit(workspaceID: UUID, direction: SplitResizeDirection, amount: Int)
@@ -250,6 +259,8 @@ public extension AppAction {
             return "splitFocusedSlotInDirectionWithWorkingDirectory"
         case .splitFocusedSlotInDirectionWithTerminalProfile:
             return "splitFocusedSlotInDirectionWithTerminalProfile"
+        case .splitPanel:
+            return "splitPanel"
         case .focusSlot:
             return "focusSlot"
         case .resizeFocusedSlotSplit:

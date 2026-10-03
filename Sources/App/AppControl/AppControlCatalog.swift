@@ -222,7 +222,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
         case .workspaceClose:
             return .init(id: rawValue, kind: .action, summary: "Close a workspace. Its subspaces stay open as top-level workspaces.", selectors: [.windowID, .workspaceID])
         case .workspaceTabCreate:
-            return .init(id: rawValue, kind: .action, summary: "Create a new workspace tab.", selectors: [.windowID, .workspaceID], aliases: aliases)
+            return .init(id: rawValue, kind: .action, summary: "Create a terminal tab and return workspaceID, tabID and panelID. Managed callers default to their own workspace.", selectors: [.windowID, .workspaceID], parameters: [.terminalCreationActivation(required: false)], aliases: aliases)
         case .workspaceTabSelect:
             return .init(
                 id: rawValue,
@@ -273,21 +273,21 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 aliases: aliases
             )
         case .workspaceSplitHorizontal:
-            return .init(id: rawValue, kind: .action, summary: "Split the focused slot horizontally.", selectors: [.windowID, .workspaceID])
+            return terminalSplitDescriptor(summary: "Create a terminal split horizontally.")
         case .workspaceSplitVertical:
-            return .init(id: rawValue, kind: .action, summary: "Split the focused slot vertically.", selectors: [.windowID, .workspaceID])
+            return terminalSplitDescriptor(summary: "Create a terminal split vertically.")
         case .workspaceSplitRight:
-            return .init(id: rawValue, kind: .action, summary: "Split the focused slot to the right.", selectors: [.windowID, .workspaceID])
+            return terminalSplitDescriptor(summary: "Create a terminal split to the right.")
         case .workspaceSplitDown:
-            return .init(id: rawValue, kind: .action, summary: "Split the focused slot downward.", selectors: [.windowID, .workspaceID])
+            return terminalSplitDescriptor(summary: "Create a terminal split downward.")
         case .workspaceSplitLeft:
-            return .init(id: rawValue, kind: .action, summary: "Split the focused slot to the left.", selectors: [.windowID, .workspaceID])
+            return terminalSplitDescriptor(summary: "Create a terminal split to the left.")
         case .workspaceSplitUp:
-            return .init(id: rawValue, kind: .action, summary: "Split the focused slot upward.", selectors: [.windowID, .workspaceID])
+            return terminalSplitDescriptor(summary: "Create a terminal split upward.")
         case .workspaceSplitRightWithProfile:
-            return .init(id: rawValue, kind: .action, summary: "Split right with a terminal profile.", selectors: [.windowID, .workspaceID], parameters: [.profileID(required: true)])
+            return terminalSplitDescriptor(summary: "Split right with a terminal profile.", withProfile: true)
         case .workspaceSplitDownWithProfile:
-            return .init(id: rawValue, kind: .action, summary: "Split down with a terminal profile.", selectors: [.windowID, .workspaceID], parameters: [.profileID(required: true)])
+            return terminalSplitDescriptor(summary: "Split down with a terminal profile.", withProfile: true)
         case .panelClose:
             return .init(
                 id: rawValue,
@@ -433,10 +433,11 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Launch an agent profile into a terminal panel.",
-                selectors: [.workspaceID, .panelID],
+                summary: "Launch an agent profile into a terminal without changing selection or keyboard focus. Managed callers default to their own workspace and tab. Prefer the panelID returned by creation.",
+                selectors: [.windowID, .workspaceID, .panelID],
                 parameters: [
                     .profileID(required: true),
+                    .tabID(required: false),
                     .cwd(required: false),
                     .environment(required: false),
                     .model(required: false),
@@ -454,6 +455,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
         case .terminalDropImageFiles:
             return .init(id: rawValue, kind: .action, summary: "Drop local files into a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.files(required: true), .cwd(required: false), .allowUnavailable(required: false)])
         }
+    }
+
+    private func terminalSplitDescriptor(summary: String, withProfile: Bool = false) -> AppControlCommandDescriptor {
+        .init(
+            id: rawValue,
+            kind: .action,
+            summary: summary + " Uses panelID as the source, or the target tab's focused slot. Managed callers default to their own workspace and tab. Returns workspaceID, tabID and panelID.",
+            selectors: [.windowID, .workspaceID, .panelID],
+            parameters: [.tabID(required: false), .terminalCreationActivation(required: false)] +
+                (withProfile ? [.profileID(required: true)] : [])
+        )
     }
 }
 
@@ -565,6 +577,15 @@ private extension AppControlParameterDescriptor {
         .init(
             name: "activate",
             summary: "Select the new workspace immediately. Defaults to true.",
+            valueType: .boolean,
+            required: required
+        )
+    }
+
+    static func terminalCreationActivation(required: Bool) -> Self {
+        .init(
+            name: "activate",
+            summary: "Select the new tab or focus the new panel within the target workspace. Defaults to true. false preserves tab selection and panel focus. Does not select a different workspace or window.",
             valueType: .boolean,
             required: required
         )

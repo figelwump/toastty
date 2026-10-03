@@ -667,6 +667,11 @@ struct AgentLaunchServiceTests {
         let startedSessionID = try #require(observerRegistry.startedObservations.first?.managedSessionID)
         #expect(observerRegistry.cancelledSessionIDs == [startedSessionID])
         #expect(sessionRuntimeStore.sessionRegistry.activeSession(sessionID: startedSessionID) == nil)
+        #expect(sessionRuntimeStore.sessionRegistry.activeSession(for: panelID) == nil)
+        #expect(sessionRuntimeStore.sessionRegistry.activeSessionIDByPanelID[panelID] == nil)
+        #expect(sessionRuntimeStore.sessionRegistry.sessionsByID[startedSessionID]?.stoppedAt != nil)
+        #expect(terminalRouter.sendAttemptsByPanelID[panelID] == 1)
+        #expect(store.hasEverLaunchedAgent == false)
     }
 
     @Test

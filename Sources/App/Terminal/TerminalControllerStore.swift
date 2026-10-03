@@ -131,19 +131,24 @@ final class TerminalControllerStore {
     func registerPendingSplitSourceIfNeeded(
         workspaceID: UUID,
         previousState: AppState,
-        nextState: AppState
+        nextState: AppState,
+        sourcePanelID explicitSourcePanelID: UUID? = nil
     ) {
         guard let previousWorkspace = previousState.workspacesByID[workspaceID],
               let nextWorkspace = nextState.workspacesByID[workspaceID],
-              let sourcePanelID = Self.resolveSplitSourcePanelID(in: previousWorkspace) else {
+              let sourcePanelID = explicitSourcePanelID ?? Self.resolveSplitSourcePanelID(in: previousWorkspace),
+              let sourceTabID = previousWorkspace.tabID(containingPanelID: sourcePanelID),
+              case .terminal = previousWorkspace.panelState(for: sourcePanelID) else {
             return
         }
 
-        let createdPanelIDs = Set(nextWorkspace.panels.keys).subtracting(previousWorkspace.panels.keys)
+        let createdPanelIDs = Set(nextWorkspace.allPanelsByID.keys).subtracting(previousWorkspace.allPanelsByID.keys)
         guard createdPanelIDs.count == 1,
               let newPanelID = createdPanelIDs.first,
-              case .terminal = nextWorkspace.panels[newPanelID],
-              case .terminal = nextWorkspace.panels[sourcePanelID] else {
+              nextWorkspace.tabID(containingPanelID: newPanelID) == sourceTabID,
+              nextWorkspace.tabID(containingPanelID: sourcePanelID) == sourceTabID,
+              case .terminal = nextWorkspace.panelState(for: newPanelID),
+              case .terminal = nextWorkspace.panelState(for: sourcePanelID) else {
             return
         }
 

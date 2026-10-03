@@ -885,7 +885,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     }
     #endif
 
-    private func isReadyForAutomationInput(now: Date = Date()) -> Bool {
+    func isReadyForAutomationInput(now: Date = Date()) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
         guard lifecycleState.isReadyForFocus else {
             return false

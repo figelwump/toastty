@@ -2362,7 +2362,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
         let service = TerminalMetadataService(
             store: store,
             registry: registry,
-            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            resolveWorkingDirectoryFromProcessOverride: { panelID in
+                panelID == backgroundPanelID ? "/tmp/background-tab" : nil
+            },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
             },
@@ -2371,10 +2373,21 @@ final class TerminalMetadataServiceTests: XCTestCase {
             }
         )
 
-        service.reconcileSurfaceWorkingDirectory(
-            panelID: backgroundPanelID,
-            workingDirectory: "/tmp/background-tab",
-            source: "test"
+        XCTAssertEqual(
+            service.refreshWorkingDirectoryFromProcessIfNeeded(
+                panelID: backgroundPanelID,
+                source: "pre_split_refresh"
+            ),
+            "/tmp/background-tab"
+        )
+        XCTAssertEqual(try terminalState(panelID: backgroundPanelID, state: store.state).cwd, "/tmp/background-tab")
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalCWD("/tmp/background-tab-native"),
+                workspaceID: workspaceID,
+                panelID: backgroundPanelID,
+                state: store.state
+            )
         )
         XCTAssertTrue(
             service.handleRuntimeMetadataAction(
@@ -2389,7 +2402,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
         let terminalState = try terminalState(panelID: backgroundPanelID, state: store.state)
         let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(updatedWorkspace.selectedTabID, selectedTabID)
-        XCTAssertEqual(terminalState.cwd, "/tmp/background-tab")
+        XCTAssertEqual(terminalState.cwd, "/tmp/background-tab-native")
+        XCTAssertTrue(service.prefersNativeCWDSignal(panelID: backgroundPanelID))
         XCTAssertEqual(terminalState.title, "Terminal 1")
         XCTAssertEqual(service.liveTitle(for: backgroundPanelID), "bundle exec rspec")
         try StateValidator.validate(store.state)

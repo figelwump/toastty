@@ -808,7 +808,7 @@ public enum ToasttyCLI {
     static let usage = """
     Usage:
       toastty [--json] [--socket-path <path>] action list
-      toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+      toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
       toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive] [--resolved-codex-executable <path>] [--codex-home <path>] [--codex-process-path <path>]
       toastty [--json] [--socket-path <path>] agent managed-launch-preflight-decision --token <id>
       toastty [--json] [--socket-path <path>] doctor
@@ -816,7 +816,7 @@ public enum ToasttyCLI {
       toastty diagnostics submit --file <file> [--contact <text>] [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
-      toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+      toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -1085,10 +1085,13 @@ public enum ToasttyCLI {
         case "run":
             let parsed = try parseCommandArguments(
                 remainingArguments,
-                valueOptions: ["--window", "--workspace", "--panel", "--stdin"]
+                valueOptions: ["--window", "--workspace", "--tab", "--panel", "--stdin"]
             )
             guard let id = parsed.positionals.first, id.isEmpty == false else {
                 throw ToasttyCLIError.usage("\(kind.rawValue) run requires <id>\n\n\(usage)")
+            }
+            guard parsed.values("--tab").count <= 1 else {
+                throw ToasttyCLIError.usage("tabID must be supplied only once\n\n\(usage)")
             }
 
             var args: [String: AutomationJSONValue] = [:]
@@ -1104,6 +1107,12 @@ public enum ToasttyCLI {
                 }
                 args["workspaceID"] = .string(workspaceID)
             }
+            if let tabID = parsed.singleValue("--tab") {
+                guard UUID(uuidString: tabID) != nil else {
+                    throw ToasttyCLIError.usage("--tab must be a UUID\n\n\(usage)")
+                }
+                args["tabID"] = .string(tabID)
+            }
             if let panelID = parsed.singleValue("--panel") {
                 guard UUID(uuidString: panelID) != nil else {
                     throw ToasttyCLIError.usage("--panel must be a UUID\n\n\(usage)")
@@ -1113,6 +1122,9 @@ public enum ToasttyCLI {
 
             for argument in parsed.positionals.dropFirst() {
                 let assignment = try parseKeyValueAssignment(argument)
+                if assignment.key == "tabID", args["tabID"] != nil {
+                    throw ToasttyCLIError.usage("tabID must be supplied only once\n\n\(usage)")
+                }
                 recordAppControlValue(.string(assignment.value), for: assignment.key, in: &args)
             }
             if let stdinKey = parsed.singleValue("--stdin") {

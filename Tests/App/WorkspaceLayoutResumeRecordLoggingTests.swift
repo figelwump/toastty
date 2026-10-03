@@ -178,6 +178,51 @@ final class WorkspaceLayoutResumeRecordLoggingTests: XCTestCase {
         XCTAssertEqual(removeLog.metadata["next_count"], "0")
     }
 
+    func testPersistenceCoordinatorLogsExplicitSourceInUnselectedTab() throws {
+        let fileURL = temporaryLayoutFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        var initialState = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(initialState.selectedWorkspaceSelection()?.workspaceID)
+        var workspace = try XCTUnwrap(initialState.workspacesByID[workspaceID])
+        let backgroundTab = WorkspaceTabState.bootstrap(initialTerminalCWD: "/tmp/source")
+        let sourcePanelID = try XCTUnwrap(backgroundTab.focusedPanelID)
+        workspace.appendTab(backgroundTab, select: false)
+        initialState.workspacesByID[workspaceID] = workspace
+        let action = AppAction.splitPanel(
+            workspaceID: workspaceID,
+            tabID: backgroundTab.id,
+            panelID: sourcePanelID,
+            direction: .right,
+            profileBinding: nil,
+            activate: false
+        )
+        var nextState = initialState
+        XCTAssertTrue(AppReducer().send(action, state: &nextState))
+        var logs: [(message: String, metadata: [String: String])] = []
+        let coordinator = WorkspaceLayoutPersistenceCoordinator(
+            context: WorkspaceLayoutPersistenceContext(
+                profileID: "test-profile",
+                fileURL: fileURL,
+                shouldMigrateLegacyStore: false
+            ),
+            layoutLifecycleLogger: { message, metadata in
+                logs.append((message, metadata))
+            }
+        )
+
+        coordinator.handleAppliedAction(action, previousState: initialState, nextState: nextState)
+
+        let panelCreatedLog = try XCTUnwrap(logs.first { log in
+            log.message == "Workspace layout topology changed" &&
+                log.metadata["mutation"] == "panel_created"
+        })
+        XCTAssertEqual(panelCreatedLog.metadata["action"], "splitPanel")
+        XCTAssertEqual(panelCreatedLog.metadata["workspace_id"], workspaceID.uuidString)
+        XCTAssertEqual(panelCreatedLog.metadata["tab_id"], backgroundTab.id.uuidString)
+        XCTAssertEqual(panelCreatedLog.metadata["source_panel_id"], sourcePanelID.uuidString)
+        XCTAssertEqual(panelCreatedLog.metadata["tab_selected"], "false")
+    }
+
     func testPersistenceCoordinatorToleratesDuplicatePanelIDsInDiagnosticProjection() throws {
         let fileURL = temporaryLayoutFileURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }

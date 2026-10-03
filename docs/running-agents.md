@@ -70,6 +70,15 @@ Profile fields:
 
 ### Automation launch options
 
+`--workspace <id>`, `--tab <id>`, and `--panel <id>` select the destination.
+`--tab` is shorthand for `tabID=<id>`; supply the tab only once.
+An explicit panel identifies its workspace and tab. Supplied IDs must agree; invalid or closed targets fail.
+Without an explicit workspace, tab, panel, or window, a managed caller uses
+its own workspace and tab. In the caller's workspace, an omitted tab also
+means the caller's tab. Other explicit workspaces use their selected tab.
+A caller without a managed session retains the selected-workspace default.
+The destination panel is fixed before launch waits for the terminal to be ready.
+
 The `agent.launch` app-control action accepts optional structured launch
 arguments for automation:
 
@@ -125,6 +134,38 @@ instrumentation. Toastty fails the launch clearly when a wrapper, executable,
 or equivalent flag shape is ambiguous instead of risking a conflicting argv.
 The live `agent.launch` action descriptor advertises `supportedProfileIDs` on
 both parameters so automation can feature-detect this support.
+
+To create a terminal in the background, use `activate=false` with
+`workspace.split.right` (or another split direction) or `workspace.tab.create`.
+Split actions accept `--workspace`, `--tab`, and an optional `--panel` that
+identifies the panel to split. Without a panel, they split the target tab's
+focused slot. Managed callers use the same workspace and tab defaults as
+`agent.launch`. Tab creation accepts a workspace or window target and defaults
+to the managed caller's workspace.
+
+Both creation paths return `workspaceID`, `tabID`, and the new terminal's
+`panelID`. Check that the response succeeded, then pass those IDs to
+`agent.launch`. Do not find the new terminal by reading the current UI selection.
+
+```bash
+created=$("$TOASTTY_CLI_PATH" --json action run workspace.split.right \
+  --workspace "$workspace_id" --tab "$tab_id" activate=false) || exit 1
+printf '%s' "$created" | jq -e '.ok == true' >/dev/null || exit 1
+
+"$TOASTTY_CLI_PATH" --json action run agent.launch \
+  --workspace "$(printf '%s' "$created" | jq -r '.result.workspaceID')" \
+  --tab "$(printf '%s' "$created" | jq -r '.result.tabID')" \
+  --panel "$(printf '%s' "$created" | jq -r '.result.panelID')" \
+  profileID=codex
+```
+
+`activate=false` preserves the selected tab, panel focus, and right-panel focus.
+The default, `activate=true`, selects the new tab or focuses the new panel within
+the target workspace. Neither setting selects another workspace or window.
+`agent.launch` always preserves selection and keyboard focus. A new terminal can
+take time to start; launch waits briefly for its shell prompt and fails if the
+terminal is still unavailable or busy. Preserve that error and retry the same
+panel when appropriate. Never redirect a failed launch to a different panel.
 
 Built-in Codex, Claude, and Cursor automation launches support `initialPrompt` when the
 resolved argv is exactly one direct first-party command (`codex`, `cdx`,

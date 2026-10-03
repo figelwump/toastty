@@ -126,7 +126,8 @@ final class TerminalWindowRuntimeStore {
     func registerPendingSplitSourceIfNeeded(
         workspaceID: UUID,
         previousState: AppState,
-        nextState: AppState
+        nextState: AppState,
+        sourcePanelID: UUID? = nil
     ) {
         guard let windowID = windowID(forWorkspaceID: workspaceID, state: nextState) else {
             preconditionFailure(
@@ -135,7 +136,8 @@ final class TerminalWindowRuntimeStore {
         }
         runtime(for: workspaceID, windowID: windowID, state: nextState).registerPendingSplitSourceIfNeeded(
             previousState: previousState,
-            nextState: nextState
+            nextState: nextState,
+            sourcePanelID: sourcePanelID
         )
     }
 
