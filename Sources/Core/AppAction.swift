@@ -44,6 +44,11 @@ public enum AppAction: Equatable, Sendable {
     case moveSidebarSession(workspaceID: UUID, panelID: UUID, targetPanelID: UUID, placeAfter: Bool, visiblePanelIDs: [UUID])
     case createWorkspace(windowID: UUID, title: String?, activate: Bool)
     case createWorkspaceTab(workspaceID: UUID, seed: WindowLaunchSeed?)
+    /// Appends a tab holding one plain terminal, without selecting it. The
+    /// caller chooses the IDs so it can address the terminal afterward. The
+    /// terminal takes no profile binding: a profile's startup command would
+    /// occupy the shell that the caller is about to use.
+    case createBackgroundTerminalTab(workspaceID: UUID, tabID: UUID, panelID: UUID, terminalCWD: String)
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
@@ -149,6 +154,8 @@ public extension AppAction {
             return "createWorkspace"
         case .createWorkspaceTab:
             return "createWorkspaceTab"
+        case .createBackgroundTerminalTab:
+            return "createBackgroundTerminalTab"
         case .createWindow:
             return "createWindow"
         case .closeWindow:

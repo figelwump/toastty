@@ -365,3 +365,81 @@ public enum ToasttyMobileFixture {
 
     private static let fixtureReceiptTime = ProcessInfo.processInfo.systemUptime
 }
+
+// MARK: - Session start
+
+public extension ToasttyMobileFixture {
+    /// What a Mac would offer for a new session in `workspace`: two agents
+    /// that can start and one that cannot, so the sheet's states are all
+    /// reachable without a Mac.
+    static func sessionStartOptions(for workspace: MobileWorkspace?) -> RemoteSessionStartOptionsResponse {
+        guard let workspace else {
+            return RemoteSessionStartOptionsResponse(permission: .allowed, workspace: .notFound)
+        }
+        return RemoteSessionStartOptionsResponse(
+            permission: .allowed,
+            workspace: .available,
+            launchDirectory: workspace.conversations.lazy.compactMap(\.cwd).first
+                ?? "~/GiantThings/repos/\(workspace.title)",
+            agents: [
+                RemoteSessionStartAgent(
+                    profileID: "claude",
+                    displayName: "Claude",
+                    availability: .available,
+                    supportsModel: true,
+                    recentModels: ["claude-opus-5-5", "claude-fable-5-1"],
+                    reasoningEfforts: ["low", "medium", "high", "xhigh"]
+                ),
+                RemoteSessionStartAgent(
+                    profileID: "codex",
+                    displayName: "Codex",
+                    availability: .available,
+                    supportsModel: true,
+                    recentModels: ["gpt-6.1-sol"],
+                    reasoningEfforts: ["low", "medium", "high", "xhigh"]
+                ),
+                RemoteSessionStartAgent(
+                    profileID: "cursor",
+                    displayName: "Cursor",
+                    availability: .notInstalled,
+                    supportsModel: true
+                ),
+            ]
+        )
+    }
+
+    /// The session a fixture start adds to `workspace`, as the Mac's next
+    /// snapshot would list it.
+    static func startedConversation(
+        id: UUID,
+        request: RemoteSessionStartRequest,
+        agentDisplayName: String,
+        workspace: MobileWorkspace
+    ) -> MobileConversation {
+        let profile = RemoteSessionExecutionProfile(
+            modelIdentifier: request.model,
+            reasoningEffort: request.reasoningEffort
+        )
+        return MobileConversation(
+            id: id,
+            workspaceID: workspace.id,
+            workspaceTitle: workspace.title,
+            cwd: sessionStartOptions(for: workspace).launchDirectory,
+            agent: AgentKind(rawValue: request.profileID) ?? .claude,
+            title: "New \(agentDisplayName) session",
+            state: MobileSessionStatus.working,
+            inputAvailability: .unavailable(reason: "working"),
+            age: "now",
+            activityAge: MobileActivityAge(
+                secondsAtReceipt: 0,
+                receivedAtMonotonicTime: ProcessInfo.processInfo.systemUptime
+            ),
+            lastActivity: request.text,
+            executionProfile: profile.isEmpty ? nil : profile,
+            turnElapsed: MobileActivityAge(
+                secondsAtReceipt: 0,
+                receivedAtMonotonicTime: ProcessInfo.processInfo.systemUptime
+            )
+        )
+    }
+}

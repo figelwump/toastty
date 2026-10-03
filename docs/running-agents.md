@@ -134,9 +134,13 @@ subcommands, wrappers, shell helpers such as `argv = ["scodex"]`, and custom
 profiles such as `[gemini]`, must declare
 `initialPromptPlacement = "trailing"` before `initialPrompt` is accepted. Pi
 launches currently do not support `initialPrompt` unless a profile declares that
-placement explicitly. For a direct Cursor launch, Toastty inserts the
-standard `--` option boundary when the prompt begins with `-`, so prompt text is
-not mistaken for a Cursor CLI flag.
+placement explicitly. When the prompt begins with `-` and the profile's command
+is a first-party one (`codex`, `cdx`, `claude`, or `cursor-agent`, with or
+without configured arguments), Toastty inserts the standard `--` option
+boundary, so prompt text is not mistaken for a CLI flag. For a wrapper or
+custom command Toastty cannot know the boundary and passes the prompt as
+written; a session started from Toastty Mobile refuses such a message
+instead.
 
 ### Profile ID rules
 

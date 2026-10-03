@@ -107,7 +107,7 @@ See [Right Panel](docs/right-panel.md) for shortcuts, Recently Opened, and link 
 
 ### Toastty Mobile (TestFlight)
 
-Check on sessions and reply from your iPhone over your private tailnet. It is available through TestFlight for now; see [Remote Access](docs/remote-access.md).
+Check on sessions, reply, and start new sessions from your iPhone over your private tailnet. It is available through TestFlight for now; see [Remote Access](docs/remote-access.md).
 
 ## Automate it
 

@@ -672,6 +672,49 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(flagged.label.hasSuffix("flagged for later"))
     }
 
+    func testNewSessionFromAWorkspaceStartsAndOpensTheConversation() {
+        let app = launchFixtureApp()
+        openWorkspace(toasttyWorkspaceID, in: app)
+
+        let newSession = app.buttons["toastty-mobile-workspace-new-session"]
+        XCTAssertTrue(newSession.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-new-session-workspace", of: app)
+        newSession.tap()
+
+        let start = app.buttons["toastty-mobile-new-session-start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        let claude = app.buttons["toastty-mobile-new-session-agent-claude"]
+        XCTAssertTrue(claude.waitForExistence(timeout: 5))
+        // The last agent used is remembered across launches, so pick one.
+        claude.tap()
+        XCTAssertFalse(app.buttons["toastty-mobile-new-session-agent-cursor"].isEnabled)
+        XCTAssertTrue(app.buttons["toastty-mobile-new-session-model"].exists)
+        XCTAssertTrue(app.buttons["toastty-mobile-new-session-effort"].exists)
+        XCTAssertFalse(start.isEnabled)
+
+        let message = app.textViews["toastty-mobile-new-session-message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        message.tap()
+        message.typeText("Fix the flaky picker test")
+        XCTAssertTrue(start.isEnabled)
+        attachScreenshot(named: "fixture-new-session-form", of: app)
+        start.tap()
+
+        let conversationTitle = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 15))
+        XCTAssertEqual(conversationTitle.label, "New Claude session")
+        XCTAssertFalse(start.exists)
+        attachScreenshot(named: "fixture-new-session-opened", of: app)
+
+        // The new session is listed in the workspace it started in.
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "New Claude session"))
+                .firstMatch.waitForExistence(timeout: 5)
+        )
+    }
+
     func testSwipeInfoOpensTheDetailSheet() {
         let app = launchFixtureApp()
         showAllSessions(in: app)

@@ -108,6 +108,23 @@ enum AgentLaunchError: LocalizedError, Equatable {
     }
 }
 
+/// A configured profile as a launch would resolve it.
+struct AgentLaunchProfileSummary: Equatable, Sendable {
+    var profileID: String
+    var displayName: String
+    var agent: AgentKind
+    /// The profile's command resolves to an executable.
+    var isInstalled: Bool
+    /// A first prompt can be passed on the command line.
+    var acceptsInitialPrompt: Bool
+    /// A first prompt that starts with a dash is passed as text. False for a
+    /// wrapper command, where the launcher cannot know how to mark the end
+    /// of options.
+    var acceptsLeadingDashPrompt: Bool
+    var supportsModel: Bool
+    var supportsReasoningEffort: Bool
+}
+
 @MainActor
 final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private static let asyncPromptReadinessTimeout: Duration = .seconds(1)
@@ -275,7 +292,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         additionalDirectories: [String] = [],
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
         parentSessionID: String? = nil,
-        focusPolicy: TerminalInputFocusPolicy = .focusTarget
+        focusPolicy: TerminalInputFocusPolicy = .focusTarget,
+        beforeDispatch: (@MainActor () throws -> Void)? = nil
     ) async throws -> AgentLaunchResult {
         let preparation = try makeLaunchPreparation(
             profileID: profileID,
@@ -304,6 +322,16 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             preparation.request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
         )
+        // The caller's last check runs here, after the final suspension, so
+        // nothing can change between it and the command reaching the shell.
+        if let beforeDispatch {
+            do {
+                try beforeDispatch()
+            } catch {
+                managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+                throw error
+            }
+        }
         return try completeLaunch(preparation, plan: plan)
     }
 
@@ -594,6 +622,25 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         )
     }
 
+    /// What a caller that offers profiles to a person needs to know about
+    /// each configured profile, resolved the same way a launch resolves it.
+    func launchProfileSummaries() -> [AgentLaunchProfileSummary] {
+        agentCatalogProvider.catalog.profiles.compactMap { profile in
+            guard let agent = AgentKind(rawValue: profile.id) else { return nil }
+            let executable = try? profileExecutableState(profileID: profile.id)
+            return AgentLaunchProfileSummary(
+                profileID: profile.id,
+                displayName: profile.displayName,
+                agent: agent,
+                isInstalled: executable?.executablePath != nil,
+                acceptsInitialPrompt: initialPromptPlacement(for: profile, agent: agent) == .trailing,
+                acceptsLeadingDashPrompt: Self.argvRunsFirstPartyPromptCommand(profile.argv, for: agent),
+                supportsModel: AgentLaunchArgumentOverrideAdapter.modelSupportedAgents.contains(agent),
+                supportsReasoningEffort: AgentLaunchArgumentOverrideAdapter.reasoningEffortSupportedAgents.contains(agent)
+            )
+        }
+    }
+
     private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {
         agent == .codex
             || agent == .claude
@@ -790,9 +837,14 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         if forkRecord != nil || !additionalDirectories.isEmpty {
             return overrideArgv + ["--", prompt]
         }
-        if agent == .cursor,
-           Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent),
-           prompt.hasPrefix("-") {
+        // A prompt that starts with a dash would be read as an option, so it
+        // goes after the standard end-of-options marker. Only the first-party
+        // commands are known to accept the marker.
+        if prompt.hasPrefix("-"),
+           Self.argvRunsFirstPartyPromptCommand(profile.argv, for: agent),
+           // A configured marker already ends the options; a second one
+           // would itself be read as the prompt.
+           overrideArgv.contains("--") == false {
             return overrideArgv + ["--", prompt]
         }
         return overrideArgv + [prompt]
@@ -830,8 +882,13 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     }
 
     private static func argvIsDirectFirstPartyPromptCommand(_ argv: [String], for agent: AgentKind) -> Bool {
-        guard argv.count == 1,
-              let executable = argv.first else {
+        argv.count == 1 && argvRunsFirstPartyPromptCommand(argv, for: agent)
+    }
+
+    /// Whether argv[0] is the provider's own command, with or without
+    /// configured arguments after it.
+    private static func argvRunsFirstPartyPromptCommand(_ argv: [String], for agent: AgentKind) -> Bool {
+        guard let executable = argv.first else {
             return false
         }
         let commandNames: Set<String>

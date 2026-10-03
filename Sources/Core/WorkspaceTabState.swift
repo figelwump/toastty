@@ -43,14 +43,15 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
     }
 
     public static func bootstrap(
+        id: UUID = UUID(),
+        panelID: UUID = UUID(),
         initialTerminalCWD: String? = nil,
         initialTerminalProfileBinding: TerminalProfileBinding? = nil,
         terminalTitle: String = "Terminal 1"
     ) -> WorkspaceTabState {
-        let panelID = UUID()
         let slotID = UUID()
         return WorkspaceTabState(
-            id: UUID(),
+            id: id,
             layoutTree: .slot(slotID: slotID, panelID: panelID),
             panels: [
                 panelID: .terminal(

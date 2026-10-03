@@ -324,6 +324,20 @@ public final class RemoteDeviceStore: @unchecked Sendable {
         }
     }
 
+    /// Turns "Start sessions" off or back on for one device.
+    @discardableResult
+    public func setSessionStartDisabled(_ disabled: Bool, forDevice deviceID: UUID) throws -> Bool {
+        try withStateLock {
+            guard let index = storedState.devices.firstIndex(where: { $0.id == deviceID }),
+                  storedState.devices[index].sessionStartDisabled != disabled else { return false }
+            var nextState = storedState
+            nextState.devices[index].sessionStartDisabled = disabled
+            try persistSynchronously(nextState)
+            storedState = nextState
+            return true
+        }
+    }
+
     @discardableResult
     public func revokeDevice(_ deviceID: UUID, at date: Date) throws -> Bool {
         try withStateLock {

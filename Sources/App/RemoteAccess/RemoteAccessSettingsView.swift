@@ -396,6 +396,18 @@ struct RemoteAccessSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
+                        if device.authKind == .native {
+                            // Starting a session sends a first message, so
+                            // the switch means nothing without send access.
+                            Toggle("Start sessions", isOn: Binding(
+                                get: { device.sessionStartDisabled == false },
+                                set: { service.setDeviceSessionStart($0, for: device.id) }
+                            ))
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(device.scopes.contains(.send) == false)
+                            .help("Let this device start new agent sessions in your workspaces.")
+                        }
                         Button("Revoke", role: .destructive) {
                             service.revokeDevice(device.id)
                         }

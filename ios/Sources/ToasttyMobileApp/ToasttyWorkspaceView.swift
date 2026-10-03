@@ -15,7 +15,12 @@ struct ToasttyWorkspaceView: View {
     @AppStorage private var storedWorkspaceSessionFilter: String
     @State private var spawnerFilter: ToasttySpawnerChip?
     @State private var infoConversation: ToasttySessionInfoSelection?
+    @State private var newSession: ToasttyNewSessionModel?
+    /// How the new-session sheet ended, acted on once it has dismissed so
+    /// opening the conversation does not race the sheet's animation.
+    @State private var newSessionFinish: ToasttyNewSessionModel.Finish?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let defaults: UserDefaults
 
     init(
         workspaceID: UUID,
@@ -26,6 +31,7 @@ struct ToasttyWorkspaceView: View {
         self.workspaceID = workspaceID
         self.controller = controller
         self.openWorkspace = openWorkspace
+        self.defaults = defaults
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
             ToasttyWorkspaceSessionFilter.preferenceKey,
@@ -52,9 +58,31 @@ struct ToasttyWorkspaceView: View {
         .sheet(item: $infoConversation) { selection in
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }
+        .sheet(item: $newSession, onDismiss: finishNewSession) { model in
+            ToasttyNewSessionSheet(model: model) { newSessionFinish = $0 }
+        }
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            if controller.canStartSessions, let workspace = controller.workspace(id: workspaceID) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        newSessionFinish = nil
+                        newSession = ToasttyNewSessionModel(
+                            workspaceID: workspace.id,
+                            workspaceTitle: workspace.title,
+                            host: controller,
+                            preferences: ToasttyNewSessionPreferences(defaults: defaults)
+                        )
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("New session")
+                    .accessibilityIdentifier("toastty-mobile-workspace-new-session")
+                }
+            }
+        }
         .accessibilityIdentifier("toastty-mobile-workspace-detail")
         .onAppear {
             if ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) == nil {
@@ -295,6 +323,17 @@ struct ToasttyWorkspaceView: View {
             return
         }
         spawnerFilter = spawnerFilter?.conversationID == chip.conversationID ? nil : chip
+    }
+
+    private func finishNewSession() {
+        guard let finish = newSessionFinish else { return }
+        newSessionFinish = nil
+        switch finish {
+        case .open(let conversationID):
+            controller.openConversation(id: conversationID)
+        case .startedPending(let agentName):
+            controller.announceStartedSessionPending(agentName: agentName)
+        }
     }
 
     private func onOpen(_ conversation: MobileConversation) {
