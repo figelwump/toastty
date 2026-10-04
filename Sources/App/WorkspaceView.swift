@@ -4588,11 +4588,15 @@ struct PanelCardView: View {
         guard browserAnnotationSendAvailability(for: candidate).isAvailable else {
             return false
         }
-        return terminalRuntimeRegistry.sendText(
+        guard terminalRuntimeRegistry.sendText(
             payload,
             submit: true,
             panelID: candidate.panelID
-        )
+        ) else {
+            return false
+        }
+        _ = store.sendNavigation(.focusPanel(workspaceID: workspaceID, panelID: candidate.panelID))
+        return true
     }
 
     private func rebindScratchpad(to candidate: ScratchpadAgentBindCandidate) {
