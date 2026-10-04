@@ -262,8 +262,10 @@ CLI notes:
 | `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and run outputs. |
 | `RUN_LABEL` | timestamped `computer-use-*` value | Optional stable label for the remote Computer Use run. Prefer `--run-label` for explicit CLI usage. |
 | `TIMEOUT_SECONDS` | `300` | Default hard timeout for the Codex turn when `--timeout-seconds` is not passed. |
-| `CODEX_COMPUTER_USE_MODEL` | `gpt-5.3-codex-spark` | Codex model passed explicitly to `codex app-server` for Computer Use turns. |
+| `CODEX_COMPUTER_USE_MODEL` | `gpt-6.1-sol` | Codex model passed explicitly to `codex app-server` for Computer Use turns. |
 | `CODEX_COMPUTER_USE_REASONING_EFFORT` | `medium` | Codex reasoning effort passed explicitly to `codex app-server` for Computer Use turns. |
+
+The remote Codex account must have access to the selected model. During verification with Codex `0.147.0-alpha.1.2`, the remote ChatGPT account rejected `gpt-6.1-sol` as unsupported. If the account rejects the default, set `CODEX_COMPUTER_USE_MODEL=<available-model>` for that invocation.
 
 CLI notes:
 
