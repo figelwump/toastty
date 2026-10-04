@@ -306,6 +306,22 @@ final class HomeScreenController {
         hostSupportsSessionStart && freshness == .live
     }
 
+    /// Where a new session from Home starts: the workspace of the last
+    /// session this phone started, while the Mac still lists it, otherwise
+    /// the workspace Home lists first.
+    func defaultSessionStartWorkspace(lastUsed: UUID?) -> MobileWorkspace? {
+        lastUsed.flatMap(workspace(id:)) ?? snapshot.topLevelWorkspaces.first
+    }
+
+    func sessionStartWorkspaces(keeping keptWorkspaceIDs: Set<UUID>) -> [ToasttyNewSessionWorkspace] {
+        snapshot.topLevelWorkspaces.flatMap { workspace in
+            [ToasttyNewSessionWorkspace(id: workspace.id, title: workspace.title, parentTitle: nil)]
+                + snapshot.subspaceRows(of: workspace.id)
+                .filter { keptWorkspaceIDs.contains($0.id) }
+                .map { ToasttyNewSessionWorkspace(id: $0.id, title: $0.workspace.title, parentTitle: workspace.title) }
+        }
+    }
+
     func setHostSupportsSessionStart(_ isSupported: Bool) {
         hostSupportsSessionStart = isSupported
     }

@@ -326,12 +326,12 @@ Notable action-specific behavior:
     cannot be overridden. Environment keys must use shell variable syntax,
     values must not contain NUL bytes, and duplicate definitions across
     `env.NAME`, `env`, and `environment` payloads are rejected.
-  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor/Grok automation
-    profiles, built-in Codex/Claude/Cursor/Grok profiles whose argv is exactly one direct
+  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor/Grok/Pi automation
+    profiles, built-in Codex/Claude/Cursor/Grok/Pi profiles whose argv is exactly one direct
     first-party command, or profiles that declare
     `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
     prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
-    A direct Cursor or Grok launch inserts `--` before a prompt that begins
+    A direct Cursor, Grok, or Pi launch inserts `--` before a prompt that begins
     with `-`, preventing the prompt from being parsed as a CLI option.
   - `model` is supported for `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, and
     `pi`. `reasoningEffort` is supported for `codex`, `claude`, `grok`, and `pi`.
