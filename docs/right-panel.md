@@ -22,7 +22,7 @@ Browser panel header actions can open the current page in the default browser, c
 
 ## Annotation mode
 
-Browser and Scratchpad panels both offer annotation mode from the pencil button in the panel header. Click to mark a point or drag to mark a region, add a comment, then send the numbered screenshots and comments to an active agent in the same workspace tab. Drag the heading of a comment dialog to move it out of the way. Scratchpad annotations reset when the panel requests a fresh render, including content revisions, theme changes, and binding changes.
+Browser and Scratchpad panels both offer annotation mode from the pencil button in the panel header. Click to mark a point or drag to mark a region, add a comment, then send the numbered screenshots and comments to an active agent in the same workspace tab. After a successful send, the destination agent panel becomes active. Drag the heading of a comment dialog to move it out of the way. Scratchpad annotations reset when the panel requests a fresh render, including content revisions, theme changes, and binding changes.
 
 ## Links and history
 
