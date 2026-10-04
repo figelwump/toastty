@@ -329,6 +329,36 @@ struct RemoteSessionStarterTests {
     }
 
     @MainActor
+    @Test func installedPiIsAvailableAndStartsWithTheFirstMessage() async throws {
+        for text in ["Review this change", "--help me refactor"] {
+            let fixture = try Fixture()
+            let executable = fixture.root.appendingPathComponent("bin/pi").path
+            FileManager.default.createFile(atPath: executable, contents: Data("#!/bin/sh\n".utf8))
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable)
+            let options = fixture.starter.options(
+                for: RemoteSessionStartOptionsRequest(workspaceID: fixture.workspaceID), device: fixture.device
+            )
+            #expect(try #require(options.agents.first { $0.profileID == "pi" }).availability == .available)
+            let before = fixture.workspace
+            let result = await fixture.start(fixture.request(profileID: "pi", model: nil, effort: nil, text: text))
+            guard case .started(let conversationID) = result else {
+                Issue.record("expected Pi to start, got \(result)")
+                continue
+            }
+            let panelID = try #require(fixture.newPanelIDs.first)
+            #expect(fixture.conversationID(ofPanel: panelID) == conversationID)
+            #expect(fixture.workspace.resolvedSelectedTabID == before.resolvedSelectedTabID)
+            #expect(fixture.workspace.focusedPanelID == fixture.originalPanelID)
+            #expect(fixture.router.sentTextByPanelID[fixture.originalPanelID] == nil)
+            let boundary = text.hasPrefix("-") ? " --" : ""
+            let command = try #require(fixture.router.sentTextByPanelID[panelID])
+            #expect(command.contains(executable))
+            #expect(command.contains("\(boundary) '\(text)'"))
+            #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.agent == .pi)
+        }
+    }
+
+    @MainActor
     @Test func optionsListOnlyAgentsTheSessionListCanShowWithTheirChoices() throws {
         let fixture = try Fixture()
         let options = fixture.starter.options(

@@ -679,7 +679,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             id: agent.rawValue,
             displayName: agent.displayName,
             argv: [implicitExecutableName(for: agent)],
-            initialPromptPlacement: (agent == .codex || agent == .claude || agent == .cursor || agent == .grok)
+            initialPromptPlacement: (agent == .codex || agent == .claude || agent == .cursor || agent == .grok || agent == .pi)
                 ? .trailing
                 : nil
         )
@@ -900,7 +900,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         if let placement = profile.initialPromptPlacement {
             return placement
         }
-        guard agent == .codex || agent == .claude || agent == .cursor || agent == .grok else {
+        guard agent == .codex || agent == .claude || agent == .cursor || agent == .grok || agent == .pi else {
             return nil
         }
         return Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent) ? .trailing : nil
@@ -926,6 +926,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             commandNames = ["cursor-agent"]
         case .grok:
             commandNames = ["grok"]
+        case .pi:
+            commandNames = ["pi"]
         default:
             return false
         }
