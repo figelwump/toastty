@@ -1,10 +1,12 @@
 import Foundation
 
-/// The phone's own memory of new-session choices: the last agent, and per
-/// agent the models picked recently and the last model and effort used.
+/// The phone's own memory of new-session choices: the last workspace and
+/// agent, and per agent the models picked recently and the last model and
+/// effort used.
 struct ToasttyNewSessionPreferences {
     static let maximumRecentModels = 5
 
+    private static let lastWorkspaceKey = "toastty-mobile-new-session-last-workspace"
     private static let lastAgentKey = "toastty-mobile-new-session-last-agent"
     private static let agentKeyPrefix = "toastty-mobile-new-session-agent-"
 
@@ -20,6 +22,10 @@ struct ToasttyNewSessionPreferences {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    var lastWorkspaceID: UUID? {
+        defaults.string(forKey: Self.lastWorkspaceKey).flatMap(UUID.init(uuidString:))
     }
 
     var lastAgentID: String? {
@@ -39,7 +45,7 @@ struct ToasttyNewSessionPreferences {
     }
 
     /// Records the choices of a start the Mac accepted.
-    func recordStart(agentID: String, model: String?, effort: String?) {
+    func recordStart(workspaceID: UUID, agentID: String, model: String?, effort: String?) {
         var choices = choices(forAgent: agentID)
         if let model {
             choices.recentModels = Array(
@@ -52,6 +58,7 @@ struct ToasttyNewSessionPreferences {
             defaults.set(data, forKey: Self.agentKeyPrefix + agentID)
         }
         defaults.set(agentID, forKey: Self.lastAgentKey)
+        defaults.set(workspaceID.uuidString, forKey: Self.lastWorkspaceKey)
     }
 
     private func choices(forAgent profileID: String) -> AgentChoices {

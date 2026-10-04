@@ -827,4 +827,49 @@ final class SessionStartControllerTests: XCTestCase {
         XCTAssertEqual(conversation.executionProfile?.modelIdentifier, "gpt-6.1-sol")
         XCTAssertTrue(controller.openConversation(id: conversationID.rawValue))
     }
+
+    func testWorkspaceChoicesAreTopLevelPlusAKeptSubspaceUnderItsParent() {
+        let parent = MobileWorkspace(id: UUID(), title: "toastty", conversations: [])
+        let other = MobileWorkspace(id: UUID(), title: "dotfiles", conversations: [])
+        let subspace = MobileWorkspace(
+            id: UUID(), title: "fix-picker", conversations: [], parentWorkspaceID: parent.id
+        )
+        let controller = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: MobileHomeSnapshot(hostName: "mac", workspaces: [parent, other, subspace]),
+            connectionState: .live
+        )
+        let topLevel = controller.snapshot.topLevelWorkspaces.map(\.id)
+        XCTAssertEqual(Set(topLevel), [parent.id, other.id])
+
+        XCTAssertEqual(controller.sessionStartWorkspaces(keeping: []).map(\.id), topLevel)
+        // A subspace the sheet opened in is listed right after its parent.
+        let kept = controller.sessionStartWorkspaces(keeping: [subspace.id])
+        let parentIndex = kept.firstIndex { $0.id == parent.id }!
+        XCTAssertEqual(kept[parentIndex + 1], ToasttyNewSessionWorkspace(
+            id: subspace.id, title: "fix-picker", parentTitle: "toastty"
+        ))
+        XCTAssertEqual(kept.count, 3)
+    }
+
+    func testHomeStartsInTheLastUsedWorkspaceWhileTheMacStillListsIt() {
+        let controller = HomeScreenController(
+            runtimeMode: .fixture, snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        let first = controller.snapshot.topLevelWorkspaces.first?.id
+        let last = controller.snapshot.topLevelWorkspaces.last?.id
+        XCTAssertNotEqual(first, last)
+
+        XCTAssertEqual(controller.defaultSessionStartWorkspace(lastUsed: last)?.id, last)
+        XCTAssertEqual(controller.defaultSessionStartWorkspace(lastUsed: nil)?.id, first)
+        // A workspace closed on the Mac falls back to Home's first one.
+        XCTAssertEqual(controller.defaultSessionStartWorkspace(lastUsed: UUID())?.id, first)
+
+        let empty = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: MobileHomeSnapshot(hostName: "mac", workspaces: []),
+            connectionState: .live
+        )
+        XCTAssertNil(empty.defaultSessionStartWorkspace(lastUsed: last))
+    }
 }

@@ -222,8 +222,8 @@ final class ToasttyNewSessionModelTests: XCTestCase {
 
     func testModelChoicesListThePhonesPicksThenTheMacsWithoutDuplicatesOrInvalidValues() async {
         let preferences = ToasttyNewSessionPreferences(defaults: defaults)
-        preferences.recordStart(agentID: "claude", model: "claude-sonnet-5-5", effort: nil)
-        preferences.recordStart(agentID: "claude", model: "claude-opus-5-5", effort: nil)
+        preferences.recordStart(workspaceID: workspaceID, agentID: "claude", model: "claude-sonnet-5-5", effort: nil)
+        preferences.recordStart(workspaceID: workspaceID, agentID: "claude", model: "claude-opus-5-5", effort: nil)
         let host = FakeNewSessionHost(options: options(agents: [
             claude(recentModels: ["claude-opus-5-5", "Opus 5.5", "claude-haiku-4-5"]),
         ]))
@@ -247,9 +247,9 @@ final class ToasttyNewSessionModelTests: XCTestCase {
     func testPhoneRemembersOnlyItsFiveMostRecentModels() {
         let preferences = ToasttyNewSessionPreferences(defaults: defaults)
         for index in 1...7 {
-            preferences.recordStart(agentID: "codex", model: "model-\(index)", effort: nil)
+            preferences.recordStart(workspaceID: workspaceID, agentID: "codex", model: "model-\(index)", effort: nil)
         }
-        preferences.recordStart(agentID: "codex", model: "model-4", effort: nil)
+        preferences.recordStart(workspaceID: workspaceID, agentID: "codex", model: "model-4", effort: nil)
 
         XCTAssertEqual(
             preferences.recentModels(forAgent: "codex"),
@@ -260,7 +260,7 @@ final class ToasttyNewSessionModelTests: XCTestCase {
 
     func testEffortStartsOnTheLastEffortOnlyWhileTheAgentStillOffersIt() async {
         let preferences = ToasttyNewSessionPreferences(defaults: defaults)
-        preferences.recordStart(agentID: "claude", model: nil, effort: "xhigh")
+        preferences.recordStart(workspaceID: workspaceID, agentID: "claude", model: nil, effort: "xhigh")
 
         let offered = makeModel(host: FakeNewSessionHost(options: options(agents: [
             claude(efforts: ["low", "xhigh"]),
@@ -286,7 +286,7 @@ final class ToasttyNewSessionModelTests: XCTestCase {
     }
 
     func testLastAgentUsedIsSelectedAgain() async {
-        ToasttyNewSessionPreferences(defaults: defaults).recordStart(agentID: "codex", model: nil, effort: nil)
+        ToasttyNewSessionPreferences(defaults: defaults).recordStart(workspaceID: workspaceID, agentID: "codex", model: nil, effort: nil)
         let model = makeModel(host: FakeNewSessionHost(options: options(agents: [claude(), codex()])))
         await model.loadOptions()
         XCTAssertEqual(model.selectedAgentID, "codex")
@@ -324,6 +324,7 @@ final class ToasttyNewSessionModelTests: XCTestCase {
 
         let preferences = ToasttyNewSessionPreferences(defaults: defaults)
         XCTAssertEqual(preferences.lastAgentID, "codex")
+        XCTAssertEqual(preferences.lastWorkspaceID, workspaceID)
         XCTAssertEqual(preferences.lastModel(forAgent: "codex"), "gpt-6.1-sol")
         XCTAssertEqual(preferences.lastEffort(forAgent: "codex"), "xhigh")
         XCTAssertEqual(preferences.recentModels(forAgent: "codex"), ["gpt-6.1-sol"])
@@ -339,6 +340,145 @@ final class ToasttyNewSessionModelTests: XCTestCase {
         await model.start()
 
         XCTAssertEqual(model.phase, .finished(.startedPending(agentName: "Claude")))
+    }
+
+    // MARK: - Workspace
+
+    func testSwitchingWorkspaceLoadsItsOptionsAndKeepsTheDraft() async throws {
+        let otherID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude(), codex()]))
+        host.workspaces = [
+            ToasttyNewSessionWorkspace(id: workspaceID, title: "toastty", parentTitle: nil),
+            ToasttyNewSessionWorkspace(id: otherID, title: "dotfiles", parentTitle: nil),
+        ]
+        host.optionsByWorkspace[otherID] = .loaded(RemoteSessionStartOptionsResponse(
+            permission: .allowed, workspace: .available, launchDirectory: "~/.dotfiles",
+            agents: [claude(efforts: ["high"]), codex()]
+        ))
+        host.startOutcomes = [.unconfirmed, .unconfirmed]
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.selectAgent("claude")
+        model.selectModel("claude-fable-5-1")
+        model.selectEffort("xhigh")
+        model.updateMessage("Tidy the zsh config")
+        await model.start()
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.unreachableMessage)
+
+        let gate = host.holdOptions(for: otherID)
+        let switching = Task { await model.selectWorkspace(otherID) }
+        try await waitUntil { model.isLoadingWorkspace }
+        // Start waits for the new workspace's options.
+        XCTAssertEqual(model.workspaceTitle, "dotfiles")
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.canStart)
+        gate.resume()
+        await switching.value
+
+        XCTAssertFalse(model.isLoadingWorkspace)
+        XCTAssertEqual(model.options?.launchDirectory, "~/.dotfiles")
+        XCTAssertEqual(model.message, "Tidy the zsh config")
+        XCTAssertEqual(model.selectedAgentID, "claude")
+        XCTAssertEqual(model.model, "claude-fable-5-1")
+        // The agent here does not offer the effort that was picked.
+        XCTAssertNil(model.effort)
+        XCTAssertTrue(model.canStart)
+
+        await model.start()
+        let request = try XCTUnwrap(host.startRequests.last)
+        XCTAssertEqual(request.workspaceID, otherID)
+        // Another workspace makes a different request, with its own key.
+        XCTAssertEqual(host.startRequests.map(\.clientRequestID), ["request-1", "request-2"])
+    }
+
+    func testSwitchingToAWorkspaceWhereTheAgentCannotStartPicksAnother() async {
+        let otherID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude(), codex()]))
+        host.workspaces = [ToasttyNewSessionWorkspace(id: otherID, title: "dotfiles", parentTitle: nil)]
+        host.optionsByWorkspace[otherID] = options(agents: [piNotInstalled(), claude()])
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.selectAgent("codex")
+
+        await model.selectWorkspace(otherID)
+
+        XCTAssertEqual(model.selectedAgentID, "claude")
+    }
+
+    func testAnAnswerForAWorkspaceLeftBehindIsDropped() async throws {
+        let slowID = UUID()
+        let fastID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.workspaces = [
+            ToasttyNewSessionWorkspace(id: slowID, title: "slow", parentTitle: nil),
+            ToasttyNewSessionWorkspace(id: fastID, title: "fast", parentTitle: nil),
+        ]
+        host.optionsByWorkspace[slowID] = .loaded(RemoteSessionStartOptionsResponse(
+            permission: .allowed, workspace: .available, launchDirectory: "~/slow", agents: [claude()]
+        ))
+        host.optionsByWorkspace[fastID] = .loaded(RemoteSessionStartOptionsResponse(
+            permission: .allowed, workspace: .available, launchDirectory: "~/fast", agents: [claude()]
+        ))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+
+        let gate = host.holdOptions(for: slowID)
+        let slow = Task { await model.selectWorkspace(slowID) }
+        try await waitUntil { model.isLoadingWorkspace }
+        await model.selectWorkspace(fastID)
+        gate.resume()
+        await slow.value
+
+        XCTAssertEqual(model.workspaceID, fastID)
+        XCTAssertEqual(model.options?.launchDirectory, "~/fast")
+        XCTAssertFalse(model.isLoadingWorkspace)
+    }
+
+    func testWorkspaceThatCouldNotLoadShowsTheRetryWithTheDraftKept() async {
+        let otherID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.workspaces = [ToasttyNewSessionWorkspace(id: otherID, title: "dotfiles", parentTitle: nil)]
+        host.optionsByWorkspace[otherID] = .unreachable
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.updateMessage("Tidy the zsh config")
+
+        await model.selectWorkspace(otherID)
+        XCTAssertEqual(model.phase, .unreachable)
+
+        host.optionsByWorkspace[otherID] = options(agents: [claude()])
+        await model.loadOptions()
+        XCTAssertEqual(model.phase, .form)
+        XCTAssertEqual(model.workspaceID, otherID)
+        XCTAssertEqual(model.message, "Tidy the zsh config")
+    }
+
+    func testASubspaceTheSheetOpenedInStaysListedAfterASwitch() async {
+        let parent = MobileWorkspace(id: UUID(), title: "toastty", conversations: [])
+        let subspace = MobileWorkspace(
+            id: UUID(), title: "fix-picker", conversations: [], parentWorkspaceID: parent.id
+        )
+        let otherSubspace = MobileWorkspace(
+            id: UUID(), title: "docs", conversations: [], parentWorkspaceID: parent.id
+        )
+        let controller = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: MobileHomeSnapshot(hostName: "mac", workspaces: [parent, subspace, otherSubspace]),
+            connectionState: .live
+        )
+        let model = ToasttyNewSessionModel(
+            workspaceID: subspace.id,
+            workspaceTitle: subspace.title,
+            host: controller,
+            preferences: ToasttyNewSessionPreferences(defaults: defaults)
+        )
+        await model.loadOptions()
+        XCTAssertEqual(model.workspaceChoices.map(\.id), [parent.id, subspace.id])
+
+        await model.selectWorkspace(parent.id)
+
+        XCTAssertEqual(model.workspaceID, parent.id)
+        XCTAssertEqual(model.workspaceChoices.map(\.id), [parent.id, subspace.id])
     }
 
     // MARK: - Helpers
@@ -428,17 +568,52 @@ final class ToasttyNewSessionModelTests: XCTestCase {
 
 @MainActor
 private final class FakeNewSessionHost: ToasttyNewSessionHost {
+    /// Holds an options request until the test resumes it.
+    @MainActor
+    final class Gate {
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var isOpen = false
+
+        func wait() async {
+            guard isOpen == false else { return }
+            await withCheckedContinuation { continuation = $0 }
+        }
+
+        func resume() {
+            isOpen = true
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    /// Options for the sheet's first workspace and any not listed below.
     var options: ToasttySessionStartOptionsOutcome
+    var optionsByWorkspace: [UUID: ToasttySessionStartOptionsOutcome] = [:]
+    var workspaces: [ToasttyNewSessionWorkspace] = []
     var startOutcomes: [ToasttySessionStartOutcome] = []
     var conversations: Set<UUID> = []
     private(set) var startRequests: [RemoteSessionStartRequest] = []
+    private var gates: [UUID: Gate] = [:]
 
     init(options: ToasttySessionStartOptionsOutcome) {
         self.options = options
     }
 
+    func holdOptions(for workspaceID: UUID) -> Gate {
+        let gate = Gate()
+        gates[workspaceID] = gate
+        return gate
+    }
+
+    func sessionStartWorkspaces(keeping keptWorkspaceIDs: Set<UUID>) -> [ToasttyNewSessionWorkspace] {
+        workspaces
+    }
+
     func sessionStartOptions(workspaceID: UUID) async -> ToasttySessionStartOptionsOutcome {
-        options
+        if let gate = gates.removeValue(forKey: workspaceID) {
+            await gate.wait()
+        }
+        return optionsByWorkspace[workspaceID] ?? options
     }
 
     func startSession(_ request: RemoteSessionStartRequest) async -> ToasttySessionStartOutcome {
