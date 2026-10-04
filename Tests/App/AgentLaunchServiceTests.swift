@@ -874,6 +874,70 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func launchUsesImplicitOrDirectConfiguredPiProfileWithTrailingPrompt() throws {
+        for profiles in [
+            [AgentProfile](),
+            [AgentProfile(id: "pi", displayName: "Pi", argv: ["pi"])],
+            [AgentProfile(id: "pi", displayName: "Pi", argv: ["/opt/homebrew/bin/pi"])],
+        ] {
+            for prompt in ["Review this change", "--help me refactor"] {
+                let store = AppStore(persistTerminalFontPreference: false)
+                let sessionRuntimeStore = SessionRuntimeStore()
+                sessionRuntimeStore.bind(store: store)
+                let terminalRouter = TestTerminalCommandRouter()
+                terminalRouter.defaultPromptState = .idleAtPrompt
+                let service = AgentLaunchService(
+                    store: store, terminalCommandRouter: terminalRouter,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    agentCatalogProvider: TestAgentCatalogProvider(profiles: profiles),
+                    cliExecutablePathProvider: { "/bin/sh" },
+                    socketPathProvider: { "/tmp/toastty-tests.sock" }
+                )
+
+                let result = try service.launch(
+                    profileID: "pi", model: "requested-model", reasoningEffort: "high",
+                    initialPrompt: prompt
+                )
+                let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+                #expect(result.agent == .pi)
+                let boundary = prompt.hasPrefix("-") ? " --" : ""
+                #expect(command.contains("--model requested-model --thinking high\(boundary) '\(prompt)'"))
+            }
+        }
+    }
+
+    @Test
+    func piWrapperAndConfiguredArgumentsRequireExplicitPromptPlacement() throws {
+        for argv in [["safe-pi"], ["pi", "--provider", "openai"]] {
+            for placement in [AgentInitialPromptPlacement?.none, .trailing] {
+                let store = AppStore(persistTerminalFontPreference: false)
+                let sessionRuntimeStore = SessionRuntimeStore()
+                sessionRuntimeStore.bind(store: store)
+                let router = TestTerminalCommandRouter()
+                router.defaultPromptState = .idleAtPrompt
+                let service = AgentLaunchService(
+                    store: store, terminalCommandRouter: router,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    agentCatalogProvider: TestAgentCatalogProvider(profiles: [
+                        AgentProfile(id: "pi", displayName: "Pi", argv: argv, initialPromptPlacement: placement),
+                    ]),
+                    cliExecutablePathProvider: { "/bin/sh" },
+                    socketPathProvider: { "/tmp/toastty-tests.sock" }
+                )
+                if placement == nil {
+                    #expect(throws: AgentLaunchError.initialPromptUnsupported(profileID: "pi")) {
+                        _ = try service.launch(profileID: "pi", initialPrompt: "Review this change")
+                    }
+                    #expect(router.sentTextByPanelID.isEmpty)
+                } else {
+                    let result = try service.launch(profileID: "pi", initialPrompt: "Review this change")
+                    #expect(try #require(router.sentTextByPanelID[result.panelID]).contains("'Review this change'"))
+                }
+            }
+        }
+    }
+
+    @Test
     func launchUsesImplicitCursorProfileWithModelAndTrailingPrompt() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
