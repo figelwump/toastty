@@ -103,16 +103,21 @@ struct ToasttyNewSessionSheet: View {
                     note(error, tone: .error, identifier: "toastty-mobile-new-session-error")
                 }
                 workspaceField
-                agentPicker
-                ForEach(model.unavailableAgentNotes, id: \.self) { reason in
-                    note(reason, tone: .warning, identifier: "toastty-mobile-new-session-agent-note")
-                }
-                if model.showsModel || model.showsEffort {
-                    HStack(alignment: .top, spacing: 10) {
-                        if model.showsModel { modelField }
-                        if model.showsEffort { effortField }
+                Group {
+                    agentPicker
+                    ForEach(model.unavailableAgentNotes, id: \.self) { reason in
+                        note(reason, tone: .warning, identifier: "toastty-mobile-new-session-agent-note")
+                    }
+                    if model.showsModel || model.showsEffort {
+                        HStack(alignment: .top, spacing: 10) {
+                            if model.showsModel { modelField }
+                            if model.showsEffort { effortField }
+                        }
                     }
                 }
+                // These still show the last workspace's options.
+                .disabled(model.isLoadingWorkspace)
+                .opacity(model.isLoadingWorkspace ? 0.45 : 1)
                 messageEditor
             }
             .padding(16)
@@ -123,22 +128,44 @@ struct ToasttyNewSessionSheet: View {
     }
 
     private var workspaceField: some View {
-        field(label: "Workspace") {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(model.workspaceTitle)
-                    .font(.subheadline)
-                    .foregroundStyle(ToasttyDesignTokens.primaryText)
-                Spacer(minLength: 8)
-                if let directory = model.options?.launchDirectory {
-                    Text(directory)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                        .lineLimit(1)
-                        .truncationMode(.head)
+        Menu {
+            Picker("Workspace", selection: workspaceSelection) {
+                ForEach(model.workspaceChoices) { choice in
+                    if let parentTitle = choice.parentTitle {
+                        Label("\(choice.title) — in \(parentTitle)", systemImage: "arrow.turn.down.right")
+                            .tag(choice.id)
+                    } else {
+                        Text(choice.title).tag(choice.id)
+                    }
                 }
             }
+        } label: {
+            field(label: "Workspace") {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(model.workspaceTitle)
+                        .font(.subheadline)
+                        .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if model.isLoadingWorkspace {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else if let directory = model.options?.launchDirectory {
+                        Text(directory)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(ToasttyDesignTokens.mutedText)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                    Image(systemName: "chevron.up.chevron.down")
+                        .imageScale(.small)
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                }
+            }
+            .contentShape(Rectangle())
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Workspace")
+        .accessibilityValue(model.workspaceTitle)
         .accessibilityIdentifier("toastty-mobile-new-session-workspace")
     }
 
@@ -379,6 +406,13 @@ struct ToasttyNewSessionSheet: View {
         .contentShape(Rectangle())
     }
 
+    private var workspaceSelection: Binding<UUID> {
+        Binding(
+            get: { model.workspaceID },
+            set: { id in Task { await model.selectWorkspace(id) } }
+        )
+    }
+
     private var modelSelection: Binding<String?> {
         Binding(get: { model.model }, set: { model.selectModel($0) })
     }
@@ -389,6 +423,41 @@ struct ToasttyNewSessionSheet: View {
 
     private var messageBinding: Binding<String> {
         Binding(get: { model.message }, set: { model.updateMessage($0) })
+    }
+}
+
+/// Presents the new-session sheet for `model`, then acts on how it ended
+/// once it has dismissed, so opening the conversation does not race the
+/// sheet's animation.
+private struct ToasttyNewSessionSheetModifier: ViewModifier {
+    @Binding var model: ToasttyNewSessionModel?
+    let controller: HomeScreenController
+    @State private var finish: ToasttyNewSessionModel.Finish?
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $model, onDismiss: didDismiss) { model in
+            ToasttyNewSessionSheet(model: model) { finish = $0 }
+        }
+    }
+
+    private func didDismiss() {
+        guard let finish else { return }
+        self.finish = nil
+        switch finish {
+        case .open(let conversationID):
+            controller.openConversation(id: conversationID)
+        case .startedPending(let agentName):
+            controller.announceStartedSessionPending(agentName: agentName)
+        }
+    }
+}
+
+extension View {
+    func toasttyNewSessionSheet(
+        _ model: Binding<ToasttyNewSessionModel?>,
+        controller: HomeScreenController
+    ) -> some View {
+        modifier(ToasttyNewSessionSheetModifier(model: model, controller: controller))
     }
 }
 
