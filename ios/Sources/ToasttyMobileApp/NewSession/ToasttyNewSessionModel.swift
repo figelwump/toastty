@@ -19,9 +19,22 @@ enum ToasttySessionStartOutcome: Equatable, Sendable {
     case unconfirmed
 }
 
+/// A workspace the new-session sheet can start in.
+struct ToasttyNewSessionWorkspace: Identifiable, Equatable {
+    let id: UUID
+    let title: String
+    /// Set for a subspace, which the list includes only when the sheet
+    /// opened in it.
+    let parentTitle: String?
+}
+
 /// The parts of the app the new-session sheet talks to.
 @MainActor
 protocol ToasttyNewSessionHost: AnyObject {
+    /// The workspaces a session can start in, in the order Home lists them:
+    /// every top-level workspace, plus any of `keptWorkspaceIDs` that is a
+    /// subspace, under its parent.
+    func sessionStartWorkspaces(keeping keptWorkspaceIDs: Set<UUID>) -> [ToasttyNewSessionWorkspace]
     func sessionStartOptions(workspaceID: UUID) async -> ToasttySessionStartOptionsOutcome
     func startSession(_ request: RemoteSessionStartRequest) async -> ToasttySessionStartOutcome
     func conversation(id: UUID) -> MobileConversation?
@@ -58,8 +71,11 @@ final class ToasttyNewSessionModel: Identifiable {
     static let invalidModelMessage = "That isn't a model ID the Mac can use. Use one word with no spaces that doesn't start with a dash."
 
     let id = UUID()
-    let workspaceID: UUID
-    let workspaceTitle: String
+    private(set) var workspaceID: UUID
+    private(set) var workspaceTitle: String
+    /// The workspace's options are loading after a switch. The form stays
+    /// up, but Start waits for the new options.
+    private(set) var isLoadingWorkspace = false
 
     private(set) var phase: Phase = .loading
     private(set) var options: RemoteSessionStartOptionsResponse?
@@ -75,6 +91,12 @@ final class ToasttyNewSessionModel: Identifiable {
     private(set) var startingAgentName: String?
 
     @ObservationIgnored private let host: any ToasttyNewSessionHost
+    /// The workspace the sheet opened in. It stays in the list after a
+    /// switch, even when it is a subspace.
+    @ObservationIgnored private let initialWorkspaceID: UUID
+    /// Counts option loads, so an answer for a workspace the person has
+    /// since left is dropped.
+    @ObservationIgnored private var optionsLoadCount = 0
     @ObservationIgnored private let preferences: ToasttyNewSessionPreferences
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let makeRequestID: () -> String
@@ -96,6 +118,7 @@ final class ToasttyNewSessionModel: Identifiable {
     ) {
         self.workspaceID = workspaceID
         self.workspaceTitle = workspaceTitle
+        initialWorkspaceID = workspaceID
         self.host = host
         self.preferences = preferences
         self.now = now
@@ -105,6 +128,10 @@ final class ToasttyNewSessionModel: Identifiable {
     }
 
     // MARK: - Derived presentation
+
+    var workspaceChoices: [ToasttyNewSessionWorkspace] {
+        host.sessionStartWorkspaces(keeping: [initialWorkspaceID])
+    }
 
     var agents: [RemoteSessionStartAgent] {
         options?.agents ?? []
@@ -182,6 +209,7 @@ final class ToasttyNewSessionModel: Identifiable {
 
     var canStart: Bool {
         phase == .form
+            && isLoadingWorkspace == false
             && blockingMessage == nil
             && selectedAgent?.availability == .available
             && trimmedMessage.isEmpty == false
@@ -209,14 +237,48 @@ final class ToasttyNewSessionModel: Identifiable {
     func loadOptions() async {
         guard phase == .loading || phase == .unreachable else { return }
         phase = .loading
-        switch await host.sessionStartOptions(workspaceID: workspaceID) {
+        optionsLoadCount += 1
+        let load = optionsLoadCount
+        let outcome = await host.sessionStartOptions(workspaceID: workspaceID)
+        guard load == optionsLoadCount else { return }
+        apply(outcome)
+    }
+
+    /// Moves the draft to another workspace and loads what the Mac offers
+    /// there. The message stays, and so does the agent while it can start
+    /// in the new workspace.
+    func selectWorkspace(_ id: UUID) async {
+        guard phase == .form, id != workspaceID,
+              let choice = workspaceChoices.first(where: { $0.id == id }) else { return }
+        workspaceID = choice.id
+        workspaceTitle = choice.title
+        explainedAgentID = nil
+        draftDidChange()
+        isLoadingWorkspace = true
+        optionsLoadCount += 1
+        let load = optionsLoadCount
+        let outcome = await host.sessionStartOptions(workspaceID: choice.id)
+        // A later switch owns the form now.
+        guard load == optionsLoadCount else { return }
+        isLoadingWorkspace = false
+        apply(outcome)
+    }
+
+    private func apply(_ outcome: ToasttySessionStartOptionsOutcome) {
+        switch outcome {
         case .loaded(let response):
             options = response
             let available = response.agents.filter { $0.availability == .available }
-            let remembered = preferences.lastAgentID.flatMap { last in
-                available.first { $0.profileID == last }
+            if let current = available.first(where: { $0.profileID == selectedAgentID }) {
+                // Keep the person's picks, less any the agent no longer takes.
+                if current.supportsModel == false { model = nil }
+                if let effort, current.reasoningEfforts.contains(effort) == false { self.effort = nil }
+            } else {
+                let remembered = preferences.lastAgentID.flatMap { last in
+                    available.first { $0.profileID == last }
+                }
+                applyAgent((remembered ?? available.first)?.profileID)
             }
-            applyAgent((remembered ?? available.first)?.profileID)
             phase = .form
         case .unreachable:
             phase = .unreachable
@@ -308,7 +370,12 @@ final class ToasttyNewSessionModel: Identifiable {
         switch await host.startSession(request) {
         case .answered(.started(let conversationID)):
             unconfirmedRequest = nil
-            preferences.recordStart(agentID: agent.profileID, model: sentModel, effort: sentEffort)
+            preferences.recordStart(
+                workspaceID: request.workspaceID,
+                agentID: agent.profileID,
+                model: sentModel,
+                effort: sentEffort
+            )
             await waitForStartedConversation(conversationID.rawValue, agentName: agent.displayName)
         case .answered(.rejected(let reason)):
             // Nothing was launched, so the next start is a new request.

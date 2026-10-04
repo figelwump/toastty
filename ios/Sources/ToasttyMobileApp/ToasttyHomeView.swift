@@ -196,7 +196,9 @@ struct ToasttyHomeView: View {
     @State private var spawnerFilter: ToasttySpawnerChip?
     /// The session whose detail card the Info swipe opened.
     @State private var infoConversation: ToasttySessionInfoSelection?
+    @State private var newSession: ToasttyNewSessionModel?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let defaults: UserDefaults
 
     init(
         controller: HomeScreenController,
@@ -209,6 +211,7 @@ struct ToasttyHomeView: View {
         self.refresh = refresh
         self.onSettings = onSettings
         self.openWorkspace = openWorkspace
+        self.defaults = defaults
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
             ToasttyWorkspaceSessionFilter.preferenceKey,
@@ -238,6 +241,7 @@ struct ToasttyHomeView: View {
         .sheet(item: $infoConversation) { selection in
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }
+        .toasttyNewSessionSheet($newSession, controller: controller)
         // The identifier must precede safeAreaInset: applied after it, it
         // stamps both the scroll view and the inset header, breaking UI-test
         // queries with ambiguous matches.
@@ -530,12 +534,14 @@ struct ToasttyHomeView: View {
                 brand
                 Spacer(minLength: 12)
                 connection
+                newSessionButton
                 settingsButton
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .center) {
                     brand
                     Spacer(minLength: 12)
+                    newSessionButton
                     settingsButton
                 }
                 connection
@@ -560,6 +566,34 @@ struct ToasttyHomeView: View {
             state: controller.connectionState,
             hostName: controller.snapshot.hostName
         )
+    }
+
+    /// Starts a session in the workspace of the last one started from this
+    /// phone, which the sheet lets the person change.
+    @ViewBuilder
+    private var newSessionButton: some View {
+        if controller.canStartSessions,
+           let workspace = controller.defaultSessionStartWorkspace(
+               lastUsed: ToasttyNewSessionPreferences(defaults: defaults).lastWorkspaceID
+           ) {
+            Button {
+                newSession = ToasttyNewSessionModel(
+                    workspaceID: workspace.id,
+                    workspaceTitle: workspace.title,
+                    host: controller,
+                    preferences: ToasttyNewSessionPreferences(defaults: defaults)
+                )
+            } label: {
+                Image(systemName: "plus")
+                    .font(.title3.weight(.semibold))
+                    .frame(width: 44, height: 44)
+                    .background(ToasttyDesignTokens.amber, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
+            .accessibilityLabel("New session")
+            .accessibilityIdentifier("toastty-mobile-home-new-session")
+        }
     }
 
     private var settingsButton: some View {

@@ -227,9 +227,9 @@ checkbox. An older phone ignores them and keeps its flat list.
 
 ### Starting a session
 
-Tap **+** on a workspace screen to start a new agent session in that
-workspace. Choose the agent, optionally a model and an effort level, and write
-the first message. A first message is required.
+Tap **+** on the Home screen or on a workspace screen to start a new agent
+session. Choose the workspace, the agent, optionally a model and an effort
+level, and write the first message. A first message is required.
 
 The Mac opens a new tab in that workspace with a plain terminal, starts the
 agent there with your message, and leaves the tab you are looking at and your
@@ -237,6 +237,12 @@ keyboard focus where they were. The session then appears in the phone's list
 and opens. If it has not appeared after 10 seconds, the sheet closes with a
 notice, and you open the session from the list when it arrives.
 
+- **Workspace.** The menu lists every top-level workspace in Home order. From
+  a workspace screen it starts on that workspace, and a subspace stays in the
+  list under its parent. From Home it starts on the workspace of the last
+  session started from this phone, or on Home's first workspace when the Mac no
+  longer lists that one. Changing the workspace keeps your message and reloads
+  the agents and directory for the new workspace.
 - **Directory.** The session starts in the directory of the workspace's first
   terminal, which the sheet shows. The phone never sends a path, a command, or
   environment values. A workspace with no terminal directory cannot start a
@@ -259,9 +265,9 @@ notice, and you open the session from the list when it arrives.
 - **Retries.** If the phone does not get an answer, **Start** sends the same
   request again, and the Mac returns the session it already started instead of
   starting another. The Mac remembers a started request for 10 minutes and
-  until Toastty quits. Changing the message, agent, model, or effort makes a
-  new request. You cannot cancel the sheet while the Mac is starting a
-  session.
+  until Toastty quits. Changing the workspace, message, agent, model, or
+  effort makes a new request. You cannot cancel the sheet while the Mac is
+  starting a session.
 
 Starting needs updates on both sides. The Mac advertises the `session_start`
 capability for `POST /api/session.start.options` and `POST /api/session.start`.

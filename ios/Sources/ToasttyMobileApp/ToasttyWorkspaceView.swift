@@ -16,9 +16,6 @@ struct ToasttyWorkspaceView: View {
     @State private var spawnerFilter: ToasttySpawnerChip?
     @State private var infoConversation: ToasttySessionInfoSelection?
     @State private var newSession: ToasttyNewSessionModel?
-    /// How the new-session sheet ended, acted on once it has dismissed so
-    /// opening the conversation does not race the sheet's animation.
-    @State private var newSessionFinish: ToasttyNewSessionModel.Finish?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let defaults: UserDefaults
 
@@ -58,9 +55,7 @@ struct ToasttyWorkspaceView: View {
         .sheet(item: $infoConversation) { selection in
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }
-        .sheet(item: $newSession, onDismiss: finishNewSession) { model in
-            ToasttyNewSessionSheet(model: model) { newSessionFinish = $0 }
-        }
+        .toasttyNewSessionSheet($newSession, controller: controller)
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -68,7 +63,6 @@ struct ToasttyWorkspaceView: View {
             if controller.canStartSessions, let workspace = controller.workspace(id: workspaceID) {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        newSessionFinish = nil
                         newSession = ToasttyNewSessionModel(
                             workspaceID: workspace.id,
                             workspaceTitle: workspace.title,
@@ -323,17 +317,6 @@ struct ToasttyWorkspaceView: View {
             return
         }
         spawnerFilter = spawnerFilter?.conversationID == chip.conversationID ? nil : chip
-    }
-
-    private func finishNewSession() {
-        guard let finish = newSessionFinish else { return }
-        newSessionFinish = nil
-        switch finish {
-        case .open(let conversationID):
-            controller.openConversation(id: conversationID)
-        case .startedPending(let agentName):
-            controller.announceStartedSessionPending(agentName: agentName)
-        }
     }
 
     private func onOpen(_ conversation: MobileConversation) {
