@@ -1360,6 +1360,54 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(jumpToLatest.exists, "A deliberate drag must release post-send following")
     }
 
+    func testGatedSendKeepsCompletedWorkCollapsedWhenStatusArrivesFirst() {
+        assertCompletedWorkStaysCollapsedDuringSend(order: "status-first")
+    }
+
+    func testGatedSendKeepsCompletedWorkCollapsedWhenEchoArrivesFirst() {
+        assertCompletedWorkStaysCollapsedDuringSend(order: "echo-first")
+    }
+
+    private func assertCompletedWorkStaysCollapsedDuringSend(order: String) {
+        let app = launchFixtureApp(environment: [
+            "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
+            "TOASTTY_MOBILE_FIXTURE_SEND_EVENT_ORDER": order,
+        ])
+        openGatedSendConversation(in: app)
+        let previousWork = app.buttons["toastty-mobile-transcript-turn-1"]
+        XCTAssertTrue(previousWork.waitForExistence(timeout: 5))
+        XCTAssertEqual(previousWork.value as? String, "Collapsed")
+        let input = composerInput(in: app)
+        input.tap()
+        input.typeText("Keep the previous work collapsed")
+        app.buttons["toastty-mobile-composer-send"].tap()
+        let optimistic = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-enqueued-1"]
+        XCTAssertTrue(optimistic.waitForExistence(timeout: 5))
+
+        for update in 0..<5 {
+            let advance = app.buttons["toastty-mobile-fixture-send-update-\(update)"]
+            XCTAssertTrue(advance.waitForExistence(timeout: 5))
+            advance.tap()
+            XCTAssertTrue(advance.waitForNonExistence(timeout: 5))
+            XCTAssertEqual(previousWork.value as? String, "Collapsed", "Previous work reopened after update \(update + 1)")
+            XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-transcript-row-2"].exists)
+            if update >= 1 {
+                XCTAssertFalse(optimistic.exists)
+                let canonical = app.descendants(matching: .any)["toastty-mobile-transcript-row-4"]
+                XCTAssertTrue(canonical.exists)
+                XCTAssertTrue(canonical.label.contains("Keep the previous work collapsed"))
+            }
+            if update >= 2 {
+                let newWork = app.buttons["toastty-mobile-transcript-turn-4"]
+                XCTAssertTrue(newWork.exists)
+                XCTAssertEqual(newWork.value as? String, update == 4 ? "Collapsed" : "Expanded")
+            }
+            if update == 1 || update == 3 || update == 4 {
+                attachScreenshot(named: "fixture-send-\(order)-update-\(update + 1)", of: app)
+            }
+        }
+    }
+
     func testGatedSendControlledOptimisticRowKeepsTranscriptStableWhileComposerCollapses() {
         let app = launchFixtureApp(
             environment: [

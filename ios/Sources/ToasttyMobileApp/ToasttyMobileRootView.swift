@@ -15,6 +15,8 @@ struct ToasttyMobileRootView: View {
     @State private var fixtureComposerIsReserved = false
 #if DEBUG
     @State private var controlledFixtureSubmission: ControlledFixtureSubmission?
+    @State private var fixtureSentText: String?
+    @State private var fixtureSendUpdateCount = 0
 #endif
     @State private var fixtureInteractionAnswerState: ToasttyInteractionAnswerState?
     @State private var fixtureInteractionAcceptedAnswers: [RemoteInteractionAnswer]?
@@ -24,6 +26,7 @@ struct ToasttyMobileRootView: View {
     private let fixtureScenario: ToasttyMobileFixtureScenario?
 #if DEBUG
     private let controlsFixtureSubmission: Bool
+    private let fixtureSendEventOrder: ToasttyConversationFixture.SendEventOrder?
 #endif
     private let deepLinkParser: DeepLinkParser?
 
@@ -68,6 +71,10 @@ struct ToasttyMobileRootView: View {
 #if DEBUG
         controlsFixtureSubmission = configuration.fixtureScenario == .gatedSend
             && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_CONTROLLED_SUBMIT"] == "1"
+        fixtureSendEventOrder = configuration.fixtureScenario == .gatedSend
+            ? ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_SEND_EVENT_ORDER"]
+                .flatMap(ToasttyConversationFixture.SendEventOrder.init(rawValue:))
+            : nil
 #endif
         deepLinkParser = configuration.urlScheme.flatMap(DeepLinkParser.init(scheme:))
     }
@@ -371,6 +378,19 @@ struct ToasttyMobileRootView: View {
                 .padding(.top, 8)
                 .padding(.trailing, 12)
             }
+            if fixtureSendEventOrder != nil,
+               conversationID == Self.fixtureOpenPromptConversationID,
+               fixtureSentText != nil, fixtureSendUpdateCount < 5 {
+                Button("Next send event") {
+                    advanceFixtureSendEvent()
+                }
+                .font(.caption.weight(.semibold))
+                .padding(12)
+                .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
+                .background(ToasttyDesignTokens.amber, in: Capsule())
+                .accessibilityIdentifier("toastty-mobile-fixture-send-update-\(fixtureSendUpdateCount)")
+                .padding(8)
+            }
         }
 #endif
     }
@@ -444,6 +464,13 @@ struct ToasttyMobileRootView: View {
         case .toolActivity:
             return ToasttyConversationFixture.toolActivityPresentation(for: conversationID)
         case .gatedSend, .gatedSendReceipt:
+            if let order = fixtureSendEventOrder,
+               conversationID == Self.fixtureOpenPromptConversationID {
+                return ToasttyConversationFixture.reconciledSendPresentation(
+                    for: conversationID, sendItems: fixtureSendItems, sentText: fixtureSentText,
+                    updateCount: fixtureSendUpdateCount, order: order
+                )
+            }
             return ToasttyConversationFixture.gatedSendPresentation(
                 for: conversationID,
                 sendItems: conversationID == Self.fixtureOpenPromptConversationID
@@ -708,12 +735,43 @@ struct ToasttyMobileRootView: View {
         _ submission: ToasttyComposerSubmission,
         clientRequestID: String
     ) {
+        if fixtureSendEventOrder != nil {
+            fixtureSentText = submission.text
+            fixtureSendUpdateCount = 0
+        }
         fixtureSendItems.append(ToasttySendPresentationItem(
             clientRequestID: clientRequestID,
             text: submission.text,
             content: .optimistic(response: .accepted)
         ))
         fixtureComposerIsReserved = true
+    }
+
+    private func advanceFixtureSendEvent() {
+        guard let order = fixtureSendEventOrder, fixtureSendUpdateCount < 5 else { return }
+        fixtureSendUpdateCount += 1
+        if order.hasCanonicalEcho(after: fixtureSendUpdateCount) {
+            fixtureSendItems.removeAll()
+        }
+        let home = sessionController.homeController
+        let workspaces = home.snapshot.workspaces.map { workspace in
+            workspace.withConversations(workspace.conversations.map { conversation in
+                guard conversation.id == Self.fixtureOpenPromptConversationID else { return conversation }
+                return MobileConversation(
+                    id: conversation.id, workspaceID: conversation.workspaceID,
+                    workspaceTitle: conversation.workspaceTitle, cwd: conversation.cwd, agent: conversation.agent,
+                    title: conversation.title,
+                    state: order.hasWorkingStatus(after: fixtureSendUpdateCount) ? MobileSessionStatus.working : .ready,
+                    inputAvailability: conversation.inputAvailability, age: conversation.age,
+                    lastActivity: conversation.lastActivity, executionProfile: conversation.executionProfile,
+                    workspaceTabID: conversation.workspaceTabID, workspaceTabTitle: conversation.workspaceTabTitle
+                )
+            })
+        }
+        home.update(
+            snapshot: MobileHomeSnapshot(hostName: home.snapshot.hostName, workspaces: workspaces),
+            connectionState: home.connectionState, freshness: home.freshness
+        )
     }
 
     private func advanceControlledFixtureSubmission() {

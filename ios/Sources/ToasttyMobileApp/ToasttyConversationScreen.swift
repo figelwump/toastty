@@ -93,6 +93,7 @@ struct ToasttyConversationScreen: View {
             if let conversation = controller.conversation(id: conversationID) {
                 ToasttyTranscriptView(
                     state: resolvedPresentation,
+                    isSubmitting: isSubmitting,
                     loadOlder: loadOlder,
                     dismissSendReceipt: dismissSendReceipt,
                     interactionAnswerStates: interactionAnswerStates,
