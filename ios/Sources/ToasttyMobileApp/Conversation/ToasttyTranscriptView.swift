@@ -8,6 +8,7 @@ struct ToasttyTranscriptView: View {
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
 
     let state: ToasttyConversationPresentationState
+    let isSubmitting: Bool
     let loadOlder: () -> Void
     let dismissSendReceipt: (String) -> Void
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
@@ -34,6 +35,7 @@ struct ToasttyTranscriptView: View {
 
     init(
         state: ToasttyConversationPresentationState,
+        isSubmitting: Bool,
         loadOlder: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
         interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
@@ -47,6 +49,7 @@ struct ToasttyTranscriptView: View {
         onVisibleLiveEdge: @escaping () -> Void = {}
     ) {
         self.state = state
+        self.isSubmitting = isSubmitting
         self.loadOlder = loadOlder
         self.dismissSendReceipt = dismissSendReceipt
         self.interactionAnswerStates = interactionAnswerStates
@@ -446,14 +449,8 @@ struct ToasttyTranscriptView: View {
         readAcknowledgementEpoch?.bucket == .working
     }
 
-    /// Turns whose work may fold: the response arrived, and for the last turn
-    /// the session is also no longer streaming it.
     private var settledTurnIDs: Set<ToasttyTranscriptRowID> {
-        var settled = Set(state.turns.filter(\.hasResponse).map(\.id))
-        if let last = state.turns.last, isSessionWorking {
-            settled.remove(last.id)
-        }
-        return settled
+        state.settledTurnIDs(isSessionWorking: isSessionWorking, isSubmitting: isSubmitting)
     }
 
     private var liveTurnID: ToasttyTranscriptRowID? {

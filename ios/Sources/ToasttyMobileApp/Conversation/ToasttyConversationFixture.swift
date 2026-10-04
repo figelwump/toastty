@@ -3,6 +3,19 @@ import Foundation
 import RemoteProtocol
 
 enum ToasttyConversationFixture {
+    enum SendEventOrder: String {
+        case statusFirst = "status-first"
+        case echoFirst = "echo-first"
+
+        func hasWorkingStatus(after updateCount: Int) -> Bool {
+            updateCount >= (self == .statusFirst ? 1 : 2) && updateCount < 5
+        }
+
+        func hasCanonicalEcho(after updateCount: Int) -> Bool {
+            updateCount >= (self == .statusFirst ? 2 : 1)
+        }
+    }
+
     static let questionInteractionID = RemotePendingInteraction.ID(
         rawValue: "fixture-question-interaction"
     )
@@ -214,6 +227,43 @@ enum ToasttyConversationFixture {
             sendItems: sendItems,
             phase: .live,
             revision: sendItems.isEmpty ? .initial : .appended,
+            historyTruncated: false
+        )
+    }
+
+    static func reconciledSendPresentation(
+        for conversationID: UUID,
+        sendItems: [ToasttySendPresentationItem],
+        sentText: String?,
+        updateCount: Int,
+        order: SendEventOrder
+    ) -> ToasttyConversationPresentationState {
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        var rows = [
+            row(conversationID, 1, timestamp, .userMessage(text: "Previous request", origin: .local)),
+            row(conversationID, 2, timestamp, .assistantMessage(
+                text: Array(repeating: "Earlier work details must stay collapsed during the next send.", count: 30)
+                    .joined(separator: "\n\n"),
+                phase: .commentary
+            )),
+            row(conversationID, 3, timestamp, .assistantMessage(text: "The previous request is complete.", phase: .final)),
+        ]
+        if let sentText, order.hasCanonicalEcho(after: updateCount) {
+            rows.append(row(conversationID, 4, timestamp, .userMessage(text: sentText, origin: .remote)))
+        }
+        if updateCount >= 3 {
+            rows.append(row(conversationID, 5, timestamp, .assistantMessage(text: "Working on the new request.", phase: .commentary)))
+        }
+        if updateCount >= 4 {
+            rows.append(row(conversationID, 6, timestamp, .assistantMessage(text: "The new answer is ready.", phase: .final)))
+        }
+        let contentChanged = updateCount == (order == .statusFirst ? 2 : 1)
+            || updateCount == 3 || updateCount == 4
+        return ToasttyConversationPresentationState(
+            rows: rows,
+            sendItems: sendItems,
+            phase: .live,
+            revision: sentText == nil ? .initial : (contentChanged ? .appended : .metadataOnly),
             historyTruncated: false
         )
     }

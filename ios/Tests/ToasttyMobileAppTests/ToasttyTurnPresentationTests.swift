@@ -82,7 +82,7 @@ final class ToasttyTurnPresentationTests: XCTestCase {
         XCTAssertEqual(turn.noteCount, 0)
     }
 
-    func testTurnsWithoutWorkOrWithoutUserAnchorAreNotFoldable() {
+    func testWorklessUserTurnsStayInTimelineWithoutFoldableBlocks() throws {
         let rows: [ToasttyTranscriptRow] = [
             row(1, .toolStarted(callID: "call-0", name: "Read", detail: nil)),
             row(2, .userMessage(text: "instant question", origin: .local)),
@@ -94,7 +94,98 @@ final class ToasttyTurnPresentationTests: XCTestCase {
             revision: .initial,
             historyTruncated: false
         )
-        XCTAssertTrue(state.turns.isEmpty)
+        XCTAssertEqual(state.turns.map(\.id.sequence), [2])
+        XCTAssertTrue(try XCTUnwrap(state.turns.first).workBlockIDs.isEmpty)
+    }
+
+    func testNewSendKeepsCompletedWorkCollapsedInBothEventOrders() {
+        let previousRows: [ToasttyTranscriptRow] = [
+            row(1, .userMessage(text: "first question", origin: .local)),
+            row(2, .assistantMessage(text: "previous work", phase: .commentary)),
+            row(3, .assistantMessage(text: "first answer", phase: .final)),
+        ]
+        let pending = ToasttySendPresentationItem(
+            clientRequestID: "new-send", text: "next question", content: .optimistic(response: .accepted)
+        )
+        let previousID = rowID(1)
+        let nextID = rowID(4)
+
+        for statusFirst in [true, false] {
+            var fold = ToasttyTurnFoldState()
+            func reconcile(
+                _ rows: [ToasttyTranscriptRow],
+                sends: [ToasttySendPresentationItem] = [],
+                working: Bool,
+                revision: ToasttyTranscriptRevision = .appended
+            ) {
+                let state = ToasttyConversationPresentationState(
+                    rows: rows, sendItems: sends, phase: .live, revision: revision, historyTruncated: false
+                )
+                fold.reconcile(
+                    turns: state.turns, settledIDs: state.settledTurnIDs(isSessionWorking: working),
+                    revision: revision, previousBoundarySequence: nil
+                )
+                XCTAssertFalse(fold.isExpanded(previousID), "Previous completed work stays collapsed")
+            }
+
+            reconcile(previousRows, working: false, revision: .initial)
+            reconcile(previousRows, sends: [pending], working: false, revision: .metadataOnly)
+            if statusFirst {
+                reconcile(previousRows, sends: [pending], working: true, revision: .metadataOnly)
+            }
+            let echoedRows = previousRows + [row(4, .userMessage(text: pending.text, origin: .remote))]
+            reconcile(echoedRows, working: statusFirst)
+            reconcile(echoedRows, working: true, revision: .metadataOnly)
+
+            let workingRows = echoedRows + [row(5, .toolStarted(callID: "new-tool", name: "Read", detail: nil))]
+            reconcile(workingRows, working: true)
+            XCTAssertTrue(fold.isExpanded(nextID), "The new turn shows its work")
+
+            let responseRows = workingRows + [row(6, .assistantMessage(text: "next answer", phase: .final))]
+            reconcile(responseRows, working: true)
+            XCTAssertTrue(fold.isExpanded(nextID), "Work stays open while its response streams")
+            reconcile(responseRows, working: false, revision: .metadataOnly)
+            XCTAssertFalse(fold.isExpanded(nextID), "The new turn folds when the session settles")
+        }
+    }
+
+    func testSubmissionKeepsCompletedWorkCollapsedBeforeOptimisticPublication() {
+        let state = ToasttyConversationPresentationState(
+            rows: [
+                row(1, .userMessage(text: "question", origin: .local)),
+                row(2, .assistantMessage(text: "previous work", phase: .commentary)),
+                row(3, .assistantMessage(text: "answer", phase: .final)),
+            ],
+            phase: .live, revision: .metadataOnly, historyTruncated: false
+        )
+        var fold = ToasttyTurnFoldState()
+        fold.reconcile(
+            turns: state.turns,
+            settledIDs: state.settledTurnIDs(isSessionWorking: true, isSubmitting: true),
+            revision: .initial, previousBoundarySequence: nil
+        )
+        XCTAssertFalse(fold.isExpanded(rowID(1)))
+    }
+
+    func testSendReceiptDoesNotCloseTheCurrentStreamingWork() {
+        let state = ToasttyConversationPresentationState(
+            rows: [
+                row(1, .userMessage(text: "question", origin: .local)),
+                row(2, .assistantMessage(text: "current work", phase: .commentary)),
+                row(3, .assistantMessage(text: "streaming answer", phase: .final)),
+            ],
+            sendItems: [ToasttySendPresentationItem(
+                clientRequestID: "old-rejection", text: "rejected draft",
+                content: .receipt(.init(kind: .rejected(.epochMismatch)))
+            )],
+            phase: .live, revision: .initial, historyTruncated: false
+        )
+        var fold = ToasttyTurnFoldState()
+        fold.reconcile(
+            turns: state.turns, settledIDs: state.settledTurnIDs(isSessionWorking: true),
+            revision: .initial, previousBoundarySequence: nil
+        )
+        XCTAssertTrue(fold.isExpanded(rowID(1)))
     }
 
     func testFoldStateSettledTurnsCollapseAndLiveTurnStaysOpen() {
