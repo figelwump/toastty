@@ -847,6 +847,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         let title = app.staticTexts["toastty-mobile-conversation-title"]
         XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
+        assertReadyMessageStartsAtTop(in: app)
+        attachScreenshot(named: "fixture-ready-message-start-from-home", of: app)
         let scratchpad = app.buttons["toastty-conversation-scratchpad"]
         let next = app.buttons["toastty-conversation-next"]
         XCTAssertTrue(scratchpad.waitForExistence(timeout: 5))
@@ -856,6 +858,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(next.frame.minX, scratchpad.frame.maxX)
         XCTAssertEqual(next.value as? String, "6 need you")
         attachScreenshot(named: "fixture-conversation-next-and-scratchpad", of: app)
+
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 5))
 
         // Tap opens the most urgent session: the one waiting on approval.
         next.tap()
@@ -868,12 +874,49 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-conversation-next-menu", of: app)
         choice.tap()
         XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
+        assertReadyMessageStartsAtTop(in: app)
+        attachScreenshot(named: "fixture-ready-message-start-from-next", of: app)
 
         // Next replaced the conversation instead of pushing, so Back
         // returns straight to Home.
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 5))
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+    }
+
+    func testWorkingSessionStillOpensAtLiveEdge() {
+        let app = launchFixtureApp()
+        let row = app.buttons["toastty-mobile-grouped-card-\(workingConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+
+        let tail = app.descendants(matching: .any)["toastty-mobile-transcript-row-14"]
+        XCTAssertTrue(tail.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(timeout: 5) { tail.isHittable })
+        XCTAssertFalse(app.buttons["toastty-mobile-transcript-jump-latest"].exists)
+        attachScreenshot(named: "fixture-working-session-live-edge", of: app)
+    }
+
+    func testShortReadyResponseKeepsLiveEdgeWhenKeyboardOpens() {
+        let app = launchFixtureApp(
+            environment: [
+                "TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send",
+                "TOASTTY_MOBILE_FIXTURE_SHORT_READY_RESPONSE": "1",
+            ]
+        )
+        openGatedSendConversation(in: app)
+        let response = app.descendants(matching: .any)["toastty-mobile-transcript-row-13"]
+        XCTAssertTrue(response.waitForExistence(timeout: 5))
+        XCTAssertTrue(response.isHittable)
+
+        composerInput(in: app).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            response.isHittable && response.frame.maxY <= composerInput(in: app).frame.minY + 2
+        }, "A short ready response should keep its bottom above the composer after the keyboard opens")
+        XCTAssertFalse(app.buttons["toastty-mobile-transcript-jump-latest"].exists)
+        attachScreenshot(named: "fixture-short-ready-response-keyboard", of: app)
     }
 
     func testFixtureHomeAtEveryAccessibilityContentSize() {
@@ -2157,6 +2200,19 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             }
         }
         return top
+    }
+
+    private func assertReadyMessageStartsAtTop(in app: XCUIApplication) {
+        let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-13"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            let top = max(
+                app.scrollViews["toastty-mobile-transcript"].frame.minY,
+                app.navigationBars.firstMatch.frame.maxY
+            )
+            return message.frame.minY >= top - 2 && message.frame.minY <= top + 32
+        }, "The ready session should show the start of its latest response", file: #filePath, line: #line)
+        XCTAssertTrue(app.buttons["toastty-mobile-transcript-jump-latest"].waitForExistence(timeout: 5))
     }
 
     private func launchFixtureApp(

@@ -95,8 +95,12 @@ The fixture UI readiness measurement starts before opening the conversation and 
 A remote Debug run on 2026-09-05 recorded 1.9807 seconds for those 200 updates in `artifacts/remote-tests/ios-audit-final-debug/`, with the timing attachment exported under `artifacts/reviews/ios-audit-append-measurement/`. This is one simulator observation, not a physical-device frame-time guarantee.
 
 
-## Transcript send scrolling
+## Transcript scrolling
+
+Opening a ready session from the home list, a workspace, or Next session shows the start of its latest assistant response to the current request. Long responses start at their first block. Commentary and later session activity do not change that target. If the current request has no response yet, the session opens at the bottom. Other session states and pending sends also open at the bottom. A short response that fits on screen keeps following the bottom. The entry position is selected once after content arrives and resets when the conversation changes. Read acknowledgements still require the bottom of the transcript to be visible.
 
 Submitting acquires the transcript’s bottom immediately without animation, including when the user was reading older messages. SwiftUI’s size-change anchor then keeps that bottom fixed through keyboard dismissal, composer collapse, and appended content. Bottom detection excludes the keyboard, composer, and navigation insets from the usable viewport. A direct user drag cancels following so older history remains readable. Initial positioning and history restoration still use the existing layout-settling coordinator.
 
 The opt-in Debug fixture environment value `TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE=1` exposes coherent scroll geometry samples to UI tests. Send regression tests inspect every recorded geometry change after reaching the bottom, rather than comparing accessibility frames captured at different points during a keyboard animation. This is simulator layout evidence; it does not measure physical-device frame timing.
+
+The Debug `gated-send` fixture accepts `TOASTTY_MOBILE_FIXTURE_SHORT_READY_RESPONSE=1` to make its latest reply short. The keyboard regression uses this variant to check bottom following after ready-session entry.

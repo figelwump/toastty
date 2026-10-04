@@ -1,10 +1,107 @@
 import Foundation
+import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 import XCTest
 @testable import ToasttyMobileApp
 
 final class ToasttyTranscriptVisibilityTests: XCTestCase {
+    func testReadyEntryTargetsFirstChunkOfLatestResponseBeforeTrailingActivity() {
+        let latestResponseID = rowID(sequence: 3)
+        let text = (1...30).map { "## Section \($0)\n\n" + String(repeating: "Response detail. ", count: 30) }
+            .joined(separator: "\n\n")
+        let state = entryState([
+            .assistantMessage(text: "Earlier response", phase: .final),
+            .userMessage(text: "Explain the result", origin: .local),
+            .assistantMessage(text: text, phase: .unknown),
+            .assistantMessage(text: "Later work note", phase: .commentary),
+            .sessionBindingChanged(reason: .runtimeResumed),
+        ])
+        XCTAssertGreaterThan(state.blocks.filter { $0.id.rowID == latestResponseID }.count, 1)
+
+        var position = TranscriptEntryScrollPosition()
+        XCTAssertEqual(
+            position.target(for: state, status: .ready, isSubmitting: false),
+            .transcript(ToasttyTranscriptBlockID(rowID: latestResponseID))
+        )
+    }
+
+    func testEntryWaitsForContentAndDoesNotMoveAgainAfterStatusOrTranscriptUpdates() {
+        var position = TranscriptEntryScrollPosition()
+        XCTAssertNil(position.target(for: .loading, status: .ready, isSubmitting: false))
+
+        let state = entryState([.assistantMessage(text: "Latest response", phase: .final)])
+        XCTAssertEqual(
+            position.target(for: state, status: .ready, isSubmitting: false),
+            .transcript(ToasttyTranscriptBlockID(rowID: rowID(sequence: 1)))
+        )
+        for status in [MobileSessionStatus.idle, .working, .ready] {
+            XCTAssertNil(position.target(for: state, status: status, isSubmitting: false))
+        }
+    }
+
+    func testNonReadyEntriesAndReadyEntriesWithoutAResponseUseLiveEdge() {
+        let state = entryState([.assistantMessage(text: "Latest response", phase: .final)])
+        for status in [MobileSessionStatus.working, .needsApproval, .idle, .error] {
+            var position = TranscriptEntryScrollPosition()
+            XCTAssertEqual(position.target(for: state, status: status, isSubmitting: false), .liveEdge)
+        }
+        var position = TranscriptEntryScrollPosition()
+        XCTAssertEqual(
+            position.target(
+                for: entryState([.assistantMessage(text: "Work note", phase: .commentary)]),
+                status: .ready,
+                isSubmitting: false
+            ),
+            .liveEdge
+        )
+    }
+
+    func testSubmissionAtReadyEntryKeepsTheLiveEdge() {
+        var position = TranscriptEntryScrollPosition()
+        XCTAssertEqual(
+            position.target(
+                for: entryState([.assistantMessage(text: "Previous response", phase: .final)]),
+                status: .ready,
+                isSubmitting: true
+            ),
+            .liveEdge
+        )
+    }
+
+    func testReadyEntryWithoutAResponseToTheLatestRequestDoesNotOpenAnOlderAnswer() {
+        var position = TranscriptEntryScrollPosition()
+        XCTAssertEqual(
+            position.target(
+                for: entryState([
+                    .assistantMessage(text: "Previous answer", phase: .final),
+                    .userMessage(text: "New request", origin: .local),
+                    .assistantMessage(text: "Work note", phase: .commentary),
+                    .toolStarted(callID: "new-work", name: "Read", detail: nil),
+                ]),
+                status: .ready,
+                isSubmitting: false
+            ),
+            .liveEdge
+        )
+    }
+
+    func testReadyEntryKeepsPendingSendItemsVisible() {
+        let state = ToasttyConversationPresentationState(
+            rows: entryState([.assistantMessage(text: "Previous response", phase: .final)]).rows,
+            sendItems: [ToasttySendPresentationItem(
+                clientRequestID: "pending-send",
+                text: "New request",
+                content: .receipt(ToasttySendReceiptPresentation(kind: .uncertain))
+            )],
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+        var position = TranscriptEntryScrollPosition()
+        XCTAssertEqual(position.target(for: state, status: .ready, isSubmitting: false), .liveEdge)
+    }
+
     func testScrollGeometryExcludesComposerAndKeyboardInsetsFromVisibleBottom() {
         let metrics = TranscriptScrollMetrics(geometry: ScrollGeometry(
             contentOffset: CGPoint(x: 0, y: 1_316),
@@ -432,6 +529,22 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
             measuredBoundaryID: measuredBoundary,
             latestBoundaryID: boundary,
             readAcknowledgementEpoch: readAcknowledgementEpoch
+        )
+    }
+
+    private func entryState(_ contents: [ToasttyTranscriptRow.Content]) -> ToasttyConversationPresentationState {
+        ToasttyConversationPresentationState(
+            rows: contents.enumerated().map { index, content in
+                ToasttyTranscriptRow(
+                    id: rowID(sequence: UInt64(index + 1)),
+                    timestamp: Date(timeIntervalSince1970: 0),
+                    provider: .codex,
+                    content: content
+                )
+            },
+            phase: .live,
+            revision: .appended,
+            historyTruncated: false
         )
     }
 

@@ -28,6 +28,7 @@ struct ToasttyTranscriptView: View {
     @State private var isVisible = false
     @State private var followsLiveEdge = true
     @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
+    @State private var entryScrollPosition = TranscriptEntryScrollPosition()
     @State private var scrollCoordinator = TranscriptScrollCoordinator()
     #if DEBUG
     @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
@@ -57,6 +58,7 @@ struct ToasttyTranscriptView: View {
         self.submitInteractionAnswer = submitInteractionAnswer
         self.readAcknowledgementEpoch = readAcknowledgementEpoch
         self.onVisibleLiveEdge = onVisibleLiveEdge
+        _followsLiveEdge = State(initialValue: readAcknowledgementEpoch?.bucket != .ready)
         _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
     }
 
@@ -271,7 +273,19 @@ struct ToasttyTranscriptView: View {
                     guard scrollCoordinator.command == command else { return }
                     execute(command, using: proxy)
 
-                    guard command.target == .liveEdge else { return }
+                    guard command.target == .liveEdge else {
+                        if command.target == entryScrollPosition.selectedTarget {
+                            try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
+                            guard Task.isCancelled == false,
+                                  scrollCoordinator.command == command,
+                                  hasMeasuredScrollGeometry
+                            else { return }
+                            // A short response can show its start and the live
+                            // edge together. Keep following in that case only.
+                            followsLiveEdge = hasReachedPhysicalLiveEdge
+                        }
+                        return
+                    }
                     let initialDelay: Duration = command.motion == .animated
                         ? .milliseconds(250)
                         : .milliseconds(100)
@@ -585,8 +599,31 @@ struct ToasttyTranscriptView: View {
     }
 
     private func reconcileScrollChange() {
+        if let target = entryScrollPosition.target(
+            for: state,
+            status: readAcknowledgementEpoch,
+            isSubmitting: isSubmitting
+        ) {
+            switch target {
+            case .liveEdge:
+                followsLiveEdge = true
+                if scrollCoordinator.hasExplicitLiveEdgeOwner {
+                    scrollCoordinator.reinforceLiveEdge()
+                } else {
+                    scrollCoordinator.requestInitialLiveEdge()
+                }
+            case .transcript(let blockID):
+                followsLiveEdge = !scrollCoordinator.requestHistoryAnchor(blockID)
+            }
+            return
+        }
+
         switch state.revision {
-        case .initial, .rebuilt:
+        case .initial:
+            // Entry positioning already owns the first snapshot. Repeated
+            // fixture metadata must not move the reader through that response.
+            break
+        case .rebuilt:
             guard lastScrollTarget != nil else { return }
             followsLiveEdge = true
             scrollCoordinator.requestInitialLiveEdge()
@@ -678,6 +715,42 @@ struct ToasttyTranscriptView: View {
                 values.insert(id)
             }
         }
+    }
+}
+
+/// Choose an entry position once, after transcript content becomes available.
+/// Later status updates must not move a reader through the same response.
+struct TranscriptEntryScrollPosition {
+    private(set) var selectedTarget: TranscriptScrollCoordinator.Target?
+
+    mutating func target(
+        for state: ToasttyConversationPresentationState,
+        status: MobileSessionStatus?,
+        isSubmitting: Bool
+    ) -> TranscriptScrollCoordinator.Target? {
+        guard selectedTarget == nil,
+              state.blocks.isEmpty == false || state.sendItems.isEmpty == false
+        else { return nil }
+        selectedTarget = .liveEdge
+
+        guard status?.bucket == .ready,
+              isSubmitting == false,
+              state.sendItems.isEmpty,
+              let response = state.rows.reversed().prefix(while: { row in
+                  if case .userMessage = row.content { return false }
+                  return true
+              }).first(where: { row in
+                  guard case .assistantMessage(_, let phase) = row.content else { return false }
+                  // Unknown phases are responses too, as in turn folding.
+                  return phase != .commentary
+              })
+        else { return .liveEdge }
+
+        let target = TranscriptScrollCoordinator.Target.transcript(
+            ToasttyTranscriptBlockID(rowID: response.id)
+        )
+        selectedTarget = target
+        return target
     }
 }
 

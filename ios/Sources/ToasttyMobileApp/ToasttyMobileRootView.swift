@@ -355,6 +355,7 @@ struct ToasttyMobileRootView: View {
             submitInteractionAnswer: conversationInteractionSubmitAction(for: conversationID),
             onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID)
         )
+        .id(conversationID)
 #if DEBUG
         .overlay(alignment: .topTrailing) {
             if controlsFixtureSubmission,
@@ -475,7 +476,10 @@ struct ToasttyMobileRootView: View {
                 for: conversationID,
                 sendItems: conversationID == Self.fixtureOpenPromptConversationID
                     ? fixtureSendItems
-                    : []
+                    : [],
+                hasShortResponse: ProcessInfo.processInfo.environment[
+                    "TOASTTY_MOBILE_FIXTURE_SHORT_READY_RESPONSE"
+                ] == "1"
             )
         case .interactionAnswer:
             return ToasttyConversationFixture.questionPresentation(

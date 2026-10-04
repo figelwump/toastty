@@ -219,11 +219,18 @@ enum ToasttyConversationFixture {
 
     static func gatedSendPresentation(
         for conversationID: UUID,
-        sendItems: [ToasttySendPresentationItem]
+        sendItems: [ToasttySendPresentationItem],
+        hasShortResponse: Bool = false
     ) -> ToasttyConversationPresentationState {
         let fixture = presentation(for: conversationID)
         return ToasttyConversationPresentationState(
-            rows: fixture.rows.filter { $0.id.sequence != 14 },
+            rows: fixture.rows.filter { $0.id.sequence != 14 }.map { row in
+                guard hasShortResponse, row.id.sequence == 13 else { return row }
+                return ToasttyTranscriptRow(
+                    id: row.id, timestamp: row.timestamp, provider: row.provider,
+                    content: .assistantMessage(text: "The latest response is ready.", phase: .final)
+                )
+            },
             sendItems: sendItems,
             phase: .live,
             revision: sendItems.isEmpty ? .initial : .appended,
