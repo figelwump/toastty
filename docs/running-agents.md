@@ -171,17 +171,19 @@ take time to start; launch waits briefly for its shell prompt and fails if the
 terminal is still unavailable or busy. Preserve that error and retry the same
 panel when appropriate. Never redirect a failed launch to a different panel.
 
-Built-in Codex, Claude, Cursor, and Grok automation launches support
+Built-in Codex, Claude, Cursor, Grok, and Pi automation launches support
 `initialPrompt` when the resolved argv is exactly one direct first-party
-command (`codex`, `cdx`, `claude`, `cursor-agent`, or `grok`). Implicit automation
-profiles for `codex`, `claude`, `cursor`, and `grok` also support it when no
+command (`codex`, `cdx`, `claude`, `cursor-agent`, `grok`, or `pi`). Implicit automation
+profiles for `codex`, `claude`, `cursor`, `grok`, and `pi` also support it when no
 `agents.toml` profile exists. Profiles with extra arguments,
 subcommands, wrappers, shell helpers such as `argv = ["scodex"]`, and custom
 profiles such as `[gemini]`, must declare
-`initialPromptPlacement = "trailing"` before `initialPrompt` is accepted. Pi
-launches currently do not support `initialPrompt` unless a profile declares that
-placement explicitly. When the prompt begins with `-` and the profile's command
-is a first-party one (`codex`, `cdx`, `claude`, `cursor-agent`, or `grok`, with or
+`initialPromptPlacement = "trailing"` before `initialPrompt` is accepted. Direct
+Pi profiles need no explicit setting to start a session from Toastty Mobile.
+Pi treats a positional message that begins with `@` as a file input, including
+after `--`; this follows Pi's CLI syntax.
+When the prompt begins with `-` and the profile's command
+is a first-party one (`codex`, `cdx`, `claude`, `cursor-agent`, `grok`, or `pi`, with or
 without configured arguments), Toastty inserts the standard `--` option
 boundary, so prompt text is not mistaken for a CLI flag. For a wrapper or
 custom command Toastty cannot know the boundary and passes the prompt as
