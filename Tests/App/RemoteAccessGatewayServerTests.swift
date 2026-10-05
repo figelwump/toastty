@@ -45,6 +45,12 @@ struct RemoteAccessGatewayServerTests {
         var tailscaleLogin: String
     }
 
+    private enum HarnessError: Error {
+        case listenerFailed(UInt16)
+        case listenerTimedOut(UInt16)
+        case transportUnreachable(UInt16)
+    }
+
     private static func makeSnapshot() -> RemoteSessionListSnapshot {
         RemoteSessionListSnapshot(
             projectionRunID: RemoteProjectionRunID(),
@@ -71,13 +77,14 @@ struct RemoteAccessGatewayServerTests {
         requestHeaderTimeoutNanoseconds: UInt64 = RemoteAccessGatewayServer.defaultRequestHeaderTimeoutNanoseconds,
         attachmentUploadTimeoutNanoseconds: UInt64 = RemoteAccessGatewayServer.defaultAttachmentUploadTimeoutNanoseconds,
         previewHandler: (@MainActor (RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse)? = nil,
-        attachmentSendHandler: (@MainActor (RemoteMessageSendRequest, RemoteDeviceRecord) async -> RemoteMessageSendResult)? = nil
-    ) throws -> Harness {
+        attachmentSendHandler: (@MainActor (RemoteMessageSendRequest, RemoteDeviceRecord) async -> RemoteMessageSendResult)? = nil,
+        candidatePort: (Int) -> UInt16 = { _ in UInt16.random(in: 49500..<64000) }
+    ) async throws -> Harness {
         let deviceStore = RemoteDeviceStore(fileURL: nil)
-        var port: UInt16 = 0
         var lastError: Error?
-        for _ in 0..<10 {
-            let candidate = UInt16.random(in: 49500..<64000)
+        for attempt in 0..<10 {
+            try Task.checkCancellation()
+            let candidate = candidatePort(attempt)
             let origin = "http://127.0.0.1:\(candidate)"
             let auditLog = RemoteAccessAuditLog(fileURL: nil)
             let handler = RemoteGatewayRequestHandler(
@@ -102,19 +109,45 @@ struct RemoteAccessGatewayServerTests {
                 requestHeaderTimeoutNanoseconds: requestHeaderTimeoutNanoseconds,
                 attachmentUploadTimeoutNanoseconds: attachmentUploadTimeoutNanoseconds
             )
+            var listenerFailed = false
+            var isReady = false
+            server.onListenerFailed = { listenerFailed = true }
+            defer {
+                server.onListenerFailed = nil
+                if !isReady { server.stop() }
+            }
             do {
                 try server.start(port: candidate)
-                port = candidate
-                return Harness(
-                    server: server,
-                    deviceStore: deviceStore,
-                    auditLog: auditLog,
-                    port: port,
-                    origin: origin
-                )
             } catch {
                 lastError = error
+                continue
             }
+
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(2))
+            while server.listeningPort != candidate {
+                try Task.checkCancellation()
+                if listenerFailed { break }
+                // Only a reported setup failure selects another port. A listener
+                // that never resolves must fail the test instead of being retried.
+                guard clock.now < deadline else {
+                    throw HarnessError.listenerTimedOut(candidate)
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try Task.checkCancellation()
+            if listenerFailed {
+                lastError = HarnessError.listenerFailed(candidate)
+                continue
+            }
+            isReady = true
+            return Harness(
+                server: server,
+                deviceStore: deviceStore,
+                auditLog: auditLog,
+                port: candidate,
+                origin: origin
+            )
         }
         throw lastError ?? RemoteAccessGatewayServer.ServerError.invalidPort
     }
@@ -127,10 +160,11 @@ struct RemoteAccessGatewayServerTests {
                 _ = try await URLSession.shared.data(for: request)
                 return
             } catch {
+                try Task.checkCancellation()
                 try await Task.sleep(nanoseconds: 50_000_000)
             }
         }
-        Issue.record("Server never became reachable on port \(harness.port)")
+        throw HarnessError.transportUnreachable(harness.port)
     }
 
     private static func pairDevice(_ harness: Harness, name: String = "Test phone") async throws -> String {
@@ -155,6 +189,44 @@ struct RemoteAccessGatewayServerTests {
         return "\(RemoteGatewayProtocol.credentialCookieName)=\(token)"
     }
 
+    @Test func occupiedCandidatePortRetriesBeforePairingWithItsOwnStore() async throws {
+        let first = try await Self.startHarness()
+        defer { first.server.stop() }
+        try await Self.awaitListening(first)
+
+        var attemptedPorts: [UInt16] = []
+        let second = try await Self.startHarness(candidatePort: { attempt in
+            let port = attempt == 0 ? first.port : UInt16.random(in: 49500..<64000)
+            attemptedPorts.append(port)
+            return port
+        })
+        defer { second.server.stop() }
+        #expect(attemptedPorts.first == first.port)
+        #expect(attemptedPorts.count > 1)
+        #expect(second.port != first.port)
+        #expect(second.server.listeningPort == second.port)
+        try await Self.awaitListening(second)
+        _ = try await Self.pairDevice(second, name: "Second phone")
+        #expect(second.deviceStore.devices.map(\.name) == ["Second phone"])
+        #expect(first.deviceStore.devices.isEmpty)
+    }
+
+    @Test func occupiedCandidatePortsFailWithoutReturningAnotherServersHarness() async throws {
+        let first = try await Self.startHarness()
+        defer { first.server.stop() }
+        try await Self.awaitListening(first)
+
+        do {
+            let unexpected = try await Self.startHarness(candidatePort: { _ in first.port })
+            unexpected.server.stop()
+            Issue.record("Expected listener setup to fail when every candidate port is occupied")
+        } catch HarnessError.listenerFailed(let port) {
+            #expect(port == first.port)
+        }
+        _ = try await Self.pairDevice(first, name: "Original phone")
+        #expect(first.deviceStore.devices.map(\.name) == ["Original phone"])
+    }
+
     @Test func nativePreviewAndResourceUseDeferredLoopbackTransport() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("remote-preview-http-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -163,7 +235,7 @@ struct RemoteAccessGatewayServerTests {
         try Data("<h1>Preview</h1>".utf8).write(to: entry)
         try Data("body { color: red; }".utf8).write(to: directory.appendingPathComponent("style.css"))
         let context = RemotePreviewContext(title: "HTML", source: .file(reference: entry.path, recordedCWD: nil, openPaths: [entry.path], format: nil, isTranscriptLinked: false))
-        let harness = try Self.startHarness(previewHandler: { operation in
+        let harness = try await Self.startHarness(previewHandler: { operation in
             let work = Task.detached { try RemotePreviewProvider.response(operation: operation, context: context) }
             do { return try await work.value } catch { return operation.errorResponse(.missing) }
         })
@@ -196,7 +268,7 @@ struct RemoteAccessGatewayServerTests {
 
     @Test func previewTimeoutCancelsConnectionOwnedTask() async throws {
         var wasCancelled = false
-        let harness = try Self.startHarness(requestHeaderTimeoutNanoseconds: 300_000_000, previewHandler: { operation in
+        let harness = try await Self.startHarness(requestHeaderTimeoutNanoseconds: 300_000_000, previewHandler: { operation in
             do { try await Task.sleep(for: .seconds(10)) } catch { wasCancelled = Task.isCancelled }
             return operation.errorResponse(.missing)
         })
@@ -276,7 +348,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func servesStaticClientAndSessionListOverTCP() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
 
@@ -303,7 +375,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func webSocketSubscribeReceivesBroadcasts() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let cookie = try await Self.pairDevice(harness)
@@ -344,7 +416,7 @@ struct RemoteAccessGatewayServerTests {
     /// trust boundary and can forge Serve headers; this does not substitute
     /// for the separate live Tailscale Serve identity validation.
     @Test func loopbackNativeBearerAuthenticatesRESTAndWebSocketWithoutBrowserOrigin() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let login = "native-person@example.com"
@@ -381,7 +453,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func nativeGatewayAuditOmitsCredentialsOfferIdentityAndConversationContent() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let pairing = try await Self.pairNativeDevice(
@@ -420,7 +492,7 @@ struct RemoteAccessGatewayServerTests {
     /// Exercises the real handler callback -> deferred server sweep path over
     /// loopback. The trusted-local header caveat from the test above applies.
     @Test func loopbackNativeSelfRevokeRespondsThenSweepsEveryDeviceSocket() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let login = "self-revoke@example.com"
@@ -464,7 +536,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func disconnectingDeviceClosesItsActiveWebSocket() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let cookie = try await Self.pairDevice(harness)
@@ -490,7 +562,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func disconnectingDeviceSweepsAllMatchingSocketsAndIsolatesOtherDevice() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let firstCookie = try await Self.pairDevice(harness, name: "First phone")
@@ -528,7 +600,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func disconnectAllSweepsEveryDeviceSocket() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let firstCookie = try await Self.pairDevice(harness, name: "First phone")
@@ -567,7 +639,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func sendScopeDowngradeKeepsReadSocketAliveAndRejectsSendImmediately() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let cookie = try await Self.pairDevice(harness)
@@ -611,7 +683,7 @@ struct RemoteAccessGatewayServerTests {
 
     @Test func attachmentUploadTraversesAuthenticatedLoopbackAndPreservesBytes() async throws {
         var received: RemoteMessageSendRequest?
-        let harness = try Self.startHarness(attachmentSendHandler: { request, _ in
+        let harness = try await Self.startHarness(attachmentSendHandler: { request, _ in
             received = request
             return .accepted(epoch: request.expectedInputEpoch)
         })
@@ -635,7 +707,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func attachmentHeadersRejectUnauthenticatedUploadWithoutWaitingForBodyAndLimitAdmission() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let native = try await Self.pairNativeDevice(harness)
@@ -683,7 +755,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func admittedAttachmentUploadUsesItsAbsoluteDeadlineAndReleasesSlotAfterTimeout() async throws {
-        let harness = try Self.startHarness(requestHeaderTimeoutNanoseconds: 100_000_000,
+        let harness = try await Self.startHarness(requestHeaderTimeoutNanoseconds: 100_000_000,
                                             attachmentUploadTimeoutNanoseconds: 500_000_000)
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
@@ -718,7 +790,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func incompletePreAuthRequestIsDroppedAtDeadline() async throws {
-        let harness = try Self.startHarness(requestHeaderTimeoutNanoseconds: 100_000_000)
+        let harness = try await Self.startHarness(requestHeaderTimeoutNanoseconds: 100_000_000)
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
 
@@ -743,7 +815,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func preAuthConnectionCountIsCapped() async throws {
-        let harness = try Self.startHarness(maximumConnections: 1, requestHeaderTimeoutNanoseconds: 2_000_000_000)
+        let harness = try await Self.startHarness(maximumConnections: 1, requestHeaderTimeoutNanoseconds: 2_000_000_000)
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
 
@@ -766,7 +838,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func stopClosesTheListener() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         try await Self.awaitListening(harness)
         await harness.server.stopAndWaitForListenerCancellation()
 
@@ -781,7 +853,7 @@ struct RemoteAccessGatewayServerTests {
     }
 
     @Test func stopAndRestartKeepsExistingCredentialValid() async throws {
-        let harness = try Self.startHarness()
+        let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let cookie = try await Self.pairDevice(harness)
