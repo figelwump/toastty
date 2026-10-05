@@ -1625,15 +1625,6 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         return terminalState
     }
 
-    #if TOASTTY_HAS_GHOSTTY_KIT
-    func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState {
-        splitSourceSurfaceState(for: panelID)
-    }
-
-    func consumeSplitSource(forNewPanelID panelID: UUID) {
-        consumeSplitSource(for: panelID)
-    }
-
     /// Registers text for a panel that the caller creates next. The surface
     /// types it as its first input, so the caller does not wait for the shell.
     func setPendingInitialInput(_ input: String, forNewPanelID panelID: UUID) {
@@ -1642,6 +1633,20 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
     func discardPendingInitialInput(forPanelID panelID: UUID) {
         pendingInitialInputByPanelID.removeValue(forKey: panelID)
+    }
+
+    /// The text still waiting for the panel's surface to launch, if any.
+    func pendingInitialInput(forPanelID panelID: UUID) -> String? {
+        pendingInitialInputByPanelID[panelID]
+    }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState {
+        splitSourceSurfaceState(for: panelID)
+    }
+
+    func consumeSplitSource(forNewPanelID panelID: UUID) {
+        consumeSplitSource(for: panelID)
     }
 
     func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {

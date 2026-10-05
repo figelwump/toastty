@@ -552,10 +552,13 @@ struct RemoteHostTerminalOpenerTests {
         // The command stays available until the surface has launched, so a
         // failed surface creation can try again. After that it is typed
         // never again: a later surface for the panel is a plain shell.
+        #expect(registry.pendingInitialInput(forPanelID: firstPanelID) == attachLine)
+        #if TOASTTY_HAS_GHOSTTY_KIT
         #expect(registry.surfaceLaunchConfiguration(for: firstPanelID).initialInput == attachLine)
         #expect(registry.surfaceLaunchConfiguration(for: firstPanelID).initialInput == attachLine)
         registry.markInitialSurfaceLaunchCompleted(for: firstPanelID)
         #expect(registry.surfaceLaunchConfiguration(for: firstPanelID).initialInput == nil)
+        #endif
 
         // A second session goes to the same workspace as another tab.
         #expect(opener.open(

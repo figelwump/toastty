@@ -114,7 +114,7 @@ final class SidebarRemoteHostsSectionTests: XCTestCase {
         XCTAssertEqual(window0.selectedWorkspaceID, remoteWorkspace.id)
         let panelID = try XCTUnwrap(remoteWorkspace.tab(id: try XCTUnwrap(remoteWorkspace.tabIDs.first))?.panels.keys.first)
         XCTAssertEqual(
-            registry.surfaceLaunchConfiguration(for: panelID).initialInput,
+            registry.pendingInitialInput(forPanelID: panelID),
             "\"$TOASTTY_CLI_PATH\" remote attach mini \(RemoteHostsFixtures.attachableID.uuidString)"
         )
         XCTAssertFalse(semanticTexts(in: hostingView).contains { $0.contains("remoteAttachCommand") })
