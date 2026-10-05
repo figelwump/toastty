@@ -1474,6 +1474,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let finish = app.buttons["toastty-mobile-fixture-finish-submit"]
         let draft = "Line 01\nLine 02\nLine 03\nLine 04\nLine 05"
 
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 5))
         XCTAssertTrue(newestStableRow.waitForExistence(timeout: 5))
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap()
@@ -1557,6 +1560,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
         ])
         openGatedSendConversation(in: app)
+        let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 5))
         let input = composerInput(in: app)
         input.tap()
         input.typeText("Line 01\nLine 02\nLine 03\nLine 04\nLine 05")
@@ -1892,6 +1899,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "toastty-mobile-transcript-row-13"
         ]
         let jumpToLatest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 5))
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 5))
         XCTAssertTrue(newestRow.waitForExistence(timeout: 5))
         XCTAssertTrue(newestRow.isHittable)
         XCTAssertFalse(jumpToLatest.exists)
