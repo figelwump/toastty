@@ -430,7 +430,7 @@ test("workflow and names-only manifest expose all release inputs without enablin
   assert.match(mobileFilters, /'scripts\/ci\/ios-testflight\.sh'/);
   assert.match(mobileWorkflow, /node --test ios\/Tests\/ScriptTests\/\*\.test\.mjs ios\/Tests\/ReleaseScriptTests\/\*\.test\.mjs/);
   assert.match(mobileWorkflow, /configuration: \[Debug, Release\]/);
-  assert.match(workflow, /TOASTTY_IOS_CONFIGURATION: Release/);
+  assert.match(workflow, /configuration: \[Debug, Release\]/);
   assert.match(workflow, /artifacts\/ios-release\/\*\*\/Toastty\.xcarchive\.tar\.gz/);
   assert.match(workflow, /retention-days: 90/);
 });

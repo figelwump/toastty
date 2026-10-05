@@ -144,12 +144,13 @@ The `Toastty CI` workflow runs secret-free dispatcher and release-script tests, 
 
 Manual `Toastty CI` runs retain the full Debug UI suite and the numeric budget test in both configurations. Select the branch in the workflow's **Run workflow** menu to run this coverage before TestFlight or after event decode/reduce changes. The default dispatcher remains unchanged: `node ios/scripts/toastty-ios.mjs test` includes all Debug tests. `--ui-tests all` explicitly selects that UI coverage, and both UI selector values require Debug. Use the [controlled remote benchmark](../architecture/mobile-ios-domain-performance.md#reference-evidence) to distinguish a performance regression from hosted-runner contention.
 
-Setting `TOASTTY_IOS_CONFIGURATION=Release` on the dispatcher selects only app/domain tests and enables internal test imports without defining `DEBUG`; fixture UI launches require Debug. The remote wrapper invokes xcodebuild directly, so select the same focused Release tier explicitly:
+Setting `TOASTTY_IOS_CONFIGURATION=Release` on the dispatcher selects the existing `ToasttyMobileApp-Release` scheme with only app/domain test targets and enables internal test imports without defining `DEBUG`. The UI test bundle is not built in this tier; fixture UI launches require Debug. Dispatcher test invocations pass `ONLY_ACTIVE_ARCH=YES`, letting the selected simulator determine the architecture without assuming the hosted runner architecture. App builds and signed archives retain their existing architecture settings. The remote wrapper invokes xcodebuild directly, so select the same focused Release tier explicitly:
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
   --run-label ios-release-tests -- \
-  -configuration Release ENABLE_TESTABILITY=YES \
+  -scheme ToasttyMobileApp-Release -configuration Release \
+  ENABLE_TESTABILITY=YES ONLY_ACTIVE_ARCH=YES \
   -only-testing:ToasttyMobileAppTests \
   -only-testing:ToasttyMobileDomainTests
 ```

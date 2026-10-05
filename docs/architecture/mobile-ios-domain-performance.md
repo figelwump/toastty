@@ -47,7 +47,7 @@ The hardware and toolchain records were captured separately through the required
 
 Use repeated clean remote runs when calibrating this provisional gate. Keep the input and measurement boundaries stable so later results remain comparable.
 
-Run the budget test before TestFlight and after changes to event decoding or reduction. Automatic `Toastty CI` jobs pass `--skip-performance-budgets` to exclude only `testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets`; `testFiveThousandEventDecodeAndReducePreservesEventsAndCursor` still verifies catch-up completion, retained events, unknown-event handling, and cursor advancement. Manual dispatch of `Toastty CI` retains the budget test in Debug and Release. The separate `iOS TestFlight` workflow also retains these checks, including when its optional push trigger is enabled.
+Run the budget test before TestFlight and after changes to event decoding or reduction. Automatic `Toastty CI` jobs pass `--skip-performance-budgets` to exclude only `testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets`; `testFiveThousandEventDecodeAndReducePreservesEventsAndCursor` still verifies catch-up completion, retained events, unknown-event handling, and cursor advancement. Manual dispatch of `Toastty CI` retains the budget test in Debug and Release. The separate `iOS TestFlight` workflow uses the same correctness selection and skips the provisional budget test, including when its optional push trigger is enabled. Run manual `Toastty CI` for the budget check before TestFlight.
 
 During the September 2026 CI investigation, one GitHub Release run measured
 1.0715 seconds while another run of the same commit passed. The failing test

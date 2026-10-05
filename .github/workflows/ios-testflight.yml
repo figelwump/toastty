@@ -31,9 +31,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  native-tests:
+    name: Release gate (${{ matrix.configuration }})
+    if: ${{ (github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true') && (github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload) }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    env:
+      TOASTTY_IOS_CONFIGURATION: ${{ matrix.configuration }}
+      TOASTTY_IOS_WORKTREE_ID: testflight-ci
+      TOASTTY_IOS_RUN_ROOT: ${{ github.workspace }}/artifacts/ios/run
+      TOASTTY_IOS_DERIVED_DATA_PATH: ${{ github.workspace }}/artifacts/ios/DerivedData
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Install pinned Tuist
+        run: |
+          brew install mise
+          TUIST_VERSION="$(awk '$1 == "tuist" { print $2 }' .tool-versions)"
+          mise install "tuist@$TUIST_VERSION" --quiet
+          TUIST_BIN_DIR="$(dirname "$(mise exec "tuist@$TUIST_VERSION" -- which tuist)")"
+          echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
+          test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
+
+      - name: Test native client
+        # Use the routine CI selection; full UI and budgets remain in manual Toastty CI.
+        run: node ios/scripts/toastty-ios.mjs test ${{ matrix.configuration == 'Debug' && '--ui-tests smoke --skip-performance-budgets' || '--skip-performance-budgets' }}
+
+      - name: Upload native test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-tests-${{ matrix.configuration }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ios/DerivedData/Logs/Test/
+          if-no-files-found: warn
+          retention-days: 90
+
   testflight:
     name: Validate or Upload
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true' }}
+    needs: native-tests
+    # An explicit validation-only skip is allowed; failed or cancelled tests never are.
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true') && (needs.native-tests.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.run_tests && !inputs.upload && needs.native-tests.result == 'skipped')) }}
     environment: testflight
     runs-on: macos-26
     timeout-minutes: 90
@@ -60,17 +109,6 @@ jobs:
 
       - name: Test release script
         run: node --test ios/Tests/ReleaseScriptTests/*.test.mjs
-
-      - name: Test native client
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload }}
-        run: node ios/scripts/toastty-ios.mjs test
-
-      - name: Test Release app and domain
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload }}
-        env:
-          TOASTTY_IOS_CONFIGURATION: Release
-          TOASTTY_IOS_RUN_ID: release-tests
-        run: node ios/scripts/toastty-ios.mjs test
 
       - name: Require main for upload
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && github.ref != 'refs/heads/main' }}

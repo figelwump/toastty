@@ -113,12 +113,27 @@ The release script fails before upload unless it can prove:
   `ITSAppUsesNonExemptEncryption=false`, and privacy manifest;
 - App Store Connect accepts the exported IPA during validation.
 
-Before archiving, the workflow runs Debug tests and focused Release app/domain
-tests. Release tests enable internal test imports while preserving Release
-compilation branches; Debug-only fixture UI launches are excluded. Upload
-requests always run both tiers even if `run_tests` is false. The ordinary PR
-workflow also runs both configurations and the secret-free release-script suite,
-including when the release workflow or script changes.
+Before archiving, the workflow runs Debug and Release tests in parallel on
+separate hosted runners. Both run app/domain correctness tests. Debug also runs
+the two fixture UI smoke scenarios used by ordinary PR CI. Release tests enable
+internal test imports while preserving Release compilation branches; Debug-only
+fixture UI targets are excluded from the Release test scheme. Test invocations
+build only the selected simulator architecture. Signed archive settings are
+unchanged. Both configurations skip the provisional
+hardware-sensitive performance budget test; large-page correctness stays covered.
+Full UI and performance budget checks remain available through a manual
+`Toastty CI` run. Use that workflow before a release when broader coverage is
+needed, and after changes to event decoding or reduction.
+
+Upload requests require both configurations to pass, even if `run_tests` is
+false. Failed, cancelled, or unexpectedly skipped tests block archiving. A manual
+validation-only run with both `upload=false` and `run_tests=false` can skip native
+tests. Enabled push runs always require both configurations and never upload.
+The ordinary PR workflow also runs both configurations and the secret-free
+release-script suite, including when the release workflow or script changes.
+Native test logs and result bundles are retained for 90 days, with separate
+artifacts for each configuration and run attempt. If the `testflight` environment
+requires approval, its archive job requests that approval after the tests finish.
 
 The workflow retains the signed IPA, compressed Xcode archive (including app
 dSYMs), export options, release metadata, and sanitized

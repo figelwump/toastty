@@ -164,3 +164,86 @@ test('Mac artifacts include result bundles without uploading DerivedData', () =>
   const upload = workflow.jobs.macos.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload.with.path, 'artifacts/ci-macos/*.xcresult');
 });
+
+const releaseWorkflow = parse(read('.github/workflows/ios-testflight.yml'));
+// Evaluate the literal workflow expressions for canonical Actions context values.
+// This narrow subset uses JS-compatible operators; absent push inputs are undefined.
+function releaseExpression(expression, context) {
+  const match = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/);
+  assert.ok(match, expression);
+  const source = match[1].replaceAll('needs.native-tests', 'needs["native-tests"]');
+  return Function('github', 'inputs', 'vars', 'needs', 'matrix', 'cancelled', `return ${source}`)(
+    context.github, context.inputs, context.vars, context.needs, context.matrix,
+    () => context.cancelled ?? false,
+  );
+}
+
+test('release archive requires successful tests except an explicit validation-only skip', () => {
+  const tests = releaseWorkflow.jobs['native-tests'];
+  const archive = releaseWorkflow.jobs.testflight;
+  assert.deepEqual([archive.needs].flat(), ['native-tests']);
+  assert.deepEqual(tests.strategy.matrix.configuration, ['Debug', 'Release']);
+  assert.equal(tests.strategy['fail-fast'], false);
+  assert.equal(tests.needs, undefined);
+  // A status function must override Actions' implicit success() for a skipped dependency.
+  assert.ok(archive.if.includes('!cancelled()'));
+  for (const event of ['workflow_dispatch', 'push']) {
+    for (const enabled of [undefined, '', 'false', 'true']) {
+      for (const runTests of [false, true]) {
+        for (const upload of [false, true]) {
+          const active = event === 'workflow_dispatch' || enabled === 'true';
+          const required = event === 'push' || runTests || upload;
+          const context = {
+            github: { event_name: event },
+            inputs: event === 'push' ? {} : { run_tests: runTests, upload },
+            vars: { TOASTTY_IOS_TESTFLIGHT_ON_PUSH: enabled },
+          };
+          assert.equal(Boolean(releaseExpression(tests.if, context)), active && required);
+          for (const result of ['success', 'failure', 'cancelled', 'skipped']) {
+            context.needs = { 'native-tests': { result } };
+            const expected = active && (result === 'success' || (!required && result === 'skipped'));
+            assert.equal(Boolean(releaseExpression(archive.if, context)), expected,
+              JSON.stringify({ event, enabled, runTests, upload, result }));
+            assert.equal(Boolean(releaseExpression(archive.if, { ...context, cancelled: true })), false);
+          }
+        }
+      }
+    }
+  }
+});
+
+test('release test jobs preserve app/domain execution without signing credentials', () => {
+  const job = releaseWorkflow.jobs['native-tests'];
+  const archive = releaseWorkflow.jobs.testflight;
+  assert.equal(job['runs-on'], archive['runs-on']);
+  assert.equal(job.environment, undefined);
+  assert.deepEqual(job.permissions, { contents: 'read' });
+  assert.ok(!JSON.stringify(job).includes('secrets.'));
+  assert.ok(!archive.steps.some((step) => step.run?.includes('toastty-ios.mjs test')));
+  const command = job.steps.find((step) => step.name === 'Test native client').run;
+  const prefix = 'node ios/scripts/toastty-ios.mjs test ';
+  assert.ok(command.startsWith(prefix));
+  for (const configuration of job.strategy.matrix.configuration) {
+    const selector = releaseExpression(command.slice(prefix.length), { matrix: { configuration } });
+    const result = spawnSync(process.execPath, [
+      new URL('ios/scripts/toastty-ios.mjs', root).pathname,
+      'test', ...selector.split(' '), '--dry-run',
+    ], { env: { ...process.env, TOASTTY_IOS_CONFIGURATION: configuration }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const args = JSON.parse(result.stdout).steps.at(-1).args;
+    assert.ok(args.includes('-only-testing:ToasttyMobileAppTests'));
+    assert.ok(args.includes('-only-testing:ToasttyMobileDomainTests'));
+    assert.equal(args.filter((arg) => arg.startsWith('-only-testing:ToasttyMobileUITests/')).length,
+      configuration === 'Debug' ? 2 : 0);
+    assert.deepEqual(args.filter((arg) => arg.startsWith('-skip-testing:')), [
+      '-skip-testing:ToasttyMobileDomainTests/ConversationRuntimePerformanceTests/testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets',
+    ]);
+  }
+  const artifact = job.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.equal(artifact.if, 'always()');
+  assert.equal(artifact.with['retention-days'], 90);
+  assert.equal(artifact.with.path, 'artifacts/ios/DerivedData/Logs/Test/');
+  for (const component of ['matrix.configuration', 'github.run_id', 'github.run_attempt']) {
+    assert.ok(artifact.with.name.includes(component));
+  }
+});

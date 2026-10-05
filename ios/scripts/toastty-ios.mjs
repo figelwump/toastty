@@ -330,6 +330,12 @@ function performGeneration(environment) {
   }
 }
 
+function selectedScheme(command) {
+  return command === "test" && process.env.TOASTTY_IOS_CONFIGURATION?.trim() === "Release"
+    ? "ToasttyMobileApp-Release"
+    : scheme;
+}
+
 function xcodebuildArguments(command, context, destination, uiTests, skipPerformanceBudgets) {
   const configuration = process.env.TOASTTY_IOS_CONFIGURATION?.trim() || "Debug";
   if (configuration !== "Debug" && configuration !== "Release") {
@@ -339,7 +345,7 @@ function xcodebuildArguments(command, context, destination, uiTests, skipPerform
     "-workspace",
     workspace,
     "-scheme",
-    scheme,
+    selectedScheme(command),
     "-configuration",
     configuration,
     "-destination",
@@ -352,7 +358,9 @@ function xcodebuildArguments(command, context, destination, uiTests, skipPerform
   // enabled, producing nondeterministic handshake timeouts. Tests within each
   // bundle still exercise their intended concurrency.
   if (command === "test") {
-    args.push("-parallel-testing-enabled", "NO");
+    // Let the selected simulator determine the architecture, including on Intel hosts.
+    // Keep this invocation-scoped so device builds and archives retain their settings.
+    args.push("-parallel-testing-enabled", "NO", "ONLY_ACTIVE_ARCH=YES");
     if (configuration === "Release") {
       // Keep Release compilation branches while allowing unit tests to import
       // internal declarations. Fixture-driven UI launches require Debug.
@@ -403,7 +411,7 @@ function dryRunPlan(command, context, uiTests, skipPerformanceBudgets) {
     dryRun: true,
     cwd: iosRoot,
     workspace,
-    scheme,
+    scheme: selectedScheme(command),
     worktreeID: context.rawWorktreeID,
     worktreeComponent: context.worktreeComponent,
     bundleSuffix: context.bundleSuffix,
