@@ -216,6 +216,9 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `window.create`
 - `window.sidebar.toggle`
 - `workspace.create`
+- `workspace.set-parent`
+- `workspace.set-done`
+- `workspace.clear-done`
 - `workspace.select`
 - `workspace.move`
 - `workspace.rename`
@@ -248,8 +251,33 @@ Notable action-specific behavior:
   - `args.activate` is optional and defaults to `true`.
   - When `args.activate=false`, Toastty creates the workspace without changing
     the visible workspace selection.
+  - Optional `args.parent` is a workspace UUID in the target window or uses
+    `"none"` for a top-level workspace. When omitted, a managed caller creates
+    a subspace under its own workspace's root if that workspace is in the
+    target window; otherwise the new workspace is top level.
+  - Parent links stay one level deep. A parent that is itself a subspace
+    resolves to its root. A scoped caller needs access to both the requested
+    parent and that root.
   - Background-created workspaces remain marked as new until selected once.
-  - The action result includes `workspaceID` and `windowID`.
+  - The action result includes `workspaceID`, `windowID`, and nullable
+    `parentWorkspaceID`.
+- `workspace.set-parent`
+  - requires `args.parent`, a workspace UUID in the same window or `"none"`
+    to detach the target workspace. A subspace parent resolves to its root;
+    self-parenting and cycles are rejected.
+  - The caller needs access to the target workspace, requested parent, and root.
+    Reparenting retains the original spawning session when present; otherwise
+    it records the managed caller. Detaching clears the spawner and done mark.
+    Any subspaces of the target workspace move under the same root.
+- `workspace.set-done`, `workspace.clear-done`
+  - With no workspace or window selector, a managed caller targets its own
+    workspace. A caller whose session has ended must name the workspace.
+  - `workspace.set-done` rejects top-level workspaces. Repeating it preserves
+    the original mark time; `workspace.clear-done` removes the mark.
+  - The mark clears when a managed agent session in that workspace starts new
+    work. The turn that set it, restored sessions, and process watches do not
+    clear it. Both `workspace.list` and `workspace.snapshot` return a `done`
+    boolean.
 - `workspace.select`
   - requires `args.workspaceID` or `args.index` (1-based).
   - Changes the user's visible workspace. Use only for user-authorized
@@ -474,6 +502,7 @@ Queries preserve selection and focus, but can initialize runtime state:
 Common query IDs include:
 
 - `annotation.keys`
+- `agent.profile.state`
 - `workspace.list`
 - `workspace.snapshot`
 - `terminal.state`
@@ -483,6 +512,32 @@ Common query IDs include:
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+
+`agent.profile.state` requires `args.profileID` and takes no selectors. It
+returns the executable that profile would run in Toastty's launch environment,
+skipping Toastty's command shims. It launches no agent or shell and does not
+change selection or focus. Workspace scope does not restrict this query.
+
+The result contains `profileID`, `displayName`, `command` (argv[0]),
+`argumentCount`, `source` (`configured` or `implicit`), `commandIsExplicitPath`,
+nullable `executablePath`, `resolved`, `fallbackProbeUsed`,
+`directExecutableProbeUsed`, and nullable `failure`. Arguments and environment
+values are omitted. An unresolved command returns `resolved: false` with
+`failure` set to `command_not_found`, `explicit_path_not_executable`, or
+`explicit_path_not_absolute`. Absolute paths are checked directly; relative
+and `~` paths are not resolved. The query does not run a new login-shell path
+probe. `fallbackProbeUsed` and `directExecutableProbeUsed` are diagnostic
+flags for those probes and are false on this query path. An unknown or
+unavailable profile fails the query. Wrapper profiles resolve their wrapper
+executable, not the provider inside it.
+
+`workspace.snapshot` includes nullable `parentWorkspaceID` and
+`spawningSessionID`, plus `subspaceWorkspaceIDs`. Related workspaces outside
+the caller's scope are omitted, either as null fields or absent array entries.
+For a scoped caller, a null `parentWorkspaceID` does not prove the workspace
+is top level.
+Its `annotations` entries include `primary`, which identifies the annotation
+chosen for the subspace row.
 
 `annotation.keys` takes no selectors or arguments and returns
 `{keys: [String]}` in bytewise order. It lists every annotation key previously

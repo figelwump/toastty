@@ -113,7 +113,7 @@ confirmation.
 
 ### Photos and files from iOS
 
-Use **Attach** below the conversation composer to choose **Photo Library**,
+Use the **Attach** paperclip inside the message field to choose **Photo Library**,
 **Take Photo**, or **Choose File**. Review the selected thumbnails or filenames,
 remove anything you do not want to send, then send with or without message text.
 Camera access requires permission and a device with a camera. Selection alone
@@ -283,7 +283,8 @@ stopped local gateway.
 
 ## Workspace panels and file previews
 
-Open a workspace in Toastty Mobile to see **Open Panels** above its sessions.
+Open a workspace in Toastty Mobile to see its sessions first, followed by
+**Subspaces** when present, then **Open Panels**.
 The list includes the right-side panels from every desktop tab in that
 workspace, including tabs that are not selected and panels in a hidden
 sidebar. Each row identifies its owning desktop tab. Panels are ordered by

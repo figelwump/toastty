@@ -663,6 +663,7 @@ focus actions are appropriate only for user-authorized navigation.
 
 ```bash
 "$TOASTTY_CLI_PATH" query run annotation.keys
+"$TOASTTY_CLI_PATH" query run agent.profile.state profileID=codex
 "$TOASTTY_CLI_PATH" query run workspace.snapshot --workspace "$WORKSPACE_ID"
 "$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$PANEL_ID" contains="ready"
 "$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$OTHER_PANEL_ID" tail=80 includeScrollback=true
@@ -671,6 +672,7 @@ focus actions are appropriate only for user-authorized navigation.
 Prefer `query list --json` to discover the current canonical IDs. Common queries include:
 
 - `annotation.keys`
+- `agent.profile.state`
 - `workspace.list`
 - `workspace.snapshot`
 - `terminal.state` (returns `windowID`, `workspaceID`, `panelID`, and terminal metadata)
@@ -681,6 +683,26 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+
+`agent.profile.state` requires `profileID` and reports the executable that
+profile would run in Toastty's launch environment, skipping Toastty's command
+shims. Use it before checking a provider CLI's native launch or fork support.
+It reads configuration and filesystem metadata without launching an agent,
+starting a shell, or changing selection or focus. It takes no workspace or
+panel selector and is available to workspace-scoped callers.
+
+The result includes `profileID`, `displayName`, `command` (the profile's first
+argv entry), `argumentCount`, `source` (`configured` or `implicit`),
+`commandIsExplicitPath`, nullable `executablePath`, `resolved`,
+`fallbackProbeUsed`, `directExecutableProbeUsed`, and nullable `failure`.
+Profile arguments and environment values are not returned. If `resolved` is
+false, `failure` is `command_not_found`, `explicit_path_not_executable`, or
+`explicit_path_not_absolute`. Absolute paths are checked directly; relative
+and `~` paths are not resolved. The query does not run a new login-shell path
+probe. `fallbackProbeUsed` and `directExecutableProbeUsed` are diagnostic
+flags for those probes and are false on this query path. An unknown or
+unavailable profile fails the query. A wrapper profile reports the wrapper
+executable, not a provider hidden inside it.
 
 `terminal.visible-text` may target any terminal panel in a workspace the
 caller can automate, not only the caller's own panel. Reads by another session

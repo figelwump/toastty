@@ -104,6 +104,12 @@ During `WorkspaceState` decode:
   are dropped, valid text and URLs are normalized through the shared
   validation rules, and at most 12 canonical keys are retained in lexical
   order.
+- `primaryAnnotationKey` defaults to `nil` and is cleared unless it names a
+  retained annotation. Workspace initialization and layout-snapshot decode
+  apply the same rule.
+- Missing, null, or malformed `parentWorkspaceID`, `spawningSessionID`, and
+  `doneAt` values become `nil`. Layout-snapshot decode applies the same rule;
+  parent relationships are normalized later during snapshot restore.
 
 During `WorkspaceTabState` decode:
 
@@ -137,6 +143,11 @@ During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 - workspace titles, visit state, annotations, tab order, layout trees, panel
   kinds, and `focusedPanelID` are restored; layout-snapshot annotation decode
   applies the same entry-by-entry sanitization described above
+- `primaryAnnotationKey`, `parentWorkspaceID`, `spawningSessionID`, and `doneAt`
+  are restored. Parent links are then normalized to one level within the same
+  window: deeper links resolve to their root; self-links, cycles, missing
+  parents, and parents in another window are dropped. A workspace left at the
+  top level loses its spawning session and done mark.
 - `focusedPanelModeActive` is reset to `false`
 - `unreadPanelIDs` is reset to `[]`
 - `unreadWorkspaceNotificationCount` is reset to `0`
@@ -162,6 +173,15 @@ These behaviors are current reducer contract, but `StateValidator` does not chec
 - Panel removal collapses the layout tree instead of leaving placeholders.
 - Workspace commits normalize `sidebarSessionPanelOrder`, removing closed or
   moved-out terminal panels without changing tab or pane layout order.
+- Setting a workspace parent resolves it to a top-level workspace in the same
+  window and rejects self-links and cycles. Existing subspaces of that
+  workspace move under the same root. Detaching clears `spawningSessionID`
+  and `doneAt`. Closing a parent keeps its subspaces open at the top level
+  and clears their `spawningSessionID` and `doneAt`.
+- `primaryAnnotationKey` must name a retained annotation or be `nil`. Removing
+  that annotation clears the primary key.
+- Only subspaces can receive a non-null `doneAt`. Marking an already-done
+  subspace keeps its original timestamp.
 - Closing the last panel in a workspace removes the workspace, and removing the last
   workspace in a window removes the window for valid reducer-managed state.
 - Reducer paths generally keep `selectedWindowID` pointing at a live window for valid
@@ -189,5 +209,7 @@ When this contract changes, update the code and the doc together.
 - `Sources/Core/WorkspaceState.swift`
 - `Sources/Core/AppReducer.swift`
 - `Sources/Core/WorkspaceLayoutSnapshot.swift`
+- `Sources/Core/WorkspaceSubspaces.swift`
 - `Tests/Core/StateValidatorTests.swift`
 - `Tests/Core/WorkspaceLayoutSnapshotTests.swift`
+- `Tests/Core/WorkspaceSubspacesTests.swift`
