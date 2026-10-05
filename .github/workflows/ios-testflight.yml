@@ -8,11 +8,6 @@ on:
         required: true
         type: boolean
         default: false
-      run_tests:
-        description: Run native Swift tests before archive
-        required: true
-        type: boolean
-        default: true
   push:
     branches:
       - main
@@ -21,7 +16,8 @@ on:
       - "ios/**"
       - "Sources/RemoteProtocol/**"
       - "Tests/RemoteProtocol/**"
-      - "scripts/ci/ios-testflight.sh"
+      - "scripts/ci/**"
+      - ".github/ios-xcode-version"
       - ".secrets"
       - ".node-version"
       - ".tool-versions"
@@ -31,72 +27,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  native-tests:
-    name: Release gate (${{ matrix.configuration }})
-    if: ${{ (github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true') && (github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload) }}
-    runs-on: macos-26
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        configuration: [Debug, Release]
-    env:
-      TOASTTY_IOS_CONFIGURATION: ${{ matrix.configuration }}
-      TOASTTY_IOS_WORKTREE_ID: testflight-ci
-      TOASTTY_IOS_RUN_ROOT: ${{ github.workspace }}/artifacts/ios/run
-      TOASTTY_IOS_DERIVED_DATA_PATH: ${{ github.workspace }}/artifacts/ios/DerivedData
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-
-      - name: Install pinned Tuist
-        run: |
-          brew install mise
-          TUIST_VERSION="$(awk '$1 == "tuist" { print $2 }' .tool-versions)"
-          mise install "tuist@$TUIST_VERSION" --quiet
-          TUIST_BIN_DIR="$(dirname "$(mise exec "tuist@$TUIST_VERSION" -- which tuist)")"
-          echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
-          test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
-
-      - name: Test native client
-        # Use the routine CI selection; full UI and budgets remain in manual Toastty CI.
-        run: node ios/scripts/toastty-ios.mjs test ${{ matrix.configuration == 'Debug' && '--ui-tests smoke --skip-performance-budgets' || '--skip-performance-budgets' }}
-
-      - name: Upload native test evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-release-tests-${{ matrix.configuration }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/ios/DerivedData/Logs/Test/
-          if-no-files-found: warn
-          retention-days: 90
-
   testflight:
     name: Validate or Upload
-    needs: native-tests
-    # An explicit validation-only skip is allowed; failed or cancelled tests never are.
-    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true') && (needs.native-tests.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.run_tests && !inputs.upload && needs.native-tests.result == 'skipped')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true' }}
     environment: testflight
     runs-on: macos-26
     timeout-minutes: 90
     permissions:
       contents: read
+      actions: read
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
+
+      - name: Require main for upload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "TestFlight uploads are allowed only from main." >&2
+          exit 1
+
+      - name: Require trusted CI for the release source
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: node scripts/ci/require-ios-ci.mjs --sha "$RELEASE_SHA" --output artifacts/ios-release/ci-evidence.json
+
+      - name: Select pinned iOS Xcode
+        run: bash scripts/ci/select-ios-xcode.sh
 
       - name: Install pinned Tuist
         run: |
@@ -110,14 +76,9 @@ jobs:
       - name: Test release script
         run: node --test ios/Tests/ReleaseScriptTests/*.test.mjs
 
-      - name: Require main for upload
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && github.ref != 'refs/heads/main' }}
-        run: |
-          echo "TestFlight uploads are allowed only from main." >&2
-          exit 1
-
       - name: Archive and validate TestFlight build
         env:
+          TOASTTY_IOS_VERIFIED_SHA: ${{ steps.ci.outputs.verified_sha }}
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
@@ -135,6 +96,7 @@ jobs:
         with:
           name: ios-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            artifacts/ios-release/ci-evidence.json
             artifacts/ios-release/**/export/*.ipa
             artifacts/ios-release/**/Toastty.xcarchive.tar.gz
             artifacts/ios-release/**/ExportOptions.plist

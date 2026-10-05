@@ -69,6 +69,9 @@ jobs:
         with:
           node-version-file: .node-version
 
+      - name: Select pinned iOS Xcode
+        run: bash scripts/ci/select-ios-xcode.sh
+
       - name: Install pinned Tuist
         run: |
           brew install mise

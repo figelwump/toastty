@@ -74,11 +74,11 @@ run on every release-relevant push.
 1. Make sure the exact release commit is on `main` and the normal `Toastty CI`
    workflow is green, and complete the disposable-host validation below.
 2. In GitHub Actions, open `iOS TestFlight` and run it from `main` with
-   `upload=false` and `run_tests=true`.
+   `upload=false`.
 3. Inspect the retained release metadata and validation log. Confirm the bundle
    ID, version, build number, signing team, privacy manifest, and encryption
    declaration.
-4. Run the workflow again from `main` with `upload=true` and `run_tests=true`.
+4. Run the workflow again from `main` with `upload=true`.
 5. After App Store Connect finishes processing, assign the build to the
    internal group or enable automatic distribution for that group.
 6. Record the git SHA, GitHub Actions run URL, marketing version, build number,
@@ -113,27 +113,41 @@ The release script fails before upload unless it can prove:
   `ITSAppUsesNonExemptEncryption=false`, and privacy manifest;
 - App Store Connect accepts the exported IPA during validation.
 
-Before archiving, the workflow runs Debug and Release tests in parallel on
-separate hosted runners. Both run app/domain correctness tests. Debug also runs
-the two fixture UI smoke scenarios used by ordinary PR CI. Release tests enable
-internal test imports while preserving Release compilation branches; Debug-only
-fixture UI targets are excluded from the Release test scheme. Test invocations
-build only the selected simulator architecture. Signed archive settings are
-unchanged. Both configurations skip the provisional
-hardware-sensitive performance budget test; large-page correctness stays covered.
-Full UI and performance budget checks remain available through a manual
-`Toastty CI` run. Use that workflow before a release when broader coverage is
-needed, and after changes to event decoding or reduction.
+Before archiving, the workflow checks GitHub Actions for successful `Toastty CI`
+on the exact checked-out release SHA. It accepts only `push` and
+`workflow_dispatch` runs from `main` in `figelwump/toastty`, with workflow ID
+`340799440` and path `.github/workflows/mobile-ios.yml`. PR runs do not qualify.
+The newest trusted run must have a successful current attempt and a successful
+`CI gate`. That gate requires every build graph, including both iOS
+configurations, on main pushes and manual runs. A failed or pending newer run
+blocks an older green result, including when a manual full-coverage run is pending
+or fails after a successful push run. Missing, skipped, cancelled, abandoned, failed,
+pending, incomplete, or unavailable evidence blocks archiving and upload.
 
-Upload requests require both configurations to pass, even if `run_tests` is
-false. Failed, cancelled, or unexpectedly skipped tests block archiving. A manual
-validation-only run with both `upload=false` and `run_tests=false` can skip native
-tests. Enabled push runs always require both configurations and never upload.
-The ordinary PR workflow also runs both configurations and the secret-free
-release-script suite, including when the release workflow or script changes.
-Native test logs and result bundles are retained for 90 days, with separate
-artifacts for each configuration and run attempt. If the `testflight` environment
-requires approval, its archive job requests that approval after the tests finish.
+Ordinary CI runs Debug and Release app/domain correctness tests. Routine Debug
+also runs two fixture UI smoke tests. Release excludes the Debug-only UI bundle;
+test invocations build only the selected simulator architecture. Routine CI skips
+one provisional hardware-sensitive budget test but retains large-page correctness.
+Full UI and performance budget checks remain available through manual `Toastty CI`.
+Use that workflow when broader coverage is needed, and after event decode/reduce
+changes. TestFlight does not repeat simulator tests or download CI build artifacts.
+
+Dispatch TestFlight after CI passes for the exact main commit. The checkout uses
+the workflow event SHA, and the release script verifies that the archive source
+still matches the gate's SHA and has no tracked changes, including after generation. The obsolete `run_tests` input is removed: neither
+validation-only runs nor uploads can bypass CI evidence. A branch-only commit
+without trusted main CI cannot run signed workflow validation. The optional push
+trigger remains disabled by default; if enabled, it fails closed while main CI is
+pending. It does not wait for CI or dispatch tests automatically. Retry manually
+after CI passes. Environment approval, when configured, still applies to the
+archive job.
+
+`ci-evidence.json` records the trusted CI run URL, ID, attempt, source SHA,
+workflow, event, and result. It is retained with the release artifacts for 90 days.
+This records evidence at gate time; a later CI rerun does not revoke that record.
+Simulator logs retain ordinary CI's 14-day policy. No separate release test
+artifacts are produced. The secret-free gate, dispatcher, and release-script
+suites run in ordinary CI when these scripts or workflows change.
 
 The workflow retains the signed IPA, compressed Xcode archive (including app
 dSYMs), export options, release metadata, and sanitized
@@ -143,9 +157,16 @@ build remains supported longer; GitHub retention policy may impose a lower limit
 
 Release metadata records the actual checked-out source SHA separately from the
 CI event SHA, plus the selected Xcode/build version, Swift version, iOS SDK, and
-Tuist version. Hosted runners currently supply the selected Xcode toolchain; this
-records its identity but does not pin a specific Xcode version. Check these values
-when comparing builds or investigating a runner-image change.
+Tuist version. Both ordinary iOS CI and the archive job select and verify the
+exact Xcode version/build in `.github/ios-xcode-version` before generation.
+Node and Tuist continue to use `.node-version` and `.tool-versions`. To update
+Xcode, change the shared pin to a build installed on `macos-26`, pass ordinary
+main CI with that commit, then release that same commit. An unavailable or
+mismatched Xcode build fails instead of falling back to the runner default.
+
+The direct local release script remains available for separately authorized
+release work. It does not query main CI outside GitHub Actions; it is not a
+substitute for the workflow evidence gate.
 
 ## Disposable host validation
 
