@@ -447,6 +447,12 @@ attach command for is listed but does not open; its tooltip gives the reason.
 The menu on the group reconnects, pairs again, or unpairs. Unpair asks the
 host to revoke this Mac and removes the credential from the client's keychain.
 
+Both Macs need a Toastty with this feature. The host advertises the
+`terminal_attach` capability and sends an optional `terminalAttachCommand` on
+each conversation summary. An older host still lists its sessions on the
+client, but none of them opens. Toastty Mobile and older clients ignore the
+field.
+
 ### Limits
 
 - **Input from the phone.** The host cannot see typing that arrives through
