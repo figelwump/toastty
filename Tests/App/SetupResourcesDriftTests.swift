@@ -170,6 +170,8 @@ final class SetupResourcesDriftTests: XCTestCase {
                 .appendingPathComponent("SKILL.md", isDirectory: false),
             encoding: .utf8
         )
+        // Prose guidance can wrap across lines without changing its meaning.
+        let normalizedContent = content.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 
         for requiredGuidance in [
             "Agent Model And Reasoning Selection",
@@ -183,7 +185,7 @@ final class SetupResourcesDriftTests: XCTestCase {
             "Never echo or log the complete command",
         ] {
             XCTAssertTrue(
-                content.contains(requiredGuidance),
+                normalizedContent.contains(requiredGuidance),
                 "Capabilities skill is missing launch-selection guidance: \(requiredGuidance)"
             )
         }
