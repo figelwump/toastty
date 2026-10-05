@@ -888,10 +888,12 @@ drag, or hold the pointer near the sidebar's top or bottom edge to scroll.
 ### Nested sessions and background activity
 
 When a managed session launches another managed agent through Toastty automation,
-Toastty records the launching session as the parent. Child sessions in the same
-workspace appear beneath that parent as expandable sidebar rows instead of
-duplicating the same work at the top level. A child in another workspace keeps
-its canonical row there and receives a parent label for context.
+Toastty records the launching session as the parent. A child with its own
+terminal panel in the same workspace has a normal sidebar row; its parent
+appears in hover details. A child in another workspace keeps its normal row
+there, with a parent label, and can appear as a navigation row under the parent.
+Background agents without their own terminal panels remain nested under the
+parent.
 
 The same child-row surface includes provider-reported background activity, such
 as a Codex collaboration agent or a Claude in-process subagent. Child rows show
