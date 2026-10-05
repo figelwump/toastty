@@ -139,6 +139,7 @@ See the [full shortcut reference](docs/keyboard-shortcuts.md).
 - Toastty settings: `~/.toastty/config` ([Configuration](docs/configuration.md))
 - Agent launchers: `~/.toastty/agents.toml` ([Running Agents](docs/running-agents.md#agentstoml))
 - Terminal profiles: `~/.toastty/terminal-profiles.toml` ([Terminal Profiles](docs/terminal-profiles.md))
+- Other Macs to list sessions from (prototype): `~/.toastty/remotes.toml` ([Remote Access](docs/remote-access.md#sessions-from-another-mac-prototype))
 
 Use `Toastty > Manage Config…` to edit settings inside Toastty and `Toastty > Reload Configuration` to apply them without relaunching.
 

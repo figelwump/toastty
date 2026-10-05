@@ -8,19 +8,25 @@ public struct TerminalProfile: Equatable, Sendable {
     /// Single lowercase alphanumeric character used as a keyboard shortcut.
     /// Split right: ⌘⌥<key>, split down: ⌘⌥⇧<key>.
     public let shortcutKey: Character?
+    /// Command that attaches a second terminal to the multiplexer session this
+    /// profile's pane runs in. Toastty offers it to paired remote clients, so
+    /// it should attach to an existing session and never create one.
+    public let remoteAttachCommand: String?
 
     public init(
         id: String,
         displayName: String,
         badgeLabel: String,
         startupCommand: String,
-        shortcutKey: Character? = nil
+        shortcutKey: Character? = nil,
+        remoteAttachCommand: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
         self.badgeLabel = badgeLabel
         self.startupCommand = startupCommand
         self.shortcutKey = shortcutKey
+        self.remoteAttachCommand = remoteAttachCommand
     }
 }
 

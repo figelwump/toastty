@@ -1,4 +1,5 @@
 import Foundation
+import RemoteProtocol
 
 public struct TerminalProfilesParseError: LocalizedError, Equatable, Sendable {
     public let line: Int
@@ -102,6 +103,13 @@ public enum TerminalProfilesFile {
         # created or restored.
         # `shortcutKey` (optional) is a single letter or digit that registers
         # ⌘⌥<key> to split right and ⌘⌥⇧<key> to split down with this profile.
+        # `remoteAttachCommand` (optional) lets another Mac attach a terminal to
+        # this pane's multiplexer session over SSH. See docs/remote-access.md.
+        # Use a command that attaches to an existing session and never creates
+        # one; `zmx attach` creates a missing session, so the example checks
+        # `zmx list` first. The command runs in your login shell with
+        # TOASTTY_PANEL_ID set, and it cannot contain a single quote or a
+        # backslash.
         #
         # Toastty sets these environment variables for profiled panes:
         # - TOASTTY_PANEL_ID
@@ -119,6 +127,7 @@ public enum TerminalProfilesFile {
         # displayName = "ZMX"
         # badge = "ZMX"
         # startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
+        # remoteAttachCommand = "zmx list --short | grep -qxF toastty.$TOASTTY_PANEL_ID && zmx attach toastty.$TOASTTY_PANEL_ID"
         # shortcutKey = "z"
         """
             + "\n"
@@ -132,6 +141,7 @@ private enum TerminalProfilesParser {
         var badge: String?
         var startupCommand: String?
         var shortcutKey: String?
+        var remoteAttachCommand: String?
     }
 
     static func parse(contents: String) throws -> TerminalProfileCatalog {
@@ -162,13 +172,24 @@ private enum TerminalProfilesParser {
             } else {
                 nil
             }
+            let remoteAttachCommand = normalizedNonEmpty(currentProfile.remoteAttachCommand)
+            if let remoteAttachCommand,
+               RemoteTerminalAttachCommand.isValidRecipe(remoteAttachCommand) == false {
+                throw TerminalProfilesParseError(
+                    line: currentProfile.line,
+                    message: "[\(currentID)] remoteAttachCommand must be one line of at most "
+                        + "\(RemoteTerminalAttachCommand.maximumRecipeByteCount) bytes "
+                        + "without a single quote or a backslash"
+                )
+            }
             profiles.append(
                 TerminalProfile(
                     id: currentID,
                     displayName: displayName,
                     badgeLabel: badgeLabel,
                     startupCommand: startupCommand,
-                    shortcutKey: shortcutKey
+                    shortcutKey: shortcutKey,
+                    remoteAttachCommand: remoteAttachCommand
                 )
             )
         }
@@ -257,6 +278,15 @@ private enum TerminalProfilesParser {
                     )
                 }
                 currentProfile?.shortcutKey = try decodeString(rawValue, line: index + 1, profileID: currentID, key: key)
+
+            case "remoteAttachCommand":
+                guard currentProfile?.remoteAttachCommand == nil else {
+                    throw TerminalProfilesParseError(
+                        line: index + 1,
+                        message: "[\(currentID)] has duplicate remoteAttachCommand"
+                    )
+                }
+                currentProfile?.remoteAttachCommand = try decodeString(rawValue, line: index + 1, profileID: currentID, key: key)
 
             default:
                 throw TerminalProfilesParseError(

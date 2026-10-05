@@ -55,6 +55,7 @@ enum CLICommand: Equatable {
     case diagnosticsCollect(DiagnosticsCollectOptions)
     case diagnosticsSubmit(DiagnosticsSubmitOptions)
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
+    case remoteAttach(remoteID: String, conversationID: UUID)
     case setup(SetupCommand)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
@@ -116,7 +117,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionCursorHookEvent, .sessionGrokHookEvent, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderSessionName, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .remoteAttach, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionCursorHookEvent, .sessionGrokHookEvent, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderSessionName, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -186,7 +187,7 @@ enum CLICommand: Equatable {
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .setup, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .remoteAttach, .setup, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
             preconditionFailure("request-backed commands are handled as requests")
 
         case .notify(let title, let body, let workspaceID, let panelID):
@@ -596,6 +597,8 @@ enum CLICommand: Equatable {
             return "queried \(id)"
         case .notify:
             return "notification emitted"
+        case .remoteAttach:
+            return "attached to remote session"
         case .setup:
             return "ran setup command"
         case .sessionStart(let sessionID, _, _, _, _):
@@ -719,6 +722,14 @@ public enum ToasttyCLI {
                 )
                 return 0
 
+            case .remoteAttach(let remoteID, let conversationID):
+                return try RemoteAttachCommand.run(
+                    socketPath: invocation.options.socketPath,
+                    remoteID: remoteID,
+                    conversationID: conversationID,
+                    callerSessionID: callerSessionID
+                )
+
             case .setup(let setupCommand):
                 return try SetupCommandRunner.run(
                     command: setupCommand,
@@ -824,6 +835,12 @@ public enum ToasttyCLI {
                 command: try parseNotifyCommand(Array(remainingArguments.dropFirst()))
             )
 
+        case "remote":
+            return CLIInvocation(
+                options: options,
+                command: try parseRemoteCommand(Array(remainingArguments.dropFirst()))
+            )
+
         case "setup":
             return CLIInvocation(
                 options: options,
@@ -853,6 +870,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
+      toastty [--socket-path <path>] remote attach <remote-id> <conversation-id>
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -928,6 +946,19 @@ public enum ToasttyCLI {
             workspaceID: workspaceID,
             panelID: panelID
         )
+    }
+
+    private static func parseRemoteCommand(_ arguments: [String]) throws -> CLICommand {
+        guard arguments.first == "attach" else {
+            throw ToasttyCLIError.usage("remote requires the attach subcommand\n\n\(usage)")
+        }
+        guard arguments.count == 3 else {
+            throw ToasttyCLIError.usage("remote attach requires <remote-id> and <conversation-id>")
+        }
+        guard let conversationID = UUID(uuidString: arguments[2]) else {
+            throw ToasttyCLIError.usage("remote attach requires a UUID conversation ID")
+        }
+        return .remoteAttach(remoteID: arguments[1], conversationID: conversationID)
     }
 
     private static func parseSetupCommand(_ arguments: [String]) throws -> CLICommand {

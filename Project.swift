@@ -239,6 +239,7 @@ var appDependencies: [TargetDependency] = [
     .target(name: "CodexReconciliation"),
     .target(name: "CoreState"),
     .target(name: "RemoteProtocol"),
+    .target(name: "ToasttyMobileDomain"),
     .target(name: "toastty"),
     .target(name: "toastty-agent-shim"),
     .external(name: "Sparkle"),
@@ -358,6 +359,7 @@ var appTestDependencies: [TargetDependency] = [
     .target(name: "CodexReconciliation"),
     .target(name: "CoreState"),
     .target(name: "RemoteProtocol"),
+    .target(name: "ToasttyMobileDomain"),
 ]
 
 if hasGhosttyXCFramework {
@@ -512,6 +514,25 @@ let project = Project(
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
             sources: ["Sources/RemoteProtocol/**"]
+        ),
+        // The gateway client that Toastty Mobile uses, built again for macOS
+        // so this Mac can show another Mac's sessions. `ios/Project.swift`
+        // declares the same module over the same sources, as both graphs do
+        // for RemoteProtocol.
+        .target(
+            name: "ToasttyMobileDomain",
+            destinations: .macOS,
+            product: .staticFramework,
+            bundleId: "com.GiantThings.toastty.mobile-domain",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["ios/Sources/ToasttyMobileDomain/**"],
+            dependencies: [
+                .target(name: "RemoteProtocol"),
+            ],
+            settings: .settings(base: [
+                "SWIFT_STRICT_CONCURRENCY": "complete",
+            ])
         ),
         .target(
             name: "CoreState",

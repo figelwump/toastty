@@ -19,6 +19,7 @@ final class AppControlExecutor {
     private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let scratchpadDocumentStore: ScratchpadDocumentStore
+    private let remoteHostAttachTargetProvider: RemoteHostAttachTargetProvider?
     private var currentRequestContext: AutomationRequestContext?
 
     init(
@@ -31,7 +32,8 @@ final class AppControlExecutor {
         annotationStyleStore: AnnotationStyleStore? = nil,
         inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
         reloadConfigurationAction: (@MainActor () -> Void)?,
-        scratchpadDocumentStore: ScratchpadDocumentStore? = nil
+        scratchpadDocumentStore: ScratchpadDocumentStore? = nil,
+        remoteHostAttachTargetProvider: RemoteHostAttachTargetProvider? = nil
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
@@ -43,6 +45,7 @@ final class AppControlExecutor {
         self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
         self.reloadConfigurationAction = reloadConfigurationAction
         self.scratchpadDocumentStore = scratchpadDocumentStore ?? webPanelRuntimeRegistry.scratchpadDocumentStore
+        self.remoteHostAttachTargetProvider = remoteHostAttachTargetProvider
     }
 
     func listActionDescriptors() -> [AppControlCommandDescriptor] {
@@ -938,6 +941,32 @@ final class AppControlExecutor {
             return agentProfileStateSnapshot(
                 try agentLaunchService.profileExecutableState(profileID: profileID)
             )
+
+        case .remoteAttachTarget:
+            guard let remoteID = normalizedOptionalText(args.stringValue("remoteID")) else {
+                throw AutomationSocketError.invalidPayload("remoteID is required")
+            }
+            guard let conversationID = normalizedOptionalText(args.stringValue("conversationID"))
+                .flatMap(UUID.init(uuidString:)) else {
+                throw AutomationSocketError.invalidPayload("conversationID must be a UUID")
+            }
+            guard let remoteHostAttachTargetProvider else {
+                throw AutomationSocketError.invalidPayload("remote hosts are unavailable in this Toastty instance")
+            }
+            // Read-only, and about another Mac's session, so no local
+            // workspace access check applies.
+            switch remoteHostAttachTargetProvider(remoteID, conversationID) {
+            case .success(let target):
+                return [
+                    "remoteID": .string(target.remoteID),
+                    "displayName": .string(target.displayName),
+                    "sshDestination": .string(target.sshDestination),
+                    "command": .string(target.command),
+                    "conversationTitle": .string(target.conversationTitle),
+                ]
+            case .failure(let failure):
+                throw AutomationSocketError.invalidPayload(failure.localizedDescription)
+            }
         }
         }
     }

@@ -181,6 +181,15 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     public var turnStartedAt: Date?
     /// Length of the last finished turn, in seconds.
     public var lastTurnDuration: TimeInterval?
+    /// Command that attaches a terminal to this conversation's multiplexer
+    /// session when run on the host, for a client that has its own SSH
+    /// access. Sent only for a live session whose terminal profile declares
+    /// one; absent from older hosts. See `RemoteTerminalAttachCommand`.
+    private var storedTerminalAttachCommand: String?
+    public var terminalAttachCommand: String? {
+        get { storedTerminalAttachCommand }
+        set { storedTerminalAttachCommand = RemoteTerminalAttachCommand.normalizedWireValue(newValue) }
+    }
     /// Generation of this conversation's sequence space within the current
     /// projection run. Bumped when this one conversation is rebuilt mid-run
     /// (for example after an unreconcilable provider file rewrite) so its
@@ -206,6 +215,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        terminalAttachCommand: String? = nil,
         projectionGeneration: UInt64 = 0,
         latestSequence: UInt64,
         updatedAt: Date
@@ -224,6 +234,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        self.storedTerminalAttachCommand = RemoteTerminalAttachCommand.normalizedWireValue(terminalAttachCommand)
         self.projectionGeneration = projectionGeneration
         self.latestSequence = latestSequence
         self.updatedAt = updatedAt
@@ -252,6 +263,9 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
             isFlaggedForLater: try container.decodeIfPresent(Bool.self, forKey: .isFlaggedForLater) ?? false,
             turnStartedAt: try container.decodeIfPresent(Date.self, forKey: .turnStartedAt),
             lastTurnDuration: try container.decodeIfPresent(TimeInterval.self, forKey: .lastTurnDuration),
+            // Optional and display-adjacent: a value this client cannot read
+            // removes the attach affordance without failing the summary.
+            terminalAttachCommand: (try? container.decodeIfPresent(String.self, forKey: .terminalAttachCommand)) ?? nil,
             projectionGeneration: try container.decode(UInt64.self, forKey: .projectionGeneration),
             latestSequence: try container.decode(UInt64.self, forKey: .latestSequence),
             updatedAt: try container.decode(Date.self, forKey: .updatedAt)
@@ -274,6 +288,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         if isFlaggedForLater { try container.encode(true, forKey: .isFlaggedForLater) }
         try container.encodeIfPresent(turnStartedAt, forKey: .turnStartedAt)
         try container.encodeIfPresent(lastTurnDuration, forKey: .lastTurnDuration)
+        try container.encodeIfPresent(terminalAttachCommand, forKey: .terminalAttachCommand)
         try container.encode(projectionGeneration, forKey: .projectionGeneration)
         try container.encode(latestSequence, forKey: .latestSequence)
         try container.encode(updatedAt, forKey: .updatedAt)
@@ -306,6 +321,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         case isFlaggedForLater
         case turnStartedAt
         case lastTurnDuration
+        case terminalAttachCommand
         case projectionGeneration
         case latestSequence
         case updatedAt

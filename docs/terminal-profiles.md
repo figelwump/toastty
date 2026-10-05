@@ -19,7 +19,7 @@ Use `Terminal > Manage Terminal Profiles…` to open or create the file inside T
 Toastty accepts a narrow TOML-like profile file rather than the full TOML spec. In practice:
 
 - each top-level table defines one profile
-- supported keys are only `displayName`, `badge`, `startupCommand`, and `shortcutKey`
+- supported keys are only `displayName`, `badge`, `startupCommand`, `shortcutKey`, and `remoteAttachCommand`
 - string values must use quoted string syntax
 - duplicate keys and unknown keys are rejected
 
@@ -47,6 +47,16 @@ Field reference:
 | `badge` | no | Panel-header pill label. Defaults to `displayName` when omitted. |
 | `startupCommand` | yes | Sent to the pane's login shell when the pane is created or restored. |
 | `shortcutKey` | no | Single letter or digit. Registers `Cmd+Opt+<key>` for Split Right and `Cmd+Opt+Shift+<key>` for Split Down. Shortcut keys are case-insensitive and must be unique across profiles. |
+| `remoteAttachCommand` | no | Command that attaches another terminal to this pane's multiplexer session. Another Mac paired through Remote Access runs it over SSH to open the pane's agent session. See [Sessions from another Mac](remote-access.md#sessions-from-another-mac-prototype). |
+
+`remoteAttachCommand` runs on this Mac in your login shell, with
+`TOASTTY_PANEL_ID` and `TOASTTY_TERMINAL_PROFILE_ID` set to the pane's values.
+Use a command that attaches to an existing session and does not create one.
+It must be one line of at most 1024 bytes and cannot contain a single quote or
+a backslash, because zsh, bash, and fish read those differently inside the
+quoting Toastty adds. The login shell is not interactive: zsh reads
+`~/.zprofile` but not `~/.zshrc`. Use an absolute path if the multiplexer is
+only on the `PATH` that `~/.zshrc` sets.
 
 If the file fails to parse at startup, Toastty logs a warning and continues with an empty profile catalog until the file is fixed and reloaded.
 

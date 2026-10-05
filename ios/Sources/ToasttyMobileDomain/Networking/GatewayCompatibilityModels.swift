@@ -72,6 +72,8 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
     public var isFlaggedForLater: Bool
     public var turnStartedAt: Date?
     public var lastTurnDuration: TimeInterval?
+    /// See `RemoteConversationSummary.terminalAttachCommand`.
+    public var terminalAttachCommand: String?
     public var projectionGeneration: UInt64
     public var latestSequence: UInt64
     public var updatedAt: Date
@@ -91,6 +93,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        terminalAttachCommand: String? = nil,
         projectionGeneration: UInt64,
         latestSequence: UInt64,
         updatedAt: Date
@@ -99,6 +102,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration
+        self.terminalAttachCommand = RemoteTerminalAttachCommand.normalizedWireValue(terminalAttachCommand)
         self.provider = provider
         self.title = title
         self.placement = placement

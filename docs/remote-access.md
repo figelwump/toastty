@@ -375,8 +375,101 @@ unsupported previews, and files exceeding the preview size limits show an
 unavailable message. Hosts without the preview capabilities continue to
 support conversations; update Toastty on the Mac to enable previews.
 
+## Sessions from another Mac (prototype)
+
+A Mac can list the agent sessions of another Mac in its own sidebar, and open
+one as a terminal. This is for a setup where agents run on an always-on Mac
+(the host) and you work from a laptop (the client). It uses two channels:
+
+- **Session list.** The client pairs with the host's Remote Access gateway, as
+  Toastty Mobile does, and reads the same session list.
+- **Terminal.** The client opens a local terminal tab that runs `ssh` to the
+  host and attaches to the terminal multiplexer session that the agent runs
+  in. Toastty does not carry terminal data itself.
+
+Any multiplexer works when it keeps a named session per pane and has a
+command to attach to it, such as zmx or tmux.
+
+### On the host
+
+1. Set up Remote Access and Tailscale Serve as described above.
+2. Allow SSH logins from the client, for example with Remote Login or
+   Tailscale SSH.
+3. Run panes inside the multiplexer through a terminal profile, and add a
+   `remoteAttachCommand` to that profile in
+   `~/.toastty/terminal-profiles.toml`:
+
+   ```toml
+   [zmx]
+   displayName = "ZMX"
+   startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
+   remoteAttachCommand = "zmx list --short | grep -qxF toastty.$TOASTTY_PANEL_ID && zmx attach toastty.$TOASTTY_PANEL_ID"
+   ```
+
+   The command must attach to an existing session and never create one.
+   `zmx attach` creates a missing session, so the example first checks
+   `zmx list`. For tmux, `tmux attach -t toastty-$TOASTTY_PANEL_ID` only
+   attaches. A command that also creates a session gives the client an empty
+   shell when the pane's session is gone.
+4. Make that profile the default with `default-terminal-profile = "zmx"` in
+   `~/.toastty/config`, so new agent panes use it.
+
+The host sends an attach command only for a session that has a running agent
+in a pane whose profile has `remoteAttachCommand`. The command runs in your
+login shell with `TOASTTY_PANEL_ID` and `TOASTTY_TERMINAL_PROFILE_ID` set, as
+`startupCommand` does. See [Terminal Profiles](terminal-profiles.md).
+
+### On the client
+
+1. Add the host to `~/.toastty/remotes.toml`:
+
+   ```toml
+   [mini]
+   displayName = "Mini"
+   gatewayURL = "https://mini.your-tailnet.ts.net"
+   sshDestination = "mini"
+   ```
+
+   `gatewayURL` is the host's Tailscale Serve address. `sshDestination` is
+   what you pass to `ssh`: a host alias or `user@host`. `displayName` is
+   optional. The table name may contain letters, digits, `.`, `_`, and `-`.
+2. Choose **Toastty > Reload Configuration**. The host appears as a group
+   below your workspaces in the sidebar.
+3. On the host, open **Toastty > Remote Access…** and choose **Show Pairing
+   QR**. On the client, choose **Pair…** on the host's group and enter the
+   fallback code.
+
+The group lists the host's workspaces, subspaces, and sessions with their
+status. Click a session to open a terminal tab attached to it. The tabs for a
+host go in a local workspace named after it. A session that the host gave no
+attach command for is listed but does not open; its tooltip gives the reason.
+
+The menu on the group reconnects, pairs again, or unpairs. Unpair asks the
+host to revoke this Mac and removes the credential from the client's keychain.
+
+### Limits
+
+- **Input from the phone.** The host cannot see typing that arrives through
+  SSH. A reply sent from Toastty Mobile while you type in an attached terminal
+  can land in the middle of your text. Do not use both on one session at the
+  same time.
+- **Sessions started from the phone** run in a plain terminal without a
+  profile, so they have no multiplexer session and cannot be opened from
+  another Mac.
+- **Restart.** An attached tab does not reconnect after Toastty restarts on
+  the client. It comes back as a plain local terminal. Open the session again
+  from the sidebar.
+- **Revocation.** Unpairing or revoking stops the session list. It does not
+  end an SSH session that is already attached, and it does not change SSH
+  access to the host.
+- The client shows the session list and terminals only. It does not show
+  conversation transcripts, Scratchpads, or file previews.
+
 ## Privacy and security
 
+- A Mac paired as a client stores its credential in your login keychain. The
+  client passes the host's attach command to `ssh` as one argument, so no
+  shell on the client reads it; it runs on the host, under your SSH login.
 - Remote Access is tailnet-private only when your Tailscale Serve and tailnet
   ACL configuration keep it private. Do not publish the loopback gateway
   through Funnel, a public reverse proxy, port forwarding, or another ingress.

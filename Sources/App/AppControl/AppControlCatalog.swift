@@ -481,6 +481,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case panelScratchpadList = "panel.scratchpad.list"
     case panelScratchpadState = "panel.scratchpad.state"
     case agentProfileState = "agent.profile.state"
+    case remoteAttachTarget = "remote.attach-target"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -558,6 +559,14 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 summary: "Return the executable an agent profile would run, resolved in the launch environment and skipping Toastty's command shims. Launches no agent and starts no shell; omits the profile's arguments.",
                 selectors: [],
                 parameters: [.profileID(required: true)]
+            )
+        case .remoteAttachTarget:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return the SSH destination and host command that attach a terminal to one session of a remote host from remotes.toml. Used by `toastty remote attach`; fails unless the remote is connected and the session has a terminal to attach to.",
+                selectors: [],
+                parameters: [.remoteID(required: true), .conversationID(required: true)]
             )
         }
     }
@@ -778,6 +787,14 @@ private extension AppControlParameterDescriptor {
 
     static func placement(required: Bool) -> Self {
         .init(name: "placement", summary: "Panel placement strategy.", valueType: .string, required: required, allowedValues: ["rightPanel", "newTab", "splitRight", "rootRight"])
+    }
+
+    static func remoteID(required: Bool) -> Self {
+        .init(name: "remoteID", summary: "Remote host ID: a table name in remotes.toml.", valueType: .string, required: required)
+    }
+
+    static func conversationID(required: Bool) -> Self {
+        .init(name: "conversationID", summary: "Remote conversation UUID, as the remote host lists it.", valueType: .uuid, required: required)
     }
 
     static func profileID(required: Bool) -> Self {

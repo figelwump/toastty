@@ -192,6 +192,76 @@ struct TerminalProfilesFileTests {
         #expect(catalog.profiles.map(\.shortcutKey) == [Character("z"), Character("s")])
     }
 
+    /// The template is what users copy from, so its example must be valid
+    /// once the comment markers are removed.
+    @Test
+    func templateExampleParsesWhenUncommented() throws {
+        let example = TerminalProfilesFile.templateContents()
+            .components(separatedBy: "\n")
+            .drop { $0 != "# [zmx]" }
+            .map { String($0.dropFirst(2)) }
+            .joined(separator: "\n")
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: example)
+
+        let catalog = try TerminalProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
+        )
+
+        let profile = try #require(catalog.profile(id: "zmx"))
+        #expect(profile.startupCommand == "zmx attach toastty.$TOASTTY_PANEL_ID")
+        #expect(profile.remoteAttachCommand
+            == "zmx list --short | grep -qxF toastty.$TOASTTY_PANEL_ID && zmx attach toastty.$TOASTTY_PANEL_ID")
+    }
+
+    @Test
+    func loadParsesOptionalRemoteAttachCommand() throws {
+        let contents = """
+        [zmx]
+        displayName = "ZMX"
+        startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
+        remoteAttachCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
+
+        [plain]
+        displayName = "Plain"
+        startupCommand = "ls"
+        """
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
+        let catalog = try TerminalProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
+        )
+
+        #expect(catalog.profiles.map(\.remoteAttachCommand) == ["zmx attach toastty.$TOASTTY_PANEL_ID", nil])
+    }
+
+    /// A single quote or a backslash would make zsh, bash, and fish read the
+    /// host's quoting differently, so the file refuses them up front.
+    @Test(arguments: [
+        #"tmux attach -t 'toastty'"#,
+        #"tmux attach -t toastty\\x"#,
+    ])
+    func loadRejectsRemoteAttachCommandThatCannotBeQuotedForEveryShell(command: String) throws {
+        let encodedCommand = String(decoding: try JSONEncoder().encode(command), as: UTF8.self)
+        let contents = """
+        [tmux]
+        displayName = "tmux"
+        startupCommand = "tmux new -A -s toastty"
+        remoteAttachCommand = \(encodedCommand)
+        """
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
+
+        #expect(throws: TerminalProfilesParseError.self) {
+            try TerminalProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path,
+                environment: [:]
+            )
+        }
+    }
+
     @Test
     func loadAllowsProfilesWithoutShortcutKey() throws {
         let contents = """

@@ -358,6 +358,7 @@ final class RemoteAccessService: ObservableObject {
     private let annotationStyleStore: AnnotationStyleStore
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    private weak var terminalProfileStore: TerminalProfileStore?
     private let deviceStore: RemoteDeviceStore
     private let auditLog: RemoteAccessAuditLog
     private let projectionStore = RemoteConversationProjectionStore()
@@ -460,6 +461,7 @@ final class RemoteAccessService: ObservableObject {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
         sessionLauncher: (any RemoteSessionLaunching)? = nil,
+        terminalProfileStore: TerminalProfileStore? = nil,
         port: UInt16 = RemoteAccessPreferences.loadPort(),
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
@@ -474,6 +476,7 @@ final class RemoteAccessService: ObservableObject {
         self.annotationStyleStore = annotationStyleStore
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.terminalProfileStore = terminalProfileStore
         self.port = port
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
@@ -682,6 +685,20 @@ final class RemoteAccessService: ObservableObject {
                       self.isEnabled,
                       self.conversationTrackingGeneration == generation else { return }
                 self.syncConversations()
+            }
+            .store(in: &conversationTrackingCancellables)
+
+        // A profile's `remoteAttachCommand` decides each summary's attach
+        // command and lives outside AppState too. The deferred broadcast
+        // reads the catalog after this willSet publication lands.
+        terminalProfileStore?.$catalog
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation else { return }
+                self.scheduleSessionListBroadcast()
             }
             .store(in: &conversationTrackingCancellables)
 
@@ -1485,6 +1502,7 @@ final class RemoteAccessService: ObservableObject {
         var isFlaggedForLater: Bool
         var turnStartedAt: Date?
         var lastTurnDuration: TimeInterval?
+        var terminalAttachCommand: String?
         var updatedAt: Date
         var transcriptPath: String?
         var providerFeed: ManagedProviderConversationFeedSnapshot?
@@ -1964,6 +1982,16 @@ final class RemoteAccessService: ObservableObject {
                         && activeSessionID.map(sessionRuntimeStore.isLaterFlagged(sessionID:)) == true,
                     turnStartedAt: panelStatus?.turnStartedAt,
                     lastTurnDuration: panelStatus?.lastTurnDuration,
+                    // Offered only while an agent runs in the pane: the
+                    // command attaches to that agent's terminal, and an ended
+                    // conversation may have no multiplexer session left.
+                    terminalAttachCommand: hasLiveAgent
+                        ? Self.terminalAttachCommand(
+                            panelID: panelID,
+                            terminalState: terminalState,
+                            catalog: terminalProfileStore?.catalog ?? .empty
+                        )
+                        : nil,
                     updatedAt: max(
                         activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? .distantPast,
                         providerFeed?.updatedAt ?? .distantPast
@@ -2033,6 +2061,7 @@ final class RemoteAccessService: ObservableObject {
                     isFlaggedForLater: candidate.isFlaggedForLater,
                     turnStartedAt: candidate.turnStartedAt,
                     lastTurnDuration: candidate.lastTurnDuration,
+                    terminalAttachCommand: candidate.terminalAttachCommand,
                     projectionGeneration: projector.generation,
                     latestSequence: projector.latestSequence,
                     updatedAt: max(projector.updatedAt, candidate.updatedAt)
@@ -2051,10 +2080,23 @@ final class RemoteAccessService: ObservableObject {
                 isFlaggedForLater: candidate.isFlaggedForLater,
                 turnStartedAt: candidate.turnStartedAt,
                 lastTurnDuration: candidate.lastTurnDuration,
+                terminalAttachCommand: candidate.terminalAttachCommand,
                 latestSequence: 0,
                 updatedAt: candidate.updatedAt
             )
         }
+    }
+
+    static func terminalAttachCommand(
+        panelID: UUID,
+        terminalState: TerminalPanelState,
+        catalog: TerminalProfileCatalog
+    ) -> String? {
+        guard let profileID = terminalState.profileBinding?.profileID,
+              let recipe = catalog.profile(id: profileID)?.remoteAttachCommand else {
+            return nil
+        }
+        return RemoteTerminalAttachCommand.compose(recipe: recipe, panelID: panelID, profileID: profileID)
     }
 
     private static func remoteState(for kind: SessionStatusKind) -> RemoteSessionState {

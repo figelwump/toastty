@@ -358,6 +358,89 @@ struct RemoteAccessServiceSafetyTests {
         return []
     }
 
+    /// A live agent in a pane whose profile has `remoteAttachCommand` lists
+    /// an attach command for that pane. The command follows the profile
+    /// file: after a reload without the key, connected clients are told.
+    @MainActor
+    @Test func liveSessionInAProfiledPaneOffersAnAttachCommandThatFollowsProfileReloads() async throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-remote-attach-host-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let profilesURL = home.appendingPathComponent("terminal-profiles.toml")
+        let profilesEnvironment = [TerminalProfilesFile.environmentOverrideKey: profilesURL.path]
+        func writeProfiles(remoteAttachCommand: String?) throws {
+            var contents = "[zmx]\ndisplayName = \"ZMX\"\nstartupCommand = \"zmx attach toastty.$TOASTTY_PANEL_ID\"\n"
+            if let remoteAttachCommand {
+                contents += "remoteAttachCommand = \"\(remoteAttachCommand)\"\n"
+            }
+            try contents.write(to: profilesURL, atomically: true, encoding: .utf8)
+        }
+        try writeProfiles(remoteAttachCommand: "zmx attach toastty.$TOASTTY_PANEL_ID")
+        let profileStore = TerminalProfileStore(homeDirectoryPath: home.path, environment: profilesEnvironment)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let selection = try #require(store.state.selectedWorkspaceSelection())
+        #expect(store.send(.createWorkspaceTab(
+            workspaceID: selection.workspaceID,
+            seed: WindowLaunchSeed(terminalProfileBinding: TerminalProfileBinding(profileID: "zmx")),
+            activate: true
+        )))
+        let workspace = try #require(store.state.workspacesByID[selection.workspaceID])
+        let tabID = try #require(workspace.tabIDs.last)
+        let panelID = try #require(workspace.tab(id: tabID)?.panels.keys.first)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.startSession(
+            sessionID: "attach-host-\(UUID().uuidString)",
+            agent: .claude,
+            panelID: panelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Date()
+        )
+
+        let server = RemoteAccessGatewayServerSpy()
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: home.path,
+            environment: [ToasttyRuntimePaths.environmentKey: home.appendingPathComponent("runtime").path]
+        )
+        let service = RemoteAccessService(
+            store: store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            terminalProfileStore: profileStore,
+            port: 42_994,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in server }
+        )
+        defer { service.setEnabled(false, persist: false) }
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_994)
+
+        let summary = try #require(service.facadeSessionList(at: .now).conversations.first {
+            $0.placement.panelID == panelID
+        })
+        #expect(summary.terminalAttachCommand
+            == "env TOASTTY_PANEL_ID=\(panelID.uuidString) TOASTTY_TERMINAL_PROFILE_ID=zmx"
+            + " \"$SHELL\" -lc 'zmx attach toastty.$TOASTTY_PANEL_ID'")
+
+        server.removeAllBroadcasts()
+        try writeProfiles(remoteAttachCommand: nil)
+        #expect((try? profileStore.reload().get()) != nil)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        var rebroadcast: RemoteConversationSummary?
+        while rebroadcast == nil, ContinuousClock.now < deadline {
+            rebroadcast = server.sessionListSnapshots.last?.conversations.first { $0.placement.panelID == panelID }
+            if rebroadcast == nil { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        let delivered = try #require(rebroadcast)
+        #expect(delivered.terminalAttachCommand == nil)
+    }
+
     @Test func readAcknowledgementAcceptsAuthoritativeEmptyAndRejectsStaleBoundaries() {
         let runID = RemoteProjectionRunID()
         let empty = RemoteConversationReadAcknowledgementRequest(

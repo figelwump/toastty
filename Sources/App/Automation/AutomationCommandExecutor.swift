@@ -75,6 +75,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     private let codexStatusHooksPreflightProvider: CodexStatusHooksPreflightProvider
     private let codexStatusHooksWarningPresenter: CodexStatusHooksAsyncWarningPresenter
     private let codexStatusHooksInstallAction: CodexStatusHooksInstallAction
+    private let remoteHostAttachTargetProvider: RemoteHostAttachTargetProvider?
     private let automationConfig: AutomationConfig?
     private let startedAt = Date()
     private let managedLaunchPreflightPollIntervalMilliseconds = 250
@@ -98,7 +99,8 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         agentLaunchService: agentLaunchService,
         annotationStyleStore: annotationStyleStore,
         inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
-        reloadConfigurationAction: reloadConfigurationAction
+        reloadConfigurationAction: reloadConfigurationAction,
+        remoteHostAttachTargetProvider: remoteHostAttachTargetProvider
     )
 
     init(
@@ -114,6 +116,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider,
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter,
         codexStatusHooksInstallAction: @escaping CodexStatusHooksInstallAction,
+        remoteHostAttachTargetProvider: RemoteHostAttachTargetProvider? = nil,
         automationConfig: AutomationConfig?
     ) {
         self.store = store
@@ -128,6 +131,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         self.codexStatusHooksPreflightProvider = codexStatusHooksPreflightProvider
         self.codexStatusHooksWarningPresenter = codexStatusHooksWarningPresenter
         self.codexStatusHooksInstallAction = codexStatusHooksInstallAction
+        self.remoteHostAttachTargetProvider = remoteHostAttachTargetProvider
         self.automationConfig = automationConfig
         self.currentFixtureName = automationConfig?.fixtureName ?? "default"
     }

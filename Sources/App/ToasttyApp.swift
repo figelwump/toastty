@@ -661,6 +661,8 @@ struct ToasttyApp: App {
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
     @StateObject private var remoteAccessService: RemoteAccessService
     @StateObject private var annotationStyleStore: AnnotationStyleStore
+    private let remoteHostsStore: RemoteHostsStore
+    private let remoteHostTerminalOpener: RemoteHostTerminalOpener
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
@@ -727,10 +729,12 @@ struct ToasttyApp: App {
         Self.prepareRuntimeEnvironment(processInfo: processInfo)
         if shouldCreateStartupSetupTemplates {
             Self.ensureTerminalProfilesTemplateExists()
+            try? RemoteHostsFile.ensureTemplateExists()
         }
         Self.refreshManagedShellIntegrationSnippetIfInstalled(processInfo: processInfo)
         Self.configureWindowPersistenceDefaults()
         let terminalProfileStore = TerminalProfileStore()
+        let remoteHostsStore = RemoteHostsStore()
         let initialToasttyConfig = usesPersistentPreferences ? ToasttyConfigStore.load() : ToasttyConfig()
         let initialToasttySettings = usesPersistentPreferences ? ToasttySettingsStore.load() : ToasttySettings()
         let legacyTerminalFontSizePoints = usesPersistentPreferences
@@ -1049,6 +1053,7 @@ struct ToasttyApp: App {
                     store: store,
                     agentCatalogStore: agentCatalogStore,
                     terminalProfileStore: terminalProfileStore,
+                    remoteHostsStore: remoteHostsStore,
                     runtimePaths: runtimePaths,
                     agentLaunchSocketPath: socketPath,
                     agentLaunchCLIExecutablePath: cliExecutablePath,
@@ -1205,9 +1210,21 @@ struct ToasttyApp: App {
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
-            sessionLauncher: remoteSessionLauncher
+            sessionLauncher: remoteSessionLauncher,
+            terminalProfileStore: terminalProfileStore
         ))
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
+        self.remoteHostsStore = remoteHostsStore
+        remoteHostTerminalOpener = RemoteHostTerminalOpener(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            hostsStore: remoteHostsStore
+        )
+        // Automation and test runs use no user configuration, so they never
+        // read remotes.toml, the keychain, or the network.
+        if usesPersistentPreferences {
+            remoteHostsStore.reload()
+        }
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
             usesPersistentPreferences: persistUserSettings,
@@ -1270,11 +1287,18 @@ struct ToasttyApp: App {
                 agentLaunchService: agentLaunchService,
                 annotationStyleStore: annotationStyleStore,
                 inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
+                remoteHostAttachTargetProvider: { remoteID, conversationID in
+                    RemoteHostAttach.target(
+                        host: remoteHostsStore.host(id: remoteID),
+                        conversationID: conversationID
+                    )
+                },
                 reloadConfigurationAction: {
                     Self.reloadConfiguration(
                         store: store,
                         agentCatalogStore: agentCatalogStore,
                         terminalProfileStore: terminalProfileStore,
+                        remoteHostsStore: remoteHostsStore,
                         runtimePaths: runtimePaths,
                         agentLaunchSocketPath: socketPath,
                         agentLaunchCLIExecutablePath: cliExecutablePath,
@@ -1601,6 +1625,10 @@ struct ToasttyApp: App {
                 disableAnimations: disableAnimations
             )
             .frame(minWidth: 980, minHeight: 620)
+            .environment(
+                \.remoteHostsSidebarContext,
+                RemoteHostsSidebarContext(hostsStore: remoteHostsStore, opener: remoteHostTerminalOpener)
+            )
             .onAppear {
                 appLifecycleDelegate.sceneDidAppear()
             }
@@ -1664,6 +1692,7 @@ struct ToasttyApp: App {
             store: store,
             agentCatalogStore: agentCatalogStore,
             terminalProfileStore: terminalProfileStore,
+            remoteHostsStore: remoteHostsStore,
             runtimePaths: runtimePaths,
             agentLaunchSocketPath: agentLaunchSocketPath,
             agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
@@ -1680,6 +1709,7 @@ struct ToasttyApp: App {
         store: AppStore,
         agentCatalogStore: AgentCatalogStore,
         terminalProfileStore: TerminalProfileStore,
+        remoteHostsStore: RemoteHostsStore,
         runtimePaths: ToasttyRuntimePaths,
         agentLaunchSocketPath: String,
         agentLaunchCLIExecutablePath: String?,
@@ -1700,6 +1730,13 @@ struct ToasttyApp: App {
         }
 
         switch terminalProfileStore.reload() {
+        case .success:
+            break
+        case .failure(let error):
+            failureMessages.append(error.localizedDescription)
+        }
+
+        switch remoteHostsStore.reload() {
         case .success:
             break
         case .failure(let error):

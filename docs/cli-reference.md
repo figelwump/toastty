@@ -827,6 +827,29 @@ toastty notify <title> <body> [--workspace <id>] [--panel <id>]
 "$TOASTTY_CLI_PATH" notify "Build Complete" "All tests passed"
 ```
 
+### `remote attach`
+
+Attach this terminal to an agent session on another Mac from
+`~/.toastty/remotes.toml`. Toastty types this command into the tab it opens
+when you click a remote session in the sidebar; you can also run it yourself
+in a Toastty terminal.
+
+```
+toastty remote attach <remote-id> <conversation-id>
+```
+
+| Argument | Required | Description |
+|---|---|---|
+| `<remote-id>` | yes | Table name in `remotes.toml` |
+| `<conversation-id>` | yes | The session's conversation UUID on the remote host |
+
+The command asks the running Toastty app for the remote's SSH destination and
+the attach command the host supplied (the `remote.attach-target` query), then
+replaces itself with `ssh -t -- <destination> <command>`. It fails with the
+app's reason when the remote is not connected or the session has no terminal
+to attach to. See [Sessions from another
+Mac](remote-access.md#sessions-from-another-mac-prototype).
+
 ### `session start`
 
 Create a new agent session for a terminal panel.

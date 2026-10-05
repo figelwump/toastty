@@ -733,6 +733,62 @@ extension AppReducerTests {
 
 extension AppReducerTests {
     @Test
+    func createTerminalWorkspaceAppendsASelectedWorkspaceWithOnePlainTerminal() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let existingWorkspaceIDs = try #require(state.windows.first?.workspaceIDs)
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let panelID = UUID()
+
+        #expect(reducer.send(
+            .createTerminalWorkspace(
+                windowID: windowID, workspaceID: workspaceID, title: "Mini",
+                tabID: tabID, panelID: panelID, terminalCWD: "/tmp/project"
+            ),
+            state: &state
+        ))
+
+        let window = try #require(state.windows.first)
+        #expect(window.workspaceIDs == existingWorkspaceIDs + [workspaceID])
+        #expect(window.selectedWorkspaceID == workspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.title == "Mini")
+        #expect(workspace.tabIDs == [tabID])
+        guard case .terminal(let terminal) = workspace.tab(id: tabID)?.panels[panelID] else {
+            Issue.record("expected the workspace to hold the requested terminal")
+            return
+        }
+        #expect(terminal.cwd == "/tmp/project")
+        #expect(terminal.profileBinding == nil)
+        try StateValidator.validate(state)
+
+        // IDs already in use, and a blank title, are refused.
+        #expect(reducer.send(
+            .createTerminalWorkspace(
+                windowID: windowID, workspaceID: workspaceID, title: "Mini",
+                tabID: UUID(), panelID: UUID(), terminalCWD: "/tmp/project"
+            ),
+            state: &state
+        ) == false)
+        #expect(reducer.send(
+            .createTerminalWorkspace(
+                windowID: windowID, workspaceID: UUID(), title: "Mini",
+                tabID: UUID(), panelID: panelID, terminalCWD: "/tmp/project"
+            ),
+            state: &state
+        ) == false)
+        #expect(reducer.send(
+            .createTerminalWorkspace(
+                windowID: windowID, workspaceID: UUID(), title: "  ",
+                tabID: UUID(), panelID: UUID(), terminalCWD: "/tmp/project"
+            ),
+            state: &state
+        ) == false)
+    }
+
+    @Test
     func createBackgroundTerminalTabAddsAPlainTerminalWithoutSelectingIt() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

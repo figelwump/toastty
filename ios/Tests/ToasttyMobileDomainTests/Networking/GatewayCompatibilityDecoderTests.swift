@@ -282,6 +282,31 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         )
     }
 
+    func testTerminalAttachCommandIsOptionalAndAnUnusableValueIsDropped() throws {
+        let input: [String: Any] = ["kind": "unavailable", "reason": "working"]
+        let absent = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(inputAvailability: input, preview: NSNull())
+        )
+        XCTAssertNil(try XCTUnwrap(absent.conversations.first).terminalAttachCommand)
+
+        let command = "env TOASTTY_PANEL_ID=X \"$SHELL\" -lc 'zmx attach toastty.X'"
+        let present = try decoder.decodeSessionListResponse(
+            sessionSnapshotData(inputAvailability: input, preview: NSNull(), terminalAttachCommand: command)
+        )
+        XCTAssertEqual(try XCTUnwrap(present.conversations.first).terminalAttachCommand, command)
+
+        // The command is one SSH argument. A value that is not plain
+        // one-line text removes the attach affordance and keeps the row.
+        for unusable: Any in [NSNull(), "", "one\ntwo", 42, ["future": true]] {
+            let snapshot = try decoder.decodeSessionListResponse(
+                sessionSnapshotData(inputAvailability: input, preview: NSNull(), terminalAttachCommand: unusable)
+            )
+            let conversation = try XCTUnwrap(snapshot.conversations.first)
+            XCTAssertNil(conversation.terminalAttachCommand)
+            XCTAssertEqual(conversation.title, "Needs review")
+        }
+    }
+
     func testPresentationBodyPrefersStatusDetailThenPendingPreviewThenLegacyCopy() throws {
         let preview = try JSONSerialization.jsonObject(
             with: fixtureData(named: "pending-interaction-preview")
@@ -678,7 +703,8 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         cwd: Any? = nil,
         statusDetail: Any? = nil,
         executionProfile: Any? = nil,
-        placement: [String: Any] = [:]
+        placement: [String: Any] = [:],
+        terminalAttachCommand: Any? = nil
     ) throws -> Data {
         var conversation: [String: Any] = [
             "conversationID": "11111111-1111-1111-1111-111111111111",
@@ -703,6 +729,9 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         }
         if let statusDetail {
             conversation["statusDetail"] = statusDetail
+        }
+        if let terminalAttachCommand {
+            conversation["terminalAttachCommand"] = terminalAttachCommand
         }
         return try JSONSerialization.data(withJSONObject: [
             "protocolVersion": "1.0",

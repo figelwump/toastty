@@ -104,6 +104,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var restoredManagedLaunchSubmitTasksByPanelID: [UUID: Task<Void, Never>] = [:]
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
+    /// Text to type into a plain terminal when its surface starts, set by the
+    /// code that is about to create the panel. It stays until the surface has
+    /// launched, so a failed surface creation can try again. Kept in memory
+    /// only, so a restored pane never repeats it.
+    private var pendingInitialInputByPanelID: [UUID: String] = [:]
     private var exitedTerminalPanelIDs: Set<UUID> = []
     private var loggedLaunchEnvironmentPanelIDs: Set<UUID> = []
     private var baseLaunchEnvironmentProvider: (@Sendable (UUID) -> [String: String])?
@@ -446,6 +451,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         let livePanelIDs = liveTerminalPanelIDs(in: state)
         launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
+        pendingInitialInputByPanelID = pendingInitialInputByPanelID.filter { livePanelIDs.contains($0.key) }
         restoreNoticeQueuedAtByPanelID = restoreNoticeQueuedAtByPanelID.filter { livePanelIDs.contains($0.key) }
         for (panelID, launch) in restoredManagedLaunchesByPanelID where livePanelIDs.contains(panelID) == false {
             restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)?.cancel()
@@ -1628,9 +1634,26 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         consumeSplitSource(for: panelID)
     }
 
+    /// Registers text for a panel that the caller creates next. The surface
+    /// types it as its first input, so the caller does not wait for the shell.
+    func setPendingInitialInput(_ input: String, forNewPanelID panelID: UUID) {
+        pendingInitialInputByPanelID[panelID] = input
+    }
+
+    func discardPendingInitialInput(forPanelID panelID: UUID) {
+        pendingInitialInputByPanelID.removeValue(forKey: panelID)
+    }
+
     func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
         let baseEnvironmentVariables = launchContextEnvironment(for: panelID)
         logSurfaceLaunchEnvironmentIfNeeded(panelID: panelID, environment: baseEnvironmentVariables)
+
+        if let initialInput = pendingInitialInputByPanelID[panelID] {
+            return TerminalSurfaceLaunchConfiguration(
+                environmentVariables: baseEnvironmentVariables,
+                initialInput: initialInput
+            )
+        }
 
         if let restoredManagedLaunch = restoredManagedLaunchesByPanelID[panelID],
            restoredManagedLaunch.surfaceLaunchCompleted {
@@ -1929,6 +1952,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     }
 
     func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
+        pendingInitialInputByPanelID.removeValue(forKey: panelID)
         restoredTerminalPanelIDsAwaitingLaunch.remove(panelID)
         if restoredManagedLaunchesByPanelID[panelID] != nil {
             restoredManagedLaunchesByPanelID[panelID]?.surfaceLaunchCompleted = true

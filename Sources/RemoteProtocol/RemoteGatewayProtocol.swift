@@ -47,6 +47,10 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// workspace. Whether one device may do so is a per-device permission
     /// that the start options report.
     case sessionStart = "session_start"
+    /// Conversation summaries may carry `terminalAttachCommand`, which a
+    /// client with SSH access to the host can run to attach a terminal to the
+    /// conversation's multiplexer session.
+    case terminalAttach = "terminal_attach"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -71,6 +75,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .workspaceDone,
             .conversationFlag,
             .sessionStart,
+            .terminalAttach,
         ]
     ) {
         self.protocolVersion = protocolVersion

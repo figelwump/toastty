@@ -84,6 +84,7 @@ final class AutomationSocketServer: @unchecked Sendable {
         agentLaunchService: AgentLaunchService,
         annotationStyleStore: AnnotationStyleStore? = nil,
         inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
+        remoteHostAttachTargetProvider: RemoteHostAttachTargetProvider? = nil,
         reloadConfigurationAction: (@MainActor () -> Void)? = nil,
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider = AgentLaunchUI.codexStatusHooksPreflightState,
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter = AgentLaunchUI.presentCodexStatusHooksWarningAsync,
@@ -112,6 +113,7 @@ final class AutomationSocketServer: @unchecked Sendable {
             codexStatusHooksPreflightProvider: codexStatusHooksPreflightProvider,
             codexStatusHooksWarningPresenter: codexStatusHooksWarningPresenter,
             codexStatusHooksInstallAction: codexStatusHooksInstallAction,
+            remoteHostAttachTargetProvider: remoteHostAttachTargetProvider,
             automationConfig: automationConfig
         )
         try startListening()

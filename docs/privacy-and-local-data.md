@@ -58,6 +58,14 @@ Toastty is designed to run locally on your machine. The app itself does not send
     document paths, and Scratchpad document IDs/titles. The list contains up to
     20 items and may contain URLs or local paths that identify the supporting
     material you opened.
+- `~/.toastty/remotes.toml`
+  - Other Macs whose sessions this Mac lists: a name, the Tailscale Serve
+    address, and the SSH destination for each. Toastty creates a comment-only
+    template; you add the entries. For each paired entry, Toastty keeps one
+    item in your login keychain (service
+    `com.giantthings.toastty.remote-host-credential`) with the Bearer
+    credential, the gateway address, and this Mac's device ID and name on that
+    host. Unpairing deletes the item.
 - `~/.toastty/remote-access/devices.json`
   - Paired-device IDs, names, browser/native kind, scopes, timestamps,
     revocation state, and SHA-256 hashes of device credentials. Native records
@@ -331,6 +339,14 @@ served as assets. These preview endpoints require native credentials and do
 not accept legacy browser cookies. See [workspace panels and file
 previews](remote-access.md#workspace-panels-and-file-previews) for the access
 rules and mobile behavior.
+
+A Mac listed in `remotes.toml` and paired connects out to that host's Tailscale
+Serve address while Toastty runs, and receives the same session list as a
+paired phone. The list can include a command, supplied by the host, that
+attaches a terminal to a session there. Toastty runs it only on that host,
+through `ssh` with your own SSH access, when you open the session. See
+[Sessions from another
+Mac](remote-access.md#sessions-from-another-mac-prototype).
 
 Native pairing offers are memory-only. Their QR secret and fallback code are
 discarded on success, cancellation, reissue, expiry, or when Remote Access is

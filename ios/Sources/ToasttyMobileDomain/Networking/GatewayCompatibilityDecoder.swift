@@ -187,6 +187,7 @@ public struct GatewayCompatibilityDecoder: Sendable {
             isFlaggedForLater: (try? object.optionalBool("isFlaggedForLater")) == true,
             turnStartedAt: try? object.requiredDate("turnStartedAt"),
             lastTurnDuration: object.lossyDouble("lastTurnDuration"),
+            terminalAttachCommand: object.lossyString("terminalAttachCommand"),
             projectionGeneration: try object.requiredUInt64("projectionGeneration"),
             latestSequence: try object.requiredUInt64("latestSequence"),
             updatedAt: try object.requiredDate("updatedAt")

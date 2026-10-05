@@ -537,6 +537,7 @@ struct SidebarView: View {
     /// Test seam for asserting the rendered scroll viewport used by hidden-session pills.
     let workspaceViewportHeightObserver: ((CGFloat) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.remoteHostsSidebarContext) private var remoteHostsSidebarContext
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
@@ -747,6 +748,15 @@ struct SidebarView: View {
                             Text("No windows")
                                 .font(ToastyTheme.fontBody)
                                 .foregroundStyle(ToastyTheme.mutedText)
+                        }
+                        // Remote hosts are not workspaces: they stay out of
+                        // the card list's numbering and drag reordering.
+                        if let remoteHostsSidebarContext {
+                            SidebarRemoteHostsSection(
+                                windowID: windowID,
+                                hostsStore: remoteHostsSidebarContext.hostsStore,
+                                opener: remoteHostsSidebarContext.opener
+                            )
                         }
                     }
                     .padding(.horizontal, 8)
