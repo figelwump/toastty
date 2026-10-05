@@ -51,6 +51,9 @@ enum RemoteHostPairingError: LocalizedError, Equatable {
     case rejected
     case deviceLimitReached
     case hostUnreachable
+    /// The address answered, but not as Toastty's gateway: for example a
+    /// Tailscale Serve mapping that forwards to another port.
+    case gatewayNotServing(statusCode: Int?)
     case identityUnavailable
     case hostTooOld
     case keychain
@@ -75,6 +78,10 @@ enum RemoteHostPairingError: LocalizedError, Equatable {
             "The other Mac has reached its paired-device limit. Remove a device there first."
         case .hostUnreachable:
             "Toastty could not reach the other Mac. Check Tailscale and that Remote Access is enabled there."
+        case .gatewayNotServing(let statusCode):
+            "The address answered\(statusCode.map { " with HTTP \($0)" } ?? ""), but not as Toastty's Remote Access gateway. "
+                + "On the other Mac, check that Remote Access is enabled and that Tailscale Serve forwards to it: "
+                + "tailscale serve --bg http://127.0.0.1:42871"
         case .identityUnavailable:
             "The other Mac could not see this Mac's Tailscale identity. Connect through its Tailscale Serve address."
         case .hostTooOld:
@@ -355,7 +362,11 @@ final class RemoteHostsStore: ObservableObject {
             .identityUnavailable
         case .capabilityUnavailable, .protocolMismatch:
             .hostTooOld
-        case .unauthenticated, .authorizationDenied, .server, .http, .invalidResponse:
+        case .server(_, let statusCode), .http(_, let statusCode):
+            .gatewayNotServing(statusCode: statusCode)
+        case .invalidResponse:
+            .gatewayNotServing(statusCode: nil)
+        case .unauthenticated, .authorizationDenied:
             .other
         }
     }

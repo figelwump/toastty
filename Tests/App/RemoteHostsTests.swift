@@ -338,6 +338,28 @@ struct RemoteHostsStoreTests {
         #expect(credentials.current == nil)
     }
 
+    /// Tailscale Serve forwarding to the wrong port answers 502. The message
+    /// must point at the gateway address, not say only that pairing failed.
+    @Test func aProxyErrorFromTheGatewayAddressIsReportedAsNotServingToastty() async throws {
+        let store = Self.makeStore(
+            configurations: Configurations([RemoteHostsFixtures.mini]),
+            credentialStore: RemoteHostsInMemoryCredentialStore(),
+            pairing: .failure(.server(operation: .pairingExchange, statusCode: 502))
+        )
+        store.reload()
+        _ = try await Self.waitFor(store) { $0?.status == .notPaired }
+        let offerDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-remote-hosts-store-\(UUID().uuidString)", isDirectory: true)
+        let offer = try RemoteDeviceStore(fileURL: offerDirectory.appendingPathComponent("devices.json"))
+            .issueNativePairingOffer(gatewayURL: RemoteHostsFixtures.mini.gatewayURL, at: Date())
+
+        let failure = await store.pair(remoteID: "mini", input: offer.fallbackCode).failure
+
+        #expect(failure == .gatewayNotServing(statusCode: 502))
+        #expect(failure?.localizedDescription.contains("HTTP 502") == true)
+        #expect(failure?.localizedDescription.contains("tailscale serve") == true)
+    }
+
     /// A credential issued by one gateway is never sent to another, even
     /// when both are stored under the same remote ID.
     @Test func aCredentialForAnotherGatewayIsNotUsed() async throws {
