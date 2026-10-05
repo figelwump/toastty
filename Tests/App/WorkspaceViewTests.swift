@@ -2585,7 +2585,7 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testSwitchingToWorkspaceClearsUnreadScratchpadOnlyWhileRightPanelShowsIt() throws {
+    func testSwitchingToWorkspaceClearsUnreadScratchpadOnlyWhileRightPanelShowsIt() async throws {
         let scratchpadPanelID = UUID()
         var scratchpadWorkspaceID: UUID?
         let harness = try makeWorkspaceHarness(appIsActive: true) { state, windowID, _ in
@@ -2609,34 +2609,52 @@ final class WorkspaceViewTests: XCTestCase {
             try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]).unreadPanelIDs.contains(scratchpadPanelID)
         }
 
+        func expectScratchpadClear(_ shouldClear: Bool, after transition: () -> Void) async throws {
+            let cleared = expectation(description: "The visible scratchpad becomes read")
+            cleared.isInverted = !shouldClear
+            let observer = harness.store.addActionAppliedObserver { action, _, _ in
+                if case .markPanelNotificationsRead(let targetWorkspaceID, let panelID) = action,
+                   targetWorkspaceID == workspaceID, panelID == scratchpadPanelID {
+                    cleared.fulfill()
+                }
+            }
+            defer { harness.store.removeActionAppliedObserver(observer) }
+
+            transition()
+            XCTAssertTrue(try scratchpadIsUnread())
+            // Yield to SwiftUI and the delayed clear task, and observe the actual
+            // transition instead of assuming both ran within a fixed run-loop pump.
+            await fulfillment(of: [cleared], timeout: shouldClear ? 3 : 0.6)
+            XCTAssertEqual(try scratchpadIsUnread(), !shouldClear)
+        }
+
         // The scratchpad's workspace is on screen, but its right panel is closed.
-        XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: workspaceID)))
-        pumpMainRunLoop(duration: 0.6)
-        XCTAssertTrue(try scratchpadIsUnread())
+        try await expectScratchpadClear(false) {
+            XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: workspaceID)))
+        }
 
         // Opening the right panel shows the scratchpad. The reducer does not clear
         // unread here; the view's delayed clear does.
-        XCTAssertTrue(
-            harness.store.send(.setRightAuxPanelVisibility(workspaceID: workspaceID, isVisible: true))
-        )
-        XCTAssertTrue(try scratchpadIsUnread())
-        pumpMainRunLoop(duration: 0.6)
-        XCTAssertFalse(try scratchpadIsUnread())
+        try await expectScratchpadClear(true) {
+            XCTAssertTrue(
+                harness.store.send(.setRightAuxPanelVisibility(workspaceID: workspaceID, isVisible: true))
+            )
+        }
 
         // An update while another workspace is on screen stays unread until the user
         // switches back to the scratchpad's workspace.
-        XCTAssertTrue(
-            harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: harness.workspaceID))
-        )
-        XCTAssertTrue(
-            harness.store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: scratchpadPanelID))
-        )
-        pumpMainRunLoop(duration: 0.6)
-        XCTAssertTrue(try scratchpadIsUnread())
+        try await expectScratchpadClear(false) {
+            XCTAssertTrue(
+                harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: harness.workspaceID))
+            )
+            XCTAssertTrue(
+                harness.store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: scratchpadPanelID))
+            )
+        }
 
-        XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: workspaceID)))
-        pumpMainRunLoop(duration: 0.6)
-        XCTAssertFalse(try scratchpadIsUnread())
+        try await expectScratchpadClear(true) {
+            XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: harness.windowID, workspaceID: workspaceID)))
+        }
     }
 
     @MainActor
