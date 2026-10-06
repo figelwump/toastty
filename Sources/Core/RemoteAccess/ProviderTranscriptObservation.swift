@@ -42,6 +42,7 @@ public enum ProviderTranscriptSupport {
             || provider == .opencode
             || provider == .mimocode
             || provider == .pi
+            || provider == .cursor
     }
 }
 

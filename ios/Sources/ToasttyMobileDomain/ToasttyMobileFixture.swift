@@ -369,7 +369,7 @@ public enum ToasttyMobileFixture {
 // MARK: - Session start
 
 public extension ToasttyMobileFixture {
-    /// What a Mac would offer for a new session in `workspace`: two agents
+    /// What a Mac would offer for a new session in `workspace`: three agents
     /// that can start and one that cannot, so the sheet's states are all
     /// reachable without a Mac.
     static func sessionStartOptions(for workspace: MobileWorkspace?) -> RemoteSessionStartOptionsResponse {
@@ -397,6 +397,14 @@ public extension ToasttyMobileFixture {
                     supportsModel: true,
                     recentModels: ["gpt-6.1-sol"],
                     reasoningEfforts: ["low", "medium", "high", "xhigh"]
+                ),
+                RemoteSessionStartAgent(
+                    profileID: "cursor",
+                    displayName: "Cursor",
+                    availability: .available,
+                    supportsModel: true,
+                    recentModels: ["auto"],
+                    reasoningEfforts: []
                 ),
                 RemoteSessionStartAgent(
                     profileID: "pi",

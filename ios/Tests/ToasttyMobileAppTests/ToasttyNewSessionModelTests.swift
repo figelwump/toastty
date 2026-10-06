@@ -285,6 +285,30 @@ final class ToasttyNewSessionModelTests: XCTestCase {
         XCTAssertNil(host.startRequests.first?.reasoningEffort)
     }
 
+    func testSwitchingFromClaudeToCursorClearsEffortAndStartsWithTheCursorModel() async throws {
+        let host = FakeNewSessionHost(options: options(agents: [claude(), cursor()]))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.selectEffort("xhigh")
+        XCTAssertEqual(model.effort, "xhigh")
+        XCTAssertTrue(model.showsEffort)
+
+        model.selectAgent("cursor")
+        XCTAssertEqual(model.selectedAgentID, "cursor")
+        XCTAssertTrue(model.showsModel)
+        XCTAssertFalse(model.showsEffort)
+        XCTAssertNil(model.effort)
+        model.selectModel("auto")
+        model.updateMessage("Fix the flaky picker test")
+        await model.start()
+
+        let request = try XCTUnwrap(host.startRequests.first)
+        XCTAssertEqual(request.profileID, "cursor")
+        XCTAssertEqual(request.model, "auto")
+        XCTAssertNil(request.reasoningEffort)
+        XCTAssertEqual(request.text, "Fix the flaky picker test")
+    }
+
     func testLastAgentUsedIsSelectedAgain() async {
         ToasttyNewSessionPreferences(defaults: defaults).recordStart(workspaceID: workspaceID, agentID: "codex", model: nil, effort: nil)
         let model = makeModel(host: FakeNewSessionHost(options: options(agents: [claude(), codex()])))
@@ -543,6 +567,13 @@ final class ToasttyNewSessionModelTests: XCTestCase {
         RemoteSessionStartAgent(
             profileID: "codex", displayName: "Codex", availability: .available,
             supportsModel: true, recentModels: ["gpt-6.1-sol"], reasoningEfforts: ["high", "xhigh"]
+        )
+    }
+
+    private func cursor() -> RemoteSessionStartAgent {
+        RemoteSessionStartAgent(
+            profileID: "cursor", displayName: "Cursor", availability: .available,
+            supportsModel: true, recentModels: ["auto"], reasoningEfforts: []
         )
     }
 

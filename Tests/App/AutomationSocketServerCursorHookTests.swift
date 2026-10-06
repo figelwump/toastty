@@ -68,6 +68,66 @@ struct AutomationSocketServerCursorHookTests: AutomationSocketServerTestSupport 
         }
     }
 
+    @Test
+    func cursorHookPayloadDecoderPreservesTextAndModelWithoutChangingStatus() throws {
+        let event = try CursorHookEventPayloadDecoder.decode([
+            "hookEventName": .string("afterAgentResponse"),
+            "text": .string("  Answer\nwith spacing\t "),
+            "modelIdentifier": .string(" explicit-model "),
+        ])
+        #expect(event.text == "  Answer\nwith spacing\t ")
+        #expect(event.modelIdentifier == "explicit-model")
+        #expect(event.status == nil)
+        #expect(event.cloudHandoff == false)
+
+        let oldEvent = try CursorHookEventPayloadDecoder.decode([
+            "hookEventName": .string("sessionStart"),
+            "unknownFutureField": .string("discarded"),
+        ])
+        #expect(oldEvent.text == nil)
+        #expect(oldEvent.modelIdentifier == nil)
+        let nullFields = try CursorHookEventPayloadDecoder.decode([
+            "hookEventName": .string("sessionStart"),
+            "text": .null,
+            "modelIdentifier": .null,
+        ])
+        #expect(nullFields.text == nil)
+        #expect(nullFields.modelIdentifier == nil)
+    }
+
+    @Test(arguments: ["text", "modelIdentifier"])
+    func cursorHookPayloadDecoderRejectsInvalidOptionalFieldType(field: String) {
+        #expect(throws: (any Error).self) {
+            try CursorHookEventPayloadDecoder.decode([
+                "hookEventName": .string("afterAgentResponse"),
+                field: .bool(true),
+            ])
+        }
+    }
+
+    @Test(arguments: ["text", "modelIdentifier"])
+    func cursorHookPayloadDecoderRejectsOversizedOptionalFields(field: String) {
+        let limit = field == "text"
+            ? CursorHookEvent.maximumPromptTextUTF8Count
+            : CursorHookEvent.maximumModelIdentifierUTF8Count
+        #expect(throws: (any Error).self) {
+            try CursorHookEventPayloadDecoder.decode([
+                "hookEventName": .string("beforeSubmitPrompt"),
+                field: .string(String(repeating: "é", count: limit / 2 + 1)),
+            ])
+        }
+    }
+
+    @Test
+    func cursorHookPayloadDecoderRejectsResponseBeyondItsSmallerTextBound() {
+        #expect(throws: (any Error).self) {
+            try CursorHookEventPayloadDecoder.decode([
+                "hookEventName": .string("afterAgentResponse"),
+                "text": .string(String(repeating: "x", count: CursorHookEvent.maximumResponseTextUTF8Count + 1)),
+            ])
+        }
+    }
+
     @Test(arguments: [false, true])
     func cursorHookSocketPathGatesCompletionToRootConversationAndCurrentGeneration(promptBeforeStartup: Bool) async throws {
         let socketPath = temporarySocketPath()

@@ -2,7 +2,7 @@ import CoreState
 import Foundation
 
 enum CursorHookEventParser {
-    static let maximumPayloadByteCount = 64 * 1024
+    static let maximumPayloadByteCount = 1024 * 1024
 
     static func parse(
         sessionID: String,
@@ -20,6 +20,7 @@ enum CursorHookEventParser {
 
         let status: SessionStatus?
         let cloudHandoff: Bool
+        var text: String?
         switch eventName {
         case "sessionStart":
             cloudHandoff = false
@@ -30,6 +31,7 @@ enum CursorHookEventParser {
             )
 
         case "beforeSubmitPrompt":
+            text = boundedMessageText(object["prompt"], limit: CursorHookEvent.maximumPromptTextUTF8Count)
             if isCloudHandoffPrompt(object["prompt"]) {
                 cloudHandoff = true
                 status = SessionStatus(
@@ -45,6 +47,14 @@ enum CursorHookEventParser {
                     detail: "Responding to your prompt"
                 )
             }
+
+        case "afterAgentResponse":
+            guard let response = boundedMessageText(
+                object["text"], limit: CursorHookEvent.maximumResponseTextUTF8Count
+            ) else { return [] }
+            text = response
+            cloudHandoff = false
+            status = nil
 
         case "preToolUse":
             cloudHandoff = false
@@ -87,7 +97,9 @@ enum CursorHookEventParser {
                     conversationID: normalizedString(object["conversation_id"]),
                     generationID: normalizedString(object["generation_id"]),
                     cloudHandoff: cloudHandoff,
-                    status: status
+                    status: status,
+                    text: text,
+                    modelIdentifier: try explicitModelIdentifier(object["model"])
                 )
             ),
         ]
@@ -109,6 +121,31 @@ enum CursorHookEventParserError: LocalizedError, Equatable {
 }
 
 private extension CursorHookEventParser {
+    static func explicitModelIdentifier(_ value: Any?) throws -> String? {
+        guard let value, !(value is NSNull) else { return nil }
+        guard let model = value as? String,
+              model.utf8.count <= CursorHookEvent.maximumModelIdentifierUTF8Count else {
+            throw CursorHookEventParserError.malformedPayload
+        }
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func boundedMessageText(_ value: Any?, limit: Int) -> String? {
+        guard let text = value as? String else { return nil }
+        guard text.utf8.count > limit else { return text }
+        let availableBytes = limit - CursorHookEvent.textTruncationSuffix.utf8.count
+        var byteCount = 0
+        var end = text.unicodeScalars.startIndex
+        for scalar in text.unicodeScalars {
+            let scalarByteCount = scalar.utf8.count
+            guard byteCount + scalarByteCount <= availableBytes else { break }
+            byteCount += scalarByteCount
+            end = text.unicodeScalars.index(after: end)
+        }
+        return String(text[..<end]) + CursorHookEvent.textTruncationSuffix
+    }
+
     static func stopStatus(from object: [String: Any]) -> SessionStatus? {
         switch normalizedString(object["status"])?.lowercased() {
         case "completed":

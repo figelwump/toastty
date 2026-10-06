@@ -414,6 +414,12 @@ enum CLICommand: Equatable {
             if let generationID = event.generationID {
                 payload["generationID"] = .string(generationID)
             }
+            if let text = event.text {
+                payload["text"] = .string(text)
+            }
+            if let modelIdentifier = event.modelIdentifier {
+                payload["modelIdentifier"] = .string(modelIdentifier)
+            }
             if let status = event.status {
                 payload["kind"] = .string(status.kind.rawValue)
                 payload["summary"] = .string(status.summary)
