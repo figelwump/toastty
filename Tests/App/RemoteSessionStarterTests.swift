@@ -39,6 +39,10 @@ struct RemoteSessionStarterTests {
             FileManager.default.createFile(atPath: claude, contents: Data("#!/bin/sh\n".utf8))
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude)
 
+            let cursor = bin.appendingPathComponent("cursor-agent").path
+            FileManager.default.createFile(atPath: cursor, contents: Data("#!/bin/sh\n".utf8))
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cursor)
+
             sessionRuntimeStore.bind(store: store)
             router.defaultPromptState = .idleAtPrompt
             let workspace = store.selectedWorkspace!
@@ -58,8 +62,9 @@ struct RemoteSessionStarterTests {
                         id: "opencode", displayName: "OpenCode", argv: [claude, "--wrapped"],
                         initialPromptPlacement: .trailing
                     ),
+                    AgentProfile(id: "cursor", displayName: "Cursor", argv: [cursor]),
                     // Not shown in the remote session list, so never offered.
-                    AgentProfile(id: "cursor", displayName: "Cursor", argv: [claude]),
+                    AgentProfile(id: "grok", displayName: "Grok", argv: [claude]),
                 ]),
                 cliExecutablePathProvider: { "/bin/sh" },
                 socketPathProvider: { "/tmp/toastty-tests.sock" }
@@ -316,7 +321,7 @@ struct RemoteSessionStarterTests {
 
         #expect(await fixture.start(unknownWorkspace) == .rejected(reason: .workspaceNotFound))
         #expect(await fixture.start(fixture.request(profileID: "pi")) == .rejected(reason: .agentUnavailable))
-        #expect(await fixture.start(fixture.request(profileID: "cursor")) == .rejected(reason: .agentUnavailable))
+        #expect(await fixture.start(fixture.request(profileID: "grok")) == .rejected(reason: .agentUnavailable))
         #expect(await fixture.start(fixture.request(profileID: "missing")) == .rejected(reason: .agentUnavailable))
         #expect(await fixture.start(fixture.request(effort: "turbo")) == .rejected(reason: .invalidRequest))
 
@@ -359,6 +364,38 @@ struct RemoteSessionStarterTests {
     }
 
     @MainActor
+    @Test func cursorOffersModelWithoutReasoningAndStartsWithAutoModel() async throws {
+        let fixture = try Fixture()
+        let options = fixture.starter.options(
+            for: RemoteSessionStartOptionsRequest(workspaceID: fixture.workspaceID), device: fixture.device
+        )
+        let cursor = try #require(options.agents.first { $0.profileID == "cursor" })
+        #expect(cursor.availability == .available)
+        #expect(cursor.supportsModel)
+        #expect(cursor.reasoningEfforts.isEmpty)
+        #expect(await fixture.start(fixture.request(profileID: "cursor", model: "auto", effort: "high"))
+            == .rejected(reason: .invalidRequest))
+        #expect(fixture.newPanelIDs.isEmpty)
+
+        let result = await fixture.start(fixture.request(
+            profileID: "cursor", model: "auto", effort: nil, text: "Explain this change"
+        ))
+        guard case .started(let conversationID) = result else {
+            Issue.record("expected Cursor to start, got \(result)")
+            return
+        }
+        let panelID = try #require(fixture.newPanelIDs.first)
+        #expect(fixture.conversationID(ofPanel: panelID) == conversationID)
+        let command = try #require(fixture.router.sentTextByPanelID[panelID])
+        #expect(command.contains("cursor-agent"))
+        #expect(command.contains("--model auto"))
+        #expect(command.contains("'Explain this change'"))
+        #expect(command.contains("--effort") == false)
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.agent == .cursor)
+        #expect(fixture.router.sentTextByPanelID[fixture.originalPanelID] == nil)
+    }
+
+    @MainActor
     @Test func optionsListOnlyAgentsTheSessionListCanShowWithTheirChoices() throws {
         let fixture = try Fixture()
         let options = fixture.starter.options(
@@ -369,7 +406,7 @@ struct RemoteSessionStarterTests {
         #expect(options.permission == .allowed)
         #expect(options.workspace == .available)
         #expect(options.launchDirectory == fixture.projectDirectory)
-        #expect(options.agents.map(\.profileID) == ["claude", "pi", "opencode"])
+        #expect(options.agents.map(\.profileID) == ["claude", "pi", "opencode", "cursor"])
         let claude = try #require(options.agents.first)
         #expect(claude.availability == .available)
         #expect(claude.supportsModel)

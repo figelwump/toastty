@@ -2,6 +2,7 @@ import RemoteProtocol
 import AppKit
 import CodexReconciliation
 import CoreState
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -71,6 +72,7 @@ final class SessionRuntimeStore: ObservableObject {
         var conversationID: String
         var generationID: String?
         var cloudHandoff: Bool
+        var observedGenerationIDs: Set<String> = []
     }
     private var cursorHookCorrelationBySessionID: [String: CursorHookCorrelationState] = [:]
     private var pendingCursorPromptBySessionID: [String: CursorHookEvent] = [:]
@@ -308,10 +310,28 @@ final class SessionRuntimeStore: ObservableObject {
         panelID: UUID,
         record: ManagedAgentResumeRecord
     ) -> Bool {
+        confirmNativeSessionBinding(
+            managedSessionID: managedSessionID,
+            panelID: panelID,
+            agent: record.agent,
+            nativeSessionID: record.nativeSessionID,
+            sessionFilePath: record.sessionFilePath,
+            at: record.capturedAt
+        )
+    }
+
+    private func confirmNativeSessionBinding(
+        managedSessionID: String,
+        panelID: UUID,
+        agent: AgentKind,
+        nativeSessionID: String,
+        sessionFilePath: String,
+        at date: Date
+    ) -> Bool {
         guard let activeSession = sessionRegistry.activeSession(sessionID: managedSessionID),
-              ProviderTranscriptSupport.isManagedProvider(record.agent),
+              ProviderTranscriptSupport.isManagedProvider(agent),
               activeSession.panelID == panelID,
-              activeSession.agent == record.agent,
+              activeSession.agent == agent,
               let bindingID = nativeBindingIDBySessionID[managedSessionID] else {
             return false
         }
@@ -319,11 +339,11 @@ final class SessionRuntimeStore: ObservableObject {
         let candidate = ManagedNativeSessionBindingConfirmation(
             managedSessionID: managedSessionID,
             bindingID: bindingID,
-            agent: record.agent,
+            agent: agent,
             panelID: panelID,
-            nativeSessionID: record.nativeSessionID,
-            sessionFilePath: record.sessionFilePath,
-            confirmedAt: record.capturedAt
+            nativeSessionID: nativeSessionID,
+            sessionFilePath: sessionFilePath,
+            confirmedAt: date
         )
         if let existing = nativeBindingConfirmationBySessionID[managedSessionID],
            existing.bindingID == candidate.bindingID,
@@ -2137,6 +2157,30 @@ final class SessionRuntimeStore: ObservableObject {
                 // conversation claimed by this managed session.
                 return false
             }
+            // Keep desktop status independent of whether this panel can own
+            // the remote conversation. Two panels cannot both own its input.
+            let canBindRemoteConversation = !nativeBindingConfirmationBySessionID.values.contains(where: {
+                $0.managedSessionID != sessionID && $0.agent == .cursor
+                    && $0.nativeSessionID == conversationID
+            }) && confirmNativeSessionBinding(
+                managedSessionID: sessionID,
+                panelID: record.panelID,
+                agent: .cursor,
+                nativeSessionID: conversationID,
+                sessionFilePath: "",
+                at: now
+            ) && resetProviderConversationFeed(
+                managedSessionID: sessionID,
+                provider: .cursor,
+                nativeSessionID: conversationID,
+                snapshotID: UUID().uuidString,
+                at: now
+            )
+            if !canBindRemoteConversation {
+                nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
+                providerConversationFeedsBySessionID.removeValue(forKey: sessionID)
+                providerConversationRevision &+= 1
+            }
             cursorHookCorrelationBySessionID[sessionID] = CursorHookCorrelationState(
                 conversationID: conversationID,
                 generationID: nil,
@@ -2163,20 +2207,43 @@ final class SessionRuntimeStore: ObservableObject {
                   let generationID else {
                 return false
             }
-            guard let correlation = cursorHookCorrelationBySessionID[sessionID] else {
+            guard var correlation = cursorHookCorrelationBySessionID[sessionID] else {
                 // Keep only the latest candidate; it cannot claim root identity
                 // or change visible status until sessionStart confirms it.
                 pendingCursorPromptBySessionID[sessionID] = event
                 return true
             }
-            guard correlation.conversationID == conversationID else {
+            guard correlation.conversationID == conversationID,
+                  !correlation.observedGenerationIDs.contains(generationID) else {
                 return false
             }
-
-            cursorHookCorrelationBySessionID[sessionID] = CursorHookCorrelationState(
-                conversationID: conversationID,
-                generationID: generationID,
-                cloudHandoff: event.cloudHandoff
+            if correlation.observedGenerationIDs.count < Self.maximumProviderConversationObservationCount {
+                correlation.observedGenerationIDs.insert(generationID)
+            } else {
+                // Keep desktop status working after the bounded replay guard
+                // fills, but retire remote authority until the next root chat.
+                nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
+            }
+            correlation.generationID = generationID
+            correlation.cloudHandoff = event.cloudHandoff
+            cursorHookCorrelationBySessionID[sessionID] = correlation
+            if let text = event.text, !text.isEmpty {
+                publishCursorObservation(
+                    sessionID: sessionID, generationID: generationID, key: "prompt",
+                    payload: .transcript(.userMessage(ConversationUserMessagePayload(text: text))),
+                    at: now
+                )
+            }
+            if let model = event.modelIdentifier {
+                publishCursorObservation(
+                    sessionID: sessionID, generationID: generationID, key: "model",
+                    payload: .executionProfileReported(RemoteSessionExecutionProfile(modelIdentifier: model)),
+                    at: now, mayAuthorizeCurrentRuntime: false
+                )
+            }
+            publishCursorObservation(
+                sessionID: sessionID, generationID: generationID, key: "started",
+                payload: .turnStarted(turnID: generationID), at: now
             )
             let reportedStatus = event.status?.kind == .working ? event.status : nil
             updateStatus(
@@ -2190,6 +2257,21 @@ final class SessionRuntimeStore: ObservableObject {
                             : "Responding to your prompt")
                 ),
                 at: now
+            )
+            return true
+
+        case "afterAgentResponse":
+            guard let conversationID, let generationID,
+                  let correlation = cursorHookCorrelationBySessionID[sessionID],
+                  correlation.conversationID == conversationID,
+                  correlation.observedGenerationIDs.contains(generationID),
+                  let text = event.text, !text.isEmpty else { return false }
+            // A delayed response can add text, but cannot reopen the composer.
+            let digest = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+            publishCursorObservation(
+                sessionID: sessionID, generationID: generationID, key: "response:\(digest)",
+                payload: .transcript(.assistantMessage(ConversationAssistantMessagePayload(text: text, phase: .final))),
+                at: now, mayAuthorizeCurrentRuntime: false
             )
             return true
 
@@ -2241,6 +2323,13 @@ final class SessionRuntimeStore: ObservableObject {
                 return false
             }
 
+            publishCursorObservation(
+                sessionID: sessionID, generationID: generationID, key: "ended",
+                payload: .turnEnded(
+                    turnID: generationID,
+                    reason: reconciledStatus.kind == .ready ? .completed : .aborted
+                ), at: now
+            )
             clearCursorActiveGeneration(sessionID: sessionID)
             updateStatus(sessionID: sessionID, status: reconciledStatus, at: now)
             return true
@@ -2265,6 +2354,11 @@ final class SessionRuntimeStore: ObservableObject {
                 return false
             }
             let hadActiveGeneration = cursorHookCorrelationBySessionID[sessionID]?.generationID != nil
+            nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
+            publishCursorObservation(
+                sessionID: sessionID, generationID: nil, key: "session-ended",
+                payload: .turnEnded(turnID: nil, reason: .aborted), at: now
+            )
             cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
             if let status = event.status, status.kind == .error {
                 updateStatus(sessionID: sessionID, status: status, at: now)
@@ -2284,6 +2378,31 @@ final class SessionRuntimeStore: ObservableObject {
         default:
             return false
         }
+    }
+
+    private func publishCursorObservation(
+        sessionID: String,
+        generationID: String?,
+        key: String,
+        payload: ProviderObservationPayload,
+        at date: Date,
+        mayAuthorizeCurrentRuntime: Bool = true
+    ) {
+        guard let feed = providerConversationFeed(managedSessionID: sessionID) else { return }
+        ingestProviderConversationObservation(
+            managedSessionID: sessionID,
+            provider: .cursor,
+            nativeSessionID: feed.nativeSessionID,
+            snapshotID: feed.snapshotID,
+            observation: ProviderTranscriptObservation(
+                timestamp: date,
+                turnID: generationID,
+                providerIdentity: feed.nativeSessionID,
+                fingerprint: "cursor:\(generationID ?? "session"):\(key)",
+                payload: payload,
+                mayAuthorizeCurrentRuntime: mayAuthorizeCurrentRuntime
+            )
+        )
     }
 
     private func cursorHookEventMatchesActiveRootTurn(

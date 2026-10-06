@@ -206,7 +206,7 @@ if [[ "$(cat "$capture_prefix.payload")" != "$session_payload" ]]; then
   exit 1
 fi
 
-for passive_event in beforeSubmitPrompt preToolUse postToolUseFailure stop sessionEnd; do
+for passive_event in beforeSubmitPrompt afterAgentResponse preToolUse postToolUseFailure stop sessionEnd; do
   rm -f "$capture_prefix.payload" "$capture_prefix.args"
   passive_payload="{\"hook_event_name\":\"$passive_event\",\"conversation_id\":\"conv-1\",\"generation_id\":\"gen-1\"}"
   passive_output="$(

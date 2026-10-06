@@ -1784,6 +1784,208 @@ private enum RemoteBootstrapFixtureError: Error {
     case couldNotPublishResumeRecord
 }
 
+extension RemoteAccessServiceSafetyTests {
+    @MainActor
+    @Test func cursorHookHistoryAndRemoteSendWorkWithoutAResumeRecord() throws {
+        let fixture = try Self.cursorFixtureWithoutResumeRecord()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.currentResumeRecord == nil)
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, submit, panelID, _ in
+            #expect(panelID == fixture.panelID)
+            #expect(submit)
+            delivered.append(text)
+            return true
+        }
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        #expect(fixture.observeCursorHook("sessionStart"))
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+        let binding = try #require(fixture.sessionRuntimeStore.nativeSessionBindingConfirmation(for: fixture.sessionID))
+        #expect(binding.nativeSessionID == "cursor-root")
+        #expect(binding.sessionFilePath.isEmpty)
+        #expect(fixture.service.performRemoteSend(
+            .init(conversationID: fixture.conversationID, clientRequestID: "cursor-startup-send",
+                  expectedInputEpoch: .init(bindingID: UUID(), counter: 1), text: "Do not deliver"),
+            device: device
+        ) == .rejected(reason: .promptNotOpen))
+        #expect(delivered.isEmpty)
+
+        let firstPrompt = "  Explain the change\nwith examples. "
+        #expect(fixture.observeCursorHook("beforeSubmitPrompt", generationID: "generation-1", text: firstPrompt))
+        #expect(fixture.observeCursorHook("afterAgentResponse", generationID: "generation-1", text: "The change is complete."))
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+        #expect(fixture.observeCursorHook("stop", generationID: "generation-1"))
+        let events = try Self.cursorEvents(in: fixture)
+        #expect(events.contains {
+            guard case .userMessage(let message) = $0.payload else { return false }
+            return message.text == firstPrompt && $0.provider == .cursor && $0.turnID == "generation-1"
+        })
+        #expect(events.contains {
+            guard case .assistantMessage(let message) = $0.payload else { return false }
+            return message.text == "The change is complete." && $0.provider == .cursor
+        })
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected a matching Cursor stop to open the root prompt")
+            return
+        }
+
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "cursor-send",
+            expectedInputEpoch: epoch, text: "  Continue\nwith the next change. "
+        )
+        #expect(fixture.service.performRemoteSend(request, device: device) == .accepted(epoch: epoch))
+        #expect(fixture.service.performRemoteSend(request, device: device) == .duplicate)
+        #expect(delivered == [request.text])
+        #expect(fixture.observeCursorHook("beforeSubmitPrompt", generationID: "generation-2", text: request.text))
+        let confirmedEvents = try Self.cursorEvents(in: fixture)
+        #expect(confirmedEvents.contains {
+            guard case .userMessage(let message) = $0.payload else { return false }
+            return message.text == request.text && message.clientRequestID == request.clientRequestID
+        })
+        #expect(fixture.currentResumeRecord == nil)
+    }
+
+    @MainActor
+    @Test func cursorNestedStaleAndDuplicateCompletionCannotChangeRemoteAuthority() throws {
+        let fixture = try Self.cursorFixtureWithoutResumeRecord()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.observeCursorHook("sessionStart"))
+        #expect(fixture.observeCursorHook("sessionStart", conversationID: "nested-root") == false)
+        #expect(fixture.observeCursorHook("beforeSubmitPrompt", generationID: "generation-1", text: "First turn"))
+        #expect(fixture.observeCursorHook("beforeSubmitPrompt", generationID: "generation-2", text: "Current turn"))
+        #expect(fixture.observeCursorHook("stop", generationID: "generation-1") == false)
+        #expect(fixture.observeCursorHook("afterAgentResponse", conversationID: "nested-root", generationID: "generation-2", text: "Wrong answer") == false)
+        #expect(fixture.observeCursorHook("stop", conversationID: "nested-root", generationID: "generation-2") == false)
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+        #expect(fixture.observeCursorHook("afterAgentResponse", generationID: "generation-2", text: "Current answer"))
+        #expect(fixture.observeCursorHook("stop", generationID: "generation-2"))
+        let availability = fixture.summary.inputAvailability
+        #expect(availability.allowsRemoteSend)
+        let events = try Self.cursorEvents(in: fixture)
+        #expect(fixture.observeCursorHook("stop", generationID: "generation-2") == false)
+        #expect(fixture.observeCursorHook("beforeSubmitPrompt", generationID: "generation-1", text: "Stale prompt") == false)
+        #expect(fixture.summary.inputAvailability == availability)
+        #expect(try Self.cursorEvents(in: fixture) == events)
+    }
+
+    @MainActor
+    @Test func cursorDelayedResponsePreservesLocalDraftAndCannotReopenRemoteSend() throws {
+        let fixture = try Self.cursorFixtureWithoutResumeRecord()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.observeCursorHook("sessionStart"))
+        #expect(fixture.observeCursorHook("beforeSubmitPrompt", generationID: "generation-1", text: "First turn"))
+        #expect(fixture.observeCursorHook("stop", generationID: "generation-1"))
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected completed Cursor root prompt")
+            return
+        }
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        let draftAvailability = fixture.summary.inputAvailability
+        #expect(draftAvailability.allowsRemoteSend == false)
+        #expect(fixture.observeCursorHook("afterAgentResponse", generationID: "generation-1", text: "Delayed answer"))
+        #expect(fixture.summary.inputAvailability == draftAvailability)
+        #expect(try Self.cursorEvents(in: fixture).contains {
+            guard case .assistantMessage(let message) = $0.payload else { return false }
+            return message.text == "Delayed answer"
+        })
+
+        var deliveries = 0
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
+            deliveries += 1
+            return true
+        }
+        let result = fixture.service.performRemoteSend(
+            .init(conversationID: fixture.conversationID, clientRequestID: "cursor-local-draft",
+                  expectedInputEpoch: epoch, text: "Do not deliver"),
+            device: .init(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        )
+        #expect(result == .rejected(reason: .localDraftPresent))
+        #expect(deliveries == 0)
+    }
+
+    @MainActor
+    @Test func cursorSessionEndClosesRemotePromptAndNewRootStartsFreshHistory() throws {
+        let fixture = try Self.cursorFixtureWithoutResumeRecord()
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.observeCursorHook("sessionStart"))
+        #expect(fixture.observeCursorHook("beforeSubmitPrompt", generationID: "generation-1", text: "Old prompt"))
+        #expect(fixture.observeCursorHook("afterAgentResponse", generationID: "generation-1", text: "Old answer"))
+        #expect(fixture.observeCursorHook("stop", generationID: "generation-1"))
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend)
+        let oldGeneration = fixture.summary.projectionGeneration
+
+        #expect(fixture.observeCursorHook("sessionEnd"))
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+        #expect(fixture.sessionRuntimeStore.nativeSessionBindingConfirmation(for: fixture.sessionID) == nil)
+        #expect(fixture.observeCursorHook("afterAgentResponse", generationID: "generation-1", text: "Ended response") == false)
+        #expect(fixture.observeCursorHook("stop", generationID: "generation-1") == false)
+
+        #expect(fixture.observeCursorHook("sessionStart", conversationID: "cursor-new-root"))
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+        #expect(fixture.observeCursorHook("beforeSubmitPrompt", conversationID: "cursor-new-root", generationID: "generation-new", text: "New prompt"))
+        #expect(fixture.observeCursorHook("afterAgentResponse", conversationID: "cursor-new-root", generationID: "generation-new", text: "New answer"))
+        #expect(fixture.observeCursorHook("stop", conversationID: "cursor-new-root", generationID: "generation-new"))
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend)
+        #expect(fixture.summary.projectionGeneration != oldGeneration)
+        let events = try Self.cursorEvents(in: fixture)
+        let text = events.compactMap { event -> String? in
+            switch event.payload {
+            case .userMessage(let message): return message.text
+            case .assistantMessage(let message): return message.text
+            default: return nil
+            }
+        }
+        #expect(text == ["New prompt", "New answer"])
+        #expect(fixture.currentResumeRecord == nil)
+    }
+
+    @MainActor
+    private static func cursorFixtureWithoutResumeRecord() throws -> RemoteBootstrapFixture {
+        let fixture = try RemoteBootstrapFixture(agent: .cursor)
+        #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: nil)))
+        try FileManager.default.removeItem(atPath: fixture.resumeRecord.sessionFilePath)
+        #expect(fixture.currentResumeRecord == nil)
+        return fixture
+    }
+
+    @MainActor
+    private static func cursorEvents(in fixture: RemoteBootstrapFixture) throws -> [ConversationEvent] {
+        guard case .page(let page) = fixture.service.facadeConversationEvents(
+            for: fixture.conversationID, after: nil, limit: 100
+        ) else {
+            Issue.record("Expected Cursor remote API history")
+            return []
+        }
+        return page.events
+    }
+}
+
+@MainActor
+private extension RemoteBootstrapFixture {
+    func observeCursorHook(
+        _ name: String,
+        conversationID: String = "cursor-root",
+        generationID: String? = nil,
+        text: String? = nil
+    ) -> Bool {
+        let status: SessionStatus?
+        switch name {
+        case "sessionStart": status = .init(kind: .idle, summary: "Waiting")
+        case "beforeSubmitPrompt": status = .init(kind: .working, summary: "Working")
+        case "stop": status = .init(kind: .ready, summary: "Ready")
+        default: status = nil
+        }
+        return sessionRuntimeStore.handleCursorHookEvent(
+            sessionID: sessionID,
+            event: .init(hookEventName: name, conversationID: conversationID,
+                         generationID: generationID, status: status, text: text),
+            at: confirmedAt.addingTimeInterval(1)
+        )
+    }
+}
+
 @MainActor
 private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
     var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)?

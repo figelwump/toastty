@@ -722,6 +722,53 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         )
     }
 
+    func testNewCursorSessionStartsWithTheSelectedModelAndOpensTheConversation() {
+        let app = launchFixtureApp()
+        openWorkspace(toasttyWorkspaceID, in: app)
+        let newSession = app.buttons["toastty-mobile-workspace-new-session"]
+        XCTAssertTrue(newSession.waitForExistence(timeout: 5))
+        newSession.tap()
+
+        let start = app.buttons["toastty-mobile-new-session-start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        let cursor = app.buttons["toastty-mobile-new-session-agent-cursor"]
+        XCTAssertTrue(cursor.waitForExistence(timeout: 5))
+        cursor.tap()
+        XCTAssertFalse(app.buttons["toastty-mobile-new-session-effort"].exists)
+        let model = app.buttons["toastty-mobile-new-session-model"]
+        XCTAssertTrue(model.exists)
+        model.tap()
+        let auto = app.buttons["auto"]
+        XCTAssertTrue(auto.waitForExistence(timeout: 5))
+        auto.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { model.value as? String == "auto" })
+        XCTAssertFalse(start.isEnabled)
+
+        let message = app.textViews["toastty-mobile-new-session-message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        message.tap()
+        message.typeText("Fix the flaky Cursor picker test")
+        XCTAssertTrue(waitUntil(timeout: 5) { start.isEnabled })
+        attachScreenshot(named: "fixture-new-cursor-session-form", of: app)
+        start.tap()
+
+        let conversationTitle = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 15))
+        XCTAssertEqual(conversationTitle.label, "New Cursor session")
+        XCTAssertFalse(start.exists)
+        let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
+        XCTAssertTrue(profile.waitForExistence(timeout: 5))
+        XCTAssertEqual(profile.label, "Model: auto")
+        attachScreenshot(named: "fixture-new-cursor-session-opened", of: app)
+
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].waitForExistence(timeout: 5))
+        let session = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "New Cursor session"))
+            .firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
+        XCTAssertTrue(session.label.contains("Fix the flaky Cursor picker test"))
+    }
+
     func testNewSessionFromHomeStartsInTheChosenWorkspace() {
         // Starts are remembered across launches, so pin the last workspace
         // for this launch to make the switch below a real one.

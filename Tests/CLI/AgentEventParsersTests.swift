@@ -1995,13 +1995,13 @@ struct AgentEventParsersTests {
     }
 
     @Test
-    func cursorPromptMapsToCorrelatedWorkingStatusWithoutPromptText() throws {
+    func cursorPromptPreservesTextWithoutPuttingItInStatusOrSummaries() throws {
         let commands = try AgentEventIngestor.commands(
             for: .cursorHooks,
             sessionID: "sess-123",
             panelID: nil,
             payload: Data(
-                #"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-root","generation_id":"gen-2","prompt":"Fix the secret launch command","user_email":"person@example.com"}"#.utf8
+                #"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-root","generation_id":"gen-2","prompt":"  Fix the secret\nlaunch command\t ","user_email":"person@example.com"}"#.utf8
             )
         )
 
@@ -2018,7 +2018,8 @@ struct AgentEventParsersTests {
                         kind: .working,
                         summary: "Working",
                         detail: "Responding to your prompt"
-                    )
+                    ),
+                    text: "  Fix the secret\nlaunch command\t "
                 )
             ),
         ])
@@ -2027,8 +2028,97 @@ struct AgentEventParsersTests {
         #expect(envelope.eventType == "session.cursor_hook_event")
         #expect(envelope.payload.string("conversationID") == "conv-root")
         #expect(envelope.payload.string("generationID") == "gen-2")
+        #expect(envelope.payload.string("text") == "  Fix the secret\nlaunch command\t ")
         #expect(envelope.payload["prompt"] == nil)
         #expect(envelope.payload["user_email"] == nil)
+        let summary = try #require(commands.first).successMessage(using: AutomationResponseEnvelope(
+            requestID: "req-1", ok: true, result: nil, error: nil
+        ))
+        #expect(summary.contains("secret") == false)
+        #expect(summary.contains("person@example.com") == false)
+    }
+
+    @Test
+    func cursorResponseCarriesExplicitModelAndTextWithoutOtherSensitiveFields() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"afterAgentResponse","conversation_id":"conv-root","generation_id":"gen-2","text":"Private answer\nwith spacing. ","model":"explicit-model","user_email":"person@example.com","transcript_path":"/private/transcript","tool_input":{"command":"secret input"},"tool_output":"secret output"}"#.utf8)
+        )
+        guard case .sessionCursorHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Cursor response hook")
+            return
+        }
+        #expect(event.text == "Private answer\nwith spacing. ")
+        #expect(event.modelIdentifier == "explicit-model")
+        #expect(event.status == nil)
+        #expect(event.cloudHandoff == false)
+        let envelope = try #require(commands.first?.makeEventEnvelope(requestID: "req-1"))
+        #expect(envelope.payload.string("text") == event.text)
+        #expect(envelope.payload.string("modelIdentifier") == "explicit-model")
+        for field in ["user_email", "transcript_path", "tool_input", "tool_output", "detail", "summary"] {
+            #expect(envelope.payload[field] == nil)
+        }
+        let summary = try #require(commands.first).successMessage(using: AutomationResponseEnvelope(
+            requestID: "req-1", ok: true, result: nil, error: nil
+        ))
+        #expect(summary.contains("Private answer") == false)
+        #expect(summary.contains("explicit-model") == false)
+        #expect(summary.contains("person@example.com") == false)
+    }
+
+    @Test
+    func cursorResponseTruncatesOnAUTF8BoundaryAndRemoteSizedPromptRemainsExact() throws {
+        let response = String(repeating: "🙂", count: 20_000)
+        let responseCommands = try AgentEventIngestor.commands(
+            for: .cursorHooks, sessionID: "sess-123", panelID: nil,
+            payload: JSONSerialization.data(withJSONObject: ["hook_event_name": "afterAgentResponse", "text": response])
+        )
+        let responseEnvelope = try #require(responseCommands.first?.makeEventEnvelope(requestID: "req-1"))
+        let text = try #require(responseEnvelope.payload.string("text"))
+        #expect(text.utf8.count <= CursorHookEvent.maximumResponseTextUTF8Count)
+        #expect(text.hasSuffix(CursorHookEvent.textTruncationSuffix))
+        #expect(text.contains("�") == false)
+
+        let prompt = " \n" + String(repeating: "x", count: RemoteGatewayProtocol.maximumRequestBodyBytes - 3) + " "
+        let promptCommands = try AgentEventIngestor.commands(
+            for: .cursorHooks, sessionID: "sess-123", panelID: nil,
+            payload: JSONSerialization.data(withJSONObject: ["hook_event_name": "beforeSubmitPrompt", "prompt": prompt])
+        )
+        let promptEnvelope = try #require(promptCommands.first?.makeEventEnvelope(requestID: "req-2"))
+        #expect(promptEnvelope.payload.string("text") == prompt)
+    }
+
+    @Test(arguments: ["model_id", "agent_message", "model_params"])
+    func cursorDoesNotGuessModelFromOtherFields(field: String) throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .cursorHooks, sessionID: "sess-123", panelID: nil,
+            payload: JSONSerialization.data(withJSONObject: ["hook_event_name": "afterAgentResponse", "text": "Answer", field: "guessed-model"])
+        )
+        let envelope = try #require(commands.first?.makeEventEnvelope(requestID: "req-1"))
+        #expect(envelope.payload["modelIdentifier"] == nil)
+    }
+
+    @Test
+    func cursorRejectsOversizedExplicitModel() throws {
+        #expect(throws: CursorHookEventParserError.malformedPayload) {
+            _ = try AgentEventIngestor.commands(
+                for: .cursorHooks, sessionID: "sess-123", panelID: nil,
+                payload: JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": "afterAgentResponse", "text": "Answer",
+                    "model": String(repeating: "x", count: CursorHookEvent.maximumModelIdentifierUTF8Count + 1),
+                ])
+            )
+        }
+    }
+
+    @Test
+    func cursorRejectsNonStringExplicitModel() throws {
+        #expect(throws: CursorHookEventParserError.malformedPayload) {
+            _ = try AgentEventIngestor.commands(
+                for: .cursorHooks, sessionID: "sess-123", panelID: nil,
+                payload: Data(#"{"hook_event_name":"afterAgentResponse","text":"Answer","model":true}"#.utf8)
+            )
+        }
     }
 
     @Test
@@ -2218,8 +2308,14 @@ struct AgentEventParsersTests {
     }
 
     @Test
-    func cursorIgnoresUnknownEventsAndStopsWithoutKnownStatus() throws {
+    func cursorIgnoresUnknownEventsMissingResponsesAndStopsWithoutKnownStatus() throws {
         let unknownCommands = try AgentEventIngestor.commands(
+            for: .cursorHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"futureEvent","text":"Ignored"}"#.utf8)
+        )
+        let missingResponseCommands = try AgentEventIngestor.commands(
             for: .cursorHooks,
             sessionID: "sess-123",
             panelID: nil,
@@ -2233,6 +2329,7 @@ struct AgentEventParsersTests {
         )
 
         #expect(unknownCommands.isEmpty)
+        #expect(missingResponseCommands.isEmpty)
         #expect(incompleteStopCommands.isEmpty)
     }
 
@@ -2250,7 +2347,7 @@ struct AgentEventParsersTests {
 
     @Test
     func cursorRejectsOversizedPayload() throws {
-        let payload = Data(String(repeating: "x", count: 64 * 1024 + 1).utf8)
+        let payload = Data(String(repeating: "x", count: CursorHookEventParser.maximumPayloadByteCount + 1).utf8)
 
         #expect(throws: CursorHookEventParserError.payloadTooLarge) {
             _ = try AgentEventIngestor.commands(

@@ -56,17 +56,50 @@ pairing codes.
 ## Reading and replying
 
 A newly paired device can read managed Codex, Claude Code, OpenCode, MiMo Code,
-and Pi conversations and send replies to their active sessions. Codex and
+Pi, and Cursor conversations and send replies to their active sessions. Codex and
 Claude Code can replay history from their local provider transcript files.
 OpenCode, MiMo Code, and Pi publish a bounded launch-scoped conversation feed
 through Toastty's injected instrumentation; that history remains available
 only while the current Toastty app process retains it and is rebuilt from the
 provider when a managed launch or resume exposes a snapshot.
 
+Cursor publishes prompt and final response text from the current managed launch
+through its hooks. It does not replay older chats or publish tool results. A
+matching completed local turn enables replies; startup, interrupted turns, and
+Cursor Cloud handoffs do not. Clearing the Cursor chat starts a new history.
+Prompts are limited to 64 KiB and responses to 48 KiB, with a visible marker when
+text is truncated. A chat keeps at most 20,000 observations and 20,000 turn
+identities. When the turn limit is reached, remote input stays closed until a
+new chat starts. Relaunch Cursor through Toastty after updating the app.
+
+Cursor CLI `2026.10.01-e373342` can skip `afterAgentResponse` and `stop` hooks
+provided only by a plugin. On that version, those events also need user or
+project hook registrations for Cursor to dispatch them. Toastty does not edit
+Cursor's global hook settings. If completion hooks do not arrive, the phone
+keeps the conversation read-only. Validation used an installation with existing
+user hooks; a clean plugin-only installation is not verified.
+
+A temporary workaround for that Cursor version is to merge these no-op
+registrations into the project's `.cursor/hooks.json`, preserving any existing
+hooks. They let Cursor dispatch the corresponding Toastty plugin hooks without
+forwarding events twice. Remove this workaround when Cursor fixes plugin-only
+dispatch. See [Cursor's hook configuration](https://cursor.com/docs/hooks).
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "afterAgentResponse": [{ "command": "true" }],
+    "stop": [{ "command": "true" }]
+  }
+}
+```
+
 Toastty Mobile shows the session's reported model and reasoning above the
 message field. Codex reports these in structured turn metadata; Claude Code
 reports its model in assistant message metadata, without a reasoning value.
-Other providers currently omit these fields. Unreported values stay hidden;
+Cursor reports an explicit model from its prompt hook when available, without
+a reasoning value. Other providers currently omit these fields. Unreported values stay hidden;
 Toastty does not infer them from message text or configured defaults. The line
 shows the latest report for the conversation, not the model used for every
 earlier message, and is labelled **Last reported** while connection updates
@@ -248,7 +281,7 @@ notice, and you open the session from the list when it arrives.
   environment values. A workspace with no terminal directory cannot start a
   session from the phone.
 - **Agents.** The sheet lists the profiles from `~/.toastty/agents.toml` whose
-  sessions the phone can show: Codex, Claude Code, OpenCode, MiMo Code, and Pi.
+  sessions the phone can show: Codex, Claude Code, OpenCode, MiMo Code, Pi, and Cursor.
   A profile whose command is not installed, or that cannot take a first message
   on its command line, is listed struck through and cannot be chosen. Tap it
   to see the reason.

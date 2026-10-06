@@ -21,6 +21,7 @@ EXPECTED_SKILLS = [
 EXPECTED_CURSOR_HOOKS = [
     "sessionStart",
     "beforeSubmitPrompt",
+    "afterAgentResponse",
     "preToolUse",
     "postToolUseFailure",
     "stop",

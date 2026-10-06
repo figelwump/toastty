@@ -1616,6 +1616,23 @@ final class RemoteAccessService: ObservableObject {
                 listChanged = true
             }
 
+            // SessionEnd retires Cursor's root identity while its terminal
+            // process can remain alive (for example after /clear).
+            if candidate.provider == .cursor,
+               candidate.nativeBindingConfirmation == nil,
+               let projector = projectionStore.projectorState(for: candidate.conversationID),
+               case .openPrompt = projector.inputAvailability {
+                let emitted = projectionStore.noteBinding(
+                    for: candidate.conversationID,
+                    reason: .runtimeResumed,
+                    clearsProviderSessionFilePath: true,
+                    bindingID: UUID(),
+                    at: candidate.updatedAt
+                )
+                broadcastEvents(emitted, for: candidate.conversationID)
+                listChanged = listChanged || !emitted.isEmpty
+            }
+
             // Maintain the panel↔conversation maps used by send delivery and
             // the local-input hook.
             if panelIDByConversationID[candidate.conversationID] != candidate.panelID {
@@ -1656,7 +1673,8 @@ final class RemoteAccessService: ObservableObject {
                 }
             }
 
-            if let activeSessionID = candidate.activeSessionID,
+            if candidate.provider != .cursor,
+               let activeSessionID = candidate.activeSessionID,
                let confirmation = candidate.nativeBindingConfirmation,
                candidate.registryState == .ready,
                confirmation.managedSessionID == activeSessionID,
@@ -1920,12 +1938,18 @@ final class RemoteAccessService: ObservableObject {
                 let nativeBindingConfirmation: ManagedNativeSessionBindingConfirmation? =
                     activeRecord.flatMap { record in
                         guard ProviderTranscriptSupport.isManagedProvider(record.agent),
-                              let resumeRecord = terminalState.resumeRecord,
                               let confirmation = sessionRuntimeStore.nativeSessionBindingConfirmation(
                                   for: record.sessionID
                               ),
                               confirmation.agent == record.agent,
-                              confirmation.panelID == panelID,
+                              confirmation.panelID == panelID else { return nil }
+                        // Cursor's hooks confirm a launch-scoped identity. It
+                        // has no file transcript or persisted resume contract.
+                        if record.agent == .cursor {
+                            return providerFeed?.nativeSessionID == confirmation.nativeSessionID
+                                ? confirmation : nil
+                        }
+                        guard let resumeRecord = terminalState.resumeRecord,
                               confirmation.nativeSessionID == resumeRecord.nativeSessionID,
                               confirmation.sessionFilePath == resumeRecord.sessionFilePath else {
                             return nil
@@ -2220,12 +2244,14 @@ final class RemoteAccessService: ObservableObject {
         runtimeBound: Bool
     ) -> Bool {
         tailersByConversationID.removeValue(forKey: conversationID)?.stop()
-        pendingSendCorrelator.discard(for: conversationID)
 
         guard let projector = projectionStore.projectorState(for: conversationID),
               projector.providerSessionFilePath != nil else {
             return false
         }
+        // A hook feed normally has no file. Only losing an actual file
+        // binding invalidates pending sends; a routine feed sync does not.
+        pendingSendCorrelator.discard(for: conversationID)
         if runtimeBound {
             let emitted = projectionStore.noteBinding(
                 for: conversationID,
