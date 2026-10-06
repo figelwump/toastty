@@ -11,7 +11,8 @@ ios:
   - 'Sources/App/Resources/WebPanels/**'
   - 'WebPanels/**'
   - 'scripts/remote/test.sh'
-  - 'scripts/ci/ios-testflight.sh'
+  - 'scripts/ci/**'
+  - '.github/ios-xcode-version'
 macos:
   - '.github/workflows/mobile-ios.yml'
   - '.github/ci-paths.yml'

@@ -35,6 +35,7 @@ function releaseEnvironment(overrides = {}) {
   delete environment.TOASTTY_IOS_UPLOAD;
   return {
     ...environment,
+    GITHUB_ACTIONS: "false",
     APP_STORE_CONNECT_API_KEY_ID: "key-id",
     APP_STORE_CONNECT_API_ISSUER_ID: "issuer-id",
     APP_STORE_CONNECT_API_PRIVATE_KEY: "private-key-fixture",
@@ -92,6 +93,11 @@ test("stubbed release runs prove both skip inputs and the explicit upload path",
   fs.mkdirSync(binDirectory);
   fs.mkdirSync(homeDirectory);
 
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  writeExecutable(binDirectory, "git", `#!/bin/sh
+if [ "$3" = diff ]; then exit "${"${STUB_DIRTY_TRACKED_SOURCE:-0}"}"; fi
+exec "${realGit}" "$@"
+`);
   writeExecutable(binDirectory, "base64", "#!/bin/sh\n/bin/cat\n");
   writeExecutable(binDirectory, "uuidgen", "#!/bin/sh\nprintf '00000000-0000-0000-0000-000000000000\\n'\n");
   writeExecutable(binDirectory, "tuist", "#!/bin/sh\nprintf 'tuist %s\\n' \"$*\" >>\"$TOOL_LOG\"\nif [ \"$1\" = version ]; then printf '4.202.6\\n'; fi\n");
@@ -244,6 +250,9 @@ esac
 
     const upload = runStubbedRelease("upload", {
       TOASTTY_IOS_UPLOAD: "1",
+      GITHUB_ACTIONS: "true",
+      GITHUB_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+      TOASTTY_IOS_VERIFIED_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
     });
     assert.match(upload.invocations, /xcrun altool --validate-app/);
     assert.match(upload.invocations, /xcrun altool --upload-app/);
@@ -251,6 +260,17 @@ esac
     assert.match(upload.metadata, /UPLOAD_REQUESTED_ORIGINAL=1/);
     assert.match(upload.metadata, /UPLOAD_REQUESTED=1/);
     assert.match(upload.metadata, /UPLOAD_SUPPRESSED_BY=none/);
+
+    assert.throws(() => runStubbedRelease("changed-source", {
+      GITHUB_ACTIONS: "true",
+      GITHUB_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+      TOASTTY_IOS_VERIFIED_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+      STUB_DIRTY_TRACKED_SOURCE: "1",
+    }), (error) => {
+      assert.match(error.stderr.toString(), /tracked source modified after checkout/);
+      assert.equal(fs.readFileSync(toolLog, "utf8"), "");
+      return true;
+    });
 
     assert.throws(() => runStubbedRelease("missing-symbols", {
       TOASTTY_IOS_UPLOAD: "0",
@@ -404,7 +424,8 @@ test("workflow and names-only manifest expose all release inputs without enablin
   assert.match(workflow, /vars\.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true'/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main' && github\.event_name == 'workflow_dispatch' && inputs\.upload == true/);
   assert.match(workflow, /inputs\.upload && github\.ref != 'refs\/heads\/main'/);
-  assert.match(workflow, /inputs\.run_tests \|\| inputs\.upload/);
+  assert.doesNotMatch(workflow, /run_tests/);
+  assert.match(workflow, /steps\.ci\.outputs\.verified_sha/);
   for (const name of requiredSecrets) {
     assert.ok(secrets.split("\n").some((line) => line === `${name}?`));
     assert.match(workflow, new RegExp(`secrets\\.${name}`));
@@ -427,10 +448,10 @@ test("workflow and names-only manifest expose all release inputs without enablin
   assert.match(mobileFilters, /'\.node-version'/);
   assert.match(mobileFilters, /'\.tool-versions'/);
   assert.match(mobileFilters, /'\.github\/workflows\/ios-testflight\.yml'/);
-  assert.match(mobileFilters, /'scripts\/ci\/ios-testflight\.sh'/);
+  assert.match(mobileFilters, /'scripts\/ci\/\*\*'/);
   assert.match(mobileWorkflow, /node --test ios\/Tests\/ScriptTests\/\*\.test\.mjs ios\/Tests\/ReleaseScriptTests\/\*\.test\.mjs/);
   assert.match(mobileWorkflow, /configuration: \[Debug, Release\]/);
-  assert.match(workflow, /TOASTTY_IOS_CONFIGURATION: Release/);
+  assert.match(workflow, /require-ios-ci\.mjs/);
   assert.match(workflow, /artifacts\/ios-release\/\*\*\/Toastty\.xcarchive\.tar\.gz/);
   assert.match(workflow, /retention-days: 90/);
 });
@@ -445,4 +466,19 @@ test("privacy manifest declares required-reason APIs without tracking or collect
   assert.match(privacyManifest, /<string>CA92\.1<\/string>/);
   assert.match(privacyManifest, /NSPrivacyAccessedAPICategorySystemBootTime/);
   assert.match(privacyManifest, /<string>35F9\.1<\/string>/);
+});
+
+// Source mismatch must stop before invoking any signing or archive tools.
+test("Actions release rejects absent or mismatched verified source", () => {
+  const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim();
+  for (const [verified, event] of [["", sha], ["0".repeat(40), sha], [sha, "0".repeat(40)]]) {
+    assert.throws(() => execFileSync("bash", [releaseScript], {
+      cwd: repositoryRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      env: { PATH: process.env.PATH, GITHUB_ACTIONS: "true", GITHUB_SHA: event,
+        TOASTTY_IOS_VERIFIED_SHA: verified },
+    }), (error) => {
+      assert.match(error.stderr, /archive source must match the verified CI SHA/);
+      return true;
+    });
+  }
 });

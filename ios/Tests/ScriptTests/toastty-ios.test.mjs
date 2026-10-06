@@ -312,7 +312,7 @@ test("the newest compatible runtime does not reuse an unrelated booted iPhone", 
   assert.equal(xcodebuild.args[xcodebuild.args.indexOf("-destination") + 1], "platform=iOS Simulator,id=CREATED-UDID");
   assert.deepEqual(
     xcodebuild.args.slice(xcodebuild.args.indexOf("-parallel-testing-enabled"), -1),
-    ["-parallel-testing-enabled", "NO"],
+    ["-parallel-testing-enabled", "NO", "ONLY_ACTIVE_ARCH=YES"],
   );
   assert.equal(xcodebuild.args.at(-1), "test");
 });
@@ -438,6 +438,15 @@ test("Release tests exercise app and domain branches without Debug fixture UI la
     assert.equal(args[args.indexOf("-configuration") + 1], configuration);
     assert.equal(args.at(-1), "test");
     assert.equal(args.includes("ENABLE_TESTABILITY=YES"), configuration === "Release");
+    assert.equal(args[args.indexOf("-scheme") + 1],
+      configuration === "Release" ? "ToasttyMobileApp-Release" : "ToasttyMobileApp");
+    assert.ok(args.includes("ONLY_ACTIVE_ARCH=YES"));
+    assert.ok(!args.some((arg) => arg.startsWith("ARCHS=")));
+    const planResult = runDispatcher(["test", "--dry-run"], { TOASTTY_IOS_CONFIGURATION: configuration });
+    assert.equal(planResult.status, 0, planResult.stderr);
+    const plan = JSON.parse(planResult.stdout);
+    assert.equal(plan.scheme, args[args.indexOf("-scheme") + 1]);
+    assert.ok(plan.steps.at(-1).args.includes("ONLY_ACTIVE_ARCH=YES"));
     assert.deepEqual(args.filter((arg) => arg.startsWith("-only-testing:")),
       configuration === "Release" ? [
         "-only-testing:ToasttyMobileAppTests",
@@ -495,7 +504,7 @@ test("Debug smoke runs app/domain tests and exactly two fixture UI methods", () 
     assert.match(fixtureSource, new RegExp(`func\\s+${method}\\s*\\(`), selector);
   }
   assert.deepEqual(args.slice(args.indexOf("-parallel-testing-enabled"), -1), [
-    "-parallel-testing-enabled", "NO", ...smokeTests,
+    "-parallel-testing-enabled", "NO", "ONLY_ACTIVE_ARCH=YES", ...smokeTests,
   ]);
   assert.equal(args.at(-1), "test");
 
@@ -535,5 +544,18 @@ test("invalid test selectors fail before starting Tuist or a simulator", () => {
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, expectedError);
     assert.deepEqual(readLog(toolchain.logPath), []);
+  }
+});
+
+test("simulator build keeps its existing scheme and architecture settings", () => {
+  for (const configuration of ["Debug", "Release"]) {
+    const result = runDispatcher(["build", "--dry-run"], { TOASTTY_IOS_CONFIGURATION: configuration });
+    assert.equal(result.status, 0, result.stderr);
+    const plan = JSON.parse(result.stdout);
+    const args = plan.steps.at(-1).args;
+    assert.equal(plan.scheme, "ToasttyMobileApp");
+    assert.equal(args[args.indexOf("-scheme") + 1], plan.scheme);
+    assert.ok(!args.includes("ONLY_ACTIVE_ARCH=YES"));
+    assert.ok(!args.includes("ENABLE_TESTABILITY=YES"));
   }
 });
