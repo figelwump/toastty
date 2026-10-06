@@ -2,9 +2,13 @@
 """Show each worktree's PR, checks, local state, and Toastty workspace; optionally
 clean up worktrees whose PR has merged.
 
-Usage: worktree-status.py [--json] [--cleanup-merged] [--repo PATH]
+Usage: worktree-status.py [--json] [--cleanup-merged] [--pr NUMBER] [--repo PATH]
 
-Run from any checkout of the repository, or pass --repo. Needs `git` and an
+Run from any checkout of the repository, or pass --repo. Git commands run in the
+repository's main checkout, so a worktree being removed is never the current
+directory. --pr limits the report, and so the cleanup, to that pull request.
+--workspace, with --pr, names the one Toastty workspace cleanup may close; cleanup
+skips the PR unless that exact workspace is the match and is still marked done. Needs `git` and an
 authenticated `gh`. Toastty workspaces are matched through TOASTTY_CLI_PATH and
 the `workspace.list` query; --cleanup-merged requires them.
 
@@ -26,7 +30,10 @@ cleanup report names the sessions and busy terminals it ended.
 It refuses to run from a workspace-scoped session, whose workspace list is partial.
 It skips a row, changing nothing, when the workspace match is ambiguous; when the
 workspace is the caller's own, holds another worktree or another PR's chip, or has
-unsaved documents; or when the worktree is locked. It rereads the workspace list
+unsaved documents; or when the worktree is locked.
+Each cleaned-up row's cleanup_status is "cleaned" (workspace closed when there
+was one, worktree removed, branches deleted), "partial" (some changes made and
+something kept), "stopped" (a step failed before any change), or "skipped". It rereads the workspace list
 just before closing each workspace, rechecks the worktree just before removing it,
 and deletes each branch only while it still points at the merged commit.
 """
@@ -92,6 +99,7 @@ class Workspace:
     session_agents: list[str]
     busy_terminals: int
     unsaved_documents: int
+    done: bool = False
 
     @property
     def label(self) -> str:
@@ -129,6 +137,7 @@ class Row:
     verdict: str = "blocked"
     reason: str = ""
     cleanup: str | None = None
+    cleanup_status: str | None = None
 
 
 def real(path: str) -> str:
@@ -138,6 +147,15 @@ def real(path: str) -> str:
 
 def inside(path: str, directory: str) -> bool:
     return path == directory or path.startswith(directory.rstrip("/") + "/")
+
+
+def main_checkout(checkout: str) -> str:
+    """The repository's main worktree, or `checkout` itself for a bare repository."""
+    first = run(["git", "worktree", "list", "--porcelain"], cwd=checkout).split("\n\n")[0]
+    entry = dict(line.partition(" ")[::2] for line in first.splitlines())
+    if "bare" in entry or "worktree" not in entry:
+        return checkout
+    return real(entry["worktree"])
 
 
 def list_worktrees(repo: str) -> list[Worktree]:
@@ -257,7 +275,7 @@ def match_workspaces(workspaces: list[dict] | None, path: str | None, pr: int | 
             Workspace(w["workspaceID"], w.get("title", ""), [real(c) for c in w.get("terminalCwds", [])],
                       chips(w), [s.get("agent") or "unknown" for s in w.get("activeSessions", [])],
                       w.get("busyTerminalCount", 0),
-                      w.get("unsavedDocumentCount", 0))
+                      w.get("unsavedDocumentCount", 0), w.get("done", False))
             for w in workspaces if matches(w)
         ]
         if found:
@@ -359,31 +377,44 @@ def other_pr_chip(workspace: Workspace, pr: int, repo_slug: str) -> bool:
 
 
 def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_workspace: str | None,
-             workspaces: list[Workspace], other_worktrees: list[str]) -> str:
+             workspaces: list[Workspace], other_worktrees: list[str],
+             expected_workspace: str | None = None) -> tuple[str, str]:
     """Closes the workspace, removes the worktree, and deletes both branches. Every
-    guard runs before the first change; a failure after one reports what was done."""
+    guard runs before the first change; a failure after one reports what was done.
+    Returns the cleanup status and a description."""
+    def skip(reason: str) -> tuple[str, str]:
+        return "skipped", f"skipped: {reason}"
+
     if len(workspaces) > 1:
-        return "skipped: several workspaces match (" + ", ".join(w.label for w in workspaces) + ")"
+        return skip("several workspaces match (" + ", ".join(w.label for w in workspaces) + ")")
     workspace = workspaces[0] if workspaces else None
+    if expected_workspace:
+        if workspace is None or workspace.workspace_id != expected_workspace:
+            found = workspace.label if workspace else "none"
+            return skip(f"the matching workspace is not {expected_workspace[:8]} (found {found})")
+        if not workspace.done:
+            return skip(f"{workspace.label} is no longer marked done")
     if workspace:
         if workspace.workspace_id == own_workspace:
-            return "skipped: that is this session's own workspace"
+            return skip("that is this session's own workspace")
         if workspace.unsaved_documents:
-            return f"skipped: {workspace.label} has unsaved document changes"
+            return skip(f"{workspace.label} has unsaved document changes")
         if any(inside(cwd, other) for cwd in workspace.cwds for other in other_worktrees):
-            return f"skipped: {workspace.label} also has a terminal in another worktree"
+            return skip(f"{workspace.label} also has a terminal in another worktree")
         if other_pr_chip(workspace, row.pr, repo_slug):
-            return f"skipped: {workspace.label} carries a chip for a different PR"
+            return skip(f"{workspace.label} carries a chip for a different PR")
     if worktree.locked:
-        return "skipped: the worktree is locked"
+        return skip("the worktree is locked")
     problem = recheck(worktree, row.head)
     if problem:
-        return f"skipped: {problem}"
+        return skip(f"{problem}")
 
     done: list[str] = []
 
-    def stop(message: str) -> str:
-        return "partial: " + "; ".join(done + [message]) if done else f"stopped: {message}"
+    def stop(message: str) -> tuple[str, str]:
+        if done:
+            return "partial", "partial: " + "; ".join(done + [message])
+        return "stopped", f"stopped: {message}"
 
     if workspace:
         ok, output = succeeds([toastty_cli(), "--json", "action", "run", "workspace.close",
@@ -408,15 +439,22 @@ def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_worksp
     # Compare-and-delete: the ref goes only if it still points at the merged head.
     # Squash merges leave it unmerged by ancestry, so `git branch -d` would refuse.
     ok, output = succeeds(["git", "update-ref", "-d", f"refs/heads/{row.branch}", row.head], cwd=repo)
+    complete = ok
     done.append("deleted local branch" if ok else f"local branch kept: {output}")
-    remote = run(["git", "ls-remote", "--heads", "origin", row.branch], cwd=repo, check=False).split()
-    if remote and remote[0] == row.head:
+    ok, output = succeeds(["git", "ls-remote", "--heads", "origin", row.branch], cwd=repo)
+    remote = output.split() if ok else []
+    if not ok:
+        complete = False
+        done.append(f"remote branch kept: could not query origin: {output}")
+    elif remote and remote[0] == row.head:
         ok, output = succeeds(["git", "push", f"--force-with-lease=refs/heads/{row.branch}:{row.head}",
                                "origin", f":refs/heads/{row.branch}"], cwd=repo)
+        complete = complete and ok
         done.append("deleted remote branch" if ok else f"remote branch kept: {output}")
     elif remote:
+        complete = False
         done.append(f"remote branch kept: it now points at {remote[0][:8]}")
-    return "; ".join(done)
+    return ("cleaned" if complete else "partial"), "; ".join(done)
 
 
 def main() -> None:
@@ -425,14 +463,23 @@ def main() -> None:
     parser.add_argument("--cleanup-merged", action="store_true",
                         help="close workspaces, remove worktrees, and delete branches for merged PRs")
     parser.add_argument("--repo", help="any checkout of the repository (default: current directory)")
+    parser.add_argument("--pr", type=int, help="report and clean up only this pull request")
+    parser.add_argument("--workspace", help="with --pr: the only Toastty workspace cleanup may close")
     options = parser.parse_args()
+    if options.workspace and options.pr is None:
+        parser.error("--workspace needs --pr")
 
-    repo = run(["git", "rev-parse", "--show-toplevel"], cwd=options.repo).strip()
+    repo = main_checkout(run(["git", "rev-parse", "--show-toplevel"], cwd=options.repo).strip())
     fetched = subprocess.run(["git", "fetch", "--quiet", "--prune", "origin"], cwd=repo,
                              capture_output=True).returncode == 0
     repo_info = json.loads(run(["gh", "repo", "view", "--json", "nameWithOwner,defaultBranchRef"], cwd=repo))
     repo_slug, default_branch = repo_info["nameWithOwner"], repo_info["defaultBranchRef"]["name"]
-    prs = json.loads(run(["gh", "pr", "list", "--state", "all", "--limit", "200", "--json", PR_FIELDS], cwd=repo))
+    if options.pr is not None:
+        # Fetched directly, so a PR older than the list's window still has a row.
+        prs = [json.loads(run(["gh", "pr", "view", str(options.pr), "--json", PR_FIELDS], cwd=repo))]
+    else:
+        prs = json.loads(run(["gh", "pr", "list", "--state", "all", "--limit", "200", "--json", PR_FIELDS],
+                             cwd=repo))
     # Local branches track this repository, so fork PRs with the same branch name
     # never match. gh lists newest first; prefer an open PR, then the newest.
     prs_by_branch: dict[str, list[dict]] = {}
@@ -502,11 +549,13 @@ def main() -> None:
                 # changed while the PRs were queried or earlier rows were cleaned up.
                 current, complete = toastty_workspaces()
                 if current is None or not complete:
+                    row.cleanup_status = "skipped"
                     row.cleanup = "skipped: could not reread the full Toastty workspace list"
                     continue
                 others = [w.path for w in worktrees if w.path != row.worktree]
-                row.cleanup = clean_up(row, worktree_by_path[row.worktree], repo, repo_slug, own_workspace,
-                                       match_workspaces(current, row.worktree, row.pr, repo_slug), others)
+                row.cleanup_status, row.cleanup = clean_up(
+                    row, worktree_by_path[row.worktree], repo, repo_slug, own_workspace,
+                    match_workspaces(current, row.worktree, row.pr, repo_slug), others, options.workspace)
 
     order = {"ready": 0, "cleanup": 1, "blocked": 2}
     rows.sort(key=lambda row: (order[row.verdict], row.pr or 0))

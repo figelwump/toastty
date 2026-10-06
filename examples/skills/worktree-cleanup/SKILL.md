@@ -72,6 +72,12 @@ just before closing each one, rechecks the worktree just before removing it, and
 deletes each branch only while it still points at the merged commit. It never touches blocked rows or worktrees without a PR, and
 repeated runs are harmless.
 
+`--pr <number>` limits the report and cleanup to one PR, fetched directly. With
+`--pr`, `--workspace <id>` names the only workspace cleanup may close; the row is
+skipped unless that workspace is the match and is still marked done. Toastty's
+Merge and Clean Up button runs the script this way. Each cleaned-up row's JSON
+`cleanup_status` is `cleaned`, `partial`, `stopped`, or `skipped`.
+
 Report what was cleaned up, including any sessions or busy terminals that closing
 a workspace ended, and every skipped row with its reason. Do not work around a
 skip with manual `workspace.close`, `git worktree remove --force`, or branch

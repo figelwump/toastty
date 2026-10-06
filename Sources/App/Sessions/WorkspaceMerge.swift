@@ -3,20 +3,58 @@ import CoreState
 import Foundation
 import RemoteProtocol
 
+/// What the Merge button and its shortcut do. The user picks it from the
+/// button's menu; it is one app-wide preference, kept across launches.
+enum WorkspaceMergeMode: String, CaseIterable, Sendable {
+    /// After the pull request merges, Toastty closes the workspace, removes
+    /// its worktree, and deletes its branches.
+    case mergeAndCleanUp
+    case mergeOnly
+
+    var menuTitle: String {
+        switch self {
+        case .mergeAndCleanUp:
+            return "Merge and Clean Up"
+        case .mergeOnly:
+            return "Just Merge"
+        }
+    }
+}
+
 /// What a subspace with a pull request shows for merging it: the Merge
-/// button, its in-progress form, or the done label. Top-level workspaces and
+/// button in the user's chosen mode, its in-progress form, the cleanup that
+/// follows a Merge and Clean Up, or the done label. Top-level workspaces and
 /// subspaces without a `github-pr` annotation show nothing.
 enum WorkspaceMergePresentation: Equatable {
-    case ready(pullRequest: String)
+    case ready(pullRequest: String, mode: WorkspaceMergeMode)
     case merging(pullRequest: String)
+    /// Done, with a cleanup waiting for the pull request to merge.
+    case awaitingMerge(pullRequest: String)
+    case cleaningUp(pullRequest: String)
+    case cleanupFailed(pullRequest: String, reason: String)
     case done(pullRequest: String)
 
     /// The done mark is the only signal that a merge finished, and only a
     /// subspace can hold one, so a top-level workspace gets no button.
-    static func make(workspace: WorkspaceState, request: WorkspaceMergeRequest?) -> Self? {
+    static func make(
+        workspace: WorkspaceState,
+        request: WorkspaceMergeRequest?,
+        cleanup: WorkspaceCleanupRequest? = nil,
+        mode: WorkspaceMergeMode = .mergeAndCleanUp
+    ) -> Self? {
         guard workspace.parentWorkspaceID != nil,
               let pullRequest = workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]?.text else {
             return nil
+        }
+        switch cleanup?.phase {
+        case .cleaningUp:
+            return .cleaningUp(pullRequest: pullRequest)
+        case .failed(let reason):
+            return .cleanupFailed(pullRequest: pullRequest, reason: reason)
+        case .awaitingMerge where workspace.doneAt != nil:
+            return .awaitingMerge(pullRequest: pullRequest)
+        case .awaitingDone, .awaitingMerge, nil:
+            break
         }
         if workspace.doneAt != nil {
             return .done(pullRequest: pullRequest)
@@ -24,23 +62,60 @@ enum WorkspaceMergePresentation: Equatable {
         if request != nil {
             return .merging(pullRequest: pullRequest)
         }
-        return .ready(pullRequest: pullRequest)
+        return .ready(pullRequest: pullRequest, mode: mode)
     }
 
     var title: String {
         switch self {
-        case .ready(let pullRequest):
-            return "Merge \(pullRequest)"
+        case .ready(let pullRequest, let mode):
+            return Self.actionTitle(mode: mode, pullRequest: pullRequest)
         case .merging(let pullRequest):
             return "Merging \(pullRequest)…"
+        case .awaitingMerge(let pullRequest):
+            return "Cleans Up When \(pullRequest) Merges"
+        case .cleaningUp(let pullRequest):
+            return "Cleaning Up \(pullRequest)…"
+        case .cleanupFailed(let pullRequest, _):
+            return "Cleanup Stopped · \(pullRequest)"
         case .done(let pullRequest):
             return "Done · \(pullRequest)"
+        }
+    }
+
+    static func actionTitle(mode: WorkspaceMergeMode, pullRequest: String) -> String {
+        switch mode {
+        case .mergeAndCleanUp:
+            return "Merge & Clean Up \(pullRequest)"
+        case .mergeOnly:
+            return "Merge \(pullRequest)"
         }
     }
 
     var isReady: Bool {
         if case .ready = self { return true }
         return false
+    }
+
+    var pullRequest: String {
+        switch self {
+        case .ready(let pullRequest, _),
+             .merging(let pullRequest),
+             .awaitingMerge(let pullRequest),
+             .cleaningUp(let pullRequest),
+             .cleanupFailed(let pullRequest, _),
+             .done(let pullRequest):
+            return pullRequest
+        }
+    }
+
+    /// Whether the user can still drop the pending cleanup.
+    var canCancelCleanup: Bool {
+        switch self {
+        case .awaitingMerge, .cleanupFailed:
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -89,6 +164,11 @@ struct WorkspaceMergeController {
         /// cannot be handed the merge prompt.
         case profileCannotTakePrompt(profileID: String)
         case launchFailed(String)
+        /// Merge and Clean Up needs the task's checkout, and no session or
+        /// terminal in the workspace has a directory to find it from.
+        case noCheckoutPath
+        /// The `github-pr` annotation names no pull request number.
+        case noPullRequestNumber
     }
 
     let store: AppStore
@@ -105,6 +185,9 @@ struct WorkspaceMergeController {
         _ panelID: UUID,
         _ prompt: String
     ) async throws -> String
+    /// Records or drops the cleanup that follows the merge.
+    var requestCleanup: @MainActor (_ workspaceID: UUID, _ pullRequestNumber: Int, _ repoPath: String) -> Void
+    var cancelCleanup: @MainActor (_ workspaceID: UUID) -> Void
     var presentProblem: @MainActor (_ problem: Problem, _ pullRequest: String) -> Void =
         WorkspaceMergeController.presentAlert
 
@@ -138,6 +221,16 @@ struct WorkspaceMergeController {
                     initialPrompt: prompt,
                     focusPolicy: .preserveFirstResponder
                 ).sessionID
+            },
+            requestCleanup: { workspaceID, pullRequestNumber, repoPath in
+                sessionRuntimeStore.workspaceCleanupCoordinator?.requestCleanup(
+                    workspaceID: workspaceID,
+                    pullRequestNumber: pullRequestNumber,
+                    repoPath: repoPath
+                )
+            },
+            cancelCleanup: { workspaceID in
+                sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: workspaceID)
             }
         )
     }
@@ -145,13 +238,38 @@ struct WorkspaceMergeController {
     /// Returns the task that launches an agent when one has to start, so a
     /// caller can wait for the launch to settle; `nil` otherwise.
     @discardableResult
-    func requestMerge(workspaceID: UUID) -> Task<Void, Never>? {
+    func requestMerge(workspaceID: UUID, mode: WorkspaceMergeMode) -> Task<Void, Never>? {
         guard let workspace = store.state.workspacesByID[workspaceID],
-              case .ready(let pullRequest)? = WorkspaceMergePresentation.make(
+              case .ready(let pullRequest, _)? = WorkspaceMergePresentation.make(
                 workspace: workspace,
-                request: sessionRuntimeStore.workspaceMergeRequests[workspaceID]
+                request: sessionRuntimeStore.workspaceMergeRequests[workspaceID],
+                cleanup: sessionRuntimeStore.workspaceCleanupRequests[workspaceID]
               ) else {
             return nil
+        }
+        // The cleanup is checked first, so a merge that could not be cleaned
+        // up afterward does not start.
+        var cleanup: (pullRequestNumber: Int, repoPath: String)?
+        if mode == .mergeAndCleanUp {
+            let annotation = workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
+            guard let pullRequestNumber = annotation.flatMap({
+                WorkspaceCleanupRequest.pullRequestNumber(text: $0.text, url: $0.url)
+            }) else {
+                presentProblem(.noPullRequestNumber, pullRequest)
+                return nil
+            }
+            guard let repoPath = checkoutPath(in: workspace) else {
+                presentProblem(.noCheckoutPath, pullRequest)
+                return nil
+            }
+            cleanup = (pullRequestNumber, repoPath)
+        }
+        let recordCleanup = {
+            if let cleanup {
+                requestCleanup(workspaceID, cleanup.pullRequestNumber, cleanup.repoPath)
+            } else {
+                cancelCleanup(workspaceID)
+            }
         }
         let prompt = WorkspaceMergePrompt.text(
             customPrompt: store.pullRequestMergePrompt,
@@ -167,6 +285,7 @@ struct WorkspaceMergeController {
                 return nil
             }
             sessionRuntimeStore.beginWorkspaceMergeRequest(workspaceID: workspaceID, sessionID: session.sessionID)
+            recordCleanup()
             return nil
 
         case .busy:
@@ -190,6 +309,7 @@ struct WorkspaceMergeController {
                 do {
                     let sessionID = try await launchAgent(profile.id, workspaceID, panelID, prompt)
                     sessionRuntimeStore.beginWorkspaceMergeRequest(workspaceID: workspaceID, sessionID: sessionID)
+                    recordCleanup()
                 } catch {
                     sessionRuntimeStore.cancelWorkspaceMergeRequest(workspaceID: workspaceID)
                     if case AgentLaunchError.initialPromptUnsupported(let profileID) = error {
@@ -200,6 +320,32 @@ struct WorkspaceMergeController {
                 }
             }
         }
+    }
+
+    /// A directory inside the task's checkout: the most recent agent
+    /// session's repository root or directory, else a terminal's directory.
+    private func checkoutPath(in workspace: WorkspaceState) -> String? {
+        let sessions = sessionRuntimeStore.sessionRegistry.sessionsByID.values
+            .filter { $0.workspaceID == workspace.id }
+            .sorted { $0.updatedAt > $1.updatedAt }
+        for session in sessions {
+            for path in [session.repoRoot, session.cwd] {
+                if let path, path.isEmpty == false {
+                    return path
+                }
+            }
+        }
+        var panelIDs: [UUID] = []
+        if let focusedPanelID = workspace.focusedPanelID {
+            panelIDs.append(focusedPanelID)
+        }
+        panelIDs.append(contentsOf: workspace.allPanelsByID.keys.sorted { $0.uuidString < $1.uuidString })
+        for panelID in panelIDs {
+            if case .terminal(let terminal)? = workspace.panelState(for: panelID), terminal.cwd.isEmpty == false {
+                return terminal.cwd
+            }
+        }
+        return nil
     }
 
     /// A terminal sitting at its shell prompt, where an agent can start. The
@@ -250,6 +396,18 @@ struct WorkspaceMergeController {
             )
         case .launchFailed(let message):
             return ("Unable to Run Agent", message)
+        case .noCheckoutPath:
+            return (
+                "Unable to Clean Up After the Merge",
+                "Toastty could not find this workspace's checkout, so it could not clean up after merging \(pullRequest). "
+                    + "Open a terminal in the worktree and try again, or choose Just Merge."
+            )
+        case .noPullRequestNumber:
+            return (
+                "Unable to Clean Up After the Merge",
+                "The workspace's pull request label \"\(pullRequest)\" has no pull request number or URL. "
+                    + "Choose Just Merge, or set the github-pr annotation with the pull request's URL."
+            )
         }
     }
 

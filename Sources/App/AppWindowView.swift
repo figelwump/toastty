@@ -35,14 +35,14 @@ struct AppWindowView: View {
         store.window(id: windowID)?.sidebarVisible ?? true
     }
 
-    private func requestWorkspaceMerge(workspaceID: UUID) {
+    private func requestWorkspaceMerge(workspaceID: UUID, mode: WorkspaceMergeMode) {
         WorkspaceMergeController.live(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             agentCatalogStore: agentCatalogStore,
             agentLaunchService: agentLaunchService
-        ).requestMerge(workspaceID: workspaceID)
+        ).requestMerge(workspaceID: workspaceID, mode: mode)
     }
 
     private var sidebarToggleHasUnreadBadge: Bool {

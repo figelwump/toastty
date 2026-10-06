@@ -1631,6 +1631,7 @@ final class WorkspaceViewTests: XCTestCase {
     @MainActor
     func testPullRequestSubspaceHeaderShowsMergeControlInSubtitleSlot() throws {
         var mergeRequests: [UUID] = []
+        var mergeModes: [WorkspaceMergeMode] = []
         let harness = try makeWorkspaceHarness(
             hostWidth: 720,
             configureState: { state, windowID, workspaceID in
@@ -1648,7 +1649,7 @@ final class WorkspaceViewTests: XCTestCase {
                 workspace.unreadPanelIDs = Set([workspace.focusedPanelID].compactMap { $0 })
                 state.workspacesByID[workspaceID] = workspace
             },
-            requestWorkspaceMerge: { mergeRequests.append($0) }
+            requestWorkspaceMerge: { mergeRequests.append($0); mergeModes.append($1) }
         )
         defer { harness.window.orderOut(nil) }
         try writeTopBarEvidence(harness, name: "topbar-merge-ready")
@@ -1658,6 +1659,14 @@ final class WorkspaceViewTests: XCTestCase {
         let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
+        // The store's default mode is the button's default.
+        XCTAssertEqual(mergeModes, [.mergeAndCleanUp])
+
+        harness.store.setWorkspaceMergeMode(.mergeOnly)
+        pumpMainRunLoop(duration: 0.05)
+        try writeTopBarEvidence(harness, name: "topbar-merge-ready-just-merge")
+        harness.store.setWorkspaceMergeMode(.mergeAndCleanUp)
+        pumpMainRunLoop(duration: 0.05)
 
         harness.sessionRuntimeStore.startSession(
             sessionID: "task-agent",
@@ -1684,6 +1693,20 @@ final class WorkspaceViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.05)
         try writeTopBarEvidence(harness, name: "topbar-merge-done")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+
+        var cleanup = WorkspaceCleanupRequest(pullRequestNumber: 59, repoPath: "/work/task", phase: .awaitingMerge)
+        harness.sessionRuntimeStore.setWorkspaceCleanupRequests([harness.workspaceID: cleanup])
+        pumpMainRunLoop(duration: 0.05)
+        try writeTopBarEvidence(harness, name: "topbar-merge-awaiting-cleanup")
+        cleanup.phase = .cleaningUp
+        harness.sessionRuntimeStore.setWorkspaceCleanupRequests([harness.workspaceID: cleanup])
+        pumpMainRunLoop(duration: 0.05)
+        try writeTopBarEvidence(harness, name: "topbar-merge-cleaning-up")
+        cleanup.phase = .failed(reason: "skipped: worktree has uncommitted changes")
+        harness.sessionRuntimeStore.setWorkspaceCleanupRequests([harness.workspaceID: cleanup])
+        pumpMainRunLoop(duration: 0.05)
+        try writeTopBarEvidence(harness, name: "topbar-merge-cleanup-failed")
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
     }
 
@@ -2614,7 +2637,7 @@ final class WorkspaceViewTests: XCTestCase {
         tabCount: Int = 1,
         hostWidth: CGFloat = 900,
         configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil,
-        requestWorkspaceMerge: @escaping @MainActor (UUID) -> Void = { _ in }
+        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
     ) throws -> WorkspaceHarness {
         XCTAssertGreaterThanOrEqual(tabCount, 1)
         var state = AppState.bootstrap()

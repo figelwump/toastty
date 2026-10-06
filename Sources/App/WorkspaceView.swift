@@ -95,7 +95,7 @@ struct WorkspaceView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     /// Runs a click on the top bar's Merge button for a workspace.
-    var requestWorkspaceMerge: @MainActor (UUID) -> Void = { _ in }
+    var requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -699,13 +699,23 @@ struct WorkspaceView: View {
 
         if let mergePresentation = WorkspaceMergePresentation.make(
             workspace: workspace,
-            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id]
+            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
+            cleanup: sessionRuntimeStore.workspaceCleanupRequests[workspace.id],
+            mode: store.workspaceMergeMode
         ) {
             // A pull request subspace gives the whole slot to its merge
             // control; the sidebar and tab dots still show unreads.
-            WorkspaceHeaderMergeControl(presentation: mergePresentation) {
-                requestWorkspaceMerge(workspace.id)
-            }
+            WorkspaceHeaderMergeControl(
+                presentation: mergePresentation,
+                merge: { requestWorkspaceMerge(workspace.id, store.workspaceMergeMode) },
+                setMode: { store.setWorkspaceMergeMode($0) },
+                retryCleanup: {
+                    sessionRuntimeStore.workspaceCleanupCoordinator?.retryCleanup(workspaceID: workspace.id)
+                },
+                cancelCleanup: {
+                    sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: workspace.id)
+                }
+            )
         } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show
             // one summary, never both, so the title column never overflows.

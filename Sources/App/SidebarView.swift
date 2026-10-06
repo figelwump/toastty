@@ -530,7 +530,7 @@ struct SidebarView: View {
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Runs a subspace row's Merge menu item for that workspace.
-    let requestWorkspaceMerge: @MainActor (UUID) -> Void
+    let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
@@ -695,7 +695,7 @@ struct SidebarView: View {
         sessionRuntimeStore: SessionRuntimeStore,
         annotationStyleStore: AnnotationStyleStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
-        requestWorkspaceMerge: @escaping @MainActor (UUID) -> Void = { _ in },
+        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
         workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
         workspaceViewportHeightObserver: ((CGFloat) -> Void)? = nil
@@ -3620,10 +3620,7 @@ struct SidebarView: View {
         .contextMenu {
             let mergePresentation = subspaceMergeMenuPresentation(row)
             if let mergePresentation {
-                Button(mergePresentation.title) {
-                    requestWorkspaceMerge(row.id)
-                }
-                .disabled(mergePresentation.isReady == false)
+                subspaceMergeMenuItems(row, presentation: mergePresentation)
             }
             Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
                 toggleSubspaceDone(row)
@@ -3689,15 +3686,55 @@ struct SidebarView: View {
         }
     }
 
-    /// The row's Merge menu item: offered while the pull request is open,
-    /// disabled while the agent is merging it, and gone once the row is done.
+    /// The row's merge menu items: both merge actions while the pull request
+    /// is open, a disabled progress item while the agent merges it, and the
+    /// retry and dismiss items for a pending or failed cleanup.
+    @ViewBuilder
+    private func subspaceMergeMenuItems(
+        _ row: SidebarSubspacePresentation.Row,
+        presentation: WorkspaceMergePresentation
+    ) -> some View {
+        switch presentation {
+        case .ready(let pullRequest, let currentMode):
+            ForEach(WorkspaceMergeMode.allCases, id: \.self) { mode in
+                let title = WorkspaceMergePresentation.actionTitle(mode: mode, pullRequest: pullRequest)
+                // The shortcut runs the mode the top bar button shows.
+                Button(mode == currentMode ? ToasttyKeyboardShortcuts.mergeWorkspacePullRequest.menuTitle(title) : title) {
+                    requestWorkspaceMerge(row.id, mode)
+                }
+            }
+        case .cleanupFailed:
+            Button(presentation.title) {}
+                .disabled(true)
+            Button("Retry Clean Up") {
+                sessionRuntimeStore.workspaceCleanupCoordinator?.retryCleanup(workspaceID: row.id)
+            }
+            Button("Don't Clean Up") {
+                sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: row.id)
+            }
+        case .awaitingMerge:
+            Button(presentation.title) {}
+                .disabled(true)
+            Button("Don't Clean Up") {
+                sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: row.id)
+            }
+        case .merging, .cleaningUp, .done:
+            Button(presentation.title) {}
+                .disabled(true)
+        }
+    }
+
+    /// The row's merge state for its context menu; `nil` once the row is
+    /// done with nothing left to clean up.
     private func subspaceMergeMenuPresentation(
         _ row: SidebarSubspacePresentation.Row
     ) -> WorkspaceMergePresentation? {
         guard let workspace = store.state.workspacesByID[row.id],
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
-                request: sessionRuntimeStore.workspaceMergeRequests[row.id]
+                request: sessionRuntimeStore.workspaceMergeRequests[row.id],
+                cleanup: sessionRuntimeStore.workspaceCleanupRequests[row.id],
+                mode: store.workspaceMergeMode
               ) else {
             return nil
         }

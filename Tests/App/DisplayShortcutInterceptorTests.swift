@@ -197,6 +197,70 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isToggleLaterFlagShortcut(repeatedEvent))
     }
 
+    func testMergeWorkspacePullRequestShortcutMatchesControlCommandMOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "m", modifiers: [.command, .control], keyCode: 0x2E)
+        let watchCommandEvent = try makeKeyEvent(characters: "M", modifiers: [.command, .shift], keyCode: 0x2E)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "m",
+            modifiers: [.command, .control],
+            keyCode: 0x2E,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isMergeWorkspacePullRequestShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isMergeWorkspacePullRequestShortcut(watchCommandEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isMergeWorkspacePullRequestShortcut(repeatedEvent))
+    }
+
+    func testMergeWorkspacePullRequestRunsTheSelectedSubspacesButtonMode() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let parentWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        var merges: [(UUID, WorkspaceMergeMode)] = []
+        let interceptor = DisplayShortcutInterceptor(
+            store: store,
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            webPanelRuntimeRegistry: WebPanelRuntimeRegistry(),
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: TerminalRuntimeRegistry(),
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            ),
+            requestWorkspaceMerge: { merges.append(($0, $1)) },
+            installEventMonitor: false
+        )
+        let event = try makeKeyEvent(characters: "m", modifiers: [.command, .control], keyCode: 0x2E)
+        XCTAssertEqual(interceptor.shortcutAction(for: event, appOwnedWindowID: windowID), .mergeWorkspacePullRequest)
+
+        // A top-level workspace has no Merge button, so the key goes on to
+        // the terminal.
+        XCTAssertFalse(interceptor.handle(.mergeWorkspacePullRequest, appOwnedWindowID: windowID))
+
+        let existingWorkspaceIDs = Set(store.state.workspacesByID.keys)
+        store.send(.createWorkspace(windowID: windowID, title: "task", activate: true))
+        let taskWorkspaceID = try XCTUnwrap(Set(store.state.workspacesByID.keys).subtracting(existingWorkspaceIDs).first)
+        store.send(.setWorkspaceParent(workspaceID: taskWorkspaceID, parentWorkspaceID: parentWorkspaceID, spawningSessionID: nil))
+        store.send(.setWorkspaceAnnotation(
+            workspaceID: taskWorkspaceID,
+            key: "github-pr",
+            annotation: try XCTUnwrap(WorkspaceAnnotation.validated(text: "PR #59", url: nil))
+        ))
+
+        XCTAssertTrue(interceptor.handle(.mergeWorkspacePullRequest, appOwnedWindowID: windowID))
+        store.setWorkspaceMergeMode(.mergeOnly)
+        XCTAssertTrue(interceptor.handle(.mergeWorkspacePullRequest, appOwnedWindowID: windowID))
+        XCTAssertEqual(merges.map(\.0), [taskWorkspaceID, taskWorkspaceID])
+        XCTAssertEqual(merges.map(\.1), [.mergeAndCleanUp, .mergeOnly])
+
+        // While the merge is under way the key does nothing and is consumed.
+        sessionRuntimeStore.beginWorkspaceMergeRequest(workspaceID: taskWorkspaceID, sessionID: nil)
+        XCTAssertTrue(interceptor.handle(.mergeWorkspacePullRequest, appOwnedWindowID: windowID))
+        XCTAssertEqual(merges.count, 2)
+    }
+
     func testToggleFocusedPanelShortcutMatchesCommandShiftFOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "F", modifiers: [.command, .shift], keyCode: 0x03)
         let plainCommandEvent = try makeKeyEvent(characters: "f", modifiers: [.command], keyCode: 0x03)

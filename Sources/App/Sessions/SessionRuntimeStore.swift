@@ -54,6 +54,11 @@ final class SessionRuntimeStore: ObservableObject {
     /// Merges the user started with a workspace's Merge button and that the
     /// target agent has not finished or dropped yet, by workspace.
     @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
+    /// Merge and Clean Up requests by workspace, published for the Merge
+    /// button. `WorkspaceCleanupCoordinator` owns and updates them.
+    @Published private(set) var workspaceCleanupRequests: [UUID: WorkspaceCleanupRequest] = [:]
+    /// Set once at launch; runs the cleanups that the Merge button requests.
+    var workspaceCleanupCoordinator: WorkspaceCleanupCoordinator?
     private var workspaceMergeRequestTimeoutTasks: [UUID: Task<Void, Never>] = [:]
 
     var claudeQuestionBroker = ClaudeQuestionBroker()
@@ -4879,6 +4884,12 @@ final class SessionRuntimeStore: ObservableObject {
             self?.resolveWorkspaceMergeRequests(state: self?.store?.state)
         }
         resolveWorkspaceMergeRequests(state: store?.state, at: now)
+    }
+
+    func setWorkspaceCleanupRequests(_ requests: [UUID: WorkspaceCleanupRequest]) {
+        if workspaceCleanupRequests != requests {
+            workspaceCleanupRequests = requests
+        }
     }
 
     /// Drops a request whose agent could not be launched.

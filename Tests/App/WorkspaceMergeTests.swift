@@ -18,6 +18,8 @@ private final class WorkspaceMergeFixture {
     var sentPrompts: [(prompt: String, panelID: UUID)] = []
     var launches: [(profileID: String, panelID: UUID, prompt: String)] = []
     var problems: [WorkspaceMergeController.Problem] = []
+    var cleanupRequests: [(workspaceID: UUID, pullRequestNumber: Int, repoPath: String)] = []
+    var cancelledCleanups: [UUID] = []
     var launchError: Error?
     var profiles = [
         AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"]),
@@ -37,6 +39,8 @@ private final class WorkspaceMergeFixture {
             Set(store.state.workspacesByID.keys).subtracting(existingWorkspaceIDs).first
         )
         taskPanelID = try #require(store.state.workspacesByID[taskWorkspaceID]?.focusedPanelID)
+        // Most tests cover the merge itself; the cleanup tests opt in.
+        store.setWorkspaceMergeMode(.mergeOnly)
         store.send(.setWorkspaceParent(
             workspaceID: taskWorkspaceID,
             parentWorkspaceID: selection.workspaceID,
@@ -76,15 +80,26 @@ private final class WorkspaceMergeFixture {
                 startAgent(sessionID: sessionID, agent: try #require(AgentKind(rawValue: profileID)), status: nil)
                 return sessionID
             },
+            requestCleanup: { [unowned self] workspaceID, pullRequestNumber, repoPath in
+                cleanupRequests.append((workspaceID, pullRequestNumber, repoPath))
+            },
+            cancelCleanup: { [unowned self] in cancelledCleanups.append($0) },
             presentProblem: { [unowned self] problem, _ in problems.append(problem) }
         )
+    }
+
+    /// Clicks the Merge button in the mode the store holds, or in `mode`.
+    @discardableResult
+    func merge(_ mode: WorkspaceMergeMode? = nil) -> Task<Void, Never>? {
+        controller.requestMerge(workspaceID: taskWorkspaceID, mode: mode ?? store.workspaceMergeMode)
     }
 
     var presentation: WorkspaceMergePresentation? {
         guard let workspace = store.state.workspacesByID[taskWorkspaceID] else { return nil }
         return WorkspaceMergePresentation.make(
             workspace: workspace,
-            request: sessionRuntimeStore.workspaceMergeRequests[taskWorkspaceID]
+            request: sessionRuntimeStore.workspaceMergeRequests[taskWorkspaceID],
+            mode: store.workspaceMergeMode
         )
     }
 
@@ -93,7 +108,8 @@ private final class WorkspaceMergeFixture {
     func startAgent(
         sessionID: String = "task-agent",
         agent: AgentKind = .claude,
-        status: SessionStatusKind? = .idle
+        status: SessionStatusKind? = .idle,
+        repoRoot: String? = nil
     ) {
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
@@ -102,7 +118,7 @@ private final class WorkspaceMergeFixture {
             windowID: windowID,
             workspaceID: taskWorkspaceID,
             cwd: nil,
-            repoRoot: nil,
+            repoRoot: repoRoot,
             at: start
         )
         if let status {
@@ -127,10 +143,10 @@ struct WorkspaceMergeTests {
         fixture.startAgent()
         fixture.report(.working, at: 1)
         fixture.report(.ready, at: 2)
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59"))
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
         #expect(fixture.presentation?.title == "Merge PR #59")
 
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
 
         #expect(fixture.sentPrompts.count == 1)
         #expect(fixture.sentPrompts.first?.panelID == fixture.taskPanelID)
@@ -142,7 +158,7 @@ struct WorkspaceMergeTests {
         #expect(fixture.presentation?.title == "Merging PR #59…")
 
         // A second click while the agent has the request does nothing.
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
         #expect(fixture.sentPrompts.count == 1)
 
         // The agent picks the prompt up, pauses on an approval, then marks
@@ -165,7 +181,7 @@ struct WorkspaceMergeTests {
         fixture.startAgent()
         fixture.report(.idle, at: 1)
 
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
         // Reading the panel collapses an unread ready status to idle; a
         // status change at rest is not the merge turn ending.
         fixture.report(.idle, at: 2)
@@ -175,19 +191,19 @@ struct WorkspaceMergeTests {
         fixture.report(.working, at: 3)
         fixture.report(.ready, at: 4)
 
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59"))
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
     }
 
     @Test
     func mergeOffersTheButtonAgainWhenTheAgentExits() throws {
         let fixture = try WorkspaceMergeFixture()
         fixture.startAgent()
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
         #expect(fixture.presentation?.title == "Merging PR #59…")
 
         fixture.sessionRuntimeStore.stopSession(sessionID: "task-agent", at: fixture.start.addingTimeInterval(5))
 
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59"))
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
     }
 
     @Test
@@ -196,12 +212,12 @@ struct WorkspaceMergeTests {
         fixture.startAgent()
         fixture.report(.working, at: 1)
 
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
 
         #expect(fixture.problems == [.agentBusy])
         #expect(fixture.sentPrompts.isEmpty)
         #expect(fixture.launches.isEmpty)
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59"))
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
     }
 
     @Test
@@ -210,11 +226,11 @@ struct WorkspaceMergeTests {
         fixture.startAgent(sessionID: "earlier", agent: .claude)
         fixture.sessionRuntimeStore.stopSession(sessionID: "earlier", at: fixture.start.addingTimeInterval(1))
 
-        let launch = try #require(fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID))
+        let launch = try #require(fixture.merge())
         // The button shows progress while the agent launches, and a second
         // click does not start a second agent.
         #expect(fixture.presentation?.title == "Merging PR #59…")
-        #expect(fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID) == nil)
+        #expect(fixture.merge() == nil)
         await launch.value
 
         // Claude ran here last, so it wins over the first configured profile.
@@ -236,14 +252,14 @@ struct WorkspaceMergeTests {
         // A profile with extra arguments cannot take a first message unless
         // it declares where the prompt goes.
         fixture.launchError = AgentLaunchError.initialPromptUnsupported(profileID: "codex")
-        await fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)?.value
+        await fixture.merge()?.value
         #expect(fixture.problems == [.profileCannotTakePrompt(profileID: "codex")])
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59"))
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
 
         fixture.launchError = AgentLaunchError.panelBusy(runningCommand: "make")
-        await fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)?.value
+        await fixture.merge()?.value
         #expect(fixture.problems.last == .launchFailed("The target terminal is still busy: make"))
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59"))
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
     }
 
     @Test
@@ -265,7 +281,7 @@ struct WorkspaceMergeTests {
         )
         fixture.report(.ready, at: 3)
 
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
 
         #expect(fixture.problems == [.agentBusy])
         #expect(fixture.sentPrompts.isEmpty)
@@ -277,16 +293,16 @@ struct WorkspaceMergeTests {
 
         // The only terminal is running something, so an agent cannot start.
         fixture.promptState = .busy
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
         #expect(fixture.problems == [.noIdleTerminal])
 
         fixture.promptState = .idleAtPrompt
         fixture.profiles = []
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
         #expect(fixture.problems == [.noIdleTerminal, .noAgentProfile])
 
         #expect(fixture.launches.isEmpty)
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59"))
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
     }
 
     @Test
@@ -295,7 +311,7 @@ struct WorkspaceMergeTests {
         fixture.startAgent()
         fixture.store.setPullRequestMergePrompt("/ship-it")
 
-        fixture.controller.requestMerge(workspaceID: fixture.taskWorkspaceID)
+        fixture.merge()
 
         #expect(fixture.sentPrompts.map(\.prompt) == ["/ship-it"])
     }
@@ -305,7 +321,7 @@ struct WorkspaceMergeTests {
         let withoutPullRequest = try WorkspaceMergeFixture(pullRequest: nil)
         #expect(withoutPullRequest.presentation == nil)
         withoutPullRequest.startAgent()
-        withoutPullRequest.controller.requestMerge(workspaceID: withoutPullRequest.taskWorkspaceID)
+        withoutPullRequest.merge()
         #expect(withoutPullRequest.sentPrompts.isEmpty)
 
         // A top-level workspace cannot hold the done mark that ends a merge.
@@ -316,5 +332,73 @@ struct WorkspaceMergeTests {
             spawningSessionID: nil
         ))
         #expect(fixture.presentation == nil)
+    }
+
+    @Test
+    func mergeAndCleanUpRecordsTheCleanupForTheTasksCheckout() throws {
+        let fixture = try WorkspaceMergeFixture()
+        fixture.store.setWorkspaceMergeMode(.mergeAndCleanUp)
+        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
+        #expect(fixture.presentation?.title == "Merge & Clean Up PR #59")
+
+        fixture.merge()
+
+        #expect(fixture.sentPrompts.count == 1)
+        #expect(fixture.cleanupRequests.count == 1)
+        #expect(fixture.cleanupRequests.first?.workspaceID == fixture.taskWorkspaceID)
+        #expect(fixture.cleanupRequests.first?.pullRequestNumber == 59)
+        #expect(fixture.cleanupRequests.first?.repoPath == "/work/toastty-fix-question")
+        #expect(fixture.cancelledCleanups.isEmpty)
+    }
+
+    @Test
+    func justMergeDropsAnEarlierCleanupRequest() throws {
+        let fixture = try WorkspaceMergeFixture()
+        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
+
+        fixture.merge(.mergeOnly)
+
+        #expect(fixture.sentPrompts.count == 1)
+        #expect(fixture.cleanupRequests.isEmpty)
+        #expect(fixture.cancelledCleanups == [fixture.taskWorkspaceID])
+    }
+
+    @Test
+    func mergeAndCleanUpRecordsTheCleanupOnlyOnceTheLaunchedAgentHasThePrompt() async throws {
+        let fixture = try WorkspaceMergeFixture()
+        fixture.launchError = AgentLaunchError.panelBusy(runningCommand: "make")
+        await fixture.merge(.mergeAndCleanUp)?.value
+        #expect(fixture.cleanupRequests.isEmpty)
+
+        fixture.launchError = nil
+        await fixture.merge(.mergeAndCleanUp)?.value
+        #expect(fixture.cleanupRequests.map(\.pullRequestNumber) == [59])
+    }
+
+    @Test
+    func cleanupStatesReplaceTheDoneLabel() throws {
+        let fixture = try WorkspaceMergeFixture()
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.taskWorkspaceID])
+        var cleanup = WorkspaceCleanupRequest(pullRequestNumber: 59, repoPath: "/work/task")
+        func presentation(_ workspace: WorkspaceState) -> WorkspaceMergePresentation? {
+            WorkspaceMergePresentation.make(workspace: workspace, request: nil, cleanup: cleanup, mode: .mergeAndCleanUp)
+        }
+
+        // Before the done mark, the button still offers the merge.
+        #expect(presentation(workspace) == .ready(pullRequest: "PR #59", mode: .mergeAndCleanUp))
+
+        var doneWorkspace = workspace
+        doneWorkspace.doneAt = fixture.start
+        cleanup.phase = .awaitingMerge
+        #expect(presentation(doneWorkspace)?.title == "Cleans Up When PR #59 Merges")
+        #expect(presentation(doneWorkspace)?.canCancelCleanup == true)
+        cleanup.phase = .cleaningUp
+        #expect(presentation(doneWorkspace)?.title == "Cleaning Up PR #59…")
+        #expect(presentation(doneWorkspace)?.canCancelCleanup == false)
+        cleanup.phase = .failed(reason: "skipped: worktree has uncommitted changes")
+        #expect(presentation(doneWorkspace) == .cleanupFailed(
+            pullRequest: "PR #59",
+            reason: "skipped: worktree has uncommitted changes"
+        ))
     }
 }

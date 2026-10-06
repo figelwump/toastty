@@ -772,6 +772,7 @@ struct ToasttyApp: App {
             persistTerminalFontPreference: persistUserSettings,
             initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
+            initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
             recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()
@@ -885,6 +886,16 @@ struct ToasttyApp: App {
         }
         let sessionRuntimeStore = SessionRuntimeStore(agentHookDispatcher: agentHookDispatcher)
         sessionRuntimeStore.bind(store: store)
+        // Kept alive by the session runtime store, which the Merge button reads.
+        _ = WorkspaceCleanupCoordinator(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            runner: WorkspaceCleanupLiveCommandRunner(
+                socketPath: socketPath,
+                cliExecutablePath: cliExecutablePath
+            ),
+            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+        )
         let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             // Layout profile selection is fixed for this app process, so the
@@ -1173,6 +1184,7 @@ struct ToasttyApp: App {
                 commandPaletteController?.isPresented ?? false
             }
         )
+        let workspaceMergeLaunchService = agentLaunchService
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1185,6 +1197,15 @@ struct ToasttyApp: App {
             },
             toggleCommandPalette: { [weak commandPaletteController] originWindowID in
                 commandPaletteController?.toggle(originWindowID: originWindowID) ?? false
+            },
+            requestWorkspaceMerge: { workspaceID, mode in
+                WorkspaceMergeController.live(
+                    store: store,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    agentCatalogStore: agentCatalogStore,
+                    agentLaunchService: workspaceMergeLaunchService
+                ).requestMerge(workspaceID: workspaceID, mode: mode)
             }
         )
         _store = StateObject(wrappedValue: store)

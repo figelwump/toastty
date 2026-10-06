@@ -439,10 +439,21 @@ need the user's review and a new `worktree-done` request.
 
 ### Merging a task's pull request
 
-A subspace with a `github-pr` annotation shows a **Merge PR #N** button under
-its title in the top bar, and the same item in its sidebar row's context menu.
-Clicking it sends a merge prompt to an agent session in that workspace, as if
-you had typed it there. The built-in prompt says you reviewed the pull request
+A subspace with a `github-pr` annotation shows a Merge button under its title
+in the top bar. The arrow beside it picks what the button does:
+
+- **Merge and Clean Up**, the default, labels the button **Merge & Clean Up
+  PR #N**. After the pull request merges, Toastty closes the workspace, removes
+  its worktree, and deletes its branches.
+- **Just Merge** labels the button **Merge PR #N** and leaves the workspace in
+  place.
+
+The choice applies to every workspace and is kept across launches.
+`Cmd+Ctrl+M` runs the selected subspace's button in the mode it shows. The
+subspace's sidebar context menu offers both actions.
+
+The merge itself is the same in both modes. Clicking the button sends a merge
+prompt to an agent session in that workspace, as if you had typed it there. The built-in prompt says you reviewed the pull request
 and want it merged, and tells the agent to use the `worktree-done` skill if it
 has one, or otherwise to merge the pull request and run `workspace.set-done`.
 Set `pull-request-merge-prompt` in the [config file](configuration.md) to send
@@ -465,11 +476,35 @@ your own prompt instead.
 While the agent works on the request the button reads **Merging PR #N…**. It
 becomes **Done · PR #N** when the workspace is marked done. If the agent's turn
 ends without the done mark, for example because it stopped to ask about a
-merge prerequisite, the button returns to **Merge PR #N**; answer the agent in
+merge prerequisite, the button offers the merge again; answer the agent in
 its session and the done mark still lands when it finishes. Top-level
 workspaces do not show the button, because only a subspace holds a done mark.
 
-Run `worktree-cleanup` from an outside project workspace. Its status script lists
+After a Merge and Clean Up, the done mark does not end the work. The agent
+usually turns on auto-merge, so the pull request merges only when its checks
+pass. Until then the button reads **Cleans Up When PR #N Merges**. Toastty
+checks the pull request with `gh pr view` every 30 seconds. When it has merged,
+Toastty runs the cleanup script that `worktree-cleanup` uses, limited to that
+pull request and that workspace, and a notification reports the result.
+
+- The script makes the same checks as `worktree-cleanup`. It skips the cleanup
+  when the worktree has uncommitted changes or is not at the merged commit,
+  when the workspace has unsaved documents, or when the workspace is no longer
+  marked done. Closing the workspace ends its agent sessions and running
+  commands.
+- A cleanup that stops before it closes the workspace leaves the workspace
+  open, and the button reads **Cleanup Stopped · PR #N**. Its tooltip gives the
+  reason. Its menu offers **Retry Clean Up** and **Don't Clean Up**. A cleanup
+  that closes the workspace and then cannot remove the worktree or a branch
+  reports what it kept in a notification; run `worktree-cleanup` to finish it. A pull request that closes without
+  merging, or three failed `gh` checks in a row, also stops the cleanup.
+- New work in the workspace clears its done mark and drops the cleanup, because
+  the merge is no longer the version you accepted.
+- A pending cleanup is kept across launches. Toastty needs `gh`, `git`, and
+  `python3` on your login shell's `PATH`, and `gh` must be signed in.
+
+For pull requests merged another way, run `worktree-cleanup` from an outside
+project workspace. Its status script lists
 each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It
 merges only PRs the user names. With `--cleanup-merged`, it closes the task
 workspace, removes the worktree and deletes the branches for merged PRs, using the

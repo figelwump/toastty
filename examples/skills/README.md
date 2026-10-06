@@ -22,7 +22,11 @@ that workspace. It checks that the worktree matches the PR, enables auto-merge,
 and marks the workspace done, which its subspace row shows as a check; it never
 closes its own workspace.
 
-Later, from the project workspace, invoke `worktree-cleanup`. It lists ready,
+In Toastty, the subspace's **Merge & Clean Up** button does both steps: it asks
+the task's agent to run `worktree-done`, and after the PR merges Toastty runs
+`worktree-cleanup`'s script on that one PR and workspace.
+
+Otherwise, later, from the project workspace, invoke `worktree-cleanup`. It lists ready,
 merged, and blocked PRs, merges any you name, and for merged PRs closes the task
 workspace, removes the worktree, and deletes the branches. Closing the workspace
 ends any agent sessions and running commands in it, and cleanup reports what it
