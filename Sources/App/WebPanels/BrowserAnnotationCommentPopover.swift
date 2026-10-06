@@ -4,6 +4,7 @@ import SwiftUI
 /// Comment composer shown in a popover anchored to an annotation mark.
 /// Enter saves, Shift+Enter inserts a newline, Escape cancels.
 struct BrowserAnnotationCommentEditorView: View {
+    private weak var parentWindow: NSWindow?
     let sequenceNumber: Int
     let saveButtonTitle: String
     let onSave: (String) -> Void
@@ -14,6 +15,7 @@ struct BrowserAnnotationCommentEditorView: View {
     @State private var text: String
 
     init(
+        parentWindow: NSWindow?,
         sequenceNumber: Int,
         initialComment: String = "",
         saveButtonTitle: String,
@@ -22,6 +24,7 @@ struct BrowserAnnotationCommentEditorView: View {
         onDelete: (() -> Void)? = nil,
         onTextChange: ((String) -> Void)? = nil
     ) {
+        self.parentWindow = parentWindow
         self.sequenceNumber = sequenceNumber
         self.saveButtonTitle = saveButtonTitle
         self.onSave = onSave
@@ -49,6 +52,7 @@ struct BrowserAnnotationCommentEditorView: View {
             ZStack(alignment: .topLeading) {
                 BrowserAnnotationCommentTextView(
                     text: $text,
+                    parentWindow: parentWindow,
                     onSubmit: saveIfPossible,
                     onCancel: onCancel
                 )
@@ -219,6 +223,7 @@ struct BrowserAnnotationNumberBadge: View {
 /// Multiline comment field with field-editor-style key handling.
 private struct BrowserAnnotationCommentTextView: NSViewRepresentable {
     @Binding var text: String
+    weak var parentWindow: NSWindow?
     let onSubmit: () -> Void
     let onCancel: () -> Void
 
@@ -227,7 +232,8 @@ private struct BrowserAnnotationCommentTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = InitialFocusTextView()
+        let textView = BrowserAnnotationCommentInputView()
+        textView.parentWindow = parentWindow
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.allowsUndo = true
@@ -252,10 +258,9 @@ private struct BrowserAnnotationCommentTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        guard let textView = scrollView.documentView as? NSTextView,
-              textView.string != text else {
-            return
-        }
+        guard let textView = scrollView.documentView as? BrowserAnnotationCommentInputView else { return }
+        textView.parentWindow = parentWindow
+        guard textView.string != text else { return }
         textView.string = text
     }
 
@@ -290,28 +295,6 @@ private struct BrowserAnnotationCommentTextView: NSViewRepresentable {
             default:
                 return false
             }
-        }
-    }
-}
-
-private final class InitialFocusTextView: NSTextView {
-    private var hasRequestedInitialFocus = false
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard hasRequestedInitialFocus == false, let window else { return }
-        hasRequestedInitialFocus = true
-        DispatchQueue.main.async { [weak self, weak window] in
-            guard let self, let window else { return }
-            // The popover panel does not become key on its own; without this,
-            // keystrokes keep going to the main window's first responder.
-            window.makeKey()
-            window.makeFirstResponder(self)
-            // The insertion point does not appear until the first keystroke
-            // unless a collapsed selection is set and the caret timer kicked.
-            let endLocation = (self.string as NSString).length
-            self.setSelectedRange(NSRange(location: endLocation, length: 0))
-            self.updateInsertionPointStateAndRestartTimer(true)
         }
     }
 }
