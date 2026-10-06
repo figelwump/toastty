@@ -83,13 +83,13 @@ struct CursorConversationFeedTests {
         )
         #expect(fixture.store.handleCursorHookEvent(
             sessionID: secondID,
-            event: .init(hookEventName: "sessionStart", conversationID: "root",
+            event: .init(hookEventName: "sessionStart", conversationID: "root", generationID: nil,
                          status: .init(kind: .idle, summary: "Waiting")), at: fixture.date
         ))
         #expect(fixture.store.handleCursorHookEvent(
             sessionID: secondID,
             event: .init(hookEventName: "beforeSubmitPrompt", conversationID: "root",
-                         generationID: "second-turn", text: "Second panel"), at: fixture.date
+                         generationID: "second-turn", status: nil, text: "Second panel"), at: fixture.date
         ))
         #expect(fixture.store.sessionRegistry.activeSession(sessionID: secondID)?.status?.kind == .working)
         #expect(fixture.store.nativeSessionBindingConfirmation(for: secondID) == nil)
