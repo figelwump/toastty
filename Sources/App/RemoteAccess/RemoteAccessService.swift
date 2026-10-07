@@ -523,6 +523,7 @@ final class RemoteAccessService: ObservableObject {
         sessionStarter = RemoteSessionStarter(
             store: store,
             launcher: sessionLauncher,
+            attachmentStore: attachmentStore,
             deviceMayStart: { [weak self] deviceID in
                 guard let self, self.isEnabled else { return false }
                 return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false

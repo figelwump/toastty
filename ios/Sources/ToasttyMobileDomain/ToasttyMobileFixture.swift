@@ -412,7 +412,8 @@ public extension ToasttyMobileFixture {
                     availability: .notInstalled,
                     supportsModel: true
                 ),
-            ]
+            ],
+            supportsAttachments: true
         )
     }
 
@@ -442,7 +443,9 @@ public extension ToasttyMobileFixture {
                 secondsAtReceipt: 0,
                 receivedAtMonotonicTime: ProcessInfo.processInfo.systemUptime
             ),
-            lastActivity: request.text,
+            lastActivity: ([request.text] + request.attachments.map(\.filename))
+                .filter { $0.isEmpty == false }
+                .joined(separator: "\n"),
             executionProfile: profile.isEmpty ? nil : profile,
             turnElapsed: MobileActivityAge(
                 secondsAtReceipt: 0,

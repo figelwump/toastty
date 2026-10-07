@@ -152,6 +152,7 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
             contentLength = 0
         }
         let isAttachmentRoute = path == RemoteAttachmentPolicy.sendPath
+            || path == RemoteSessionStartPolicy.startWithAttachmentsPath
         guard !isAttachmentRoute || headerValues["content-length"] != nil else { return .invalid }
         let limit = isAttachmentRoute ? RemoteAttachmentPolicy.maximumEncodedBodyBytes : maximumBodyBytes
         guard contentLength >= 0, contentLength <= limit else { return .invalid }

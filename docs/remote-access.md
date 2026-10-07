@@ -262,7 +262,20 @@ checkbox. An older phone ignores them and keeps its flat list.
 
 Tap **+** on the Home screen or on a workspace screen to start a new agent
 session. Choose the workspace, the agent, optionally a model and an effort
-level, and write the first message. A first message is required.
+level, and write the first message or attach photos or files. Use **Attach** in
+the first-message field to choose **Photo Library**, **Take Photo**, or
+**Choose File**. Review or remove the selected files, then tap **Start**.
+Message text is optional when files are attached. The same file types and
+limits described in [Photos and files from iOS](#photos-and-files-from-ios) apply.
+Selection alone does not upload anything.
+
+The Mac saves private copies and includes their local paths in the agent's
+first message. Files stay in the form after a refused or unanswered start,
+including when you change workspaces. **Cancel** discards this unsent draft.
+The draft is held in memory and is lost if the sheet closes or the app exits.
+The first message, including the Mac's saved file paths, must fit within 64 KiB.
+If a long message is refused, shorten it and try again. Accepted or uncertain
+starts keep the same seven-day file retention and storage quota as replies.
 
 The Mac opens a new tab in that workspace with a plain terminal, starts the
 agent there with your message, and leaves the tab you are looking at and your
@@ -298,12 +311,17 @@ notice, and you open the session from the list when it arrives.
 - **Retries.** If the phone does not get an answer, **Start** sends the same
   request again, and the Mac returns the session it already started instead of
   starting another. The Mac remembers a started request for 10 minutes and
-  until Toastty quits. Changing the workspace, message, agent, model, or
+  until Toastty quits. Changing the workspace, message, attachments, agent, model, or
   effort makes a new request. You cannot cancel the sheet while the Mac is
   starting a session.
 
 Starting needs updates on both sides. The Mac advertises the `session_start`
 capability for `POST /api/session.start.options` and `POST /api/session.start`.
+Start options also report `supportsAttachments`. When it is true, the phone
+uses the native-only `POST /api/session.start-with-attachments` route. Older
+Macs still accept text-only starts and show an update hint for attachments.
+The upload requires send access, the **Start sessions** permission, and a
+`Content-Length` header. The encoded request is limited to 12 MiB.
 An older Mac does not, so the phone hides **+**. If you turn **Start sessions**
 off and then run an older Toastty build on the Mac, that build does not know
 the switch: it rewrites the device record without it, and the switch is on
@@ -435,7 +453,8 @@ support conversations; update Toastty on the Mac to enable previews.
   recorded in the audit log with the device that made it.
 - Starting a session needs a native paired device with send access and the
   **Start sessions** switch on. The device chooses only an existing workspace,
-  a configured agent profile, a model, an effort level, and the first message.
+  a configured agent profile, a model, an effort level, and the first message
+  or attached files. The Mac chooses the saved file paths.
   The Mac checks the permission again immediately before it sends the command
   to the terminal. Accepted and refused starts are recorded in the audit log
   with the device, without the message text.

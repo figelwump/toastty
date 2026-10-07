@@ -78,6 +78,7 @@ struct RemoteAccessGatewayServerTests {
         attachmentUploadTimeoutNanoseconds: UInt64 = RemoteAccessGatewayServer.defaultAttachmentUploadTimeoutNanoseconds,
         previewHandler: (@MainActor (RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse)? = nil,
         attachmentSendHandler: (@MainActor (RemoteMessageSendRequest, RemoteDeviceRecord) async -> RemoteMessageSendResult)? = nil,
+        sessionStartHandler: (@MainActor (RemoteSessionStartRequest, RemoteDeviceRecord) async -> RemoteSessionStartResult)? = nil,
         candidatePort: (Int) -> UInt16 = { _ in UInt16.random(in: 49500..<64000) }
     ) async throws -> Harness {
         let deviceStore = RemoteDeviceStore(fileURL: nil)
@@ -103,6 +104,7 @@ struct RemoteAccessGatewayServerTests {
             )
             handler.previewHandler = previewHandler
             handler.attachmentSendHandler = attachmentSendHandler
+            handler.sessionStartHandler = sessionStartHandler
             let server = RemoteAccessGatewayServer(
                 handler: handler,
                 maximumConnections: maximumConnections,
@@ -706,6 +708,100 @@ struct RemoteAccessGatewayServerTests {
         #expect(received == send)
     }
 
+    @Test func sessionStartAttachmentsTraverseNativeLoopbackAndPreserveBytes() async throws {
+        var received: RemoteSessionStartRequest?
+        let conversationID = RemoteConversationID()
+        let harness = try await Self.startHarness(sessionStartHandler: { request, _ in
+            received = request
+            return .started(conversationID: conversationID)
+        })
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+        let native = try await Self.pairNativeDevice(harness)
+        let start = RemoteSessionStartRequest(
+            clientRequestID: "large-wire-start", workspaceID: UUID(), profileID: "claude", text: "",
+            attachments: [.init(filename: "large.txt", data: Data(repeating: 65, count: 200_000))]
+        )
+        var request = URLRequest(url: harness.baseURL.appending(path: RemoteSessionStartPolicy.startWithAttachmentsPath))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(native.credential)", forHTTPHeaderField: "Authorization")
+        request.setValue(native.tailscaleLogin, forHTTPHeaderField: "Tailscale-User-Login")
+        request.httpBody = try start.encodedForTransport()
+        let session = Self.cookieFreeEphemeralSession()
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        #expect(try JSONDecoder().decode(RemoteSessionStartResponse.self, from: data).result == .started(conversationID: conversationID))
+        #expect(received == start)
+        #expect(harness.server.attachmentUploadCountForTesting == 0)
+    }
+
+    @Test func decodedSessionStartReleasesUploadAdmissionWhileItsLauncherWaits() async throws {
+        var resumeLaunch: CheckedContinuation<Void, Never>?
+        var launchEntered = false
+        var deliveredMessage = false
+        let conversationID = RemoteConversationID()
+        let harness = try await Self.startHarness(
+            attachmentUploadTimeoutNanoseconds: 200_000_000,
+            attachmentSendHandler: { request, _ in
+                deliveredMessage = true
+                return .accepted(epoch: request.expectedInputEpoch)
+            },
+            sessionStartHandler: { _, _ in
+                launchEntered = true
+                await withCheckedContinuation { resumeLaunch = $0 }
+                return .started(conversationID: conversationID)
+            }
+        )
+        defer {
+            resumeLaunch?.resume()
+            harness.server.stop()
+        }
+        try await Self.awaitListening(harness)
+        let native = try await Self.pairNativeDevice(harness)
+        let session = Self.cookieFreeEphemeralSession()
+        defer { session.invalidateAndCancel() }
+        func upload(path: String, body: Data) -> URLRequest {
+            var request = URLRequest(url: harness.baseURL.appending(path: path))
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(native.credential)", forHTTPHeaderField: "Authorization")
+            request.setValue(native.tailscaleLogin, forHTTPHeaderField: "Tailscale-User-Login")
+            request.httpBody = body
+            return request
+        }
+        let file = RemoteMessageAttachment(filename: "note.txt", data: Data("Read me".utf8))
+        let start = RemoteSessionStartRequest(
+            clientRequestID: "pending-start", workspaceID: UUID(), profileID: "claude", text: "Read this",
+            attachments: [file]
+        )
+        let startRequest = upload(path: RemoteSessionStartPolicy.startWithAttachmentsPath, body: try start.encodedForTransport())
+        let pending = Task { try await session.data(for: startRequest) }
+        defer { pending.cancel() }
+        for _ in 0..<100 where !launchEntered {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(launchEntered)
+        #expect(harness.server.attachmentUploadCountForTesting == 0)
+        let send = RemoteMessageSendRequest(
+            conversationID: RemoteConversationID(), clientRequestID: "while-launching",
+            expectedInputEpoch: .init(bindingID: UUID(), counter: 1), text: "Read this too", attachments: [file]
+        )
+        let (sendData, sendResponse) = try await session.data(for: upload(
+            path: RemoteAttachmentPolicy.sendPath, body: try JSONEncoder().encode(send)
+        ))
+        #expect((sendResponse as? HTTPURLResponse)?.statusCode == 200)
+        #expect(try JSONDecoder().decode(RemoteMessageSendResult.self, from: sendData).isAccepted)
+        #expect(deliveredMessage)
+        // The upload deadline must not cancel a launch after decoding.
+        try await Task.sleep(for: .milliseconds(250))
+        let continuation = try #require(resumeLaunch)
+        resumeLaunch = nil
+        continuation.resume()
+        let (startData, startResponse) = try await pending.value
+        #expect((startResponse as? HTTPURLResponse)?.statusCode == 200)
+        #expect(try JSONDecoder().decode(RemoteSessionStartResponse.self, from: startData).result == .started(conversationID: conversationID))
+    }
+
     @Test func attachmentHeadersRejectUnauthenticatedUploadWithoutWaitingForBodyAndLimitAdmission() async throws {
         let harness = try await Self.startHarness()
         defer { harness.server.stop() }
@@ -716,9 +812,9 @@ struct RemoteAccessGatewayServerTests {
             connection.start(queue: DispatchQueue(label: "attachment-header-test"))
             return connection
         }
-        func head(authenticated: Bool) -> Data {
+        func head(authenticated: Bool, path: String = RemoteSessionStartPolicy.startWithAttachmentsPath) -> Data {
             let auth = authenticated ? "Authorization: Bearer \(native.credential)\r\nTailscale-User-Login: \(native.tailscaleLogin)\r\n" : ""
-            return Data("POST \(RemoteAttachmentPolicy.sendPath) HTTP/1.1\r\nHost: localhost\r\n\(auth)Content-Length: \(RemoteAttachmentPolicy.maximumEncodedBodyBytes)\r\n\r\n".utf8)
+            return Data("POST \(path) HTTP/1.1\r\nHost: localhost\r\n\(auth)Content-Length: \(RemoteAttachmentPolicy.maximumEncodedBodyBytes)\r\n\r\n".utf8)
         }
         let unauthenticated = connection()
         defer { unauthenticated.cancel() }
@@ -733,7 +829,7 @@ struct RemoteAccessGatewayServerTests {
 
         let first = connection()
         defer { first.cancel() }
-        first.send(content: head(authenticated: true), completion: .contentProcessed { _ in })
+        first.send(content: head(authenticated: true, path: RemoteAttachmentPolicy.sendPath), completion: .contentProcessed { _ in })
         for _ in 0..<100 where harness.server.attachmentUploadCountForTesting == 0 {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -754,13 +850,14 @@ struct RemoteAccessGatewayServerTests {
         #expect(harness.server.attachmentUploadCountForTesting == 0)
     }
 
-    @Test func admittedAttachmentUploadUsesItsAbsoluteDeadlineAndReleasesSlotAfterTimeout() async throws {
+    @Test(arguments: [RemoteAttachmentPolicy.sendPath, RemoteSessionStartPolicy.startWithAttachmentsPath])
+    func admittedAttachmentUploadUsesItsAbsoluteDeadlineAndReleasesSlotAfterTimeout(path: String) async throws {
         let harness = try await Self.startHarness(requestHeaderTimeoutNanoseconds: 100_000_000,
                                             attachmentUploadTimeoutNanoseconds: 500_000_000)
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
         let native = try await Self.pairNativeDevice(harness)
-        let head = Data(("POST \(RemoteAttachmentPolicy.sendPath) HTTP/1.1\r\nHost: localhost\r\n"
+        let head = Data(("POST \(path) HTTP/1.1\r\nHost: localhost\r\n"
             + "Authorization: Bearer \(native.credential)\r\nTailscale-User-Login: \(native.tailscaleLogin)\r\n"
             + "Content-Length: 100000\r\n\r\n").utf8)
         func startUpload() -> NWConnection {
