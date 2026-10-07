@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import Foundation
 
@@ -178,7 +179,8 @@ struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
 /// that one pull request and workspace. The script closes the workspace,
 /// removes the worktree, and deletes the branches, with the same checks the
 /// skill uses. Requests are shown through `SessionRuntimeStore` and saved in
-/// user defaults.
+/// user defaults. It also runs Close Without Merging, which uses the same
+/// script in its `--close-unmerged` mode.
 @MainActor
 final class WorkspaceCleanupCoordinator {
     static let pollInterval: Duration = .seconds(30)
@@ -196,6 +198,7 @@ final class WorkspaceCleanupCoordinator {
     private let userDefaults: UserDefaults?
     private let pollInterval: Duration
     private let notify: @MainActor (_ title: String, _ body: String) -> Void
+    private let presentFailure: @MainActor (_ title: String, _ message: String) -> Void
     private var requests: [UUID: WorkspaceCleanupRequest] = [:]
     private var pollTasks: [UUID: Task<Void, Never>] = [:]
     private var pollFailureCounts: [UUID: Int] = [:]
@@ -208,7 +211,8 @@ final class WorkspaceCleanupCoordinator {
         scriptPath: String? = Bundle.main.resourceURL?.appendingPathComponent(scriptSubpath).path,
         userDefaults: UserDefaults? = ToasttyAppDefaults.current,
         pollInterval: Duration = WorkspaceCleanupCoordinator.pollInterval,
-        notify: @escaping @MainActor (_ title: String, _ body: String) -> Void = WorkspaceCleanupCoordinator.sendNotification
+        notify: @escaping @MainActor (_ title: String, _ body: String) -> Void = WorkspaceCleanupCoordinator.sendNotification,
+        presentFailure: @escaping @MainActor (_ title: String, _ message: String) -> Void = WorkspaceCleanupCoordinator.presentAlert
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -217,6 +221,7 @@ final class WorkspaceCleanupCoordinator {
         self.userDefaults = userDefaults
         self.pollInterval = pollInterval
         self.notify = notify
+        self.presentFailure = presentFailure
         sessionRuntimeStore.workspaceCleanupCoordinator = self
         // Through `update`, so saved requests are shown and their checks
         // start, before the reconcile below drops the ones that no longer apply.
@@ -234,7 +239,7 @@ final class WorkspaceCleanupCoordinator {
     /// Records that the user chose Merge and Clean for `workspaceID`. A
     /// later Merge Only replaces it with `cancelCleanup`.
     func requestCleanup(workspaceID: UUID, pullRequestNumber: Int, repoPath: String) {
-        guard requests[workspaceID]?.phase != .cleaningUp else { return }
+        guard requests[workspaceID]?.isRunning != true else { return }
         pollFailureCounts[workspaceID] = nil
         update(workspaceID, WorkspaceCleanupRequest(pullRequestNumber: pullRequestNumber, repoPath: repoPath))
         if let state = store?.state {
@@ -243,8 +248,30 @@ final class WorkspaceCleanupCoordinator {
     }
 
     func cancelCleanup(workspaceID: UUID) {
-        guard let request = requests[workspaceID], request.phase != .cleaningUp else { return }
+        guard let request = requests[workspaceID], request.isRunning == false else { return }
         update(workspaceID, nil)
+    }
+
+    /// Closes the pull request without merging it, then closes the workspace,
+    /// removes its worktree, and deletes its local branch. The branch stays
+    /// on GitHub, so the pull request can be reopened. The script checks
+    /// everything before its first change, so a refusal leaves the pull
+    /// request open. Replaces any pending cleanup.
+    /// `pullRequestURL` lets the script check that the number names a pull
+    /// request in the checkout's repository.
+    @discardableResult
+    func closeWithoutMerging(
+        workspaceID: UUID,
+        pullRequestNumber: Int,
+        pullRequestURL: String,
+        repoPath: String
+    ) -> Task<Void, Never>? {
+        guard requests[workspaceID]?.isRunning != true else { return nil }
+        let request = WorkspaceCleanupRequest(pullRequestNumber: pullRequestNumber, repoPath: repoPath, phase: .closing)
+        update(workspaceID, request)
+        return Task { [weak self] in
+            await self?.runClose(workspaceID: workspaceID, request: request, pullRequestURL: pullRequestURL)
+        }
     }
 
     /// Checks the pull request again after a failure.
@@ -368,36 +395,12 @@ final class WorkspaceCleanupCoordinator {
     // MARK: - Cleanup
 
     private func runCleanup(workspaceID: UUID, request: WorkspaceCleanupRequest) async {
-        guard let scriptPath, FileManager.default.fileExists(atPath: scriptPath) else {
-            fail(workspaceID, request, "The cleanup script is missing from this Toastty build.")
-            return
-        }
         let workspaceTitle = store?.state.workspacesByID[workspaceID]?.title ?? "the workspace"
         var running = request
         running.phase = .cleaningUp
         update(workspaceID, running)
 
-        let result = await runner.run(
-            arguments: [
-                "python3", scriptPath, "--json", "--cleanup-merged",
-                "--pr", String(request.pullRequestNumber),
-                "--workspace", workspaceID.uuidString,
-                "--repo", request.repoPath,
-            ],
-            directory: request.repoPath,
-            timeout: Self.cleanupTimeout
-        )
-        let outcome = Self.cleanupOutcome(from: result, pullRequestNumber: request.pullRequestNumber)
-        ToasttyLog.info(
-            "Workspace cleanup finished",
-            category: .terminal,
-            metadata: [
-                "workspace_id": workspaceID.uuidString,
-                "pull_request": String(request.pullRequestNumber),
-                "status": outcome.status ?? "none",
-                "detail": outcome.detail,
-            ]
-        )
+        let outcome = await runScript(["--cleanup-merged"], workspaceID: workspaceID, request: request)
         let workspaceClosed = store?.state.workspacesByID[workspaceID] == nil
         if outcome.status == "cleaned" {
             update(workspaceID, nil)
@@ -414,6 +417,63 @@ final class WorkspaceCleanupCoordinator {
                 reconcile(state: state)
             }
         }
+    }
+
+    private func runClose(workspaceID: UUID, request: WorkspaceCleanupRequest, pullRequestURL: String) async {
+        let workspaceTitle = store?.state.workspacesByID[workspaceID]?.title ?? "the workspace"
+        let outcome = await runScript(
+            ["--close-unmerged", "--pr-url", pullRequestURL],
+            workspaceID: workspaceID,
+            request: request
+        )
+        // Nothing is left to wait for, whatever the outcome.
+        if requests[workspaceID] == request {
+            update(workspaceID, nil)
+        }
+        let pullRequest = "PR #\(request.pullRequestNumber)"
+        if outcome.status == "cleaned" {
+            notify("Closed \(pullRequest) without merging", "\(workspaceTitle): \(outcome.detail)")
+        } else if store?.state.workspacesByID[workspaceID] == nil {
+            notify("Closing \(pullRequest) did not finish", "\(workspaceTitle): \(outcome.detail)")
+        } else {
+            presentFailure("Unable to Close \(pullRequest)", outcome.detail)
+        }
+    }
+
+    /// Runs the cleanup script on one pull request and workspace in the
+    /// given mode and reads what it did.
+    private func runScript(
+        _ modeArguments: [String],
+        workspaceID: UUID,
+        request: WorkspaceCleanupRequest
+    ) async -> CleanupOutcome {
+        let outcome: CleanupOutcome
+        if let scriptPath, FileManager.default.fileExists(atPath: scriptPath) {
+            let result = await runner.run(
+                arguments: ["python3", scriptPath, "--json"] + modeArguments + [
+                    "--pr", String(request.pullRequestNumber),
+                    "--workspace", workspaceID.uuidString,
+                    "--repo", request.repoPath,
+                ],
+                directory: request.repoPath,
+                timeout: Self.cleanupTimeout
+            )
+            outcome = Self.cleanupOutcome(from: result, pullRequestNumber: request.pullRequestNumber)
+        } else {
+            outcome = CleanupOutcome(status: nil, detail: "The cleanup script is missing from this Toastty build.")
+        }
+        ToasttyLog.info(
+            "Workspace cleanup script finished",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "pull_request": String(request.pullRequestNumber),
+                "mode": modeArguments[0],
+                "status": outcome.status ?? "none",
+                "detail": outcome.detail,
+            ]
+        )
+        return outcome
     }
 
     struct CleanupOutcome: Equatable {
@@ -456,7 +516,9 @@ final class WorkspaceCleanupCoordinator {
 
     private func saveRequests() {
         guard let userDefaults else { return }
-        let saved = Dictionary(uniqueKeysWithValues: requests.map { ($0.key.uuidString, $0.value.persisted) })
+        let saved = Dictionary(uniqueKeysWithValues: requests.compactMap { workspaceID, request in
+            request.persisted.map { (workspaceID.uuidString, $0) }
+        })
         if saved.isEmpty {
             userDefaults.removeObject(forKey: Self.persistenceKey)
         } else if let data = try? JSONEncoder().encode(saved) {
@@ -483,6 +545,7 @@ final class WorkspaceCleanupCoordinator {
         case .awaitingMerge: return "awaiting_merge"
         case .cleaningUp: return "cleaning_up"
         case .failed: return "failed"
+        case .closing: return "closing"
         }
     }
 
@@ -490,5 +553,14 @@ final class WorkspaceCleanupCoordinator {
         Task {
             await SystemNotificationSender.send(title: title, body: body, workspaceID: nil, panelID: nil)
         }
+    }
+
+    static func presentAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }

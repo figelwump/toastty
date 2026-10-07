@@ -28,10 +28,12 @@ struct WorkspaceCleanupRequestTests {
 
     @Test
     func runningCleanupKeepsItsRequestWhenItClosesTheWorkspace() {
-        let running = with(.cleaningUp)
-        #expect(running.reconciled(workspaceExists: false, isDone: false, pullRequestNumber: nil) == running)
-        // A relaunch starts an interrupted run over.
-        #expect(running.persisted == with(.awaitingMerge))
+        for running in [with(.cleaningUp), with(.closing)] {
+            #expect(running.reconciled(workspaceExists: false, isDone: false, pullRequestNumber: nil) == running)
+        }
+        // A relaunch starts an interrupted cleanup over, but not a close.
+        #expect(with(.cleaningUp).persisted == with(.awaitingMerge))
+        #expect(with(.closing).persisted == nil)
         #expect(with(.failed(reason: "x")).persisted == with(.failed(reason: "x")))
     }
 

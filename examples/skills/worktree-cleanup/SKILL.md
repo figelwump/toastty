@@ -78,6 +78,13 @@ skipped unless that workspace is the match and is still marked done. Toastty's
 Merge and Clean button runs the script this way. Each cleaned-up row's JSON
 `cleanup_status` is `cleaned`, `partial`, `stopped`, or `skipped`.
 
+`--close-unmerged`, with `--pr`, `--pr-url`, and `--workspace`, abandons that PR
+instead; it is how Toastty's Close Without Merging runs. After the same checks, and
+a check that the remote branch is at the PR head, it closes the PR if it is open,
+then cleans up as above, except that the workspace need not be done and the remote
+branch is kept so the PR can be reopened. Use it only when
+the user asks to close a PR without merging it.
+
 Report what was cleaned up, including any sessions or busy terminals that closing
 a workspace ended, and every skipped row with its reason. Do not work around a
 skip with manual `workspace.close`, `git worktree remove --force`, or branch

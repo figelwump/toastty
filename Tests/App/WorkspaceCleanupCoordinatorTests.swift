@@ -57,6 +57,9 @@ private final class CleanupFixture {
     let userDefaults: UserDefaults
     let taskWorkspaceID: UUID
     var notifications: [(title: String, body: String)] = []
+    var failureAlerts: [(title: String, message: String)] = []
+    /// What the script's run saw, recorded from `runner.onCleanup`.
+    var observedDuringRun: (phase: WorkspaceCleanupRequest.Phase?, saved: Data?)?
     private(set) var coordinator: WorkspaceCleanupCoordinator!
     let scriptPath: String
 
@@ -94,7 +97,8 @@ private final class CleanupFixture {
             scriptPath: scriptPath,
             userDefaults: userDefaults,
             pollInterval: .milliseconds(10),
-            notify: { [unowned self] title, body in notifications.append((title, body)) }
+            notify: { [unowned self] title, body in notifications.append((title, body)) },
+            presentFailure: { [unowned self] title, message in failureAlerts.append((title, message)) }
         )
     }
 
@@ -275,6 +279,75 @@ struct WorkspaceCleanupCoordinatorTests {
             repoPath: "/work/fix-question",
             phase: .awaitingMerge
         ))
+    }
+
+    @Test
+    func closeWithoutMergingReplacesAPendingCleanupAndReportsTheResult() async throws {
+        let fixture = try CleanupFixture()
+        fixture.requestCleanup()
+        fixture.runner.cleanupResult = FakeCleanupRunner.report(
+            pr: 59,
+            status: "cleaned",
+            cleanup: "closed PR #59; closed fix-question-lifetime; removed worktree; deleted local branch; kept the branch on GitHub"
+        )
+        fixture.runner.onCleanup = {
+            fixture.observedDuringRun = (
+                fixture.request?.phase,
+                fixture.userDefaults.data(forKey: "toastty.workspaceCleanupRequests")
+            )
+            fixture.closeTaskWorkspace()
+        }
+
+        let task = try #require(fixture.coordinator.closeWithoutMerging(
+            workspaceID: fixture.taskWorkspaceID,
+            pullRequestNumber: 59,
+            pullRequestURL: "https://github.com/example/toastty/pull/59",
+            repoPath: "/work/fix-question"
+        ))
+        // A second request while the first runs does nothing.
+        #expect(fixture.coordinator.closeWithoutMerging(
+            workspaceID: fixture.taskWorkspaceID,
+            pullRequestNumber: 59,
+            pullRequestURL: "https://github.com/example/toastty/pull/59",
+            repoPath: "/work/fix-question"
+        ) == nil)
+        await task.value
+
+        #expect(fixture.observedDuringRun?.phase == .closing)
+        // A close is never saved, so a relaunch does not repeat it.
+        #expect(fixture.observedDuringRun?.saved == nil)
+        #expect(fixture.request == nil)
+        let call = try #require(fixture.runner.cleanupCalls.first)
+        #expect(fixture.runner.cleanupCalls.count == 1)
+        #expect(Array(call.dropFirst(2)) == [
+            "--json", "--close-unmerged", "--pr-url", "https://github.com/example/toastty/pull/59", "--pr", "59",
+            "--workspace", fixture.taskWorkspaceID.uuidString, "--repo", "/work/fix-question",
+        ])
+        #expect(fixture.notifications.map(\.title) == ["Closed PR #59 without merging"])
+        #expect(fixture.failureAlerts.isEmpty)
+    }
+
+    @Test
+    func refusedCloseKeepsTheWorkspaceAndShowsWhy() async throws {
+        let fixture = try CleanupFixture()
+        fixture.runner.cleanupResult = FakeCleanupRunner.report(
+            pr: 59,
+            status: "skipped",
+            cleanup: "skipped: worktree has uncommitted changes"
+        )
+
+        await fixture.coordinator.closeWithoutMerging(
+            workspaceID: fixture.taskWorkspaceID,
+            pullRequestNumber: 59,
+            pullRequestURL: "https://github.com/example/toastty/pull/59",
+            repoPath: "/work/fix-question"
+        )?.value
+
+        #expect(fixture.request == nil)
+        #expect(fixture.store.state.workspacesByID[fixture.taskWorkspaceID] != nil)
+        #expect(fixture.notifications.isEmpty)
+        #expect(fixture.failureAlerts.map(\.title) == ["Unable to Close PR #59"])
+        #expect(fixture.failureAlerts.first?.message == "skipped: worktree has uncommitted changes")
     }
 
     @Test

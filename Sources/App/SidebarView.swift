@@ -531,6 +531,8 @@ struct SidebarView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Runs a subspace row's Merge menu item for that workspace.
     let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
+    /// Runs a subspace row's Close Without Merging menu item.
+    let requestWorkspaceClose: @MainActor (UUID) -> Void
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
@@ -696,6 +698,7 @@ struct SidebarView: View {
         annotationStyleStore: AnnotationStyleStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
+        requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
         workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
         workspaceViewportHeightObserver: ((CGFloat) -> Void)? = nil
@@ -707,6 +710,7 @@ struct SidebarView: View {
         self.annotationStyleStore = annotationStyleStore
         self.terminalRuntimeContext = terminalRuntimeContext
         self.requestWorkspaceMerge = requestWorkspaceMerge
+        self.requestWorkspaceClose = requestWorkspaceClose
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
         self.workspaceViewportHeightObserver = workspaceViewportHeightObserver
@@ -3703,6 +3707,9 @@ struct SidebarView: View {
                     requestWorkspaceMerge(row.id, mode)
                 }
             }
+            Button(WorkspaceMergePresentation.closeWithoutMergingTitle) {
+                requestWorkspaceClose(row.id)
+            }
         case .cleanupFailed:
             Button(presentation.title) {}
                 .disabled(true)
@@ -3718,7 +3725,7 @@ struct SidebarView: View {
             Button("Don't Clean Up") {
                 sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: row.id)
             }
-        case .merging, .cleaningUp, .done:
+        case .merging, .cleaningUp, .closing, .done:
             Button(presentation.title) {}
                 .disabled(true)
         }

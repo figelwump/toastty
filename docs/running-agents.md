@@ -504,6 +504,25 @@ pull request and that workspace, and a notification reports the result.
 - A pending cleanup is kept across launches. Toastty needs `gh`, `git`, and
   `python3` on your login shell's `PATH`, and `gh` must be signed in.
 
+To abandon a task instead, choose **Close Without Merging…** from the arrow
+menu or the subspace's sidebar context menu. It is a one-time action, not a
+mode, so the button and `Option+Shift+M` never close a pull request. After you
+confirm, Toastty itself runs the cleanup script, with no agent involved: it
+closes the pull request on GitHub, closes the workspace, removes the worktree,
+and deletes the local branch. The branch stays on GitHub, so you can reopen the
+pull request. The button reads **Closing PR #N…** meanwhile.
+
+- The script checks everything before its first change. The worktree must be
+  clean and at exactly the pull request's head commit, and the branch on GitHub
+  must be at that commit too, so no work exists only locally. The workspace must
+  pass the same checks as a cleanup, and the `github-pr` annotation must have the
+  pull request's URL, which must belong to the worktree's repository. If any check
+  fails, the pull request stays open and an alert gives the reason. The workspace
+  is checked again after the pull request closes; if it changed, for example with
+  new unsaved edits, it stays open.
+- A pull request that is already closed is cleaned up the same way. A merged
+  pull request is refused.
+
 For pull requests merged another way, run `worktree-cleanup` from an outside
 project workspace. Its status script lists
 each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It

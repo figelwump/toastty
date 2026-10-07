@@ -17,6 +17,10 @@ public struct WorkspaceCleanupRequest: Codable, Equatable, Sendable {
         /// Cleanup did not finish. The workspace stays, and the user can retry
         /// or dismiss the request.
         case failed(reason: String)
+        /// Close Without Merging is running: the cleanup script closes the
+        /// pull request, then cleans up as it does after a merge. It is never
+        /// saved, because nothing is left to resume after a quit.
+        case closing
     }
 
     public let pullRequestNumber: Int
@@ -36,7 +40,7 @@ public struct WorkspaceCleanupRequest: Codable, Equatable, Sendable {
     /// annotation names now. A running cleanup keeps its request until the
     /// run reports back, because the run itself closes the workspace.
     public func reconciled(workspaceExists: Bool, isDone: Bool, pullRequestNumber: Int?) -> Self? {
-        if phase == .cleaningUp {
+        if isRunning {
             return self
         }
         guard workspaceExists, pullRequestNumber == self.pullRequestNumber else {
@@ -52,18 +56,31 @@ public struct WorkspaceCleanupRequest: Codable, Equatable, Sendable {
             // New work in the workspace clears its done mark, and with it the
             // user's acceptance of the version that was to merge.
             return isDone ? self : nil
-        case .cleaningUp:
+        case .cleaningUp, .closing:
             return self
         }
     }
 
-    /// The state to save. A run that a quit interrupted starts over, which is
-    /// safe because the cleanup script rechecks everything before each change.
-    public var persisted: Self {
-        guard phase == .cleaningUp else { return self }
-        var next = self
-        next.phase = .awaitingMerge
-        return next
+    /// Whether the cleanup script is running for this request.
+    public var isRunning: Bool {
+        phase == .cleaningUp || phase == .closing
+    }
+
+    /// The state to save, or `nil` for none. A cleanup that a quit
+    /// interrupted starts over, which is safe because the cleanup script
+    /// rechecks everything before each change. An interrupted close is not
+    /// repeated: the user starts it again if the workspace is still there.
+    public var persisted: Self? {
+        switch phase {
+        case .cleaningUp:
+            var next = self
+            next.phase = .awaitingMerge
+            return next
+        case .closing:
+            return nil
+        case .awaitingDone, .awaitingMerge, .failed:
+            return self
+        }
     }
 
     /// The pull request number in a `github-pr` annotation: the number at the

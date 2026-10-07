@@ -23,6 +23,17 @@ elif args[:2] == ["pr", "list"]:
 elif args[:2] == ["pr", "view"]:
     pr = next(p for p in state["prs"] if p["number"] == int(args[2]))
     print(json.dumps(pr))
+elif args[:2] == ["pr", "close"]:
+    # Logged with the Toastty calls, so tests can check the order of changes.
+    with open(os.environ["FAKE_TOASTTY_LOG"], "a") as log:
+        log.write("gh " + " ".join(args) + "\n")
+    if state.get("fail_pr_close"):
+        sys.exit("GraphQL: could not close pull request")
+    # "after_pr_close" replaces the workspace list, as if the user changed a
+    # workspace while gh was closing the PR.
+    if "after_pr_close" in state:
+        state["workspaces"] = state.pop("after_pr_close")
+        json.dump(state, open(os.environ["FAKE_STATE"], "w"))
 else:
     sys.exit(f"unexpected gh call: {args}")
 '''
@@ -341,6 +352,101 @@ class CleanupTests(unittest.TestCase):
         self.assertIn("removed worktree", row["cleanup"])
         self.assertFalse(path.exists())
         self.assertEqual(self.git("branch", "--list", branch), "")
+
+    def close_unmerged(self, number, url=None):
+        workspace_id = f"00000000-0000-0000-0000-{number:012d}"
+        url = url or f"https://github.com/test/repo/pull/{number}"
+        return self.status("--close-unmerged", "--pr", str(number), "--pr-url", url,
+                           "--workspace", workspace_id)[number]
+
+    def actions(self):
+        return [line for line in self.log.read_text().splitlines() if "workspace.list" not in line
+                and "terminal.state" not in line] if self.log.exists() else []
+
+    def test_close_unmerged_closes_pr_then_cleans_up_but_keeps_remote_branch(self):
+        branch, path = self.task(1, state="OPEN", session=True)
+        row = self.close_unmerged(1)
+        self.assertEqual(row["cleanup_status"], "cleaned", row["cleanup"])
+        self.assertIn("closed PR #1", row["cleanup"])
+        self.assertIn("kept the branch on GitHub", row["cleanup"])
+        actions = self.actions()
+        self.assertEqual(actions[0], "gh pr close 1")
+        self.assertIn("workspace.close", actions[1])
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("branch", "--list", branch), "")
+        self.assertTrue(self.remote_has(branch))
+
+    def test_close_unmerged_changes_nothing_when_work_exists_only_locally(self):
+        _, dirty = self.task(1, state="OPEN")
+        (dirty / "notes.txt").write_text("unsaved\n")
+        _, ahead = self.task(2, state="OPEN")
+        self.commit(ahead, "local only")
+        for number in (1, 2):
+            row = self.close_unmerged(number)
+            self.assertEqual(row["cleanup_status"], "skipped", row["cleanup"])
+        self.assertEqual(self.actions(), [])
+        self.assertTrue(dirty.exists() and ahead.exists())
+
+    def test_close_unmerged_checks_the_workspace_before_closing_the_pr(self):
+        _, path = self.task(1, state="OPEN")
+        self.workspaces[-1]["unsavedDocumentCount"] = 1
+        row = self.close_unmerged(1)
+        self.assertIn("unsaved document changes", row["cleanup"])
+        row = self.status("--close-unmerged", "--pr", "1", "--pr-url", "https://github.com/test/repo/pull/1",
+                          "--workspace", "00000000-0000-0000-0000-0000000000ee")[1]
+        self.assertIn("matching workspace is not", row["cleanup"])
+        self.assertEqual(self.actions(), [])
+        self.assertTrue(path.exists())
+
+    def test_close_unmerged_keeps_a_workspace_that_changed_while_the_pr_closed(self):
+        _, path = self.task(1, state="OPEN")
+        self.extra_state["after_pr_close"] = [dict(self.workspaces[-1], unsavedDocumentCount=1)]
+        row = self.close_unmerged(1)
+        self.assertEqual(row["cleanup_status"], "partial")
+        self.assertIn("closed PR #1", row["cleanup"])
+        self.assertIn("unsaved document changes; workspace kept", row["cleanup"])
+        self.assertEqual(self.closed(), [])
+        self.assertTrue(path.exists())
+
+    def test_close_unmerged_refuses_a_pr_url_from_another_repository(self):
+        _, path = self.task(1, state="OPEN")
+        row = self.close_unmerged(1, url="https://github.com/other/repo/pull/1")
+        self.assertEqual(row["cleanup_status"], "skipped")
+        self.assertIn("is not this repository's PR #1", row["cleanup"])
+        self.assertEqual(self.actions(), [])
+        self.assertTrue(path.exists())
+
+    def test_close_unmerged_keeps_the_local_branch_when_github_lost_it(self):
+        branch, path = self.task(1, state="CLOSED")
+        self.git("push", "-q", "origin", "--delete", branch)
+        row = self.close_unmerged(1)
+        self.assertEqual(row["cleanup_status"], "skipped")
+        self.assertIn("only copy of the work", row["cleanup"])
+        self.assertEqual(self.actions(), [])
+        self.assertTrue(path.exists())
+        self.assertNotEqual(self.git("branch", "--list", branch), "")
+
+    def test_close_unmerged_stops_when_gh_cannot_close_the_pr(self):
+        _, path = self.task(1, state="OPEN")
+        self.extra_state["fail_pr_close"] = True
+        row = self.close_unmerged(1)
+        self.assertEqual(row["cleanup_status"], "stopped")
+        self.assertIn("could not close PR #1", row["cleanup"])
+        self.assertEqual(self.closed(), [])
+        self.assertTrue(path.exists())
+
+    def test_close_unmerged_refuses_a_merged_pr_and_cleans_up_an_already_closed_one(self):
+        _, merged = self.task(1)
+        row = self.close_unmerged(1)
+        self.assertIn("has merged", row["cleanup"])
+        self.assertTrue(merged.exists())
+        branch, closed = self.task(2, state="CLOSED")
+        row = self.close_unmerged(2)
+        self.assertEqual(row["cleanup_status"], "cleaned", row["cleanup"])
+        self.assertNotIn("closed PR", row["cleanup"])
+        self.assertFalse(closed.exists())
+        self.assertTrue(self.remote_has(branch))
+        self.assertFalse(any(line.startswith("gh pr close") for line in self.actions()))
 
     def test_cleanup_refuses_without_toastty(self):
         _, path = self.task(1)

@@ -33,6 +33,8 @@ enum WorkspaceMergePresentation: Equatable {
     case cleaningUp(pullRequest: String)
     case cleanupFailed(pullRequest: String, reason: String)
     case done(pullRequest: String)
+    /// Close Without Merging is running.
+    case closing(pullRequest: String)
 
     /// The done mark is the only signal that a merge finished, and only a
     /// subspace can hold one, so a top-level workspace gets no button.
@@ -47,6 +49,8 @@ enum WorkspaceMergePresentation: Equatable {
             return nil
         }
         switch cleanup?.phase {
+        case .closing:
+            return .closing(pullRequest: pullRequest)
         case .cleaningUp:
             return .cleaningUp(pullRequest: pullRequest)
         case .failed(let reason):
@@ -79,8 +83,12 @@ enum WorkspaceMergePresentation: Equatable {
             return "Cleanup Stopped · \(pullRequest)"
         case .done(let pullRequest):
             return "Done · \(pullRequest)"
+        case .closing(let pullRequest):
+            return "Closing \(pullRequest)…"
         }
     }
+
+    static let closeWithoutMergingTitle = "Close Without Merging…"
 
     static func actionTitle(mode: WorkspaceMergeMode, pullRequest: String) -> String {
         switch mode {
@@ -103,7 +111,8 @@ enum WorkspaceMergePresentation: Equatable {
              .awaitingMerge(let pullRequest),
              .cleaningUp(let pullRequest),
              .cleanupFailed(let pullRequest, _),
-             .done(let pullRequest):
+             .done(let pullRequest),
+             .closing(let pullRequest):
             return pullRequest
         }
     }
@@ -169,6 +178,8 @@ struct WorkspaceMergeController {
         case noCheckoutPath
         /// The `github-pr` annotation names no pull request number.
         case noPullRequestNumber
+        /// Close Without Merging cannot start; the reason says why.
+        case cannotClose(reason: String)
     }
 
     let store: AppStore
@@ -190,6 +201,14 @@ struct WorkspaceMergeController {
     var cancelCleanup: @MainActor (_ workspaceID: UUID) -> Void
     var presentProblem: @MainActor (_ problem: Problem, _ pullRequest: String) -> Void =
         WorkspaceMergeController.presentAlert
+    /// Asks the user to confirm Close Without Merging.
+    var confirmClose: @MainActor (_ pullRequest: String) -> Bool = WorkspaceMergeController.confirmCloseAlert
+    var closeWithoutMerging: @MainActor (
+        _ workspaceID: UUID,
+        _ pullRequestNumber: Int,
+        _ pullRequestURL: String,
+        _ repoPath: String
+    ) -> Void = { _, _, _, _ in }
 
     static func live(
         store: AppStore,
@@ -231,8 +250,50 @@ struct WorkspaceMergeController {
             },
             cancelCleanup: { workspaceID in
                 sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: workspaceID)
+            },
+            closeWithoutMerging: { workspaceID, pullRequestNumber, pullRequestURL, repoPath in
+                sessionRuntimeStore.workspaceCleanupCoordinator?.closeWithoutMerging(
+                    workspaceID: workspaceID,
+                    pullRequestNumber: pullRequestNumber,
+                    pullRequestURL: pullRequestURL,
+                    repoPath: repoPath
+                )
             }
         )
+    }
+
+    /// Runs Close Without Merging after the user confirms it. It is offered
+    /// only while the Merge button is ready, never through the shortcut.
+    func requestClose(workspaceID: UUID) {
+        guard let workspace = store.state.workspacesByID[workspaceID],
+              case .ready(let pullRequest, _)? = WorkspaceMergePresentation.make(
+                workspace: workspace,
+                request: sessionRuntimeStore.workspaceMergeRequests[workspaceID],
+                cleanup: sessionRuntimeStore.workspaceCleanupRequests[workspaceID]
+              ) else {
+            return
+        }
+        // The URL is required, not just a number: the script checks it names
+        // a pull request in the checkout's repository before closing anything.
+        let annotation = workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
+        guard let pullRequestURL = annotation?.url,
+              let pullRequestNumber = WorkspaceCleanupRequest.pullRequestNumber(text: "", url: pullRequestURL) else {
+            presentProblem(
+                .cannotClose(reason: "The workspace's pull request label \"\(pullRequest)\" has no pull request URL. "
+                    + "Set the github-pr annotation with the pull request's URL and try again."),
+                pullRequest
+            )
+            return
+        }
+        guard let repoPath = checkoutPath(in: workspace) else {
+            presentProblem(
+                .cannotClose(reason: "Toastty could not find this workspace's checkout. Open a terminal in the worktree and try again."),
+                pullRequest
+            )
+            return
+        }
+        guard confirmClose(pullRequest) else { return }
+        closeWithoutMerging(workspaceID, pullRequestNumber, pullRequestURL, repoPath)
     }
 
     /// Returns the task that launches an agent when one has to start, so a
@@ -408,7 +469,21 @@ struct WorkspaceMergeController {
                 "The workspace's pull request label \"\(pullRequest)\" has no pull request number or URL. "
                     + "Choose Merge Only, or set the github-pr annotation with the pull request's URL."
             )
+        case .cannotClose(let reason):
+            return ("Unable to Close \(pullRequest)", reason)
         }
+    }
+
+    private static func confirmCloseAlert(pullRequest: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Close \(pullRequest) Without Merging?"
+        alert.informativeText = "Toastty closes the pull request on GitHub, closes this workspace and ends its "
+            + "sessions, removes its worktree, and deletes the local branch. The branch stays on GitHub, "
+            + "so you can reopen the pull request."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Pull Request")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private static func presentAlert(_ problem: Problem, pullRequest: String) {

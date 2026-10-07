@@ -96,6 +96,8 @@ struct WorkspaceView: View {
     let sidebarVisible: Bool
     /// Runs a click on the top bar's Merge button for a workspace.
     var requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
+    /// Runs the Merge button menu's Close Without Merging for a workspace.
+    var requestWorkspaceClose: @MainActor (UUID) -> Void = { _ in }
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -714,7 +716,8 @@ struct WorkspaceView: View {
                 },
                 cancelCleanup: {
                     sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: workspace.id)
-                }
+                },
+                closeWithoutMerging: { requestWorkspaceClose(workspace.id) }
             )
         } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show

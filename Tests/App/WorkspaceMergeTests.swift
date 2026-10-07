@@ -20,6 +20,9 @@ private final class WorkspaceMergeFixture {
     var problems: [WorkspaceMergeController.Problem] = []
     var cleanupRequests: [(workspaceID: UUID, pullRequestNumber: Int, repoPath: String)] = []
     var cancelledCleanups: [UUID] = []
+    var closeConfirmations: [String] = []
+    var confirmsClose = true
+    var closes: [(workspaceID: UUID, pullRequestNumber: Int, pullRequestURL: String, repoPath: String)] = []
     var launchError: Error?
     var profiles = [
         AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"]),
@@ -84,7 +87,14 @@ private final class WorkspaceMergeFixture {
                 cleanupRequests.append((workspaceID, pullRequestNumber, repoPath))
             },
             cancelCleanup: { [unowned self] in cancelledCleanups.append($0) },
-            presentProblem: { [unowned self] problem, _ in problems.append(problem) }
+            presentProblem: { [unowned self] problem, _ in problems.append(problem) },
+            confirmClose: { [unowned self] pullRequest in
+                closeConfirmations.append(pullRequest)
+                return confirmsClose
+            },
+            closeWithoutMerging: { [unowned self] workspaceID, pullRequestNumber, pullRequestURL, repoPath in
+                closes.append((workspaceID, pullRequestNumber, pullRequestURL, repoPath))
+            }
         )
     }
 
@@ -400,5 +410,62 @@ struct WorkspaceMergeTests {
             pullRequest: "PR #59",
             reason: "skipped: worktree has uncommitted changes"
         ))
+        cleanup.phase = .closing
+        #expect(presentation(workspace)?.title == "Closing PR #59…")
+    }
+
+    @Test
+    func closeWithoutMergingRunsOnlyAfterTheUserConfirms() throws {
+        let fixture = try WorkspaceMergeFixture()
+        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
+        fixture.confirmsClose = false
+
+        fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
+        #expect(fixture.closeConfirmations == ["PR #59"])
+        #expect(fixture.closes.isEmpty)
+
+        fixture.confirmsClose = true
+        fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
+        #expect(fixture.closes.count == 1)
+        #expect(fixture.closes.first?.workspaceID == fixture.taskWorkspaceID)
+        #expect(fixture.closes.first?.pullRequestNumber == 59)
+        #expect(fixture.closes.first?.pullRequestURL == "https://github.com/example/toastty/pull/59")
+        #expect(fixture.closes.first?.repoPath == "/work/toastty-fix-question")
+        // Closing never touches the agent.
+        #expect(fixture.sentPrompts.isEmpty)
+        #expect(fixture.launches.isEmpty)
+    }
+
+    @Test
+    func closeWithoutMergingIsOfferedOnlyWhileTheButtonIsReady() throws {
+        let fixture = try WorkspaceMergeFixture()
+        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
+        fixture.merge()
+        #expect(fixture.presentation?.title == "Merging PR #59…")
+
+        fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
+
+        #expect(fixture.closeConfirmations.isEmpty)
+        #expect(fixture.closes.isEmpty)
+    }
+
+    @Test
+    func closeWithoutMergingNeedsThePullRequestURL() throws {
+        let fixture = try WorkspaceMergeFixture()
+        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
+        fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: fixture.taskWorkspaceID,
+            key: "github-pr",
+            annotation: try #require(WorkspaceAnnotation.validated(text: "PR #59", url: nil))
+        ))
+
+        fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
+
+        #expect(fixture.closeConfirmations.isEmpty)
+        #expect(fixture.closes.isEmpty)
+        guard case .cannotClose? = fixture.problems.first else {
+            Issue.record("expected a cannotClose problem, got \(fixture.problems)")
+            return
+        }
     }
 }

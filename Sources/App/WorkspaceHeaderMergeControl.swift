@@ -12,6 +12,7 @@ struct WorkspaceHeaderMergeControl: View {
     var setMode: (WorkspaceMergeMode) -> Void = { _ in }
     var retryCleanup: () -> Void = {}
     var cancelCleanup: () -> Void = {}
+    var closeWithoutMerging: () -> Void = {}
 
     private var shortcut: ToasttyKeyboardShortcut { ToasttyKeyboardShortcuts.mergeWorkspacePullRequest }
 
@@ -43,6 +44,10 @@ struct WorkspaceHeaderMergeControl: View {
                             )
                         )
                     }
+                    // A one-off action, not a mode, so the button and its
+                    // shortcut never close a pull request.
+                    Divider()
+                    Button(WorkspaceMergePresentation.closeWithoutMergingTitle, action: closeWithoutMerging)
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 7, weight: .bold))
@@ -57,7 +62,7 @@ struct WorkspaceHeaderMergeControl: View {
                 .accessibilityIdentifier("topbar.workspace.merge.mode")
             }
 
-        case .merging, .cleaningUp:
+        case .merging, .cleaningUp, .closing:
             progressLabel(showsSpinner: true)
                 .accessibilityIdentifier("topbar.workspace.merge.progress")
 
