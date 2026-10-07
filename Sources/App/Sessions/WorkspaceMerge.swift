@@ -23,7 +23,9 @@ enum WorkspaceMergeMode: String, CaseIterable, Sendable {
 /// What a subspace with a pull request shows for merging it: the Merge
 /// button in the user's chosen mode, its in-progress form, the cleanup that
 /// follows a Merge and Clean, or the done label. Top-level workspaces and
-/// subspaces without a `github-pr` annotation show nothing.
+/// subspaces whose `github-pr` annotation has no GitHub pull request URL show
+/// nothing. The label comes from that URL, never from the annotation's text,
+/// so it always names the pull request the button acts on.
 enum WorkspaceMergePresentation: Equatable {
     case ready(pullRequest: String, mode: WorkspaceMergeMode)
     case merging(pullRequest: String)
@@ -43,9 +45,10 @@ enum WorkspaceMergePresentation: Equatable {
         mode: WorkspaceMergeMode = .mergeAndCleanUp
     ) -> Self? {
         guard workspace.parentWorkspaceID != nil,
-              let pullRequest = workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]?.text else {
+              let link = pullRequestLink(in: workspace) else {
             return nil
         }
+        let pullRequest = "PR #\(link.number)"
         switch request?.phase {
         case .merging:
             return .merging(pullRequest: pullRequest)
@@ -86,6 +89,13 @@ enum WorkspaceMergePresentation: Equatable {
     }
 
     static let closeWithoutMergingTitle = "Close Without Merging…"
+
+    /// The pull request the workspace's `github-pr` annotation links to.
+    static func pullRequestLink(in workspace: WorkspaceState) -> WorkspacePullRequestLink? {
+        WorkspacePullRequestLink(
+            annotationURL: workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]?.url
+        )
+    }
 
     static func actionTitle(mode: WorkspaceMergeMode, pullRequest: String) -> String {
         switch mode {
@@ -131,8 +141,6 @@ enum WorkspaceMergePresentation: Equatable {
 @MainActor
 struct WorkspaceMergeController {
     enum Problem: Equatable {
-        /// The `github-pr` annotation has no GitHub pull request URL.
-        case noPullRequestURL
         /// No session or terminal in the workspace has a directory to find
         /// the task's checkout from.
         case noCheckoutPath
@@ -154,7 +162,8 @@ struct WorkspaceMergeController {
     var presentProblem: @MainActor (_ problem: Problem, _ title: String, _ pullRequest: String) -> Void =
         WorkspaceMergeController.presentAlert
     /// Asks the user to confirm Close Without Merging.
-    var confirmClose: @MainActor (_ pullRequest: String) -> Bool = WorkspaceMergeController.confirmCloseAlert
+    var confirmClose: @MainActor (_ pullRequest: WorkspacePullRequestLink) -> Bool =
+        WorkspaceMergeController.confirmCloseAlert
 
     static func live(store: AppStore, sessionRuntimeStore: SessionRuntimeStore) -> Self {
         Self(
@@ -187,7 +196,7 @@ struct WorkspaceMergeController {
     /// only while the Merge button is ready, never through the shortcut.
     func requestClose(workspaceID: UUID) {
         guard let target = readyTarget(workspaceID: workspaceID, problemTitle: "Unable to Close"),
-              confirmClose(target.pullRequest) else {
+              confirmClose(target.link) else {
             return
         }
         closeWithoutMerging(workspaceID, target.link, target.repoPath)
@@ -203,12 +212,8 @@ struct WorkspaceMergeController {
               case .ready(let pullRequest, _)? = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[workspaceID]
-              ) else {
-            return nil
-        }
-        let annotation = workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
-        guard let link = WorkspacePullRequestLink(annotationURL: annotation?.url) else {
-            presentProblem(.noPullRequestURL, problemTitle, pullRequest)
+              ),
+              let link = WorkspaceMergePresentation.pullRequestLink(in: workspace) else {
             return nil
         }
         guard let repoPath = checkoutPath(in: workspace) else {
@@ -246,12 +251,6 @@ struct WorkspaceMergeController {
 
     static func alertText(for problem: Problem, title: String, pullRequest: String) -> (title: String, message: String) {
         switch problem {
-        case .noPullRequestURL:
-            return (
-                "\(title) \(pullRequest)",
-                "The workspace's pull request label \"\(pullRequest)\" has no GitHub pull request URL. "
-                    + "Set the github-pr annotation with the pull request's URL and try again."
-            )
         case .noCheckoutPath:
             return (
                 "\(title) \(pullRequest)",
@@ -260,10 +259,10 @@ struct WorkspaceMergeController {
         }
     }
 
-    private static func confirmCloseAlert(pullRequest: String) -> Bool {
+    private static func confirmCloseAlert(pullRequest: WorkspacePullRequestLink) -> Bool {
         let alert = NSAlert()
-        alert.messageText = "Close \(pullRequest) Without Merging?"
-        alert.informativeText = "Toastty closes the pull request on GitHub, closes this workspace and ends its "
+        alert.messageText = "Close \(pullRequest.displayName) Without Merging?"
+        alert.informativeText = "Toastty closes \(pullRequest.url) on GitHub, closes this workspace and ends its "
             + "sessions, removes its worktree, and deletes the local branch. The branch stays on GitHub, "
             + "so you can reopen the pull request."
         alert.alertStyle = .warning

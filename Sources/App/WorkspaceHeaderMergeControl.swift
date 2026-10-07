@@ -3,11 +3,13 @@ import SwiftUI
 
 /// The merge control under a subspace's title in the top bar: the Merge
 /// button with a menu that picks what it does, its in-progress form while
-/// the agent works on the merge, the cleanup that follows a Merge and Clean,
+/// Toastty merges, the cleanup that follows a Merge and Clean,
 /// or the done label. It takes the subtitle slot, so it has to fit the
 /// 16pt the top bar leaves under the title.
 struct WorkspaceHeaderMergeControl: View {
     let presentation: WorkspaceMergePresentation
+    /// `<owner>/<repo>#<number>`, so the tooltip names exactly what merges.
+    var pullRequestName: String = ""
     var merge: () -> Void = {}
     var setMode: (WorkspaceMergeMode) -> Void = { _ in }
     var retryCleanup: () -> Void = {}
@@ -106,9 +108,9 @@ struct WorkspaceHeaderMergeControl: View {
     private func helpText(for mode: WorkspaceMergeMode) -> String {
         switch mode {
         case .mergeAndCleanUp:
-            return "Ask this workspace's agent to merge the pull request, then close the workspace and remove its worktree once it merges"
+            return "Merge \(pullRequestName), then close this workspace and remove its worktree once it merges"
         case .mergeOnly:
-            return "Ask this workspace's agent to merge the pull request"
+            return "Merge \(pullRequestName)"
         }
     }
 

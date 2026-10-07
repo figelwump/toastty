@@ -2,6 +2,8 @@ import Foundation
 
 /// The pull request a workspace's `github-pr` annotation links to.
 public struct WorkspacePullRequestLink: Codable, Equatable, Sendable {
+    /// `<owner>/<repo>`.
+    public let repository: String
     public let number: Int
     /// The pull request's canonical URL, `https://github.com/<owner>/<repo>/pull/<number>`.
     /// The pull request script checks it against the checkout's repository,
@@ -25,7 +27,13 @@ public struct WorkspacePullRequestLink: Codable, Equatable, Sendable {
             return nil
         }
         self.number = number
-        url = "https://github.com/\(parts[0])/\(parts[1])/pull/\(number)"
+        repository = "\(parts[0])/\(parts[1])"
+        url = "https://github.com/\(repository)/pull/\(number)"
+    }
+
+    /// `<owner>/<repo>#<number>`, which names the pull request on its own.
+    public var displayName: String {
+        "\(repository)#\(number)"
     }
 }
 

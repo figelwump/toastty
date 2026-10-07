@@ -719,6 +719,8 @@ struct WorkspaceView: View {
             // control; the sidebar and tab dots still show unreads.
             WorkspaceHeaderMergeControl(
                 presentation: mergePresentation,
+                pullRequestName: WorkspaceMergePresentation.pullRequestLink(in: workspace)?.displayName
+                    ?? mergePresentation.pullRequest,
                 merge: { requestWorkspaceMerge(workspace.id, store.workspaceMergeMode) },
                 setMode: { store.setWorkspaceMergeMode($0) },
                 retryCleanup: {

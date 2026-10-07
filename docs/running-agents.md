@@ -562,7 +562,9 @@ subspace's sidebar context menu offers both actions.
 Toastty merges the pull request itself, with no agent and no skills
 installed. It needs `gh`, `git`, and `python3` on your login shell's `PATH`, and
 `gh` must be signed in. The `github-pr` annotation must link to the pull
-request on GitHub. Clicking the button is your acceptance of the version in the
+request on GitHub; the button's label, its tooltip, and the Close Without
+Merging confirmation name the pull request from that link, not from the
+annotation's text. Clicking the button is your acceptance of the version in the
 worktree, so Toastty checks that the merge is that version before it changes
 anything:
 

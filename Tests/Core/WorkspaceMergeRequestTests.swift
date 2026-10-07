@@ -38,6 +38,7 @@ struct WorkspaceMergeRequestTests {
         let files = WorkspacePullRequestLink(annotationURL: "https://github.com/o/r/pull/63/files")
         #expect(files?.number == 63)
         #expect(files?.url == "https://github.com/o/r/pull/63")
+        #expect(files?.displayName == "o/r#63")
         #expect(WorkspacePullRequestLink(annotationURL: "https://github.com/o/r/pull/63/")?.url == "https://github.com/o/r/pull/63")
         #expect(WorkspacePullRequestLink(annotationURL: "https://github.com/o/r/issues/63") == nil)
         #expect(WorkspacePullRequestLink(annotationURL: "https://example.com/o/r/pull/63") == nil)

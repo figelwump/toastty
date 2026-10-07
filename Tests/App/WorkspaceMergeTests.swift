@@ -21,7 +21,10 @@ private final class WorkspaceMergeFixture {
     var closeConfirmations: [String] = []
     var confirmsClose = true
 
-    init(pullRequestURL: String? = "https://github.com/example/toastty/pull/59") throws {
+    init(
+        pullRequestText: String = "PR #59",
+        pullRequestURL: String? = "https://github.com/example/toastty/pull/59"
+    ) throws {
         store = AppStore(persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
         windowID = selection.windowID
@@ -41,7 +44,7 @@ private final class WorkspaceMergeFixture {
         store.send(.setWorkspaceAnnotation(
             workspaceID: taskWorkspaceID,
             key: "github-pr",
-            annotation: try #require(WorkspaceAnnotation.validated(text: "PR #59", url: pullRequestURL))
+            annotation: try #require(WorkspaceAnnotation.validated(text: pullRequestText, url: pullRequestURL))
         ))
         store.send(.updateTerminalPanelMetadata(panelID: taskPanelID, title: nil, cwd: "/work/toastty-fix-question"))
     }
@@ -58,7 +61,7 @@ private final class WorkspaceMergeFixture {
             },
             presentProblem: { [unowned self] problem, _, _ in problems.append(problem) },
             confirmClose: { [unowned self] pullRequest in
-                closeConfirmations.append(pullRequest)
+                closeConfirmations.append(pullRequest.displayName)
                 return confirmsClose
             }
         )
@@ -135,17 +138,25 @@ struct WorkspaceMergeTests {
     }
 
     @Test
-    func mergeAndCloseNeedAGitHubPullRequestURL() throws {
-        let fixture = try WorkspaceMergeFixture(pullRequestURL: nil)
-        #expect(fixture.presentation?.title == "Merge & Clean PR #59")
+    func theButtonNamesThePullRequestItsURLLinksTo() throws {
+        // The annotation's text is free-form and set separately from its URL,
+        // so it never labels the button.
+        let mislabeled = try WorkspaceMergeFixture(
+            pullRequestText: "PR #65",
+            pullRequestURL: "https://github.com/other/repo/pull/7/files"
+        )
+        #expect(mislabeled.presentation?.title == "Merge & Clean PR #7")
+        mislabeled.controller.requestClose(workspaceID: mislabeled.taskWorkspaceID)
+        #expect(mislabeled.closeConfirmations == ["other/repo#7"])
 
-        fixture.merge()
-        fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
-
-        #expect(fixture.problems == [.noPullRequestURL, .noPullRequestURL])
-        #expect(fixture.closeConfirmations.isEmpty)
-        #expect(fixture.merges.isEmpty)
-        #expect(fixture.closes.isEmpty)
+        // Without a GitHub pull request URL there is nothing to act on.
+        let withoutURL = try WorkspaceMergeFixture(pullRequestURL: nil)
+        #expect(withoutURL.presentation == nil)
+        withoutURL.merge()
+        withoutURL.controller.requestClose(workspaceID: withoutURL.taskWorkspaceID)
+        #expect(withoutURL.merges.isEmpty)
+        #expect(withoutURL.closeConfirmations.isEmpty)
+        #expect(withoutURL.problems.isEmpty)
     }
 
     @Test
@@ -183,7 +194,7 @@ struct WorkspaceMergeTests {
         fixture.confirmsClose = false
 
         fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
-        #expect(fixture.closeConfirmations == ["PR #59"])
+        #expect(fixture.closeConfirmations == ["example/toastty#59"])
         #expect(fixture.closes.isEmpty)
 
         fixture.confirmsClose = true

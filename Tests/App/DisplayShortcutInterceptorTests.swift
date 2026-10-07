@@ -248,7 +248,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         store.send(.setWorkspaceAnnotation(
             workspaceID: taskWorkspaceID,
             key: "github-pr",
-            annotation: try XCTUnwrap(WorkspaceAnnotation.validated(text: "PR #59", url: nil))
+            annotation: try XCTUnwrap(WorkspaceAnnotation.validated(text: "PR #59", url: "https://github.com/example/toastty/pull/59"))
         ))
 
         XCTAssertTrue(interceptor.handle(.mergeWorkspacePullRequest, appOwnedWindowID: windowID))
