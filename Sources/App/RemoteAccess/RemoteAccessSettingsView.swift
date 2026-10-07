@@ -182,7 +182,7 @@ struct RemoteAccessSettingsView: View {
 
             connectionStatus
 
-            if service.isEnabled {
+            if service.isEnabled, service.tailnetSetupState != .configured {
                 HStack {
                     if let approvalURL = service.tailnetSetupState.approvalURL {
                         Button("Open Tailscale Setup") {
@@ -190,13 +190,11 @@ struct RemoteAccessSettingsView: View {
                         }
                         .accessibilityIdentifier("toastty-remote-access-open-tailscale-setup")
                     }
-                    if service.tailnetSetupState != .configured {
-                        Button(service.tailnetSetupState.failureMessage == nil ? "Set Up Tailscale" : "Retry Setup") {
-                            service.setUpTailnetAccess()
-                        }
-                        .disabled(service.tailnetSetupState.isInProgress)
-                        .accessibilityIdentifier("toastty-remote-access-setup")
+                    Button(service.tailnetSetupState.failureMessage == nil ? "Set Up Tailscale" : "Retry Setup") {
+                        service.setUpTailnetAccess()
                     }
+                    .disabled(service.tailnetSetupState.isInProgress)
+                    .accessibilityIdentifier("toastty-remote-access-setup")
                 }
             }
 
