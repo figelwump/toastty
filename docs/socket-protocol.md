@@ -1421,6 +1421,23 @@ Result:
 - `status: "accepted" | "noop"`
 - `stateVersion`
 
+### `session.claude_subagent_event`
+
+Internal event emitted by the managed Claude hook ingestor. Requires an active
+Claude `sessionID`; an optional `panelID` must match that session.
+
+- `phase`: `spawned`, `started`, `finished`, `tool_use`, `tool_completed`, or `permission`
+- `agentID`: non-empty stable Claude agent ID
+- Optional: `toolUseID`, `displayName`, `command`, `summary`, `detail`, `modelIdentifier`, `reasoningEffort`
+
+`spawned` registers a teammate from an explicit `teammate_spawned` response.
+`started` reopens only registered teammates; ordinary subagents keep their
+existing activity path. `finished` removes the specified child activity.
+Tool events keep known teammate activity separate from the main session's
+status. A child approval can temporarily replace that status; completion
+restores it only if no later main status event has superseded the approval.
+The result contains `eventType`, `status: "accepted" | "noop"`, and `stateVersion`.
+
 ### `session.cursor_hook_event`
 
 Internal event used by Toastty's launch-scoped Cursor plugin. Manual wrappers
