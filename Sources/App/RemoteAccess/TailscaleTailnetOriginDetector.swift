@@ -36,11 +36,20 @@ struct TailscaleTailnetOriginDetector: Sendable {
 
     // Prefer the app bundle because a Homebrew client can target a different
     // daemon. The wrappers remain useful for non-app Tailscale installations.
-    static let defaultExecutableCandidates = [
-        URL(fileURLWithPath: "/Applications/Tailscale.app/Contents/MacOS/Tailscale"),
-        URL(fileURLWithPath: "/usr/local/bin/tailscale"),
-        URL(fileURLWithPath: "/opt/homebrew/bin/tailscale"),
-    ]
+    static var defaultExecutableCandidates: [URL] {
+#if DEBUG
+        // Isolated GUI validation uses a disposable executable, never the
+        // remote host's shared Tailscale configuration. Release ignores this.
+        if let path = ProcessInfo.processInfo.environment["TOASTTY_TAILSCALE_CLI_PATH"], path.hasPrefix("/") {
+            return [URL(fileURLWithPath: path)]
+        }
+#endif
+        return [
+            URL(fileURLWithPath: "/Applications/Tailscale.app/Contents/MacOS/Tailscale"),
+            URL(fileURLWithPath: "/usr/local/bin/tailscale"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/tailscale"),
+        ]
+    }
 
     private let executableCandidates: [URL]
     private let timeout: TimeInterval
@@ -60,6 +69,12 @@ struct TailscaleTailnetOriginDetector: Sendable {
     }
 
     func detectOrigin() async throws -> String {
+        try await detectClient().origin
+    }
+
+    /// Keep setup on the same daemon that supplied the hostname. Falling back
+    /// to another executable after a write could change a different profile.
+    func detectClient() async throws -> TailscaleClientIdentity {
         let availableCandidates = executableCandidates.filter(isExecutable)
         guard availableCandidates.isEmpty == false else {
             throw TailscaleTailnetOriginDetectionError.notInstalled
@@ -89,7 +104,7 @@ struct TailscaleTailnetOriginDetector: Sendable {
                     ["status", "--json", "--peers=false"],
                     attemptTimeout
                 )
-                return try Self.origin(fromStatusJSON: data)
+                return try Self.clientIdentity(fromStatusJSON: data, executableURL: executableURL)
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as TailscaleTailnetOriginDetectionError {
@@ -105,6 +120,10 @@ struct TailscaleTailnetOriginDetector: Sendable {
     }
 
     static func origin(fromStatusJSON data: Data) throws -> String {
+        try clientIdentity(fromStatusJSON: data, executableURL: URL(fileURLWithPath: "/unused")).origin
+    }
+
+    static func clientIdentity(fromStatusJSON data: Data, executableURL: URL) throws -> TailscaleClientIdentity {
         let status: Status
         do {
             status = try JSONDecoder().decode(Status.self, from: data)
@@ -138,7 +157,7 @@ struct TailscaleTailnetOriginDetector: Sendable {
         guard let origin = RemoteAccessService.publicGatewayURL(from: dnsName) else {
             throw TailscaleTailnetOriginDetectionError.invalidOrigin
         }
-        return origin.absoluteString
+        return TailscaleClientIdentity(executableURL: executableURL, origin: origin.absoluteString, nodeID: status.selfNode?.id)
     }
 
     private static func defaultExecutableCheck(_ url: URL) -> Bool {
@@ -167,9 +186,11 @@ struct TailscaleTailnetOriginDetector: Sendable {
     private struct Status: Decodable {
         struct SelfNode: Decodable {
             let dnsName: String?
+            let id: String?
 
             enum CodingKeys: String, CodingKey {
                 case dnsName = "DNSName"
+                case id = "ID"
             }
         }
 
@@ -181,6 +202,19 @@ struct TailscaleTailnetOriginDetector: Sendable {
             case selfNode = "Self"
         }
     }
+}
+
+struct TailscaleClientIdentity: Equatable, Sendable {
+    let executableURL: URL
+    let origin: String
+    let nodeID: String?
+}
+
+struct TailscaleCommandResult: Sendable {
+    let stdout: Data
+    let stderr: Data
+    let exitCode: Int32
+    let timedOut: Bool
 }
 
 enum TailscaleStatusCommandRunnerError: Error, Equatable, Sendable {
@@ -195,6 +229,21 @@ enum TailscaleStatusCommandRunner {
         arguments: [String],
         timeout: TimeInterval
     ) async throws -> Data {
+        let result = try await runResult(executableURL: executableURL, arguments: arguments, timeout: timeout)
+        if result.timedOut { throw TailscaleStatusCommandRunnerError.timedOut }
+        guard result.exitCode == 0 else {
+            throw TailscaleStatusCommandRunnerError.commandFailed(result.exitCode)
+        }
+        return result.stdout
+    }
+
+    /// Serve may print an approval URL and wait, or exit zero without changing
+    /// anything. The caller needs bounded output even after a timeout/failure.
+    static func runResult(
+        executableURL: URL,
+        arguments: [String],
+        timeout: TimeInterval
+    ) async throws -> TailscaleCommandResult {
         let cancellationState = CancellationState()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
@@ -222,31 +271,43 @@ enum TailscaleStatusCommandRunner {
         arguments: [String],
         timeout: TimeInterval,
         cancellationState: CancellationState
-    ) throws -> Data {
+    ) throws -> TailscaleCommandResult {
         try cancellationState.checkCancellation()
         let fileManager = FileManager.default
         let temporaryDirectory = fileManager.temporaryDirectory.appendingPathComponent(
             "toastty-tailscale-status-\(UUID().uuidString)",
             isDirectory: true
         )
-        try fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: temporaryDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
         defer { try? fileManager.removeItem(at: temporaryDirectory) }
 
         let stdoutURL = temporaryDirectory.appendingPathComponent("stdout.json")
         let stderrURL = temporaryDirectory.appendingPathComponent("stderr.txt")
         // Files avoid pipe-buffer deadlocks if a future CLI emits more output
         // than expected, while the --peers=false response stays intentionally small.
-        guard fileManager.createFile(atPath: stdoutURL.path, contents: Data()),
-              fileManager.createFile(atPath: stderrURL.path, contents: Data()) else {
+        guard fileManager.createFile(atPath: stdoutURL.path, contents: Data(), attributes: [.posixPermissions: 0o600]),
+              fileManager.createFile(atPath: stderrURL.path, contents: Data(), attributes: [.posixPermissions: 0o600]) else {
             throw TailscaleStatusCommandRunnerError.outputUnavailable
         }
 
         let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
         let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+        let stdoutReader = try FileHandle(forReadingFrom: stdoutURL)
+        let stderrReader = try FileHandle(forReadingFrom: stderrURL)
         defer {
             try? stdoutHandle.close()
             try? stderrHandle.close()
+            try? stdoutReader.close()
+            try? stderrReader.close()
         }
+        // Keep capture files open but unnamed, so a crash cannot leave raw
+        // Tailscale status or approval links behind in the temporary directory.
+        try fileManager.removeItem(at: stdoutURL)
+        try fileManager.removeItem(at: stderrURL)
 
         let process = Process()
         process.executableURL = executableURL
@@ -258,9 +319,20 @@ enum TailscaleStatusCommandRunner {
         process.standardError = stderrHandle
         process.standardInput = FileHandle.nullDevice
 
+        try cancellationState.checkCancellation()
         try process.run()
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline, cancellationState.isCancelled == false {
+        defer {
+            if process.isRunning { stop(process) }
+        }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        let maximumOutputBytes: UInt64 = 256 * 1_024
+        while process.isRunning, clock.now < deadline, cancellationState.isCancelled == false {
+            // Stop unbounded output while the child runs, before loading it.
+            if try stdoutHandle.offset() > maximumOutputBytes || stderrHandle.offset() > maximumOutputBytes {
+                stop(process)
+                throw TailscaleStatusCommandRunnerError.outputUnavailable
+            }
             Thread.sleep(forTimeInterval: 0.01)
         }
 
@@ -268,25 +340,32 @@ enum TailscaleStatusCommandRunner {
             stop(process)
             throw CancellationError()
         }
-        guard process.isRunning == false else {
+        let timedOut = process.isRunning
+        if timedOut {
             stop(process)
-            throw TailscaleStatusCommandRunnerError.timedOut
         }
 
         process.waitUntilExit()
 
-        guard process.terminationStatus == 0 else {
-            throw TailscaleStatusCommandRunnerError.commandFailed(process.terminationStatus)
+        guard try stdoutHandle.offset() <= maximumOutputBytes,
+              try stderrHandle.offset() <= maximumOutputBytes else {
+            throw TailscaleStatusCommandRunnerError.outputUnavailable
         }
-        return try Data(contentsOf: stdoutURL)
+        return TailscaleCommandResult(
+            stdout: try stdoutReader.readToEnd() ?? Data(),
+            stderr: try stderrReader.readToEnd() ?? Data(),
+            exitCode: process.terminationStatus,
+            timedOut: timedOut
+        )
     }
 
     private static func stop(_ process: Process) {
         if process.isRunning {
             process.terminate()
         }
-        let terminateDeadline = Date().addingTimeInterval(0.1)
-        while process.isRunning, Date() < terminateDeadline {
+        let clock = ContinuousClock()
+        let terminateDeadline = clock.now.advanced(by: .milliseconds(100))
+        while process.isRunning, clock.now < terminateDeadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
         if process.isRunning {

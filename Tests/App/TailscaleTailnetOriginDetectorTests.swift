@@ -146,6 +146,34 @@ struct TailscaleTailnetOriginDetectorTests {
         }
     }
 
+    @Test(arguments: [false, true]) func excessiveCommandOutputIsRejected(onStderr: Bool) async {
+        do {
+            _ = try await TailscaleStatusCommandRunner.runResult(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "exec /usr/bin/head -c 300000 /dev/zero" + (onStderr ? " >&2" : "")],
+                timeout: 2
+            )
+            Issue.record("Expected excessive command output to be rejected")
+        } catch let error as TailscaleStatusCommandRunnerError {
+            #expect(error == .outputUnavailable)
+        } catch {
+            Issue.record("Unexpected error type: \(type(of: error))")
+        }
+    }
+
+    @Test func timeoutEscalatesPastIgnoredTerminationAndPreservesOutput() async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = try await TailscaleStatusCommandRunner.runResult(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "trap '' TERM; printf 'approval-output'; exec /bin/sleep 30"],
+            timeout: 0.2
+        )
+        #expect(result.timedOut)
+        #expect(result.stdout == Data("approval-output".utf8))
+        #expect(start.duration(to: clock.now) < .seconds(2))
+    }
+
     @Test func automaticDetectionNeverOverwritesUserInput() {
         #expect(TailnetOriginDetectionPolicy.shouldApply(
             originAtStart: "",

@@ -4,6 +4,350 @@ import RemoteProtocol
 import Testing
 @testable import ToasttyApp
 
+@Suite(.serialized)
+struct RemoteAccessTailnetSetupLifecycleTests {
+    @MainActor
+    @Test func ordinaryEnableKeepsItsListenerOnlyBehavior() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture(origin: "https://manual.example.ts.net")
+        defer { fixture.cleanup() }
+        fixture.service.setEnabled(true, persist: false)
+        fixture.server.reportReady(port: 42_990)
+        await Task.yield()
+        #expect(await fixture.setup.calls.isEmpty)
+        #expect(fixture.service.tailnetSetupState == .unchecked)
+        #expect(fixture.service.canIssueNativePairingOffer)
+    }
+
+    @MainActor
+    @Test func explicitEnablePreparesSetupBeforeSynchronousListenerReadiness() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture()
+        defer { fixture.cleanup() }
+        fixture.server.readyPortOnStart = 42_992
+        fixture.service.setEnabledFromSettings(true, persist: false)
+        let calls = try await fixture.setup.waitForCalls(1)
+        #expect(calls == [.init(port: 42_992, configuredOrigin: "", configureIfNeeded: true)])
+        await fixture.setup.finishCall(0, with: .success("https://sync.example.ts.net"))
+        try await fixture.waitForState(.configured)
+    }
+
+    @MainActor
+    @Test func restoredAccessDoesNotConfigureTailscaleAndSettingsVerificationIsReadOnly() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture(initiallyEnabled: true)
+        defer { fixture.cleanup() }
+        #expect(fixture.service.activationState == .starting)
+        fixture.server.reportReady(port: 42_990)
+        await Task.yield()
+        #expect(await fixture.setup.calls.isEmpty)
+        #expect(fixture.service.tailnetSetupState == .unchecked)
+
+        fixture.service.verifyTailnetSetupIfNeeded()
+        fixture.service.verifyTailnetSetupIfNeeded()
+        let calls = try await fixture.setup.waitForCalls(1)
+        #expect(calls == [.init(port: 42_990, configuredOrigin: "", configureIfNeeded: false)])
+        await fixture.setup.finishCall(0, with: .success("https://restored.example.ts.net"))
+        try await fixture.waitForState(.configured)
+        #expect(fixture.service.tailnetOrigin == "https://restored.example.ts.net")
+        #expect(fixture.service.canIssueNativePairingOffer)
+        fixture.service.verifyTailnetSetupIfNeeded()
+        await Task.yield()
+        #expect(await fixture.setup.calls.count == 1)
+    }
+
+    @MainActor
+    @Test func explicitEnableWaitsForListenerAndUsesItsReportedPort() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture()
+        defer { fixture.cleanup() }
+        fixture.service.setEnabledFromSettings(true, persist: false)
+        #expect(fixture.service.tailnetSetupState == .waitingForListener)
+        #expect(fixture.service.activationState == .starting)
+        await Task.yield()
+        #expect(await fixture.setup.calls.isEmpty)
+        #expect(fixture.service.canIssueNativePairingOffer == false)
+
+        fixture.server.reportReady(port: 42_991)
+        fixture.service.verifyTailnetSetupIfNeeded()
+        let calls = try await fixture.setup.waitForCalls(1)
+        #expect(calls == [.init(port: 42_991, configuredOrigin: "", configureIfNeeded: true)])
+        #expect(fixture.service.tailnetSetupState == .configuring)
+        await fixture.setup.finishCall(0, with: .success("https://setup.example.ts.net"))
+        try await fixture.waitForState(.configured)
+        #expect(fixture.service.activationState == .ready(port: 42_991))
+        #expect(fixture.service.tailnetOrigin == "https://setup.example.ts.net")
+        fixture.service.issueNativePairingOffer()
+        #expect(fixture.service.currentNativePairingOffer?.qrPayload.gatewayURL.absoluteString == "https://setup.example.ts.net")
+    }
+
+    @MainActor
+    @Test func verificationPreservesTheUserEnteredOrigin() async throws {
+        let origin = "https://MANUAL.example.ts.net/"
+        let fixture = try RemoteAccessTailnetSetupFixture(initiallyEnabled: true, origin: origin)
+        defer { fixture.cleanup() }
+        fixture.server.reportReady(port: 42_990)
+        fixture.service.verifyTailnetSetupIfNeeded()
+        let calls = try await fixture.setup.waitForCalls(1)
+        #expect(calls == [.init(port: 42_990, configuredOrigin: origin, configureIfNeeded: false)])
+        await fixture.setup.finishCall(0, with: .success("https://manual.example.ts.net"))
+        try await fixture.waitForState(.configured)
+        #expect(fixture.service.tailnetOrigin == origin)
+        #expect(fixture.service.canIssueNativePairingOffer)
+    }
+
+    @MainActor
+    @Test func disableAndListenerFailureRejectLateSetupCompletion() async throws {
+        for listenerFails in [false, true] {
+            let fixture = try RemoteAccessTailnetSetupFixture()
+            defer { fixture.cleanup() }
+            fixture.service.setEnabledFromSettings(true, persist: false)
+            fixture.server.reportReady(port: 42_990)
+            _ = try await fixture.setup.waitForCalls(1)
+            if listenerFails {
+                fixture.server.reportFailure()
+            } else {
+                fixture.service.setEnabled(false, persist: false)
+            }
+            await fixture.setup.finishCall(0, with: .success("https://late.example.ts.net"))
+            try await fixture.waitForState(.unchecked)
+            await Task.yield()
+            #expect(fixture.service.tailnetOrigin.isEmpty)
+            #expect(fixture.service.isReady == false)
+            #expect(fixture.service.canIssueNativePairingOffer == false)
+            #expect(fixture.service.currentNativePairingOffer == nil)
+        }
+    }
+
+    @MainActor
+    @Test func originEditRejectsLateSetupCompletionAndPreservesManualPairing() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture()
+        defer { fixture.cleanup() }
+        fixture.service.setEnabledFromSettings(true, persist: false)
+        fixture.server.reportReady(port: 42_990)
+        _ = try await fixture.setup.waitForCalls(1)
+        fixture.service.tailnetOrigin = "https://manual.example.ts.net"
+        await fixture.setup.finishCall(0, with: .success("https://late.example.ts.net"))
+        try await fixture.waitForState(.unchecked)
+        await Task.yield()
+        #expect(fixture.service.tailnetOrigin == "https://manual.example.ts.net")
+        #expect(fixture.service.canIssueNativePairingOffer)
+        fixture.service.issueNativePairingOffer()
+        #expect(fixture.service.currentNativePairingOffer?.qrPayload.gatewayURL.absoluteString == "https://manual.example.ts.net")
+    }
+
+    @MainActor
+    @Test func retryWaitsForCancelledAttemptAndRejectsItsLateFailure() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture()
+        defer { fixture.cleanup() }
+        fixture.service.setEnabledFromSettings(true, persist: false)
+        fixture.server.reportReady(port: 42_990)
+        _ = try await fixture.setup.waitForCalls(1)
+        fixture.service.setUpTailnetAccess()
+        fixture.service.verifyTailnetSetupIfNeeded()
+        await Task.yield()
+        #expect(await fixture.setup.calls.count == 1)
+        #expect(fixture.service.canIssueNativePairingOffer == false)
+
+        // The fixture deliberately ignores cancellation until it is released.
+        await fixture.setup.finishCall(0, with: .failure(.funnelEnabled))
+        _ = try await fixture.setup.waitForCalls(2)
+        #expect(fixture.service.tailnetSetupState == .configuring)
+        #expect(await fixture.setup.maximumActiveCallCount == 1)
+        await fixture.setup.finishCall(1, with: .success("https://retry.example.ts.net"))
+        try await fixture.waitForState(.configured)
+        #expect(fixture.service.tailnetOrigin == "https://retry.example.ts.net")
+    }
+
+    @MainActor
+    @Test func explicitSetupReplacesReadOnlyVerificationWithoutOverlappingCalls() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture(initiallyEnabled: true)
+        defer { fixture.cleanup() }
+        fixture.server.reportReady(port: 42_990)
+        fixture.service.verifyTailnetSetupIfNeeded()
+        _ = try await fixture.setup.waitForCalls(1)
+        fixture.service.setUpTailnetAccess()
+        await fixture.setup.finishCall(0, with: .failure(.notConfigured))
+        let calls = try await fixture.setup.waitForCalls(2)
+        #expect(calls.map(\.configureIfNeeded) == [false, true])
+        #expect(await fixture.setup.maximumActiveCallCount == 1)
+        await fixture.setup.finishCall(1, with: .success("https://retry.example.ts.net"))
+        try await fixture.waitForState(.configured)
+    }
+
+    @MainActor
+    @Test func setupFailuresGatePairingWithoutStoppingExistingClients() async throws {
+        for error: TailscaleServeSetupError in [.notConfigured, .originMismatch, .portInUse, .funnelEnabled, .statusUnavailable] {
+            let fixture = try RemoteAccessTailnetSetupFixture(origin: "https://manual.example.ts.net")
+            defer { fixture.cleanup() }
+            fixture.service.setEnabledFromSettings(true, persist: false)
+            fixture.server.reportReady(port: 42_990)
+            fixture.server.reportWebSocketCounts(total: 1, native: 1)
+            _ = try await fixture.setup.waitForCalls(1)
+            fixture.service.issueNativePairingOffer()
+            #expect(fixture.service.currentNativePairingOffer == nil)
+            await fixture.setup.finishCall(0, with: .failure(error))
+            try await fixture.waitForState(.failed(error))
+            #expect(fixture.service.activationState == .ready(port: 42_990))
+            #expect(fixture.service.connectedNativeClientCount == 1)
+            #expect(fixture.server.stopCallCount == 0)
+            #expect(fixture.service.canIssueNativePairingOffer == (error == .statusUnavailable))
+            fixture.service.issueNativePairingOffer()
+            #expect((fixture.service.currentNativePairingOffer != nil) == (error == .statusUnavailable))
+        }
+    }
+
+    @MainActor
+    @Test func approvalLinkSurvivesRepeatedSettingsVerification() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture()
+        defer { fixture.cleanup() }
+        let approvalURL = try #require(URL(string: "https://login.tailscale.com/admin/serve"))
+        let error = TailscaleServeSetupError.approvalRequired(approvalURL)
+        fixture.service.setEnabledFromSettings(true, persist: false)
+        fixture.server.reportReady(port: 42_990)
+        _ = try await fixture.setup.waitForCalls(1)
+        await fixture.setup.finishCall(0, with: .failure(error))
+        try await fixture.waitForState(.failed(error))
+
+        fixture.service.verifyTailnetSetupIfNeeded()
+        fixture.service.verifyTailnetSetupIfNeeded()
+        await Task.yield()
+        #expect(await fixture.setup.calls.count == 1)
+        #expect(fixture.service.tailnetSetupState == .failed(error))
+        #expect(fixture.service.tailnetSetupState.approvalURL == approvalURL)
+        #expect(fixture.service.canIssueNativePairingOffer == false)
+    }
+
+    @MainActor
+    @Test func originEditPreservesFunnelBlockUntilExplicitSetupSucceeds() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture(origin: "https://manual.example.ts.net")
+        defer { fixture.cleanup() }
+        fixture.service.setEnabledFromSettings(true, persist: false)
+        fixture.server.reportReady(port: 42_990)
+        _ = try await fixture.setup.waitForCalls(1)
+        await fixture.setup.finishCall(0, with: .failure(.funnelEnabled))
+        try await fixture.waitForState(.failed(.funnelEnabled))
+
+        fixture.service.tailnetOrigin = "https://updated.example.ts.net"
+        fixture.service.verifyTailnetSetupIfNeeded()
+        fixture.service.issueNativePairingOffer()
+        await Task.yield()
+        #expect(await fixture.setup.calls.count == 1)
+        #expect(fixture.service.tailnetSetupState == .failed(.funnelEnabled))
+        #expect(fixture.service.canIssueNativePairingOffer == false)
+        #expect(fixture.service.currentNativePairingOffer == nil)
+
+        fixture.service.setUpTailnetAccess()
+        let calls = try await fixture.setup.waitForCalls(2)
+        #expect(calls.last == .init(port: 42_990, configuredOrigin: "https://updated.example.ts.net", configureIfNeeded: true))
+        await fixture.setup.finishCall(1, with: .success("https://updated.example.ts.net"))
+        try await fixture.waitForState(.configured)
+        #expect(fixture.service.canIssueNativePairingOffer)
+    }
+
+    @MainActor
+    @Test func manualPairingOfferSurvivesRepeatedSettingsVerificationAfterUnknownFailure() async throws {
+        let fixture = try RemoteAccessTailnetSetupFixture(initiallyEnabled: true, origin: "https://manual.example.ts.net")
+        defer { fixture.cleanup() }
+        fixture.server.reportReady(port: 42_990)
+        fixture.service.verifyTailnetSetupIfNeeded()
+        _ = try await fixture.setup.waitForCalls(1)
+        await fixture.setup.finishCall(0, with: .failure(.statusUnavailable))
+        try await fixture.waitForState(.failed(.statusUnavailable))
+        fixture.service.issueNativePairingOffer()
+        let offer = try #require(fixture.service.currentNativePairingOffer)
+
+        fixture.service.verifyTailnetSetupIfNeeded()
+        fixture.service.verifyTailnetSetupIfNeeded()
+        await Task.yield()
+        #expect(await fixture.setup.calls.count == 1)
+        #expect(fixture.service.tailnetSetupState == .failed(.statusUnavailable))
+        #expect(fixture.service.currentNativePairingOffer?.id == offer.id)
+        #expect(fixture.service.canIssueNativePairingOffer)
+    }
+}
+
+@MainActor
+private final class RemoteAccessTailnetSetupFixture {
+    let setup = RemoteAccessTailnetSetupSpy()
+    let server = RemoteAccessGatewayServerSpy()
+    let service: RemoteAccessService
+    private let originalOrigin: String
+    private let runtimeHome = "/tmp/toastty-tailnet-setup-lifecycle-\(UUID().uuidString)"
+
+    init(initiallyEnabled: Bool = false, origin: String = "") throws {
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
+        let setup = self.setup
+        let server = self.server
+        service = RemoteAccessService(
+            store: AppStore(state: .bootstrap(), persistTerminalFontPreference: false),
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
+            sessionRuntimeStore: SessionRuntimeStore(),
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            port: 42_990,
+            initiallyEnabled: initiallyEnabled,
+            tailnetServeSetup: { port, configuredOrigin, configureIfNeeded in
+                try await setup.run(port: port, configuredOrigin: configuredOrigin, configureIfNeeded: configureIfNeeded)
+            },
+            gatewayServerFactory: { _ in server }
+        )
+        originalOrigin = service.tailnetOrigin
+        service.tailnetOrigin = origin
+    }
+
+    func waitForState(_ expected: RemoteAccessTailnetSetupState) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while service.tailnetSetupState != expected, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(service.tailnetSetupState == expected)
+    }
+
+    func cleanup() {
+        service.setEnabled(false, persist: false)
+        service.tailnetOrigin = originalOrigin
+        try? FileManager.default.removeItem(atPath: runtimeHome)
+    }
+}
+
+private actor RemoteAccessTailnetSetupSpy {
+    struct Call: Equatable, Sendable {
+        let port: UInt16
+        let configuredOrigin: String
+        let configureIfNeeded: Bool
+    }
+    private(set) var calls: [Call] = []
+    private(set) var maximumActiveCallCount = 0
+    private var completions: [Int: CheckedContinuation<String, any Error>] = [:]
+
+    func run(port: UInt16, configuredOrigin: String, configureIfNeeded: Bool) async throws -> String {
+        let index = calls.count
+        calls.append(.init(port: port, configuredOrigin: configuredOrigin, configureIfNeeded: configureIfNeeded))
+        return try await withCheckedThrowingContinuation { completion in
+            completions[index] = completion
+            maximumActiveCallCount = max(maximumActiveCallCount, completions.count)
+        }
+    }
+
+    func waitForCalls(_ count: Int) async throws -> [Call] {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while calls.count < count, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(calls.count == count)
+        guard calls.count == count else { throw CocoaError(.coderValueNotFound) }
+        return calls
+    }
+
+    func finishCall(_ index: Int, with result: Result<String, TailscaleServeSetupError>) {
+        guard let completion = completions.removeValue(forKey: index) else {
+            Issue.record("Expected a pending Tailscale setup call")
+            return
+        }
+        completion.resume(with: result.mapError { $0 as any Error })
+    }
+}
+
 struct RemoteAccessServiceSafetyTests {
     @MainActor
     @Test func terminalOnlyTabRenameAndResetPublishPlacementWithoutActivity() async throws {
@@ -1992,6 +2336,7 @@ private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
     var onDeviceRevoked: ((UUID) -> Void)?
     var onListenerReady: ((UInt16) -> Void)?
     var onListenerFailed: (() -> Void)?
+    var readyPortOnStart: UInt16?
 
     private(set) var startedPorts: [UInt16] = []
     private(set) var stopCallCount = 0
@@ -2010,6 +2355,7 @@ private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
 
     func start(port: UInt16) throws {
         startedPorts.append(port)
+        if let readyPortOnStart { reportReady(port: readyPortOnStart) }
     }
 
     func stop() {
