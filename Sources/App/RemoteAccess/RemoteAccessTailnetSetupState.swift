@@ -32,7 +32,7 @@ enum RemoteAccessTailnetSetupState: Equatable, Sendable {
             case .detection, .statusUnavailable:
                 true
             case .originMismatch, .portInUse, .funnelEnabled, .notConfigured,
-                 .approvalRequired, .identityChanged, .configurationFailed, .timedOut:
+                 .approvalRequired, .identityChanged, .configurationFailed, .timedOut, .noAvailableHTTPSPort:
                 false
             }
         }

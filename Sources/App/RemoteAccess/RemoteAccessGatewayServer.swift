@@ -8,12 +8,44 @@ struct RemoteAccessWebSocketCounts: Equatable, Sendable {
     var native: Int
 }
 
+/// Safe, actionable categories; never expose raw system error descriptions.
+enum RemoteAccessListenerFailure: Error, Equatable, Sendable {
+    case portInUse
+    case permissionDenied
+    case unavailable
+
+    init(_ error: any Error) {
+        let code: POSIXErrorCode?
+        if let error = error as? NWError, case .posix(let value) = error {
+            code = value
+        } else {
+            code = (error as? POSIXError)?.code
+        }
+        switch code {
+        case .EADDRINUSE: self = .portInUse
+        case .EACCES, .EPERM: self = .permissionDenied
+        default: self = .unavailable
+        }
+    }
+
+    func recoveryMessage(port: UInt16) -> String {
+        switch self {
+        case .portInUse:
+            "Local port \(port) is already in use. Turn off Remote Access in another Toastty instance, or quit the app using this port, then turn Remote Access on here. Tailscale Serve setup cannot continue until this port is available."
+        case .permissionDenied:
+            "macOS denied access to local port \(port). Check your Mac’s security settings, then turn Remote Access on again. Tailscale Serve setup requires this local connection."
+        case .unavailable:
+            "Toastty could not open local port \(port). Turn Remote Access on again. If it still fails, restart this Toastty instance. Tailscale Serve setup requires this local connection."
+        }
+    }
+}
+
 @MainActor
 protocol RemoteAccessGatewayServing: AnyObject {
     var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)? { get set }
     var onDeviceRevoked: ((UUID) -> Void)? { get set }
     var onListenerReady: ((UInt16) -> Void)? { get set }
-    var onListenerFailed: (() -> Void)? { get set }
+    var onListenerFailed: ((RemoteAccessListenerFailure) -> Void)? { get set }
 
     func start(port: UInt16) throws
     func stop()
@@ -79,7 +111,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
     var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)?
     var onDeviceRevoked: ((UUID) -> Void)?
     var onListenerReady: ((UInt16) -> Void)?
-    var onListenerFailed: (() -> Void)?
+    var onListenerFailed: ((RemoteAccessListenerFailure) -> Void)?
 
     init(
         handler: RemoteGatewayRequestHandler,
@@ -161,11 +193,11 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                         "Remote access gateway listening",
                         category: .automation
                     )
-                case .failed:
+                case .failed(let error):
                     self.listener = nil
                     self.listeningPort = nil
                     listener.cancel()
-                    self.onListenerFailed?()
+                    self.onListenerFailed?(RemoteAccessListenerFailure(error))
                     ToasttyLog.error(
                         "Remote access listener failed",
                         category: .automation

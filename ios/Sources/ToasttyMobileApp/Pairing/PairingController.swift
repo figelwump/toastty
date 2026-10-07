@@ -176,8 +176,12 @@ final class PairingController {
         pendingCandidate = candidate
         manualGateway = ""
         manualCode = ""
+        var gatewayAddress = candidate.gatewayURL.host ?? candidate.gatewayURL.absoluteString
+        if let port = candidate.gatewayURL.port {
+            gatewayAddress += ":\(port)"
+        }
         state = .confirming(PairingConfirmation(
-            hostname: candidate.gatewayURL.host ?? candidate.gatewayURL.absoluteString,
+            hostname: gatewayAddress,
             method: method
         ))
     }

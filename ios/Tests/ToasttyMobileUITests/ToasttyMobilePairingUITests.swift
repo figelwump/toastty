@@ -7,7 +7,7 @@ final class ToasttyMobilePairingUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testManualPairingRequiresFullHostnameConfirmationBeforeShowingHome() {
+    func testManualPairingRequiresCustomPortConfirmationBeforeShowingHome() {
         let app = launchPairingFixture("unpaired")
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-session-unpaired"].waitForExistence(timeout: 10))
         app.buttons["toastty-mobile-session-begin-pairing"].tap()
@@ -20,18 +20,22 @@ final class ToasttyMobilePairingUITests: XCTestCase {
 
         let hostnameField = app.textFields["toastty-mobile-pairing-hostname"]
         let pairingCodeField = app.secureTextFields["toastty-mobile-pairing-code"]
-        XCTAssertEqual(hostnameField.label, "Tailscale hostname")
+        XCTAssertEqual(hostnameField.label, "Tailscale gateway address")
         XCTAssertEqual(pairingCodeField.label, "Pairing code")
         hostnameField.tap()
-        hostnameField.typeText("fixture-mac.example.ts.net")
+        hostnameField.typeText("fixture-mac.example.ts.net:8443")
         pairingCodeField.tap()
         pairingCodeField.typeText("2345-6789-ABCD")
         app.buttons["toastty-mobile-pairing-manual-continue"].tap()
 
         let hostname = app.staticTexts["toastty-mobile-pairing-confirm-hostname"]
         XCTAssertTrue(hostname.waitForExistence(timeout: 5))
-        XCTAssertEqual(hostname.label, "Authoritative hostname, fixture-mac.example.ts.net")
+        XCTAssertEqual(hostname.label, "Gateway address, fixture-mac.example.ts.net:8443")
         XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-home"].exists)
+        let confirmation = XCTAttachment(screenshot: app.screenshot())
+        confirmation.name = "Custom HTTPS port confirmation"
+        confirmation.lifetime = .keepAlways
+        add(confirmation)
 
         app.buttons["toastty-mobile-pairing-confirm"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
@@ -48,7 +52,7 @@ final class ToasttyMobilePairingUITests: XCTestCase {
 
         let hostname = app.staticTexts["toastty-mobile-pairing-confirm-hostname"]
         XCTAssertTrue(hostname.waitForExistence(timeout: 5))
-        XCTAssertEqual(hostname.label, "Authoritative hostname, fixture-mac.example.ts.net")
+        XCTAssertEqual(hostname.label, "Gateway address, fixture-mac.example.ts.net")
         app.buttons["toastty-mobile-pairing-confirm"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
     }

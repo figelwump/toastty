@@ -46,6 +46,30 @@ final class EventStreamClientTests: XCTestCase {
         await subscription.close()
     }
 
+    func testWSSReconnectPreservesCustomPortOriginAndBearerCredential() async throws {
+        let gateway = try PairingInputParser.canonicalGatewayURL("mac.tail.ts.net:8443")
+        let transport = RecordingWebSocketTransport(connection: MockWebSocketConnection(messages: []))
+        let client = EventStreamClient(
+            baseURL: gateway,
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "stream-secret"))
+        )
+
+        let first = try await client.connect()
+        await first.close()
+        let reconnected = try await client.connect()
+        await reconnected.close()
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        for request in requests {
+            XCTAssertEqual(request.url?.absoluteString, "wss://mac.tail.ts.net:8443/api/subscribe")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Origin"), "https://mac.tail.ts.net:8443")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer stream-secret")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+        }
+    }
+
     func testConnectKeepsSpecificNetworkClassification() async throws {
         let client = EventStreamClient(
             baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),

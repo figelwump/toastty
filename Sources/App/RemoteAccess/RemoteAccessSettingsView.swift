@@ -19,7 +19,10 @@ struct RemoteAccessConnectionStatusPresentation: Equatable {
         activationState: RemoteAccessActivationState,
         tailnetSetupState: RemoteAccessTailnetSetupState = .unchecked,
         connectedNativeClientCount: Int,
-        hasPairedNativeDevice: Bool
+        hasPairedNativeDevice: Bool,
+        hasUnrevokedDevice: Bool = true,
+        hasPendingPairing: Bool = false,
+        hasSavedOrigin: Bool = true
     ) -> Self {
         switch activationState {
         case .off:
@@ -37,7 +40,7 @@ struct RemoteAccessConnectionStatusPresentation: Equatable {
         case .failed(let message):
             return Self(
                 indicator: .failure,
-                title: "Remote Access could not start",
+                title: "Local Remote Access could not start",
                 detail: message
             )
         case .ready:
@@ -61,17 +64,16 @@ struct RemoteAccessConnectionStatusPresentation: Equatable {
                     detail: "Configuring Tailscale Serve for this Mac."
                 )
             case .failed(let error):
-                let needsApproval = error.approvalURL != nil
+                var detail = error.recoveryMessage + (tailnetSetupState.permitsPairing
+                    ? " A working manual setup can still pair a phone below."
+                    : "")
+                if case .portInUse = error, hasSavedOrigin, !hasPairedNativeDevice, !hasUnrevokedDevice, !hasPendingPairing {
+                    detail += " No devices are paired. To choose an available Tailscale port, clear Tailnet origin, then choose Retry Setup. Do not use Detect before retrying."
+                }
                 return Self(
                     indicator: .failure,
-                    title: needsApproval
-                        ? "Tailscale setup needs approval"
-                        : (tailnetSetupState.permitsPairing
-                            ? "Tailscale Serve is not verified"
-                            : "Private access needs attention"),
-                    detail: error.recoveryMessage + (tailnetSetupState.permitsPairing
-                        ? " A working manual setup can still pair a phone below."
-                        : "")
+                    title: error.title,
+                    detail: detail
                 )
             case .unchecked, .configured:
                 break
@@ -234,6 +236,11 @@ struct RemoteAccessSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    if let customPort = service.publicGatewayURL?.port {
+                        Text("HTTPS port \(String(customPort)) requires an updated Toastty Mobile/TestFlight build and a tailnet policy that allows this port.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         } footer: {
@@ -256,7 +263,10 @@ struct RemoteAccessSettingsView: View {
             connectedNativeClientCount: service.connectedNativeClientCount,
             hasPairedNativeDevice: service.devices.contains(where: {
                 $0.authKind == .native && $0.isRevoked == false
-            })
+            }),
+            hasUnrevokedDevice: service.devices.contains(where: { !$0.isRevoked }),
+            hasPendingPairing: service.currentPairingCode != nil || service.currentNativePairingOffer != nil,
+            hasSavedOrigin: !service.tailnetOrigin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
         return HStack(alignment: .top, spacing: 8) {
             connectionStatusIndicator(presentation.indicator)
@@ -322,7 +332,10 @@ struct RemoteAccessSettingsView: View {
                 originDetectionState = .idle
                 return
             }
-            service.tailnetOrigin = detectedOrigin
+            service.tailnetOrigin = TailnetOriginDetectionPolicy.originToApply(
+                detectedOrigin: detectedOrigin,
+                currentOrigin: service.tailnetOrigin
+            )
             originDetectionState = .idle
         } catch is CancellationError {
             originDetectionState = .idle

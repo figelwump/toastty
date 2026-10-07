@@ -79,6 +79,7 @@ struct RemoteAccessGatewayServerTests {
         previewHandler: (@MainActor (RemoteGatewayPreviewOperation) async -> RemoteGatewayHTTPResponse)? = nil,
         attachmentSendHandler: (@MainActor (RemoteMessageSendRequest, RemoteDeviceRecord) async -> RemoteMessageSendResult)? = nil,
         sessionStartHandler: (@MainActor (RemoteSessionStartRequest, RemoteDeviceRecord) async -> RemoteSessionStartResult)? = nil,
+        onListenerFailure: ((RemoteAccessListenerFailure) -> Void)? = nil,
         candidatePort: (Int) -> UInt16 = { _ in UInt16.random(in: 49500..<64000) }
     ) async throws -> Harness {
         let deviceStore = RemoteDeviceStore(fileURL: nil)
@@ -113,7 +114,10 @@ struct RemoteAccessGatewayServerTests {
             )
             var listenerFailed = false
             var isReady = false
-            server.onListenerFailed = { listenerFailed = true }
+            server.onListenerFailed = { failure in
+                listenerFailed = true
+                onListenerFailure?(failure)
+            }
             defer {
                 server.onListenerFailed = nil
                 if !isReady { server.stop() }
@@ -197,12 +201,14 @@ struct RemoteAccessGatewayServerTests {
         try await Self.awaitListening(first)
 
         var attemptedPorts: [UInt16] = []
-        let second = try await Self.startHarness(candidatePort: { attempt in
+        var failures: [RemoteAccessListenerFailure] = []
+        let second = try await Self.startHarness(onListenerFailure: { failures.append($0) }, candidatePort: { attempt in
             let port = attempt == 0 ? first.port : UInt16.random(in: 49500..<64000)
             attemptedPorts.append(port)
             return port
         })
         defer { second.server.stop() }
+        #expect(failures.first == .portInUse)
         #expect(attemptedPorts.first == first.port)
         #expect(attemptedPorts.count > 1)
         #expect(second.port != first.port)

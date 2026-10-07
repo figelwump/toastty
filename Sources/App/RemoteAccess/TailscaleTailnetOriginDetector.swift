@@ -405,6 +405,15 @@ enum TailscaleStatusCommandRunner {
 }
 
 enum TailnetOriginDetectionPolicy {
+    /// Detection identifies this Mac's hostname. It does not select a Serve
+    /// port, so keep a valid saved port when the hostname is still the same.
+    static func originToApply(detectedOrigin: String, currentOrigin: String) -> String {
+        guard let savedURL = RemoteAccessService.publicGatewayURL(from: currentOrigin),
+              let detectedURL = RemoteAccessService.publicGatewayURL(from: detectedOrigin),
+              savedURL.host == detectedURL.host else { return detectedOrigin }
+        return savedURL.absoluteString
+    }
+
     static func shouldApply(
         originAtStart: String,
         currentOrigin: String,

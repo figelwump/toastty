@@ -3,7 +3,8 @@ import Foundation
 enum TailscaleServeSetupError: Error, Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     case detection(TailscaleTailnetOriginDetectionError)
     case originMismatch
-    case portInUse
+    case portInUse(UInt16)
+    case noAvailableHTTPSPort
     case funnelEnabled
     case notConfigured
     case statusUnavailable
@@ -20,26 +21,43 @@ enum TailscaleServeSetupError: Error, Equatable, Sendable, CustomStringConvertib
         return url
     }
 
+    var title: String {
+        switch self {
+        case .detection, .statusUnavailable: "Tailscale Serve is not verified"
+        case .originMismatch: "Tailscale address does not match"
+        case .portInUse(let port): "Tailscale HTTPS port \(port) is in use"
+        case .noAvailableHTTPSPort: "No Tailscale HTTPS port is available"
+        case .funnelEnabled: "Public Tailscale Funnel access is enabled"
+        case .notConfigured: "Tailscale Serve is not configured"
+        case .configurationFailed: "Tailscale Serve setup failed"
+        case .approvalRequired: "Tailscale setup needs approval"
+        case .timedOut: "Tailscale Serve setup timed out"
+        case .identityChanged: "Tailscale account or address changed"
+        }
+    }
+
     var recoveryMessage: String {
         switch self {
         case .detection(let error):
             error.recoveryMessage
         case .originMismatch:
             "The saved address does not match this Mac’s Tailscale address. Choose Detect to update it, then try setup again."
-        case .portInUse:
-            "Tailscale HTTPS port 443 already has a different setup. Toastty will not replace it. Check the existing Serve mapping before trying again."
+        case .portInUse(let port):
+            "Tailscale HTTPS port \(port) has a different setup. Toastty will not replace it or move existing pairings. Restore the Toastty mapping on that port, then choose Retry Setup."
+        case .noAvailableHTTPSPort:
+            "Tailscale HTTPS port 443 and fallback ports 8443–8447 are occupied. Free one of those ports in Tailscale Serve, then choose Retry Setup."
         case .funnelEnabled:
-            "Tailscale Funnel exposes HTTPS port 443 or the Toastty gateway publicly. Turn off that Funnel access before pairing with Toastty."
+            "Tailscale Funnel exposes the selected HTTPS port or the Toastty gateway publicly. Turn off that Funnel access before pairing with Toastty."
         case .notConfigured:
-            "Tailscale Serve is not configured for Toastty. Choose Set Up Tailscale to connect this Mac."
+            "Tailscale Serve is not configured for Toastty. Choose Retry Setup to configure access from your phone."
         case .statusUnavailable:
             "Toastty could not check the Tailscale Serve mapping. Check that Tailscale is running and up to date, then try again."
         case .configurationFailed:
-            "Tailscale could not configure HTTPS access. Check that Tailscale is up to date and that your account can change Serve settings, then try again."
+            "Tailscale Serve did not create the HTTPS connection to Toastty. Check that Tailscale is up to date and that your account can change Serve settings, then try again."
         case .approvalRequired:
             "Tailscale needs approval to enable HTTPS. Open Tailscale Setup in your browser, complete the steps, then try again. Your tailnet administrator may need to approve it."
         case .timedOut:
-            "Tailscale did not finish setup in time. Check Tailscale, then try again."
+            "Tailscale Serve did not finish setup in time, and Toastty’s HTTPS connection is not configured. Check Tailscale, then choose Retry Setup."
         case .identityChanged:
             "The Tailscale account or Mac address changed during setup. Check the active Tailscale account, then try again."
         }
@@ -82,25 +100,43 @@ struct TailscaleServeSetup: Sendable {
             throw TailscaleServeSetupError.detection(error)
         }
         let savedOrigin = configuredOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard savedOrigin.isEmpty || RemoteAccessService.publicGatewayURL(from: savedOrigin)?.absoluteString == client.origin else {
+        let savedURL = RemoteAccessService.publicGatewayURL(from: savedOrigin)
+        guard let clientHost = URL(string: client.origin)?.host,
+              savedOrigin.isEmpty || savedURL?.host == clientHost else {
             throw TailscaleServeSetupError.originMismatch
         }
-
-        // Keep this decision next to the CLI write. There is no UI or approval
-        // wait between the last read and starting the command.
-        let before = try await configuration(client: client, port: port)
-        if before == .configured {
-            try await verifyIdentity(client)
-            return client.origin
+        let before = try await configuration(client: client)
+        let origin = try before.selectOrigin(
+            clientOrigin: client.origin, savedOrigin: savedURL?.absoluteString, gatewayPort: port
+        )
+        guard let selectedURL = URL(string: origin),
+              let httpsPort = UInt16(exactly: selectedURL.port ?? 443), httpsPort > 0 else {
+            throw TailscaleServeSetupError.statusUnavailable
         }
-        guard configureIfNeeded else { throw TailscaleServeSetupError.notConfigured }
+        if try before.state(origin: origin, port: port) == .configured {
+            try await verifyIdentity(client)
+            return origin
+        }
+        guard configureIfNeeded else {
+            try await verifyIdentity(client)
+            throw TailscaleServeSetupError.notConfigured
+        }
+
+        // Recheck the selected port immediately before writing. Never select a
+        // different address after this point; a concurrent edit must be reported.
+        let preflight = try await configuration(client: client)
+        if try preflight.state(origin: origin, port: port) == .configured {
+            try await verifyIdentity(client)
+            return origin
+        }
+        try await verifyIdentity(client)
         try Task.checkCancellation()
 
         let result: TailscaleCommandResult?
         do {
             result = try await commandRunner(
                 client.executableURL,
-                ["serve", "--bg", "--https=443", "http://127.0.0.1:\(port)"],
+                ["serve", "--bg", "--https=\(httpsPort)", "http://127.0.0.1:\(port)"],
                 commandTimeout
             )
         } catch is CancellationError {
@@ -113,7 +149,7 @@ struct TailscaleServeSetup: Sendable {
         try Task.checkCancellation()
         let afterResult: Result<TailscaleServeConfigurationState, Error>
         do {
-            afterResult = .success(try await configuration(client: client, port: port))
+            afterResult = .success(try await configuration(client: client).state(origin: origin, port: port))
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -123,7 +159,7 @@ struct TailscaleServeSetup: Sendable {
         // the old hostname. Report the identity change before that verdict.
         try await verifyIdentity(client)
         let after = try afterResult.get()
-        if after == .configured { return client.origin }
+        if after == .configured { return origin }
 
         if let result {
             if let url = Self.approvalURL(in: result.stdout) ?? Self.approvalURL(in: result.stderr) {
@@ -134,12 +170,12 @@ struct TailscaleServeSetup: Sendable {
         throw TailscaleServeSetupError.configurationFailed
     }
 
-    private func configuration(client: TailscaleClientIdentity, port: UInt16) async throws -> TailscaleServeConfigurationState {
+    private func configuration(client: TailscaleClientIdentity) async throws -> ServeConfiguration {
         do {
             let result = try await commandRunner(client.executableURL, ["serve", "status", "--json"], 3)
             try Task.checkCancellation()
             guard result.exitCode == 0, !result.timedOut else { throw TailscaleServeSetupError.statusUnavailable }
-            return try Self.configurationState(from: result.stdout, origin: client.origin, port: port)
+            return try Self.decodeConfiguration(result.stdout)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as TailscaleServeSetupError {
@@ -183,15 +219,17 @@ struct TailscaleServeSetup: Sendable {
     }
 
     static func configurationState(from data: Data, origin: String, port: UInt16) throws -> TailscaleServeConfigurationState {
-        let configuration: ServeConfiguration
+        try decodeConfiguration(data).state(origin: origin, port: port)
+    }
+
+    private static func decodeConfiguration(_ data: Data) throws -> ServeConfiguration {
         do {
             guard data.count <= 256 * 1_024 else { throw TailscaleServeSetupError.statusUnavailable }
             // The CLI emits null before the first Serve configuration.
-            configuration = try JSONDecoder().decode(ServeConfiguration?.self, from: data) ?? ServeConfiguration()
+            return try JSONDecoder().decode(ServeConfiguration?.self, from: data) ?? ServeConfiguration()
         } catch {
             throw TailscaleServeSetupError.statusUnavailable
         }
-        return try configuration.state(origin: origin, port: port)
     }
 }
 
@@ -225,34 +263,121 @@ private struct ServeConfiguration: Decodable {
     var AllowFunnel: [String: Bool]?
     var Foreground: [String: ServeConfiguration]?
 
-    private var hasFunnelOnHTTPSPort: Bool {
-        (AllowFunnel ?? [:]).contains { $0.key.hasSuffix(":443") && $0.value }
-            || (Foreground ?? [:]).values.contains { $0.hasFunnelOnHTTPSPort }
+    private var configurations: [ServeConfiguration] {
+        [self] + (Foreground ?? [:]).values.flatMap(\.configurations)
     }
 
-    private var usesHTTPSPort: Bool {
-        TCP?["443"] != nil || (Web ?? [:]).keys.contains { $0.hasSuffix(":443") }
-            || (Foreground ?? [:]).values.contains { $0.usesHTTPSPort }
+    private func uses(port: UInt16) -> Bool {
+        configurations.contains { configuration in
+            configuration.TCP?[String(port)] != nil
+                || (configuration.Web ?? [:]).keys.contains { Self.port(in: $0) == port }
+                || (configuration.AllowFunnel ?? [:]).contains { Self.port(in: $0.key) == port && $0.value }
+        }
     }
 
-    private func hasFunnelExposingGateway(port: UInt16) -> Bool {
-        (AllowFunnel ?? [:]).contains { hostPort, enabled in
-            enabled && (Web?[hostPort]?.Handlers ?? [:]).values.contains { $0.forwards(to: port) }
-        } || (Foreground ?? [:]).values.contains { $0.hasFunnelExposingGateway(port: port) }
+    private static func port(in hostPort: String) -> UInt16? {
+        hostPort.split(separator: ":").last.flatMap { UInt16($0) }
+    }
+
+    private func hasFunnel(on port: UInt16) -> Bool {
+        configurations.contains { configuration in
+            (configuration.AllowFunnel ?? [:]).contains { Self.port(in: $0.key) == port && $0.value }
+        }
+    }
+
+    private func hasFunnelExposingGateway(port: UInt16, nodeOrigin: String, selectedOrigin: String? = nil) -> Bool {
+        let all = configurations
+        let hostname = URL(string: nodeOrigin)?.host ?? ""
+        let publicPorts = Set(all.flatMap { configuration in
+            (configuration.AllowFunnel ?? [:]).compactMap { $0.value ? Self.port(in: $0.key) : nil }
+        })
+        var targets: [String: [String]] = [:]
+        for configuration in all {
+            for (hostPort, web) in configuration.Web ?? [:] {
+                targets[hostPort.lowercased(), default: []] += (web.Handlers ?? [:]).values.compactMap(\.Proxy)
+            }
+            for (httpsPort, tcp) in configuration.TCP ?? [:] {
+                if let target = tcp.TCPForward {
+                    targets["\(hostname):\(httpsPort)".lowercased(), default: []].append(target)
+                }
+            }
+        }
+        var gatewayOrigins: Set<String> = []
+        if let selectedOrigin, let url = URL(string: selectedOrigin), let host = url.host {
+            gatewayOrigins.insert("\(host):\(url.port ?? 443)".lowercased())
+        }
+        // Follow only the destinations explicitly recorded in Serve status.
+        // This finite set also catches public proxies through another local
+        // Serve route. No DNS lookup or network probe can change this decision.
+        var foundOrigin = true
+        while foundOrigin {
+            foundOrigin = false
+            for (origin, destinations) in targets where !gatewayOrigins.contains(origin) {
+                if destinations.contains(where: { Self.targetsGateway($0, port: port, origins: gatewayOrigins) }) {
+                    gatewayOrigins.insert(origin)
+                    foundOrigin = true
+                }
+            }
+        }
+        return gatewayOrigins.contains { origin in
+            Self.port(in: origin).map { publicPorts.contains($0) } ?? false
+        }
+    }
+
+    /// Reuse requires an exact root HTTP proxy. Exposure checks are stricter:
+    /// an unknown destination or a proxy to the backend port cannot prove that
+    /// access stays private, even when it uses another loopback spelling.
+    private static func targetsGateway(_ target: String, port: UInt16, origins: Set<String>) -> Bool {
+        if UInt16(target) == port { return true }
+        let candidate = target.contains("://") ? target : "http://" + target
+        guard let url = URLComponents(string: candidate) else { return true }
+        let targetPort = url.port ?? (url.scheme == "http" ? 80 : 443)
+        guard (1...65535).contains(targetPort) else { return true }
+        if targetPort == Int(port) { return true }
+        guard let host = url.host?.lowercased(), !host.isEmpty else { return true }
+        return origins.contains("\(host):\(targetPort)")
+    }
+
+    func selectOrigin(clientOrigin: String, savedOrigin: String?, gatewayPort: UInt16) throws -> String {
+        guard !hasFunnelExposingGateway(port: gatewayPort, nodeOrigin: clientOrigin) else { throw TailscaleServeSetupError.funnelEnabled }
+        if let savedOrigin {
+            _ = try state(origin: savedOrigin, port: gatewayPort)
+            return savedOrigin
+        }
+        let candidates: [UInt16] = [443, 8443, 8444, 8445, 8446, 8447]
+        var firstAvailable: String?
+        for candidate in candidates where candidate != gatewayPort {
+            let origin = candidate == 443 ? clientOrigin : "\(clientOrigin):\(candidate)"
+            do {
+                // Recover a mapping written before cancellation or a crash,
+                // before creating another one. Prefer an existing 443 mapping.
+                if try state(origin: origin, port: gatewayPort) == .configured { return origin }
+                if firstAvailable == nil { firstAvailable = origin }
+            } catch TailscaleServeSetupError.portInUse {
+                continue
+            } catch TailscaleServeSetupError.funnelEnabled {
+                continue
+            }
+        }
+        guard let firstAvailable else { throw TailscaleServeSetupError.noAvailableHTTPSPort }
+        return firstAvailable
     }
 
     func state(origin: String, port: UInt16) throws -> TailscaleServeConfigurationState {
-        guard !hasFunnelOnHTTPSPort, !hasFunnelExposingGateway(port: port) else {
+        guard let url = URL(string: origin), let hostname = url.host,
+              let httpsPort = UInt16(exactly: url.port ?? 443), httpsPort > 0 else {
+            throw TailscaleServeSetupError.originMismatch
+        }
+        guard !hasFunnel(on: httpsPort), !hasFunnelExposingGateway(port: port, nodeOrigin: origin, selectedOrigin: origin) else {
             throw TailscaleServeSetupError.funnelEnabled
         }
-        guard !(Foreground ?? [:]).values.contains(where: { $0.usesHTTPSPort }) else {
-            throw TailscaleServeSetupError.portInUse
+        guard !(Foreground ?? [:]).values.contains(where: { $0.uses(port: httpsPort) }) else {
+            throw TailscaleServeSetupError.portInUse(httpsPort)
         }
-        guard usesHTTPSPort else { return .available }
-        guard let hostname = URL(string: origin)?.host,
-              TCP?["443"]?.isHTTPS == true,
-              Web?["\(hostname):443"]?.Handlers?["/"]?.forwards(to: port) == true else {
-            throw TailscaleServeSetupError.portInUse
+        guard uses(port: httpsPort) else { return .available }
+        guard TCP?[String(httpsPort)]?.isHTTPS == true,
+              Web?["\(hostname):\(httpsPort)"]?.Handlers?["/"]?.forwards(to: port) == true else {
+            throw TailscaleServeSetupError.portInUse(httpsPort)
         }
         return .configured
     }

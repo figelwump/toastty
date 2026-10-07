@@ -607,9 +607,9 @@ final class RemoteAccessService: ObservableObject {
             self.auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessEnabled))
             self.startPendingTailnetSetupIfReady()
         }
-        server.onListenerFailed = { [weak self] in
+        server.onListenerFailed = { [weak self] failure in
             guard let self, self.isEnabled else { return }
-            self.failActivation()
+            self.failActivation(failure)
         }
         server.onDeviceRevoked = { [weak self] _ in
             self?.deviceManagementError = nil
@@ -637,7 +637,7 @@ final class RemoteAccessService: ObservableObject {
             do {
                 try server.start(port: port)
             } catch {
-                failActivation()
+                failActivation(RemoteAccessListenerFailure(error))
                 ToasttyLog.error(
                     "Remote access gateway failed to start",
                     category: .automation
@@ -661,11 +661,11 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
-    private func failActivation() {
+    private func failActivation(_ failure: RemoteAccessListenerFailure) {
         guard activationState != .off else { return }
         invalidateTailnetSetup()
         activationState = .failed(
-            message: "Could not start the local Remote Access listener. Try again."
+            message: failure.recoveryMessage(port: port)
         )
         sessionListBroadcastTask?.cancel()
         sessionListBroadcastTask = nil
@@ -2988,6 +2988,9 @@ final class RemoteAccessService: ObservableObject {
             }
             origins.insert(normalized)
         }
+        if let canonicalOrigin = publicGatewayURL?.absoluteString {
+            origins.insert(canonicalOrigin)
+        }
         handler.updateConfiguration(RemoteGatewayConfiguration(
             allowedOrigins: origins,
             staticResources: Self.loadWebClientResources()
@@ -3011,7 +3014,7 @@ final class RemoteAccessService: ObservableObject {
               rawHost.isEmpty == false,
               components.user == nil,
               components.password == nil,
-              components.port == nil || components.port == 443,
+              components.port.map({ (1...65535).contains($0) }) ?? true,
               components.query == nil,
               components.fragment == nil,
               components.path.isEmpty || components.path == "/" else {
@@ -3021,7 +3024,7 @@ final class RemoteAccessService: ObservableObject {
         guard host != "ts.net", host.hasSuffix(".ts.net") else { return nil }
         components.scheme = "https"
         components.host = host
-        components.port = nil
+        if components.port == 443 { components.port = nil }
         components.path = ""
         return components.url
     }

@@ -63,8 +63,43 @@ struct RemoteAccessSettingsPresentationTests {
         )
 
         #expect(presentation.indicator == .failure)
-        #expect(presentation.title == "Remote Access could not start")
+        #expect(presentation.title == "Local Remote Access could not start")
         #expect(presentation.detail == "Try again.")
+    }
+
+    @Test func serveFailuresIdentifyTheFailedStep() {
+        let cases: [(TailscaleServeSetupError, String)] = [
+            (.notConfigured, "Tailscale Serve is not configured"),
+            (.configurationFailed, "Tailscale Serve setup failed"),
+            (.timedOut, "Tailscale Serve setup timed out"),
+            (.portInUse(443), "Tailscale HTTPS port 443 is in use"),
+            (.noAvailableHTTPSPort, "No Tailscale HTTPS port is available"),
+        ]
+        for (error, title) in cases {
+            let presentation = RemoteAccessConnectionStatusPresentation.make(
+                activationState: .ready(port: 42_871),
+                tailnetSetupState: .failed(error),
+                connectedNativeClientCount: 0,
+                hasPairedNativeDevice: false
+            )
+            #expect(presentation.title == title)
+            #expect(presentation.indicator == .failure)
+            #expect(presentation.detail.contains("Tailscale"))
+            #expect(!RemoteAccessTailnetSetupState.failed(error).permitsPairing)
+        }
+    }
+
+    @Test func emptyOriginDoesNotSuggestClearingTheFieldAgain() {
+        let presentation = RemoteAccessConnectionStatusPresentation.make(
+            activationState: .ready(port: 42_871),
+            tailnetSetupState: .failed(.portInUse(8443)),
+            connectedNativeClientCount: 0,
+            hasPairedNativeDevice: false,
+            hasUnrevokedDevice: false,
+            hasPendingPairing: false,
+            hasSavedOrigin: false
+        )
+        #expect(!presentation.detail.contains("clear Tailnet origin"))
     }
 
     @Test func uncheckedSetupDoesNotClaimPhoneReachability() {
@@ -82,7 +117,7 @@ struct RemoteAccessSettingsPresentationTests {
     @Test func setupProgressAndKnownConflictsBlockNewPairing() {
         for state: RemoteAccessTailnetSetupState in [
             .waitingForListener, .checking, .configuring,
-            .failed(.notConfigured), .failed(.portInUse), .failed(.originMismatch),
+            .failed(.notConfigured), .failed(.portInUse(443)), .failed(.originMismatch),
             .failed(.funnelEnabled), .failed(.identityChanged),
             .failed(.timedOut), .failed(.configurationFailed),
         ] {
@@ -127,5 +162,34 @@ struct RemoteAccessSettingsPresentationTests {
         #expect(state.permitsPairing == false)
         #expect(presentation.title == "Tailscale setup needs approval")
         #expect(presentation.detail == state.failureMessage)
+    }
+
+    @Test func savedPortConflictOffersClearAndRetryOnlyWithoutDevicesOrPendingPairing() {
+        for (hasDevice, hasPendingPairing) in [(false, false), (true, false), (false, true)] {
+            let presentation = RemoteAccessConnectionStatusPresentation.make(
+                activationState: .ready(port: 42_871),
+                tailnetSetupState: .failed(.portInUse(443)),
+                connectedNativeClientCount: 0,
+                hasPairedNativeDevice: false,
+                hasUnrevokedDevice: hasDevice,
+                hasPendingPairing: hasPendingPairing
+            )
+            #expect(presentation.detail.contains("clear Tailnet origin") == (!hasDevice && !hasPendingPairing))
+            #expect(presentation.detail.contains("Do not use Detect") == (!hasDevice && !hasPendingPairing))
+            #expect(presentation.detail.contains("Restore the Toastty mapping"))
+        }
+    }
+
+    @Test func exhaustedFallbackPortsDoNotOfferSavedPortRecovery() {
+        let presentation = RemoteAccessConnectionStatusPresentation.make(
+            activationState: .ready(port: 42_871),
+            tailnetSetupState: .failed(.noAvailableHTTPSPort),
+            connectedNativeClientCount: 0,
+            hasPairedNativeDevice: false,
+            hasUnrevokedDevice: false,
+            hasPendingPairing: false
+        )
+        #expect(presentation.detail.contains("clear Tailnet origin") == false)
+        #expect(presentation.detail.contains("8443–8447"))
     }
 }
