@@ -131,6 +131,21 @@ unread state and the remote presentation returns to **Idle**, including for a
 completed session that has already stopped. Reading the same completion on the
 Mac has the same effect on the phone.
 
+The iOS app icon badge counts sessions with an unread completion, a pending
+approval, or an error. Each session counts once. Quiet unread sessions in a
+subspace marked done do not count, matching the conversation screen's **Next**
+action. Reading a completion or resolving an approval or error updates the
+badge when the Mac sends the new state. Opening the app alone does not clear it.
+Reading an error does not dismiss it; it counts until the session leaves its
+error state or is removed on the Mac.
+
+Toastty asks for badge permission when attention first appears while the app is
+active. It requests badges only. You can change this permission in iOS Settings.
+The badge keeps its last count during a connection loss or while the app is
+suspended. This version has no push delivery, so new activity cannot update the
+badge until the app reconnects. Unpairing, losing access, or a pairing that
+needs repair because it is corrupt or incompatible clears the badge.
+
 Remote replies are enabled by default for active sessions. For every supported
 provider, Toastty requires an exact match between the active managed session,
 panel, provider, and provider-native session before it enables replies. To stop

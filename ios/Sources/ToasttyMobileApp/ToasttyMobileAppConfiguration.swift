@@ -31,6 +31,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     let runtimeMode: ToasttyMobileRuntimeMode
     let fixtureScenario: ToasttyMobileFixtureScenario?
     let urlScheme: String?
+    let enablesSystemAppIconBadge: Bool
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -49,6 +50,11 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
         } else {
             fixtureScenario = nil
         }
+        let isTestOrPreview = environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+        enablesSystemAppIconBadge = (fixtureScenario == nil && !isTestOrPreview)
+            || (fixtureScenario != nil && environment["TOASTTY_MOBILE_FIXTURE_APP_BADGE"] == "1")
     }
 
     private static func routingURLScheme(in infoDictionary: [String: Any]) -> String? {

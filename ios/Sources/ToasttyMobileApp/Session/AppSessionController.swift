@@ -73,6 +73,23 @@ final class AppSessionController {
 
     var credentialProvider: any GatewayCredentialProvider { credentialVault }
 
+    /// Unknown data must not clear the badge retained by iOS. Count only a
+    /// complete live projection, or explicitly clear when pairing is unusable.
+    var appIconBadgeCount: Int? {
+        switch state {
+        case .paired(.live):
+            homeController.freshness == .live
+                ? homeController.sessionsNeedingAttention().count
+                : nil
+        case .restoring, .keychainLocked, .repairNeeded(.unavailable),
+             .paired(.connecting), .paired(.reconnecting), .paired(.unreachable):
+            nil
+        case .unpaired, .pairing, .repairNeeded(.corrupt), .incompatible,
+             .paired(.authorizationDenied):
+            0
+        }
+    }
+
     var previewService: ToasttyPreviewService {
         if usesFixtureHarness { return .fixture }
         guard let pairedDevice else { return ToasttyPreviewService() }
