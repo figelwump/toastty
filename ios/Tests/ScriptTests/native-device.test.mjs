@@ -94,6 +94,7 @@ function readCommands(logPath) {
 test("preflight-only records selected-device evidence without generation, build, install, or launch", () => {
   const toolchain = createPreflightToolchain();
   toolchain.environment.TOASTTY_IOS_DEVELOPMENT_TEAM = "";
+  toolchain.environment.TOASTTY_IOS_CONFIGURATION = "Debug";
   toolchain.environment.TUIST_TOASTTY_MOBILE_PUSH_PROBE = "1";
   const result = spawnSync(process.execPath, [
     dispatcherPath,
