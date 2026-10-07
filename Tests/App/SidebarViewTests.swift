@@ -2167,6 +2167,19 @@ final class SidebarViewTests: XCTestCase {
     }
 
     func testSubspaceWaitingPillFollowsBackgroundShellStateAndFitsWithAnnotation() throws {
+        func waitForStatusWithoutWaitingChip(_ status: String, in rootView: NSView) {
+            let deadline = Date().addingTimeInterval(1)
+            repeat {
+                pumpMainRunLoop(duration: 0.05)
+                rootView.layoutSubtreeIfNeeded()
+                let text = renderedTextValues(in: rootView)
+                if text.contains("waiting") == false,
+                   text.contains(where: { $0.hasPrefix("qa-update-visitor-fixture, subspace, \(status)") }) {
+                    return
+                }
+            } while Date() < deadline
+        }
+
         for (width, annotation, showsPill, showsAnnotation) in [
             (ToastyTheme.sidebarWidth, "PR #58", true, true),
             (ToastyTheme.sidebarWidth, "ENG-1234-fix", true, false),
@@ -2209,8 +2222,7 @@ final class SidebarViewTests: XCTestCase {
                 status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve review command"),
                 at: now.addingTimeInterval(2)
             )
-            pumpMainRunLoop()
-            rootView.layoutSubtreeIfNeeded()
+            waitForStatusWithoutWaitingChip("needs approval", in: rootView)
             XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
             XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, needs approval") })
 
@@ -2220,8 +2232,7 @@ final class SidebarViewTests: XCTestCase {
                 status: SessionStatus(kind: .working, summary: "Working", detail: "Reading review findings"),
                 at: now.addingTimeInterval(3)
             )
-            pumpMainRunLoop()
-            rootView.layoutSubtreeIfNeeded()
+            waitForStatusWithoutWaitingChip("working", in: rootView)
             XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
             XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, working") })
 

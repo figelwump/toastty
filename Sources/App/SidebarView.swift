@@ -1014,6 +1014,11 @@ struct SidebarView: View {
                 .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 3)
             }
             .buttonStyle(.plain)
+            .background {
+                SidebarSemanticTextBridge(text: SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel(pill))
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
             .accessibilityLabel(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel(pill))
             .accessibilityIdentifier("sidebar.hiddenSessions.\(pill.direction.accessibilityDirection)")
             .offset(y: pill.direction == .above ? ToastyTheme.sidebarTopPadding + 8 : -12)
