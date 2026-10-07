@@ -4,6 +4,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   isComputerUseServer,
+  isToasttyAppBundleID,
   shouldAutoAcceptMcpElicitation,
 } from "./computer-use-protocol.mjs";
 
@@ -166,14 +167,18 @@ const cwd = args.get("cwd");
 const promptPath = args.get("prompt-file");
 const transcriptPath = args.get("transcript-path");
 const summaryPath = args.get("summary-path");
+const expectedAppBundleID = args.get("app-bundle-id");
 const timeoutSeconds = Number(args.get("timeout-seconds") ?? "300");
 const approvalPolicy = parseApprovalPolicy(args.get("approval-policy"));
 const sandbox = args.get("sandbox") ?? "read-only";
 
-if (!wsUrl || !cwd || !promptPath || !transcriptPath || !summaryPath) {
+if (!wsUrl || !cwd || !promptPath || !transcriptPath || !summaryPath || !expectedAppBundleID) {
   throw new Error(
-    "--ws-url, --cwd, --prompt-file, --transcript-path, and --summary-path are required",
+    "--ws-url, --cwd, --prompt-file, --transcript-path, --summary-path, and --app-bundle-id are required",
   );
+}
+if (!isToasttyAppBundleID(expectedAppBundleID)) {
+  throw new Error("--app-bundle-id must be a Toastty bundle identifier");
 }
 
 await mkdir(path.dirname(transcriptPath), { recursive: true });
@@ -257,6 +262,7 @@ async function finish(status, options = {}) {
     cwd,
     wsUrl,
     approvalPolicy,
+    expectedAppBundleID,
     sandbox,
     model,
     modelProvider,
@@ -589,7 +595,7 @@ async function handleServerRequest(message) {
   const { id, method, params = {} } = message;
 
   if (method === "mcpServer/elicitation/request") {
-    if (shouldAutoAcceptMcpElicitation(params)) {
+    if (shouldAutoAcceptMcpElicitation(params, expectedAppBundleID)) {
       const content = buildMcpElicitationContent(params);
 
       mcpElicitationsAccepted += 1;

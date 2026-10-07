@@ -442,6 +442,11 @@ run_remote_prepare_mode() {
       build
   ) >"$build_log" 2>&1
 
+  local app_bundle_id
+  app_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_bundle/Contents/Info.plist")" \
+    || fail "Failed to read the built Toastty app's bundle identifier"
+  [[ -n "$app_bundle_id" ]] || fail "Built Toastty app has no bundle identifier"
+
   TOASTTY_RUNTIME_HOME="$runtime_home" \
   TOASTTY_USER_SKILLS_ROOT="$runtime_home/skills" \
   TOASTTY_RUNTIME_LABEL="$runtime_label" \
@@ -537,6 +542,7 @@ EOF
   "socketPath": "$(json_escape "$socket_path")",
   "instanceJson": "$(json_escape "$instance_json")",
   "appBundle": "$(json_escape "$app_bundle")",
+  "appBundleID": "$(json_escape "$app_bundle_id")",
   "appBinary": "$(json_escape "$app_binary")",
   "appPid": ${app_pid},
   "codexModel": "$(json_escape "$CODEX_COMPUTER_USE_MODEL")",
@@ -841,6 +847,10 @@ EOF
   lsof -nP -iTCP:"$local_ws_port" -sTCP:LISTEN >/dev/null 2>&1 || fail "Local tunnel did not start listening on port $local_ws_port"
   curl -fsS "http://127.0.0.1:${local_ws_port}/readyz" >/dev/null 2>&1 || fail "Local tunnel did not reach the remote app-server ready endpoint"
 
+  local app_bundle_id
+  app_bundle_id="$(jq -er '.appBundleID | select(type == "string" and length > 0)' "$launch_json")" \
+    || fail "Remote launch metadata has no nonempty appBundleID"
+
   log "Running remote Codex turn"
   local client_summary="$LOCAL_ARTIFACTS_DIR/client-summary.json"
   local client_stdout="$LOCAL_ARTIFACTS_DIR/client.stdout.log"
@@ -850,6 +860,7 @@ EOF
   if node "$ROOT_DIR/scripts/remote/codex-app-server-client.mjs" \
       --ws-url "ws://127.0.0.1:${local_ws_port}" \
       --cwd "$remote_worktree_dir" \
+      --app-bundle-id "$app_bundle_id" \
       --prompt-file "$PROMPT_FILE" \
       --transcript-path "$LOCAL_ARTIFACTS_DIR/remote/transcript.jsonl" \
       --summary-path "$client_summary" \

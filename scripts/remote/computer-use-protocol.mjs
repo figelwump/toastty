@@ -6,6 +6,11 @@ export function isComputerUseServer(name) {
   return name === "computer-use" || name === "cua_repl";
 }
 
+export function isToasttyAppBundleID(value) {
+  return typeof value === "string" &&
+    /^com\.GiantThings\.toastty(?:\.[A-Za-z0-9-]+)*$/.test(value);
+}
+
 // Native UI operations used by the isolated Toastty verification workflow.
 // Do not include shell, browser navigation, or arbitrary execution tools.
 const toasttyUiTools = new Set([
@@ -14,17 +19,18 @@ const toasttyUiTools = new Set([
   "select_text", "set_value", "perform_secondary_action",
 ]);
 
-export function shouldAutoAcceptMcpElicitation(params) {
+export function shouldAutoAcceptMcpElicitation(params, expectedAppBundleID) {
   if (params?.serverName === "cua_repl") {
     const meta = params._meta;
     const schema = params.requestedSchema;
     // The new runtime identifies app access with structured metadata. Accept
-    // only the observed Toastty request; never fill a broader permission form.
-    return params.mode === "form" &&
+    // only the app built for this run; never fill a broader permission form.
+    return isToasttyAppBundleID(expectedAppBundleID) &&
+      params.mode === "form" &&
       meta?.connector_id === "computer-use" &&
       meta?.codex_approval_kind === "mcp_tool_call" &&
       toasttyUiTools.has(meta?.tool_name) &&
-      meta?.tool_params?.app === "com.GiantThings.toastty" &&
+      meta?.tool_params?.app === expectedAppBundleID &&
       schema?.type === "object" &&
       isRecord(schema.properties) &&
       Object.keys(schema.properties).length === 0 &&
@@ -52,4 +58,3 @@ export function shouldAutoAcceptMcpElicitation(params) {
   const meta = isRecord(params?._meta) ? params._meta : {};
   return meta.codex_approval_kind === "mcp_tool_call";
 }
-
