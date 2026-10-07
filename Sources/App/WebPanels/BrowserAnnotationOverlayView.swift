@@ -437,7 +437,6 @@ final class BrowserAnnotationOverlayNSView: NSView {
     private func openCreatePopover(for draft: PendingAnnotationDraft) {
         let session = BrowserAnnotationPopoverSession(purpose: .create)
         let content = BrowserAnnotationCommentEditorView(
-            parentWindow: window,
             sequenceNumber: draft.sequenceNumber,
             saveButtonTitle: "Add",
             onSave: { [weak self] comment in
@@ -466,7 +465,6 @@ final class BrowserAnnotationOverlayNSView: NSView {
             initialText: item.comment
         )
         let content = BrowserAnnotationCommentEditorView(
-            parentWindow: window,
             sequenceNumber: item.sequenceNumber,
             initialComment: item.comment,
             saveButtonTitle: "Save",
