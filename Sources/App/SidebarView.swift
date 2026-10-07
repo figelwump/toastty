@@ -3197,6 +3197,7 @@ struct SidebarView: View {
         let orderedRowIDs = orderedRows.map(\.id)
         subspaceOrderMemory.pinByParentID[parentWorkspaceID] = pin
         subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID] = orderedRowIDs
+        store.recordSidebarSubspaceOrder(orderedRowIDs, parentWorkspaceID: parentWorkspaceID)
 
         return VStack(alignment: .leading, spacing: 3) {
             subspacesGroupHeader(
@@ -3245,6 +3246,9 @@ struct SidebarView: View {
         .padding(.bottom, 12)
         .id(SubspaceGroupScrollID(parentWorkspaceID: parentWorkspaceID))
         .accessibilityIdentifier("sidebar.workspace.subspaces.\(parentWorkspaceID.uuidString)")
+        .onDisappear {
+            store.clearSidebarSubspaceOrder(parentWorkspaceID: parentWorkspaceID)
+        }
         .onAppear {
             if needsAttention {
                 collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)

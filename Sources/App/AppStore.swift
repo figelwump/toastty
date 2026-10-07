@@ -115,6 +115,9 @@ final class AppStore: ObservableObject {
     private let recentRightPanelItemsStore: RightPanelRecentItemsStore
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
     private var nextActiveCycleState: NextActiveCycleState?
+    // The sidebar can pin or freeze subspace rows. Keep its last displayed
+    // order for navigation without publishing another view update.
+    private var sidebarSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     private var browserRecentItemIDByPanelID: [UUID: RecentRightPanelItemID] = [:]
     // Defaults belong to exact live sessions, not the selected panel or window.
     @Published private var defaultScratchpadDocumentIDsBySessionID: [String: UUID] = [:]
@@ -203,6 +206,7 @@ final class AppStore: ObservableObject {
         self.state = state
         defaultScratchpadDocumentIDsBySessionID.removeAll()
         nextActiveCycleState = nil
+        sidebarSubspaceOrderByParentID.removeAll()
         navigationGeneration &+= 1
         navigationHistory.clear()
         navigationOriginPanelID = resolvedNavigationPanelID
@@ -1998,6 +2002,14 @@ final class AppStore: ObservableObject {
         return .newWindow
     }
 
+    func recordSidebarSubspaceOrder(_ workspaceIDs: [UUID], parentWorkspaceID: UUID) {
+        sidebarSubspaceOrderByParentID[parentWorkspaceID] = workspaceIDs
+    }
+
+    func clearSidebarSubspaceOrder(parentWorkspaceID: UUID) {
+        sidebarSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
+    }
+
     private func nextUnreadOrActivePanelTarget(
         preferredWindowID: UUID?,
         sessionRuntimeStore: SessionRuntimeStore?,
@@ -2012,15 +2024,21 @@ final class AppStore: ObservableObject {
             matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
                 .union(Self.nextUnreadOrWorkingFallbackStatusKinds)
         ) ?? []
-        if let unreadTarget = state.nextUnreadPanel(
-            fromWindowID: selection.windowID,
+        let navigationOrder = SidebarPanelNavigationOrder(
+            state: state,
+            sessionRegistry: sessionRuntimeStore?.sessionRegistry,
+            displayedSubspaceOrderByParentID: sidebarSubspaceOrderByParentID,
+            windowID: selection.windowID,
             workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID,
-            isEligible: { workspace, panelID in
-                workspace.doneAt == nil || livePanelIDs.contains(panelID)
+            focusedPanelID: selection.workspace.focusedPanelID
+        )
+        if let unreadTarget = navigationOrder.all.first(where: { target in
+            guard let workspace = state.workspacesByID[target.workspaceID],
+                  workspace.tab(id: target.tabID)?.unreadPanelIDs.contains(target.panelID) == true else {
+                return false
             }
-        ) {
+            return workspace.doneAt == nil || livePanelIDs.contains(target.panelID)
+        }) {
             if updatingCycleState {
                 nextActiveCycleState = nil
             }
@@ -2148,43 +2166,44 @@ final class AppStore: ObservableObject {
             matching: Self.nextUnreadOrWorkingFallbackStatusKinds
         )
         let laterPanelIDs = sessionRuntimeStore.activeLaterPanelIDs()
+        let navigationOrder = SidebarPanelNavigationOrder(
+            state: state,
+            sessionRegistry: sessionRuntimeStore.sessionRegistry,
+            displayedSubspaceOrderByParentID: sidebarSubspaceOrderByParentID,
+            windowID: anchor.windowID,
+            workspaceID: anchor.workspaceID,
+            focusedPanelID: anchor.focusedPanelID
+        )
         var entries: [NextActiveCycleEntry] = []
         var seenPanelIDs = Set<UUID>()
 
         // Preserve read action-required priority while storing it in the
         // persisted cycle so repeated jumps can still reach working rows.
-        let actionRequiredTargets = orderedNextUnreadOrActiveFallbackTargets(
-            anchor: anchor,
-            matchingPanelIDs: actionRequiredPanelIDs
-        )
+        let actionRequiredTargets = navigationOrder.all.filter { actionRequiredPanelIDs.contains($0.panelID) }
         entries.append(contentsOf: actionRequiredTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .actionRequired)
         })
 
-        let forwardWorkingTargets = orderedNextUnreadOrActiveFallbackTargets(
-            anchor: anchor,
-            matchingPanelIDs: workingPanelIDs.subtracting(seenPanelIDs),
-            includeCurrentWorkspaceWrap: false
-        )
+        let forwardWorkingTargets = navigationOrder.forward.filter {
+            workingPanelIDs.contains($0.panelID) && !seenPanelIDs.contains($0.panelID)
+        }
         entries.append(contentsOf: forwardWorkingTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .workingForward)
         })
 
-        let laterTargets = orderedNextUnreadOrActiveFallbackTargets(
-            anchor: anchor,
-            matchingPanelIDs: laterPanelIDs.subtracting(seenPanelIDs)
-        )
+        let laterTargets = navigationOrder.all.filter {
+            laterPanelIDs.contains($0.panelID) && !seenPanelIDs.contains($0.panelID)
+        }
         entries.append(contentsOf: laterTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .later)
         })
 
-        let wrappedWorkingTargets = orderedNextUnreadOrActiveFallbackTargets(
-            anchor: anchor,
-            matchingPanelIDs: workingPanelIDs.subtracting(seenPanelIDs)
-        )
+        let wrappedWorkingTargets = navigationOrder.wrapped.filter {
+            workingPanelIDs.contains($0.panelID) && !seenPanelIDs.contains($0.panelID)
+        }
         entries.append(contentsOf: wrappedWorkingTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .workingWrapped)
@@ -2203,35 +2222,6 @@ final class AppStore: ObservableObject {
         }
 
         return entries
-    }
-
-    private func orderedNextUnreadOrActiveFallbackTargets(
-        anchor: NextActiveCycleAnchor,
-        matchingPanelIDs: Set<UUID>,
-        includeCurrentWorkspaceWrap: Bool = true
-    ) -> [PanelNavigationTarget] {
-        guard matchingPanelIDs.isEmpty == false else {
-            return []
-        }
-
-        var remainingPanelIDs = matchingPanelIDs
-        var orderedTargets: [PanelNavigationTarget] = []
-
-        while let target = state.nextMatchingPanel(
-            fromWindowID: anchor.windowID,
-            workspaceID: anchor.workspaceID,
-            tabID: anchor.selectedTabID,
-            focusedPanelID: anchor.focusedPanelID,
-            includeCurrentWorkspaceWrap: includeCurrentWorkspaceWrap,
-            matches: { _, panelID in
-            remainingPanelIDs.contains(panelID)
-            }
-        ) {
-            orderedTargets.append(target)
-            remainingPanelIDs.remove(target.panelID)
-        }
-
-        return orderedTargets
     }
 
     private func panelNavigationTarget(for panelID: UUID) -> PanelNavigationTarget? {

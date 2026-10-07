@@ -2228,6 +2228,39 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testNextActiveUsesPinnedSubspaceOrderDisplayedBySidebar() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID,
+            sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        pumpMainRunLoop(duration: 0.6)
+        for sessionID in ["ready-agent", "approval-agent"] {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Resumed"),
+                at: Date()
+            )
+        }
+        for workspaceID in [ids.approvalID, ids.readyUnreadID] {
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+            harness.store.send(.markPanelNotificationsRead(workspaceID: workspaceID, panelID: panelID))
+        }
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(
+            try subspaceRowOrder(in: harness.hostingView),
+            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
+        )
+
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID,
+            sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.approvalID)
+    }
+
     func testSelectingASubspaceHighlightsItsParentCard() throws {
         let (harness, ids) = try makeSubspacesHarness()
         let rootView = harness.hostingView
