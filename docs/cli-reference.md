@@ -313,9 +313,13 @@ spawning session. Pass `parent=none` for a top-level workspace, or
 `parent=<workspaceID>` to nest under a specific workspace in the same window.
 Subspaces do not appear as their own sidebar cards; they render as compact rows
 in a Subspaces group inside the parent card, sorted ready, needs approval,
-error, working, then idle, and the spawning session's row shows a ⑂ chip that
-filters the group to its subspaces. Nesting stays one level deep, so a parent
-that is itself a subspace resolves to its root. Closing a parent keeps its
+error, working, idle, then done. Within each status, subspaces sort by the
+latest status update from any of their sessions, newest first. Equal times use
+workspace order; subspaces with no update time follow those with an update time.
+Hovering over the list holds its order, and the selected row keeps its slot
+until selection changes. The spawning session's row shows a ⑂ chip that filters
+the group to its subspaces. Nesting stays one level deep, so a parent that is
+itself a subspace resolves to its root. Closing a parent keeps its
 subspaces open as top-level workspaces.
 
 An explicit `parent` that is not a workspace in the target window is rejected

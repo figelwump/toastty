@@ -2204,8 +2204,8 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
 
-        // The jump read launch-checklist, which would now sort last; it stays
-        // where the jump found it.
+        // The jump read launch-checklist, which now belongs at the top of
+        // the idle group; it stays where the jump found it while selected.
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
         XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("launch-checklist, subspace, ready") })
         XCTAssertEqual(
@@ -2220,9 +2220,11 @@ final class SidebarViewTests: XCTestCase {
         )
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
+        // Releasing the pin puts the most recently idle subspace first in
+        // its group, ahead of the idle workspace created before it.
         XCTAssertEqual(
             try subspaceRowOrder(in: rootView),
-            ["qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification", "launch-checklist"]
+            ["qa-mobile-navigation", "qa-update-visitor-fixture", "launch-checklist", "qa-private-app-verification"]
         )
     }
 

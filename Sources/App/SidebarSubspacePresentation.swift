@@ -72,12 +72,18 @@ enum SidebarSubspacePresentation {
         /// elsewhere can nest a subspace under it.
         var spawnerWorkspaceID: UUID? = nil
         let sessions: [SessionLine]
-        /// Position in the window's workspace order, the tie-breaker so rows
-        /// with the same status never swap.
+        /// Position in the window's workspace order, used when status and
+        /// activity time are equal or no session has reported a status yet.
         let creationIndex: Int
         /// Absolute path of where the subspace lives; see
         /// `path(sessionCWDs:workspace:)`.
         var path: String? = nil
+
+        /// The latest status update from any session in this subspace.
+        /// Metadata changes do not update these times.
+        var latestActivityAt: Date? {
+            sessions.lazy.compactMap(\.statusUpdatedAt).max()
+        }
 
         /// A subspace is waiting only when none of its working sessions is
         /// actively making progress. Attention and unread ready states win.
@@ -190,6 +196,11 @@ enum SidebarSubspacePresentation {
         rows.sorted { lhs, rhs in
             if lhs.status != rhs.status {
                 return lhs.status < rhs.status
+            }
+            let lhsActivityAt = lhs.latestActivityAt ?? .distantPast
+            let rhsActivityAt = rhs.latestActivityAt ?? .distantPast
+            if lhsActivityAt != rhsActivityAt {
+                return lhsActivityAt > rhsActivityAt
             }
             return lhs.creationIndex < rhs.creationIndex
         }
