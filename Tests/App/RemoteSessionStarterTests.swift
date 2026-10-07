@@ -13,6 +13,7 @@ struct RemoteSessionStarterTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         let router = TestTerminalCommandRouter()
         let root: URL
+        let attachmentRoot: URL
         let projectDirectory: String
         let launcher: AgentLaunchService
         let workspaceID: UUID
@@ -26,9 +27,10 @@ struct RemoteSessionStarterTests {
             tailscaleLogin: "owner@example.com", createdAt: Date(timeIntervalSince1970: 0)
         )
 
-        init(readinessTimeout: Duration = .seconds(5)) throws {
+        init(readinessTimeout: Duration = .seconds(5), attachmentMaximumBytes: Int? = nil) throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("toastty-remote-start-\(UUID().uuidString)", isDirectory: true)
+            attachmentRoot = root.appendingPathComponent("uploaded files 'private'", isDirectory: true)
             let project = root.appendingPathComponent("project", isDirectory: true)
             let bin = root.appendingPathComponent("bin", isDirectory: true)
             try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
@@ -72,6 +74,7 @@ struct RemoteSessionStarterTests {
             starter = RemoteSessionStarter(
                 store: store,
                 launcher: launcher,
+                attachmentStore: attachmentMaximumBytes.map { RemoteMessageAttachmentStore(root: attachmentRoot, maximumBytes: $0) },
                 now: { [unowned self] in self.currentDate },
                 terminalReadinessTimeout: readinessTimeout,
                 deviceMayStart: { [unowned self] _ in self.deviceMayStart },
@@ -95,16 +98,24 @@ struct RemoteSessionStarterTests {
             workspace.orderedTabs.dropFirst().compactMap { $0.panels.keys.first }
         }
 
+        func stagedFiles() throws -> [URL] {
+            guard FileManager.default.fileExists(atPath: attachmentRoot.path) else { return [] }
+            return try FileManager.default.contentsOfDirectory(at: attachmentRoot, includingPropertiesForKeys: nil)
+                .flatMap { try FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil) }
+                .sorted { $0.path < $1.path }
+        }
+
         func request(
             id: String = "request-1",
             profileID: String = "claude",
             model: String? = "claude-opus-5-5",
             effort: String? = "high",
-            text: String = "Fix the flaky test"
+            text: String = "Fix the flaky test",
+            attachments: [RemoteMessageAttachment] = []
         ) -> RemoteSessionStartRequest {
             RemoteSessionStartRequest(
                 clientRequestID: id, workspaceID: workspaceID, profileID: profileID,
-                model: model, reasoningEffort: effort, text: text
+                model: model, reasoningEffort: effort, text: text, attachments: attachments
             )
         }
 
@@ -168,15 +179,93 @@ struct RemoteSessionStarterTests {
     }
 
     @MainActor
-    @Test func repeatingARequestReturnsTheFirstConversationAndStartsNothing() async throws {
-        let fixture = try Fixture()
-        let first = await fixture.start(fixture.request())
-        let tabCount = fixture.workspace.tabIDs.count
+    @Test(arguments: ["", "Review 'this' image and file"])
+    func uploadedPhotoAndFileReachTheManagedLaunchPromptWithTheirBytes(text: String) async throws {
+        let fixture = try Fixture(attachmentMaximumBytes: 1024)
+        let photo = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6pS4AAAAASUVORK5CYII="))
+        let file = Data("let message = \"hello\"\n".utf8)
+        let attachments: [RemoteMessageAttachment] = [
+            .init(filename: "../photo.png", data: photo),
+            .init(filename: "../example.swift", data: file)
+        ]
+        let selectedTabID = fixture.workspace.resolvedSelectedTabID
+        let result = await fixture.start(fixture.request(text: text, attachments: attachments))
+        guard case .started = result else {
+            Issue.record("Expected the attachments to start a session, got \(result)")
+            return
+        }
+        let files = try fixture.stagedFiles()
+        #expect(files.count == 2)
+        #expect(try Data(contentsOf: #require(files.first { $0.pathExtension == "png" })) == photo)
+        #expect(try Data(contentsOf: #require(files.first { $0.pathExtension == "swift" })) == file)
+        let panelID = try #require(fixture.newPanelIDs.first)
+        let command = try #require(fixture.router.sentTextByPanelID[panelID])
+        // The paths are quoted for the message, then the whole message is
+        // quoted as one CLI argument by the real launcher.
+        let orderedFiles = try attachments.map { attachment in
+            try #require(files.first { $0.pathExtension == (attachment.filename as NSString).pathExtension })
+        }
+        // Directory enumeration can return the /private/var alias for a
+        // store rooted under /var. Use the store's spelling of each path.
+        let paths = orderedFiles.map { file in
+            let storedURL = fixture.attachmentRoot
+                .appendingPathComponent(file.deletingLastPathComponent().lastPathComponent, isDirectory: true)
+                .appendingPathComponent(file.lastPathComponent)
+            return TerminalDropPayloadBuilder.shellEscapedPath(storedURL.path)
+        }.joined(separator: "\n")
+        let suffix = "Read the following files attached to this message on this Mac:\n" + paths
+        let prompt = text.isEmpty ? suffix : text + "\n\n" + suffix
+        #expect(command.contains(TerminalDropPayloadBuilder.shellEscapedPath(prompt)))
+        #expect(fixture.workspace.resolvedSelectedTabID == selectedTabID)
+        #expect(fixture.workspace.focusedPanelID == fixture.originalPanelID)
+        #expect(fixture.router.sentTextByPanelID[fixture.originalPanelID] == nil)
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.agent == .claude)
+    }
 
-        let repeated = await fixture.start(fixture.request())
+    @MainActor
+    @Test func unavailableStorageAndGeneratedPromptLimitRefuseAttachmentsBeforeOpeningATab() async throws {
+        let attachment = RemoteMessageAttachment(filename: "note.txt", data: Data("Read me".utf8))
+        let legacy = try Fixture()
+        let unsupported = await legacy.start(legacy.request(attachments: [attachment]))
+        #expect(unsupported == .rejected(reason: .attachmentStorageUnavailable))
+        #expect(legacy.newPanelIDs.isEmpty)
+        // Text-only requests still work when no upload store is configured.
+        guard case .started = await legacy.start(legacy.request(id: "text-only")) else {
+            Issue.record("Expected a legacy text-only start")
+            return
+        }
+
+        let bounded = try Fixture(attachmentMaximumBytes: 3)
+        let full = await bounded.start(bounded.request(attachments: [attachment]))
+        #expect(full == .rejected(reason: .attachmentStorageUnavailable))
+        #expect(bounded.newPanelIDs.isEmpty)
+        #expect(try bounded.stagedFiles().isEmpty)
+        #expect(bounded.router.sentTextByPanelID.isEmpty)
+
+        let fixture = try Fixture(attachmentMaximumBytes: 1024)
+        let tooLong = await fixture.start(fixture.request(
+            text: String(repeating: "a", count: RemoteGatewayProtocol.maximumRequestBodyBytes), attachments: [attachment]
+        ))
+        #expect(tooLong == .rejected(reason: .invalidRequest))
+        #expect(fixture.newPanelIDs.isEmpty)
+        #expect(try fixture.stagedFiles().isEmpty)
+        #expect(fixture.router.sentTextByPanelID.isEmpty)
+    }
+
+    @MainActor
+    @Test func repeatingARequestReturnsTheFirstConversationAndStartsNothing() async throws {
+        let fixture = try Fixture(attachmentMaximumBytes: 1024)
+        let request = fixture.request(attachments: [.init(filename: "note.txt", data: Data("Read me".utf8))])
+        let first = await fixture.start(request)
+        let tabCount = fixture.workspace.tabIDs.count
+        let files = try fixture.stagedFiles()
+        #expect(files.count == 1)
+
+        let repeated = await fixture.start(request)
         #expect(repeated == first)
         #expect(fixture.workspace.tabIDs.count == tabCount)
         #expect(fixture.router.sentTextByPanelID.count == 1)
+        #expect(try fixture.stagedFiles() == files)
 
         // A different request ID is a different start.
         let second = await fixture.start(fixture.request(id: "request-2"))
@@ -186,15 +275,18 @@ struct RemoteSessionStarterTests {
 
     @MainActor
     @Test func aRepeatDuringTheLaunchJoinsItAndAnotherRequestFromTheDeviceIsBusy() async throws {
-        let fixture = try Fixture()
+        let fixture = try Fixture(attachmentMaximumBytes: 1024)
+        let request = fixture.request(attachments: [.init(filename: "note.txt", data: Data("Read me".utf8))])
         // The new shell has not printed its prompt yet, so the launch waits.
         fixture.router.defaultPromptState = .busy
-        async let first = fixture.start(fixture.request())
+        async let first = fixture.start(request)
         await SessionRuntimeStoreTestSupport.waitUntil { fixture.workspace.tabIDs.count == 2 }
+        let files = try fixture.stagedFiles()
+        #expect(files.count == 1)
 
         let other = await fixture.start(fixture.request(id: "request-2"))
         #expect(other == .rejected(reason: .busy))
-        async let repeated = fixture.start(fixture.request())
+        async let repeated = fixture.start(request)
 
         fixture.router.defaultPromptState = .idleAtPrompt
         let results = await [first, repeated]
@@ -205,36 +297,41 @@ struct RemoteSessionStarterTests {
         #expect(results[0] == results[1])
         #expect(fixture.workspace.tabIDs.count == 2)
         #expect(fixture.router.sentTextByPanelID.count == 1)
+        #expect(try fixture.stagedFiles() == files)
     }
 
     @MainActor
     @Test func aTerminalThatNeverBecomesReadyFailsTheStartAndRemovesItsTab() async throws {
-        let fixture = try Fixture(readinessTimeout: .milliseconds(300))
+        let fixture = try Fixture(readinessTimeout: .milliseconds(300), attachmentMaximumBytes: 1024)
+        let request = fixture.request(attachments: [.init(filename: "note.txt", data: Data("Read me".utf8))])
         fixture.router.defaultPromptState = .busy
         let before = fixture.workspace.tabIDs
 
-        let result = await fixture.start(fixture.request())
+        let result = await fixture.start(request)
 
         #expect(result == .rejected(reason: .launchFailed))
         #expect(fixture.workspace.tabIDs == before)
         #expect(fixture.publishCount == 0)
         #expect(fixture.router.sentTextByPanelID.isEmpty)
+        #expect(try fixture.stagedFiles().isEmpty)
 
         // Nothing was launched, so the same request may be tried again.
         fixture.router.defaultPromptState = .idleAtPrompt
-        guard case .started = await fixture.start(fixture.request()) else {
+        guard case .started = await fixture.start(request) else {
             Issue.record("expected the retry to start")
             return
         }
+        #expect(try fixture.stagedFiles().count == 1)
     }
 
     @MainActor
     @Test func permissionRemovedDuringTheLaunchStopsTheCommandFromBeingSent() async throws {
-        let fixture = try Fixture()
+        let fixture = try Fixture(attachmentMaximumBytes: 1024)
         fixture.router.defaultPromptState = .busy
         let before = fixture.workspace.tabIDs
-        async let pending = fixture.start(fixture.request())
+        async let pending = fixture.start(fixture.request(attachments: [.init(filename: "note.txt", data: Data("Read me".utf8))]))
         await SessionRuntimeStoreTestSupport.waitUntil { fixture.workspace.tabIDs.count == 2 }
+        #expect(try fixture.stagedFiles().count == 1)
 
         fixture.deviceMayStart = false
         fixture.router.defaultPromptState = .idleAtPrompt
@@ -242,6 +339,7 @@ struct RemoteSessionStarterTests {
         #expect(await pending == .rejected(reason: .permissionDenied))
         #expect(fixture.router.sentTextByPanelID.isEmpty)
         #expect(fixture.workspace.tabIDs == before)
+        #expect(try fixture.stagedFiles().isEmpty)
         #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.values.contains { $0.isActive } == false)
     }
 
@@ -265,16 +363,20 @@ struct RemoteSessionStarterTests {
 
     @MainActor
     @Test func aCommandTheTerminalDidNotConfirmIsNotSentAgainAndItsTabStays() async throws {
-        let fixture = try Fixture()
+        let fixture = try Fixture(attachmentMaximumBytes: 1024)
         fixture.router.sendSucceeds = false
         fixture.router.sendFailure = .uncertain
 
-        let result = await fixture.start(fixture.request())
+        let bytes = Data("Keep this until delivery is known".utf8)
+        let result = await fixture.start(fixture.request(attachments: [.init(filename: "note.txt", data: bytes)]))
 
         #expect(result == .rejected(reason: .launchFailed))
         // One delivery attempt, and the tab remains for the person to see.
         #expect(fixture.router.sendAttemptCount == 1)
         #expect(fixture.workspace.tabIDs.count == 2)
+        let files = try fixture.stagedFiles()
+        #expect(files.count == 1)
+        #expect(try Data(contentsOf: #require(files.first)) == bytes)
     }
 
     @MainActor
@@ -406,6 +508,7 @@ struct RemoteSessionStarterTests {
         #expect(options.permission == .allowed)
         #expect(options.workspace == .available)
         #expect(options.launchDirectory == fixture.projectDirectory)
+        #expect(!options.supportsAttachments)
         #expect(options.agents.map(\.profileID) == ["claude", "pi", "opencode", "cursor"])
         let claude = try #require(options.agents.first)
         #expect(claude.availability == .available)
@@ -425,5 +528,10 @@ struct RemoteSessionStarterTests {
         #expect(fixture.starter.options(
             for: RemoteSessionStartOptionsRequest(workspaceID: UUID()), device: fixture.device
         ).workspace == .notFound)
+
+        let withUploads = try Fixture(attachmentMaximumBytes: 1024)
+        #expect(withUploads.starter.options(
+            for: RemoteSessionStartOptionsRequest(workspaceID: withUploads.workspaceID), device: withUploads.device
+        ).supportsAttachments)
     }
 }

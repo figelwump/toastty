@@ -68,6 +68,8 @@ final class ToasttyNewSessionModel: Identifiable {
     static let unreachableMessage = "Couldn't reach your Mac. Your message is still here. Tap Start to try again."
     static let unrecognizedAnswerMessage = "Your Mac sent an answer this app doesn't understand. Check the session list before you try again, and update Toastty Mobile."
     static let messageTooLongMessage = "That message is too long to send. Shorten it and tap Start again."
+    static let attachmentsTooLargeMessage = "That message and its attachments are too large to send. Shorten the message or remove a file, then tap Start again."
+    static let attachmentsUnsupportedMessage = "Update Toastty on your Mac to attach files."
     static let invalidModelMessage = "That isn't a model ID the Mac can use. Use one word with no spaces that doesn't start with a dash."
 
     let id = UUID()
@@ -85,6 +87,9 @@ final class ToasttyNewSessionModel: Identifiable {
     /// `nil` sends no effort, so the profile's default applies.
     private(set) var effort: String?
     private(set) var message = ""
+    /// File bytes stay in this sheet's draft; preferences never save them.
+    private(set) var attachments: [RemoteMessageAttachment] = []
+    private(set) var isLoadingAttachments = false
     /// Why the last start or edit did not work. Cleared by any edit.
     private(set) var errorMessage: String?
     /// The agent of the request in flight, for the waiting state.
@@ -105,6 +110,8 @@ final class ToasttyNewSessionModel: Identifiable {
     /// A request the Mac did not answer. The Mac drops repeats of one key,
     /// so starting again with it can never launch a second session.
     @ObservationIgnored private var unconfirmedRequest: (id: String, firstSentAt: Date)?
+    /// Late import or options answers must not restore a canceled draft.
+    @ObservationIgnored private var isDiscarded = false
 
     init(
         workspaceID: UUID,
@@ -125,6 +132,19 @@ final class ToasttyNewSessionModel: Identifiable {
         self.makeRequestID = makeRequestID
         self.startedSessionTimeout = startedSessionTimeout
         self.pollInterval = pollInterval
+#if DEBUG
+        if let controller = host as? HomeScreenController,
+           controller.runtimeMode == .fixture,
+           let count = Int(ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_NEW_SESSION_ATTACHMENT_DRAFT"] ?? ""),
+           (1...RemoteAttachmentPolicy.maximumCount).contains(count) {
+            attachments = (1...count).map { index in
+                RemoteMessageAttachment(
+                    filename: index == 1 ? "fixture-notes.txt" : "fixture-notes-\(index).txt",
+                    data: Data("New session attachment fixture".utf8)
+                )
+            }
+        }
+#endif
     }
 
     // MARK: - Derived presentation
@@ -208,11 +228,29 @@ final class ToasttyNewSessionModel: Identifiable {
     }
 
     var canStart: Bool {
-        phase == .form
+        allowsEditing
             && isLoadingWorkspace == false
+            && isLoadingAttachments == false
             && blockingMessage == nil
             && selectedAgent?.availability == .available
-            && trimmedMessage.isEmpty == false
+            && (trimmedMessage.isEmpty == false || attachments.isEmpty == false)
+            && (attachments.isEmpty || supportsAttachments)
+    }
+
+    var supportsAttachments: Bool {
+        options?.supportsAttachments == true
+    }
+
+    var allowsAttachmentInput: Bool {
+        allowsEditing && isLoadingWorkspace == false
+    }
+
+    var preventsInteractiveDismissal: Bool {
+        message.isEmpty == false || attachments.isEmpty == false || isLoadingAttachments || phase == .starting
+    }
+
+    private var allowsEditing: Bool {
+        phase == .form && isDiscarded == false
     }
 
     var sheetTitle: String {
@@ -235,7 +273,7 @@ final class ToasttyNewSessionModel: Identifiable {
     // MARK: - Loading
 
     func loadOptions() async {
-        guard phase == .loading || phase == .unreachable else { return }
+        guard isDiscarded == false, phase == .loading || phase == .unreachable else { return }
         phase = .loading
         optionsLoadCount += 1
         let load = optionsLoadCount
@@ -248,7 +286,7 @@ final class ToasttyNewSessionModel: Identifiable {
     /// there. The message stays, and so does the agent while it can start
     /// in the new workspace.
     func selectWorkspace(_ id: UUID) async {
-        guard phase == .form, id != workspaceID,
+        guard allowsEditing, isLoadingAttachments == false, id != workspaceID,
               let choice = workspaceChoices.first(where: { $0.id == id }) else { return }
         workspaceID = choice.id
         workspaceTitle = choice.title
@@ -265,6 +303,7 @@ final class ToasttyNewSessionModel: Identifiable {
     }
 
     private func apply(_ outcome: ToasttySessionStartOptionsOutcome) {
+        guard isDiscarded == false else { return }
         switch outcome {
         case .loaded(let response):
             options = response
@@ -288,7 +327,7 @@ final class ToasttyNewSessionModel: Identifiable {
     // MARK: - Editing
 
     func selectAgent(_ profileID: String) {
-        guard let agent = agents.first(where: { $0.profileID == profileID }) else { return }
+        guard allowsEditing, let agent = agents.first(where: { $0.profileID == profileID }) else { return }
         guard agent.availability == .available else {
             // The agent cannot be chosen; say why instead.
             explainedAgentID = profileID
@@ -301,7 +340,7 @@ final class ToasttyNewSessionModel: Identifiable {
     }
 
     func selectModel(_ newModel: String?) {
-        guard newModel != model else { return }
+        guard allowsEditing, newModel != model else { return }
         model = newModel
         draftDidChange()
     }
@@ -310,6 +349,7 @@ final class ToasttyNewSessionModel: Identifiable {
     /// would refuse it.
     @discardableResult
     func useCustomModel(_ text: String) -> Bool {
+        guard allowsEditing else { return false }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.isValidModel(trimmed) else {
             errorMessage = Self.invalidModelMessage
@@ -320,14 +360,50 @@ final class ToasttyNewSessionModel: Identifiable {
     }
 
     func selectEffort(_ newEffort: String?) {
-        guard newEffort != effort else { return }
+        guard allowsEditing, newEffort != effort else { return }
         effort = newEffort
         draftDidChange()
     }
 
     func updateMessage(_ text: String) {
-        guard text != message else { return }
+        guard allowsEditing, text != message else { return }
         message = text
+        draftDidChange()
+    }
+
+    /// The picker sets this before reading files so Start cannot overtake it.
+    func setIsLoadingAttachments(_ isLoading: Bool) {
+        guard isLoading == false || (allowsAttachmentInput && supportsAttachments) else { return }
+        isLoadingAttachments = isLoading
+    }
+
+    @discardableResult
+    func addAttachments(_ additions: [RemoteMessageAttachment]) -> String? {
+        guard allowsAttachmentInput, isLoadingAttachments == false else {
+            return "Wait until the attachment and session options are ready."
+        }
+        guard supportsAttachments else { return Self.attachmentsUnsupportedMessage }
+        guard additions.isEmpty == false else { return nil }
+        let updated = attachments + additions
+        if let error = RemoteAttachmentPolicy.validationError(for: updated) { return error }
+        attachments = updated
+        draftDidChange()
+        return nil
+    }
+
+    func removeAttachment(_ id: UUID) {
+        guard allowsEditing, isLoadingAttachments == false,
+              attachments.contains(where: { $0.id == id }) else { return }
+        attachments.removeAll { $0.id == id }
+        draftDidChange()
+    }
+
+    func discardDraft() {
+        guard phase != .starting else { return }
+        isDiscarded = true
+        message = ""
+        attachments = []
+        isLoadingAttachments = false
         draftDidChange()
     }
 
@@ -353,13 +429,24 @@ final class ToasttyNewSessionModel: Identifiable {
             profileID: agent.profileID,
             model: sentModel,
             reasoningEffort: sentEffort,
-            text: trimmedMessage
+            text: trimmedMessage,
+            attachments: attachments
         )
         // The Mac refuses a larger request before it reads it. Sending one
         // would look like a lost connection that Start could never fix.
-        guard let encoded = try? ConversationEventCoding.makeEncoder().encode(request),
-              encoded.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+        guard request.text.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
             errorMessage = Self.messageTooLongMessage
+            return
+        }
+        if let error = RemoteAttachmentPolicy.validationError(for: request.attachments) {
+            errorMessage = error
+            return
+        }
+        let maximumBodyBytes = attachments.isEmpty
+            ? RemoteGatewayProtocol.maximumRequestBodyBytes
+            : RemoteAttachmentPolicy.maximumEncodedBodyBytes
+        guard let encoded = try? request.encodedForTransport(), encoded.count <= maximumBodyBytes else {
+            errorMessage = attachments.isEmpty ? Self.messageTooLongMessage : Self.attachmentsTooLargeMessage
             return
         }
         unconfirmedRequest = (requestID, firstSentAt)
@@ -457,6 +544,10 @@ final class ToasttyNewSessionModel: Identifiable {
             "\(agentName) can't be started on your Mac. Check that it's installed, then try again."
         case .invalidRequest:
             "Your Mac couldn't use this request. Check the model and effort, then try again."
+        case .invalidAttachments:
+            "Your Mac couldn't use an attachment. Remove it and choose an image, PDF, or supported text file."
+        case .attachmentStorageUnavailable:
+            "Your Mac couldn't save the attachments. Check its available disk space, then try again."
         case .launchFailed:
             "\(agentName) didn't start on your Mac. Try again."
         case .busy:

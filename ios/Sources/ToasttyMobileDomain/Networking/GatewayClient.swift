@@ -368,11 +368,15 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
     public func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse {
-        let response = try await perform(
+        var urlRequest = try await makeNativeBearerRequest(
             method: "POST",
-            path: RemoteSessionStartPolicy.startPath,
-            body: try encode(request)
+            path: request.attachments.isEmpty ? RemoteSessionStartPolicy.startPath : RemoteSessionStartPolicy.startWithAttachmentsPath,
+            body: try request.encodedForTransport(),
+            sendsOrigin: true
         )
+        if !request.attachments.isEmpty { urlRequest.timeoutInterval = 150 }
+        let response = try await sendTransportRequest(urlRequest)
+        guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
         return try decodeVersioned(RemoteSessionStartResponse.self, from: response.body) {
             $0.protocolVersion
         }

@@ -559,6 +559,34 @@ final class GatewayClientTests: XCTestCase {
         }
     }
 
+    func testStartSessionUploadsAttachmentsToNativeRouteWithoutInflatingBase64() async throws {
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"protocolVersion":"1.0","status":"rejected","reason":"attachment_storage_unavailable"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+        // JPEG bytes produce base64 slashes, which must remain unescaped.
+        let request = RemoteSessionStartRequest(
+            clientRequestID: "photo-start", workspaceID: UUID(), profileID: "claude", text: "",
+            attachments: [.init(filename: "photo.jpg", data: Data([255, 216, 255]))]
+        )
+        let result = try await client.startSession(request)
+        XCTAssertEqual(result.result, .rejected(reason: .attachmentStorageUnavailable))
+        let requests = await transport.recordedRequests()
+        let recorded = try XCTUnwrap(requests.first)
+        XCTAssertEqual(recorded.url?.path, RemoteSessionStartPolicy.startWithAttachmentsPath)
+        XCTAssertEqual(recorded.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertNil(recorded.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertEqual(recorded.timeoutInterval, 150)
+        let body = try XCTUnwrap(recorded.httpBody)
+        XCTAssertEqual(body, try request.encodedForTransport())
+        XCTAssertFalse(String(decoding: body, as: UTF8.self).contains(#"\/"#))
+        XCTAssertEqual(try ConversationEventCoding.makeDecoder().decode(RemoteSessionStartRequest.self, from: body), request)
+    }
+
     func testWorkspaceDoneUsesAuthenticatedPOSTContract() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Data(#"{"protocolVersion":"1.0","result":"updated"}"#.utf8)),

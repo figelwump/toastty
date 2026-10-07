@@ -80,6 +80,7 @@ final class RemoteSessionStarter {
 
     private let store: AppStore
     private weak var launcher: (any RemoteSessionLaunching)?
+    private let attachmentStore: RemoteMessageAttachmentStore?
     private let fileManager: FileManager
     private let now: () -> Date
     private let terminalReadinessTimeout: Duration
@@ -105,6 +106,7 @@ final class RemoteSessionStarter {
     init(
         store: AppStore,
         launcher: (any RemoteSessionLaunching)?,
+        attachmentStore: RemoteMessageAttachmentStore? = nil,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         terminalReadinessTimeout: Duration = RemoteSessionStarter.defaultTerminalReadinessTimeout,
@@ -114,6 +116,7 @@ final class RemoteSessionStarter {
     ) {
         self.store = store
         self.launcher = launcher
+        self.attachmentStore = attachmentStore
         self.fileManager = fileManager
         self.now = now
         self.terminalReadinessTimeout = terminalReadinessTimeout
@@ -148,7 +151,8 @@ final class RemoteSessionStarter {
                         : [],
                     reasoningEfforts: Self.reasoningEfforts(for: summary)
                 )
-            }
+            },
+            supportsAttachments: attachmentStore != nil
         )
     }
 
@@ -264,6 +268,25 @@ final class RemoteSessionStarter {
             return .rejected(reason: .invalidRequest)
         }
 
+        guard deviceMayStart(deviceID) else { return .rejected(reason: .permissionDenied) }
+        let staged: RemoteMessageAttachmentStore.Staged?
+        if !request.attachments.isEmpty {
+            guard let attachmentStore else { return .rejected(reason: .attachmentStorageUnavailable) }
+            do { staged = try await attachmentStore.stage(request.attachments) }
+            catch RemoteMessageAttachmentStore.StorageError.invalidAttachments { return .rejected(reason: .invalidAttachments) }
+            catch { return .rejected(reason: .attachmentStorageUnavailable) }
+        } else { staged = nil }
+        let initialPrompt = staged?.deliveryText(text: request.text) ?? request.text
+        // The file paths count toward the launcher's first-message limit.
+        guard initialPrompt.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+            if let staged { await attachmentStore?.discard(staged) }
+            return .rejected(reason: .invalidRequest)
+        }
+        guard deviceMayStart(deviceID) else {
+            if let staged { await attachmentStore?.discard(staged) }
+            return .rejected(reason: .permissionDenied)
+        }
+
         let tabID = UUID()
         let panelID = UUID()
         guard store.send(.createBackgroundTerminalTab(
@@ -272,6 +295,7 @@ final class RemoteSessionStarter {
             panelID: panelID,
             terminalCWD: directory
         )) else {
+            if let staged { await attachmentStore?.discard(staged) }
             return .rejected(reason: .launchFailed)
         }
 
@@ -284,6 +308,7 @@ final class RemoteSessionStarter {
             _ = try await launchWhenTerminalIsReady(
                 launcher: launcher,
                 request: request,
+                initialPrompt: initialPrompt,
                 panelID: panelID,
                 directory: directory,
                 beforeEachAttempt: { [store] in
@@ -309,8 +334,11 @@ final class RemoteSessionStarter {
             if case .commandDeliveryUncertain? = error as? AgentLaunchError {
                 // The terminal may hold part of the command. The tab stays,
                 // so the person can see what arrived.
-            } else if tabWasSelected == false {
-                closeCreatedTabIfUnused(workspaceID: request.workspaceID, tabID: tabID, panelID: panelID)
+            } else {
+                if tabWasSelected == false {
+                    closeCreatedTabIfUnused(workspaceID: request.workspaceID, tabID: tabID, panelID: panelID)
+                }
+                if let staged { await attachmentStore?.discard(staged) }
             }
             if case .permission? = error as? DispatchRefused {
                 return .rejected(reason: .permissionDenied)
@@ -354,6 +382,7 @@ final class RemoteSessionStarter {
     private func launchWhenTerminalIsReady(
         launcher: any RemoteSessionLaunching,
         request: RemoteSessionStartRequest,
+        initialPrompt: String,
         panelID: UUID,
         directory: String,
         beforeEachAttempt: @MainActor () -> Void,
@@ -371,7 +400,7 @@ final class RemoteSessionStarter {
                     cwd: directory,
                     model: request.model,
                     reasoningEffort: request.reasoningEffort,
-                    initialPrompt: request.text,
+                    initialPrompt: initialPrompt,
                     beforeDispatch: beforeDispatch
                 )
             } catch let error as AgentLaunchError {

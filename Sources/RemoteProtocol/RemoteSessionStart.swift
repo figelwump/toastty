@@ -8,6 +8,7 @@ import Foundation
 public enum RemoteSessionStartPolicy {
     public static let optionsPath = "/api/session.start.options"
     public static let startPath = "/api/session.start"
+    public static let startWithAttachmentsPath = "/api/session.start-with-attachments"
     public static let maximumOptionsBodyBytes = 1024
     public static let maximumClientRequestIDLength = 64
     public static let maximumModelLength = 200
@@ -151,23 +152,27 @@ public struct RemoteSessionStartOptionsResponse: Codable, Equatable, Sendable {
     /// The directory a new session would start in. For display only.
     public var launchDirectory: String?
     public var agents: [RemoteSessionStartAgent]
+    /// The Mac can store files and include their paths in the first message.
+    public var supportsAttachments: Bool
 
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
         permission: RemoteSessionStartPermission,
         workspace: RemoteSessionStartWorkspaceState,
         launchDirectory: String? = nil,
-        agents: [RemoteSessionStartAgent] = []
+        agents: [RemoteSessionStartAgent] = [],
+        supportsAttachments: Bool = false
     ) {
         self.protocolVersion = protocolVersion
         self.permission = permission
         self.workspace = workspace
         self.launchDirectory = launchDirectory
         self.agents = agents
+        self.supportsAttachments = supportsAttachments
     }
 
     private enum CodingKeys: String, CodingKey {
-        case protocolVersion, permission, workspace, launchDirectory, agents
+        case protocolVersion, permission, workspace, launchDirectory, agents, supportsAttachments
     }
 
     public init(from decoder: any Decoder) throws {
@@ -177,6 +182,7 @@ public struct RemoteSessionStartOptionsResponse: Codable, Equatable, Sendable {
         workspace = try container.decode(RemoteSessionStartWorkspaceState.self, forKey: .workspace)
         launchDirectory = try container.decodeIfPresent(String.self, forKey: .launchDirectory)
         agents = try container.decodeIfPresent([RemoteSessionStartAgent].self, forKey: .agents) ?? []
+        supportsAttachments = try container.decodeIfPresent(Bool.self, forKey: .supportsAttachments) ?? false
     }
 }
 
@@ -194,8 +200,9 @@ public struct RemoteSessionStartRequest: Codable, Equatable, Sendable {
     public var model: String?
     /// Absent means the profile's own default.
     public var reasoningEffort: String?
-    /// The first message. Required.
+    /// The first message. May be empty when files are attached.
     public var text: String
+    public var attachments: [RemoteMessageAttachment]
 
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
@@ -204,7 +211,8 @@ public struct RemoteSessionStartRequest: Codable, Equatable, Sendable {
         profileID: String,
         model: String? = nil,
         reasoningEffort: String? = nil,
-        text: String
+        text: String,
+        attachments: [RemoteMessageAttachment] = []
     ) {
         self.protocolVersion = protocolVersion
         self.clientRequestID = clientRequestID
@@ -213,6 +221,43 @@ public struct RemoteSessionStartRequest: Codable, Equatable, Sendable {
         self.model = model
         self.reasoningEffort = reasoningEffort
         self.text = text
+        self.attachments = attachments
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion, clientRequestID, workspaceID, profileID, model, reasoningEffort, text, attachments
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try container.decode(String.self, forKey: .protocolVersion)
+        clientRequestID = try container.decode(String.self, forKey: .clientRequestID)
+        workspaceID = try container.decode(UUID.self, forKey: .workspaceID)
+        profileID = try container.decode(String.self, forKey: .profileID)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        reasoningEffort = try container.decodeIfPresent(String.self, forKey: .reasoningEffort)
+        text = try container.decode(String.self, forKey: .text)
+        attachments = try container.decodeIfPresent([RemoteMessageAttachment].self, forKey: .attachments) ?? []
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(protocolVersion, forKey: .protocolVersion)
+        try container.encode(clientRequestID, forKey: .clientRequestID)
+        try container.encode(workspaceID, forKey: .workspaceID)
+        try container.encode(profileID, forKey: .profileID)
+        try container.encodeIfPresent(model, forKey: .model)
+        try container.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
+        try container.encode(text, forKey: .text)
+        if !attachments.isEmpty { try container.encode(attachments, forKey: .attachments) }
+    }
+
+    /// Admission and delivery use the same bytes. Escaping base64 slashes
+    /// would inflate valid uploads beyond their encoded-size limit.
+    public func encodedForTransport() throws -> Data {
+        let encoder = ConversationEventCoding.makeEncoder()
+        if !attachments.isEmpty { encoder.outputFormatting.insert(.withoutEscapingSlashes) }
+        return try encoder.encode(self)
     }
 }
 
@@ -228,6 +273,8 @@ public enum RemoteSessionStartRejectionReason: String, Codable, Equatable, Senda
     case agentUnavailable = "agent_unavailable"
     /// A field was missing, empty, or outside its limits.
     case invalidRequest = "invalid_request"
+    case invalidAttachments = "invalid_attachments"
+    case attachmentStorageUnavailable = "attachment_storage_unavailable"
     /// The Mac opened a terminal but the agent command could not be sent.
     case launchFailed = "launch_failed"
     /// This device already has a start in progress.
