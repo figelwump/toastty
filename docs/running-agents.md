@@ -445,11 +445,12 @@ in the top bar. The arrow beside it picks what the button does:
 - **Merge and Clean**, the default, labels the button **Merge & Clean
   PR #N**. After the pull request merges, Toastty closes the workspace, removes
   its worktree, and deletes its branches.
-- **Just Merge** labels the button **Merge PR #N** and leaves the workspace in
+- **Merge Only** labels the button **Merge PR #N** and leaves the workspace in
   place.
 
 The choice applies to every workspace and is kept across launches.
-`Cmd+Ctrl+M` runs the selected subspace's button in the mode it shows. The
+`Option+Shift+M` runs the selected subspace's button in the mode it shows. In a
+workspace without a Merge button, the key goes to the terminal as usual. The
 subspace's sidebar context menu offers both actions.
 
 The merge itself is the same in both modes. Clicking the button sends a merge

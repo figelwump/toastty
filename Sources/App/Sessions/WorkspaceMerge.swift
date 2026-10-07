@@ -16,7 +16,7 @@ enum WorkspaceMergeMode: String, CaseIterable, Sendable {
         case .mergeAndCleanUp:
             return "Merge and Clean"
         case .mergeOnly:
-            return "Just Merge"
+            return "Merge Only"
         }
     }
 }
@@ -400,13 +400,13 @@ struct WorkspaceMergeController {
             return (
                 "Unable to Clean Up After the Merge",
                 "Toastty could not find this workspace's checkout, so it could not clean up after merging \(pullRequest). "
-                    + "Open a terminal in the worktree and try again, or choose Just Merge."
+                    + "Open a terminal in the worktree and try again, or choose Merge Only."
             )
         case .noPullRequestNumber:
             return (
                 "Unable to Clean Up After the Merge",
                 "The workspace's pull request label \"\(pullRequest)\" has no pull request number or URL. "
-                    + "Choose Just Merge, or set the github-pr annotation with the pull request's URL."
+                    + "Choose Merge Only, or set the github-pr annotation with the pull request's URL."
             )
         }
     }

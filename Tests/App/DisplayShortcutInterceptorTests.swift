@@ -197,18 +197,20 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isToggleLaterFlagShortcut(repeatedEvent))
     }
 
-    func testMergeWorkspacePullRequestShortcutMatchesControlCommandMOnly() throws {
-        let matchingEvent = try makeKeyEvent(characters: "m", modifiers: [.command, .control], keyCode: 0x2E)
+    func testMergeWorkspacePullRequestShortcutMatchesOptionShiftMOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "Â", modifiers: [.option, .shift], keyCode: 0x2E)
         let watchCommandEvent = try makeKeyEvent(characters: "M", modifiers: [.command, .shift], keyCode: 0x2E)
+        let renameTabEvent = try makeKeyEvent(characters: "´", modifiers: [.option, .shift], keyCode: 0x0E)
         let repeatedEvent = try makeKeyEvent(
-            characters: "m",
-            modifiers: [.command, .control],
+            characters: "Â",
+            modifiers: [.option, .shift],
             keyCode: 0x2E,
             isARepeat: true
         )
 
         XCTAssertTrue(DisplayShortcutInterceptor.isMergeWorkspacePullRequestShortcut(matchingEvent))
         XCTAssertFalse(DisplayShortcutInterceptor.isMergeWorkspacePullRequestShortcut(watchCommandEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isMergeWorkspacePullRequestShortcut(renameTabEvent))
         XCTAssertFalse(DisplayShortcutInterceptor.isMergeWorkspacePullRequestShortcut(repeatedEvent))
     }
 
@@ -232,7 +234,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             requestWorkspaceMerge: { merges.append(($0, $1)) },
             installEventMonitor: false
         )
-        let event = try makeKeyEvent(characters: "m", modifiers: [.command, .control], keyCode: 0x2E)
+        let event = try makeKeyEvent(characters: "Â", modifiers: [.option, .shift], keyCode: 0x2E)
         XCTAssertEqual(interceptor.shortcutAction(for: event, appOwnedWindowID: windowID), .mergeWorkspacePullRequest)
 
         // A top-level workspace has no Merge button, so the key goes on to

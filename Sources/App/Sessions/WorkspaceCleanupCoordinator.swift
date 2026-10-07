@@ -232,7 +232,7 @@ final class WorkspaceCleanupCoordinator {
     // MARK: - Requests
 
     /// Records that the user chose Merge and Clean for `workspaceID`. A
-    /// later Just Merge replaces it with `cancelCleanup`.
+    /// later Merge Only replaces it with `cancelCleanup`.
     func requestCleanup(workspaceID: UUID, pullRequestNumber: Int, repoPath: String) {
         guard requests[workspaceID]?.phase != .cleaningUp else { return }
         pollFailureCounts[workspaceID] = nil

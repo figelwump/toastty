@@ -228,7 +228,7 @@ enum ToasttyKeyboardShortcuts {
     /// is Watch Running Command and Cmd+Option+M is the system's Minimize All.
     static let mergeWorkspacePullRequest = ToasttyKeyboardShortcut(
         "m",
-        modifiers: [.command, .control]
+        modifiers: [.option, .shift]
     )
 
     static let splitHorizontal = ToasttyKeyboardShortcut(

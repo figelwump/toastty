@@ -670,13 +670,10 @@ final class DisplayShortcutInterceptor {
     }
 
     static func isMergeWorkspacePullRequestShortcut(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown,
-              event.isARepeat == false,
-              event.charactersIgnoringModifiers?.lowercased() == "m" else {
-            return false
-        }
+        guard event.type == .keyDown, event.isARepeat == false else { return false }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        return modifiers == [.command, .control]
+        guard modifiers == [.option, .shift] else { return false }
+        return Int(event.keyCode) == Int(kVK_ANSI_M)
     }
 
     static func isToggleLaterFlagShortcut(_ event: NSEvent) -> Bool {
