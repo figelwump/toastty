@@ -308,6 +308,11 @@ let project = Project(
             buildAction: .buildAction(targets: [
                 .project(path: .relativeToRoot("."), target: "ToasttyMobileApp"),
             ]),
+            // Release tests do not use the Debug fixture UI bundle.
+            testAction: .targets([
+                .testableTarget(target: .target("ToasttyMobileDomainTests")),
+                .testableTarget(target: .target("ToasttyMobileAppTests")),
+            ], configuration: .release),
             runAction: .runAction(
                 configuration: .release,
                 executable: .project(path: .relativeToRoot("."), target: "ToasttyMobileApp")

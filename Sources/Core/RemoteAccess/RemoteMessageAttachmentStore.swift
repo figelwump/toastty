@@ -10,8 +10,12 @@ public actor RemoteMessageAttachmentStore {
         public let files: [URL]
 
         public func deliveryText(for request: RemoteMessageSendRequest) -> String {
+            deliveryText(text: request.text)
+        }
+
+        public func deliveryText(text: String) -> String {
             let paths = files.map { TerminalDropPayloadBuilder.shellEscapedPath($0.path) }.joined(separator: "\n")
-            return [request.text, "Read the following files attached to this message on this Mac:\n" + paths]
+            return [text, "Read the following files attached to this message on this Mac:\n" + paths]
                 .filter { !$0.isEmpty }.joined(separator: "\n\n")
         }
     }

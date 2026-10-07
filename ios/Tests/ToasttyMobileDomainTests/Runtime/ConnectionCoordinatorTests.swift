@@ -408,6 +408,60 @@ final class ConnectionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testSessionStartIsSentOnlyWhileLiveToAHostThatAdvertisesIt() async throws {
+        let run = runID(4)
+        let workspaceID = UUID()
+        let optionsRequest = RemoteSessionStartOptionsRequest(workspaceID: workspaceID)
+        let startRequest = RemoteSessionStartRequest(
+            clientRequestID: "request-1", workspaceID: workspaceID, profileID: "claude", text: "Hi"
+        )
+        for (capabilities, expectsRequest) in [
+            ([RemoteGatewayCapability.conversationFlag], false),
+            ([.sessionStart], true),
+        ] {
+            let operations = OperationLog()
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse(capabilities: capabilities))],
+                sessions: [.success(snapshot(runID: run, title: "Seed"))],
+                events: []
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(
+                    operations: operations,
+                    connections: [.success(subscription)]
+                ),
+                deviceScopes: [.read, .send]
+            )
+            let earlyOptions = try await coordinator.sessionStartOptions(optionsRequest)
+            let earlyStart = try await coordinator.startSession(startRequest)
+            XCTAssertNil(earlyOptions)
+            XCTAssertNil(earlyStart)
+
+            await coordinator.connectIfNeeded()
+            await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh")))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            let options = try await coordinator.sessionStartOptions(optionsRequest)
+            let start = try await coordinator.startSession(startRequest)
+
+            XCTAssertEqual(options?.permission, expectsRequest ? .allowed : nil)
+            XCTAssertEqual(start?.result, expectsRequest ? .rejected(reason: .busy) : nil)
+            let sent = await gateway.recordedSessionStartRequests()
+            XCTAssertEqual(sent, expectsRequest ? [startRequest] : [])
+
+            // Send access removed while a sheet is open: the start is
+            // refused here, and the options still explain why.
+            await coordinator.updateDeviceScopes([.read])
+            let denied = try await coordinator.startSession(startRequest)
+            XCTAssertEqual(denied?.result, expectsRequest ? .rejected(reason: .permissionDenied) : nil)
+            let sentAfterDenial = await gateway.recordedSessionStartRequests()
+            XCTAssertEqual(sentAfterDenial, sent)
+            await coordinator.suspend()
+        }
+    }
+
     func testWorkspaceDoneIsSentOnlyToAHostThatAdvertisesIt() async throws {
         let run = runID(4)
         let request = RemoteWorkspaceDoneRequest(workspaceID: UUID(), done: true)
@@ -2079,6 +2133,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var readAcknowledgements: [RemoteConversationReadAcknowledgementRequest] = []
     private var workspaceDoneRequests: [RemoteWorkspaceDoneRequest] = []
     private var conversationFlagRequests: [RemoteConversationFlagRequest] = []
+    private var sessionStartRequests: [RemoteSessionStartRequest] = []
 
     init(
         operations: OperationLog,
@@ -2169,7 +2224,21 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return RemoteConversationFlagResponse(result: .updated)
     }
 
+    func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest
+    ) async throws -> RemoteSessionStartOptionsResponse {
+        RemoteSessionStartOptionsResponse(permission: .allowed, workspace: .available)
+    }
+
+    func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse {
+        sessionStartRequests.append(request)
+        return RemoteSessionStartResponse(result: .rejected(reason: .busy))
+    }
+
     func recordedConversationFlagRequests() -> [RemoteConversationFlagRequest] { conversationFlagRequests }
+    func recordedSessionStartRequests() -> [RemoteSessionStartRequest] { sessionStartRequests }
     func recordedWorkspaceDoneRequests() -> [RemoteWorkspaceDoneRequest] { workspaceDoneRequests }
     func helloCallCount() -> Int { helloCalls }
     func recordedEventCursors() -> [ConversationEventCursor?] { eventCursors }

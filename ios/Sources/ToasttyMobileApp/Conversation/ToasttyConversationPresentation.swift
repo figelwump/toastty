@@ -158,6 +158,8 @@ struct ToasttyTranscriptTurn: Equatable, Sendable {
     /// makes the work section foldable.
     let hasResponse: Bool
 
+    /// Includes user turns before their first work block arrives, so the
+    /// previous completed turn cannot be mistaken for the current one.
     static func turns(for blocks: [ToasttyTranscriptBlock]) -> [ToasttyTranscriptTurn] {
         var turns: [ToasttyTranscriptTurn] = []
         var currentID: ToasttyTranscriptRowID?
@@ -235,7 +237,7 @@ struct ToasttyTranscriptTurn: Equatable, Sendable {
             }
         }
         flushTurn()
-        return turns.filter { $0.workBlockIDs.isEmpty == false }
+        return turns
     }
 }
 
@@ -303,6 +305,21 @@ struct ToasttyConversationPresentationState: Equatable, Sendable {
         self.hasOlder = hasOlder
         self.isLoadingOlder = isLoadingOlder
         self.prependAnchorID = prependAnchorID
+    }
+
+    func settledTurnIDs(isSessionWorking: Bool, isSubmitting: Bool = false) -> Set<ToasttyTranscriptRowID> {
+        var settled = Set(turns.filter(\.hasResponse).map(\.id))
+        let hasPendingSend = isSubmitting || sendItems.contains { item in
+            if case .optimistic = item.content { return true }
+            return false
+        }
+        // A send starts a new turn before its canonical user row arrives.
+        // Keep the completed predecessor settled through that handoff, while
+        // retaining work expansion for a response still streaming in its turn.
+        if let last = turns.last, isSessionWorking, hasPendingSend == false {
+            settled.remove(last.id)
+        }
+        return settled
     }
 
     func updatingMetadata(

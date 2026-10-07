@@ -9,7 +9,7 @@ public extension AgentKind {
     /// managed profile overlay instead.
     var usesStagedSkillsTree: Bool {
         switch self {
-        case .claude, .cursor, .mimocode, .opencode, .pi:
+        case .claude, .cursor, .grok, .mimocode, .opencode, .pi:
             return true
         default:
             return false
@@ -24,6 +24,8 @@ public extension AgentKind {
             return "Codex"
         case .cursor:
             return "Cursor"
+        case .grok:
+            return "Grok Build"
         case .mimocode:
             return "MiMo Code"
         case .opencode:
@@ -77,6 +79,7 @@ public enum ManagedAgentCommandResolver {
             "cdx",
             AgentKind.claude.rawValue,
             "cursor-agent",
+            AgentKind.grok.rawValue,
             "mimo",
             AgentKind.mimocode.rawValue,
             AgentKind.opencode.rawValue,
@@ -135,6 +138,7 @@ private extension ManagedAgentCommandResolver {
         agent == .codex
             || agent == .claude
             || agent == .cursor
+            || agent == .grok
             || agent == .mimocode
             || agent == .opencode
             || agent == .pi
@@ -167,6 +171,8 @@ private extension ManagedAgentCommandResolver {
             return .claude
         case "cursor-agent":
             return .cursor
+        case AgentKind.grok.rawValue:
+            return .grok
         case "mimo", AgentKind.mimocode.rawValue:
             return .mimocode
         case AgentKind.opencode.rawValue:
@@ -221,6 +227,8 @@ private extension ManagedAgentCommandResolver {
             return .claude
         case "cursor-agent":
             return .cursor
+        case "grok":
+            return .grok
         case "mimo", "mimocode":
             return .mimocode
         case "opencode":

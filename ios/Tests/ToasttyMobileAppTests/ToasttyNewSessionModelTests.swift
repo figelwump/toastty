@@ -1,0 +1,936 @@
+import Foundation
+import RemoteProtocol
+import XCTest
+@testable import ToasttyMobileApp
+@testable import ToasttyMobileDomain
+
+@MainActor
+final class ToasttyNewSessionModelTests: XCTestCase {
+    private let workspaceID = UUID()
+    /// XCTest makes a new instance per test, so each test has its own suite.
+    private let suiteName = "ToasttyNewSessionModelTests-\(UUID().uuidString)"
+    private lazy var defaults: UserDefaults = UserDefaults(suiteName: suiteName)!
+
+    override func tearDown() async throws {
+        defaults.removePersistentDomain(forName: suiteName)
+        try await super.tearDown()
+    }
+
+    // MARK: - Form state
+
+    func testStartNeedsAnAvailableAgentAndMessageOrAttachments() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude(), piNotInstalled()]))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+
+        XCTAssertEqual(model.phase, .form)
+        XCTAssertEqual(model.selectedAgentID, "claude")
+        // An unavailable agent is quiet until it is tapped.
+        XCTAssertEqual(model.unavailableAgentNotes, [])
+        XCTAssertFalse(model.canStart)
+        model.updateMessage("  \n ")
+        XCTAssertFalse(model.canStart)
+        let file = attachment()
+        XCTAssertNil(model.addAttachments([file]))
+        XCTAssertTrue(model.canStart)
+        model.removeAttachment(file.id)
+        XCTAssertFalse(model.canStart)
+        model.updateMessage("Fix the flaky test")
+        XCTAssertTrue(model.canStart)
+
+        // An agent that cannot start is never the selection.
+        model.selectAgent("pi")
+        XCTAssertEqual(model.selectedAgentID, "claude")
+        XCTAssertEqual(model.unavailableAgentNotes, ["Pi isn't installed on your Mac."])
+        XCTAssertTrue(model.canStart)
+        model.selectAgent("claude")
+        XCTAssertEqual(model.unavailableAgentNotes, [])
+
+        let noneAvailable = makeModel(host: FakeNewSessionHost(options: options(agents: [piNotInstalled()])))
+        await noneAvailable.loadOptions()
+        noneAvailable.updateMessage("Fix the flaky test")
+        XCTAssertNil(noneAvailable.selectedAgent)
+        XCTAssertFalse(noneAvailable.canStart)
+        // With nothing to start, the reason shows without a tap.
+        XCTAssertEqual(noneAvailable.unavailableAgentNotes, ["Pi isn't installed on your Mac."])
+    }
+
+    func testPermissionAndWorkspaceStatesExplainThemselvesAndBlockStart() async {
+        let cases: [(RemoteSessionStartPermission, RemoteSessionStartWorkspaceState)] = [
+            (.startDisabled, .available),
+            (.sendDisabled, .available),
+            (.unknown, .available),
+            (.allowed, .notFound),
+            (.allowed, .noDirectory),
+            (.allowed, .unknown),
+        ]
+        for (permission, workspace) in cases {
+            let host = FakeNewSessionHost(options: .loaded(RemoteSessionStartOptionsResponse(
+                permission: permission, workspace: workspace, agents: [claude()]
+            )))
+            let model = makeModel(host: host)
+            await model.loadOptions()
+            model.updateMessage("Fix the flaky test")
+
+            XCTAssertNotNil(model.blockingMessage, "\(permission) \(workspace)")
+            XCTAssertFalse(model.canStart, "\(permission) \(workspace)")
+            await model.start()
+            XCTAssertTrue(host.startRequests.isEmpty)
+        }
+
+        let disabled = makeModel(host: FakeNewSessionHost(options: .loaded(RemoteSessionStartOptionsResponse(
+            permission: .startDisabled, workspace: .available, agents: [claude()]
+        ))))
+        await disabled.loadOptions()
+        XCTAssertEqual(
+            disabled.blockingMessage,
+            "Starting sessions was turned off for this iPhone. Turn it back on in Toastty → Settings → Remote Access on your Mac."
+        )
+    }
+
+    func testOptionsThatCouldNotLoadCanBeRetried() async {
+        let host = FakeNewSessionHost(options: .unreachable)
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        XCTAssertEqual(model.phase, .unreachable)
+
+        host.options = options(agents: [claude()])
+        await model.loadOptions()
+        XCTAssertEqual(model.phase, .form)
+        XCTAssertEqual(model.selectedAgentID, "claude")
+    }
+
+    // MARK: - Request IDs
+
+    func testUnansweredStartRetriesWithTheSameRequestIDUntilAnEdit() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.startOutcomes = [.unconfirmed, .unconfirmed, .unconfirmed]
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.updateMessage("Fix the flaky test")
+        let file = attachment()
+        XCTAssertNil(model.addAttachments([file]))
+
+        await model.start()
+        XCTAssertEqual(model.phase, .form)
+        XCTAssertEqual(model.message, "Fix the flaky test")
+        XCTAssertEqual(model.attachments, [file])
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.unreachableMessage)
+        await model.start()
+        model.updateMessage("Fix the flaky test and open a PR")
+        XCTAssertNil(model.errorMessage)
+        await model.start()
+
+        XCTAssertEqual(host.startRequests.map(\.clientRequestID), ["request-1", "request-1", "request-2"])
+        XCTAssertEqual(host.startRequests.last?.text, "Fix the flaky test and open a PR")
+        XCTAssertTrue(host.startRequests.allSatisfy { $0.attachments == [file] })
+    }
+
+    func testEveryKindOfEditRenewsAnUnansweredRequestID() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude(), codex()]))
+        host.startOutcomes = Array(repeating: .unconfirmed, count: 4)
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.updateMessage("Fix the flaky test")
+
+        await model.start()
+        model.selectModel("claude-opus-5-5")
+        await model.start()
+        model.selectEffort("high")
+        await model.start()
+        model.selectAgent("codex")
+        await model.start()
+
+        XCTAssertEqual(
+            host.startRequests.map(\.clientRequestID),
+            ["request-1", "request-2", "request-3", "request-4"]
+        )
+    }
+
+    func testUnansweredRequestIDIsRenewedOnceTheMacHasForgottenIt() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.startOutcomes = [.unconfirmed, .unconfirmed]
+        var now = Date(timeIntervalSince1970: 1_000)
+        let model = makeModel(host: host, now: { now })
+        await model.loadOptions()
+        model.updateMessage("Fix the flaky test")
+
+        await model.start()
+        now += RemoteSessionStartPolicy.duplicateRequestWindow
+        await model.start()
+
+        XCTAssertEqual(host.startRequests.map(\.clientRequestID), ["request-1", "request-2"])
+    }
+
+    func testRejectionKeepsTheDraftExplainsAndTheNextStartIsANewRequest() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.startOutcomes = [
+            .answered(.rejected(reason: .launchFailed)),
+            .answered(.rejected(reason: .unknown)),
+        ]
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.updateMessage("Fix the flaky test")
+
+        await model.start()
+        XCTAssertEqual(model.phase, .form)
+        XCTAssertEqual(model.message, "Fix the flaky test")
+        XCTAssertEqual(
+            model.errorMessage,
+            "Claude didn't start on your Mac. Try again."
+        )
+        await model.start()
+        XCTAssertEqual(model.errorMessage, "Your Mac didn't start the session. Try again.")
+
+        XCTAssertEqual(host.startRequests.map(\.clientRequestID), ["request-1", "request-2"])
+    }
+
+    func testAnAnswerTheAppDoesNotUnderstandKeepsTheRequestID() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.startOutcomes = [.answered(.unrecognized), .answered(.unrecognized)]
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.updateMessage("Fix the flaky test")
+
+        await model.start()
+        XCTAssertEqual(model.phase, .form)
+        XCTAssertEqual(model.message, "Fix the flaky test")
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.unrecognizedAnswerMessage)
+        await model.start()
+
+        // A session may have started, so a second Start must not be new.
+        XCTAssertEqual(host.startRequests.map(\.clientRequestID), ["request-1", "request-1"])
+    }
+
+    func testAMessageTooLongForTheMacIsNotSentAndStaysInTheDraft() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        // Multibyte text: the limit applies to the encoded request.
+        let long = String(repeating: "é", count: RemoteGatewayProtocol.maximumRequestBodyBytes / 2)
+        model.updateMessage(long)
+
+        await model.start()
+
+        XCTAssertTrue(host.startRequests.isEmpty)
+        XCTAssertEqual(model.phase, .form)
+        XCTAssertEqual(model.message, long)
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.messageTooLongMessage)
+    }
+
+    func testEveryRejectionReasonHasItsOwnExplanation() {
+        let reasons: [RemoteSessionStartRejectionReason] = [
+            .permissionDenied, .workspaceNotFound, .workspaceUnavailable, .agentUnavailable,
+            .invalidRequest, .invalidAttachments, .attachmentStorageUnavailable, .launchFailed, .busy, .unknown,
+        ]
+        let messages = reasons.map { ToasttyNewSessionModel.message(for: $0, agentName: "Claude") }
+        XCTAssertEqual(Set(messages).count, reasons.count)
+    }
+
+    // MARK: - Attachments
+
+    func testAttachmentOnlyRetryKeepsFilesAndOnlyRealEditsRenewTheRequestID() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        let first = attachment()
+        let second = attachment(filename: "second.txt")
+        XCTAssertNil(model.addAttachments([first]))
+
+        await model.start()
+        XCTAssertEqual(model.message, "")
+        XCTAssertEqual(model.attachments, [first])
+        XCTAssertEqual(host.startRequests.first?.text, "")
+        XCTAssertEqual(host.startRequests.first?.attachments, [first])
+        XCTAssertNil(model.addAttachments([]))
+        model.removeAttachment(UUID())
+        XCTAssertNotNil(model.addAttachments([first]), "A duplicate file must not change the draft")
+        await model.start()
+        XCTAssertNil(model.addAttachments([second]))
+        await model.start()
+        model.removeAttachment(first.id)
+        await model.start()
+
+        XCTAssertEqual(host.startRequests.map(\.clientRequestID), ["request-1", "request-1", "request-2", "request-3"])
+        XCTAssertEqual(host.startRequests.last?.attachments, [second])
+    }
+
+    func testRejectedAndUnrecognizedStartsKeepAttachments() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.startOutcomes = [
+            .answered(.rejected(reason: .attachmentStorageUnavailable)),
+            .answered(.unrecognized),
+            .unconfirmed,
+        ]
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        let file = attachment()
+        XCTAssertNil(model.addAttachments([file]))
+
+        await model.start()
+        XCTAssertEqual(model.attachments, [file])
+        XCTAssertNotNil(model.errorMessage)
+        await model.start()
+        XCTAssertEqual(model.attachments, [file])
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.unrecognizedAnswerMessage)
+        await model.start()
+
+        XCTAssertEqual(host.startRequests.map(\.clientRequestID), ["request-1", "request-2", "request-2"])
+        XCTAssertTrue(host.startRequests.allSatisfy { $0.attachments == [file] })
+    }
+
+    func testPreparationAndStartingProtectTheAttachmentDraft() async throws {
+        let conversationID = UUID()
+        let otherWorkspaceID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude(), codex()]))
+        host.workspaces = [
+            ToasttyNewSessionWorkspace(id: workspaceID, title: "toastty", parentTitle: nil),
+            ToasttyNewSessionWorkspace(id: otherWorkspaceID, title: "other", parentTitle: nil),
+        ]
+        host.startOutcomes = [.answered(.started(conversationID: .init(rawValue: conversationID)))]
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        let file = attachment()
+        XCTAssertNil(model.addAttachments([file]))
+        model.setIsLoadingAttachments(true)
+        XCTAssertTrue(model.preventsInteractiveDismissal)
+        XCTAssertFalse(model.canStart)
+        await model.start()
+        XCTAssertTrue(host.startRequests.isEmpty)
+        await model.selectWorkspace(otherWorkspaceID)
+        XCTAssertEqual(model.workspaceID, workspaceID, "Changing options must wait for the import")
+        XCTAssertFalse(model.isLoadingWorkspace)
+        XCTAssertTrue(model.allowsAttachmentInput)
+        model.removeAttachment(file.id)
+        XCTAssertNotNil(model.addAttachments([attachment()]))
+        XCTAssertEqual(model.attachments, [file])
+        model.setIsLoadingAttachments(false)
+        let importedFile = attachment(filename: "imported.txt")
+        XCTAssertNil(model.addAttachments([importedFile]))
+        let files = [file, importedFile]
+        await model.selectWorkspace(otherWorkspaceID)
+        XCTAssertEqual(model.workspaceID, otherWorkspaceID)
+        XCTAssertEqual(model.attachments, files)
+
+        let starting = Task { await model.start() }
+        try await waitUntil { model.phase == .starting }
+        model.removeAttachment(file.id)
+        XCTAssertNotNil(model.addAttachments([attachment()]))
+        model.updateMessage("A different request")
+        model.selectAgent("codex")
+        model.selectModel("different-model")
+        model.selectEffort("high")
+        XCTAssertFalse(model.useCustomModel("different-model"))
+        await model.selectWorkspace(workspaceID)
+        model.setIsLoadingAttachments(true)
+        model.discardDraft()
+        XCTAssertFalse(model.isLoadingAttachments)
+        XCTAssertEqual(model.workspaceID, otherWorkspaceID)
+        XCTAssertEqual(model.selectedAgentID, "claude")
+        XCTAssertNil(model.model)
+        XCTAssertNil(model.effort)
+        XCTAssertEqual(model.message, "")
+        XCTAssertEqual(model.attachments, files)
+        XCTAssertEqual(host.startRequests.count, 1)
+
+        host.conversations.insert(conversationID)
+        await starting.value
+        XCTAssertEqual(model.phase, .finished(.open(conversationID: conversationID)))
+        XCTAssertNotNil(model.addAttachments([attachment()]))
+    }
+
+    func testAttachmentLimitsRejectInvalidAdditionsWithoutChangingTheDraft() async {
+        let model = makeModel(host: FakeNewSessionHost(options: options(agents: [claude()])))
+        XCTAssertNotNil(model.addAttachments([attachment()]), "Options must be loaded first")
+        await model.loadOptions()
+        let invalidAdditions: [[RemoteMessageAttachment]] = [
+            [attachment(bytes: 0)],
+            [attachment(bytes: RemoteAttachmentPolicy.maximumFileBytes + 1)],
+            [attachment(filename: "executable.exe")],
+            [attachment(filename: "photo.jpg")],
+            (0...RemoteAttachmentPolicy.maximumCount).map { _ in attachment() },
+            [attachment(bytes: RemoteAttachmentPolicy.maximumFileBytes),
+             attachment(bytes: RemoteAttachmentPolicy.maximumFileBytes), attachment()],
+        ]
+        for additions in invalidAdditions {
+            XCTAssertNotNil(model.addAttachments(additions))
+            XCTAssertTrue(model.attachments.isEmpty)
+            XCTAssertFalse(model.canStart)
+        }
+        let file = attachment()
+        XCTAssertNil(model.addAttachments([file]))
+        XCTAssertNotNil(model.addAttachments([file]))
+        XCTAssertEqual(model.attachments, [file])
+    }
+
+    func testOlderMacKeepsTextOnlyStartAndRetainsFilesUntilTheyAreRemoved() async {
+        let unsupportedHost = FakeNewSessionHost(options: options(agents: [claude()], supportsAttachments: false))
+        let unsupported = makeModel(host: unsupportedHost)
+        await unsupported.loadOptions()
+        XCTAssertFalse(unsupported.supportsAttachments)
+        XCTAssertEqual(unsupported.addAttachments([attachment()]), ToasttyNewSessionModel.attachmentsUnsupportedMessage)
+        unsupported.updateMessage("Text still works")
+        XCTAssertTrue(unsupported.canStart)
+        await unsupported.start()
+        XCTAssertEqual(unsupportedHost.startRequests.first?.attachments, [])
+
+        let otherID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.workspaces = [ToasttyNewSessionWorkspace(id: otherID, title: "other", parentTitle: nil)]
+        host.optionsByWorkspace[otherID] = options(agents: [claude()], supportsAttachments: false)
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.updateMessage("Keep the text")
+        let file = attachment()
+        XCTAssertNil(model.addAttachments([file]))
+
+        await model.selectWorkspace(otherID)
+        XCTAssertEqual(model.attachments, [file])
+        XCTAssertFalse(model.canStart)
+        await model.start()
+        XCTAssertTrue(host.startRequests.isEmpty)
+        model.removeAttachment(file.id)
+        XCTAssertTrue(model.canStart)
+        XCTAssertEqual(model.message, "Keep the text")
+    }
+
+    func testCancelDiscardsImportsAndLateOptionsCannotRestoreTheDraft() async throws {
+        let otherID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.workspaces = [ToasttyNewSessionWorkspace(id: otherID, title: "other", parentTitle: nil)]
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        XCTAssertNil(model.addAttachments([attachment()]))
+        model.updateMessage("Review the file")
+        model.setIsLoadingAttachments(true)
+
+        model.discardDraft()
+        XCTAssertFalse(model.isLoadingAttachments)
+        XCTAssertFalse(model.preventsInteractiveDismissal)
+        XCTAssertTrue(model.attachments.isEmpty)
+        XCTAssertEqual(model.message, "")
+        XCTAssertNotNil(model.addAttachments([attachment()]))
+        model.setIsLoadingAttachments(true)
+        XCTAssertFalse(model.isLoadingAttachments)
+
+        let pendingOptions = makeModel(host: host)
+        await pendingOptions.loadOptions()
+        XCTAssertNil(pendingOptions.addAttachments([attachment()]))
+        pendingOptions.updateMessage("Keep until Cancel")
+        let gate = host.holdOptions(for: otherID)
+        let switching = Task { await pendingOptions.selectWorkspace(otherID) }
+        try await waitUntil { pendingOptions.isLoadingWorkspace }
+
+        pendingOptions.discardDraft()
+        gate.resume()
+        await switching.value
+        XCTAssertTrue(pendingOptions.attachments.isEmpty)
+        XCTAssertFalse(pendingOptions.canStart)
+        pendingOptions.updateMessage("Late edit")
+        XCTAssertEqual(pendingOptions.message, "")
+    }
+
+    func testTextOnlyRequestsUseTheExactEncodedBodyLimit() async throws {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        let model = makeModel(host: host, makeRequestID: { "request" })
+        await model.loadOptions()
+        let emptyRequest = RemoteSessionStartRequest(
+            clientRequestID: "request", workspaceID: workspaceID, profileID: "claude", text: ""
+        )
+        let textBytes = RemoteGatewayProtocol.maximumRequestBodyBytes - (try emptyRequest.encodedForTransport().count)
+        model.updateMessage(String(repeating: "A", count: textBytes + 1))
+        await model.start()
+        XCTAssertTrue(host.startRequests.isEmpty)
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.messageTooLongMessage)
+        model.updateMessage(String(repeating: "A", count: textBytes))
+        await model.start()
+        XCTAssertEqual(try host.startRequests.first?.encodedForTransport().count, RemoteGatewayProtocol.maximumRequestBodyBytes)
+
+        model.updateMessage(String(repeating: "\"", count: RemoteGatewayProtocol.maximumRequestBodyBytes / 2))
+        await model.start()
+        XCTAssertEqual(host.startRequests.count, 1, "JSON escapes must count toward the wire limit")
+    }
+
+    func testLargestAttachmentsUseTransportEncodingAndKeepTheTextLimit() async throws {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        // These bytes produce many base64 slashes. Escaping each slash would
+        // exceed the body limit even though the two files meet the raw limit.
+        let photoBytes = Data([0xFF, 0xD8, 0xFF]) + Data(repeating: 0xFF, count: RemoteAttachmentPolicy.maximumFileBytes - 3)
+        let files = (0..<2).map { index in
+            RemoteMessageAttachment(filename: "photo-\(index).jpg", data: photoBytes)
+        }
+        XCTAssertNil(model.addAttachments(files))
+        model.updateMessage(String(repeating: "A", count: RemoteGatewayProtocol.maximumRequestBodyBytes + 1))
+        await model.start()
+        XCTAssertTrue(host.startRequests.isEmpty)
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.messageTooLongMessage)
+        XCTAssertEqual(model.attachments, files)
+
+        model.updateMessage(String(repeating: "A", count: RemoteGatewayProtocol.maximumRequestBodyBytes))
+        await model.start()
+        let request = try XCTUnwrap(host.startRequests.first)
+        XCTAssertEqual(request.attachments, files)
+        XCTAssertEqual(request.text.utf8.count, RemoteGatewayProtocol.maximumRequestBodyBytes)
+        XCTAssertLessThanOrEqual(try request.encodedForTransport().count, RemoteAttachmentPolicy.maximumEncodedBodyBytes)
+    }
+
+    // MARK: - Model and effort
+
+    func testModelChoicesListThePhonesPicksThenTheMacsWithoutDuplicatesOrInvalidValues() async {
+        let preferences = ToasttyNewSessionPreferences(defaults: defaults)
+        preferences.recordStart(workspaceID: workspaceID, agentID: "claude", model: "claude-sonnet-5-5", effort: nil)
+        preferences.recordStart(workspaceID: workspaceID, agentID: "claude", model: "claude-opus-5-5", effort: nil)
+        let host = FakeNewSessionHost(options: options(agents: [
+            claude(recentModels: ["claude-opus-5-5", "Opus 5.5", "claude-haiku-4-5"]),
+        ]))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+
+        // Starts on the last model used with the agent.
+        XCTAssertEqual(model.model, "claude-opus-5-5")
+        XCTAssertEqual(model.modelChoices, ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"])
+
+        XCTAssertFalse(model.useCustomModel("claude next"))
+        XCTAssertFalse(model.useCustomModel("--dangerously-skip"))
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.invalidModelMessage)
+        XCTAssertEqual(model.model, "claude-opus-5-5")
+        XCTAssertTrue(model.useCustomModel(" claude-next "))
+        XCTAssertEqual(model.model, "claude-next")
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.modelChoices.first, "claude-next")
+    }
+
+    func testPhoneRemembersOnlyItsFiveMostRecentModels() {
+        let preferences = ToasttyNewSessionPreferences(defaults: defaults)
+        for index in 1...7 {
+            preferences.recordStart(workspaceID: workspaceID, agentID: "codex", model: "model-\(index)", effort: nil)
+        }
+        preferences.recordStart(workspaceID: workspaceID, agentID: "codex", model: "model-4", effort: nil)
+
+        XCTAssertEqual(
+            preferences.recentModels(forAgent: "codex"),
+            ["model-4", "model-7", "model-6", "model-5", "model-3"]
+        )
+        XCTAssertEqual(preferences.recentModels(forAgent: "claude"), [])
+    }
+
+    func testEffortStartsOnTheLastEffortOnlyWhileTheAgentStillOffersIt() async {
+        let preferences = ToasttyNewSessionPreferences(defaults: defaults)
+        preferences.recordStart(workspaceID: workspaceID, agentID: "claude", model: nil, effort: "xhigh")
+
+        let offered = makeModel(host: FakeNewSessionHost(options: options(agents: [
+            claude(efforts: ["low", "xhigh"]),
+        ])))
+        await offered.loadOptions()
+        XCTAssertEqual(offered.effort, "xhigh")
+        XCTAssertNil(offered.model)
+
+        let withdrawn = makeModel(host: FakeNewSessionHost(options: options(agents: [
+            claude(efforts: ["low", "high"]),
+        ])))
+        await withdrawn.loadOptions()
+        XCTAssertNil(withdrawn.effort)
+
+        let host = FakeNewSessionHost(options: options(agents: [claude(efforts: [])]))
+        host.startOutcomes = [.unconfirmed]
+        let none = makeModel(host: host)
+        await none.loadOptions()
+        XCTAssertFalse(none.showsEffort)
+        none.updateMessage("Hi")
+        await none.start()
+        XCTAssertNil(host.startRequests.first?.reasoningEffort)
+    }
+
+    func testSwitchingFromClaudeToCursorClearsEffortAndStartsWithTheCursorModel() async throws {
+        let host = FakeNewSessionHost(options: options(agents: [claude(), cursor()]))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.selectEffort("xhigh")
+        XCTAssertEqual(model.effort, "xhigh")
+        XCTAssertTrue(model.showsEffort)
+
+        model.selectAgent("cursor")
+        XCTAssertEqual(model.selectedAgentID, "cursor")
+        XCTAssertTrue(model.showsModel)
+        XCTAssertFalse(model.showsEffort)
+        XCTAssertNil(model.effort)
+        model.selectModel("auto")
+        model.updateMessage("Fix the flaky picker test")
+        await model.start()
+
+        let request = try XCTUnwrap(host.startRequests.first)
+        XCTAssertEqual(request.profileID, "cursor")
+        XCTAssertEqual(request.model, "auto")
+        XCTAssertNil(request.reasoningEffort)
+        XCTAssertEqual(request.text, "Fix the flaky picker test")
+    }
+
+    func testLastAgentUsedIsSelectedAgain() async {
+        ToasttyNewSessionPreferences(defaults: defaults).recordStart(workspaceID: workspaceID, agentID: "codex", model: nil, effort: nil)
+        let model = makeModel(host: FakeNewSessionHost(options: options(agents: [claude(), codex()])))
+        await model.loadOptions()
+        XCTAssertEqual(model.selectedAgentID, "codex")
+    }
+
+    // MARK: - Started
+
+    func testStartedSessionOpensOnceItReachesTheListAndRemembersThePicks() async throws {
+        let conversationID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude(), codex()]))
+        host.startOutcomes = [.answered(.started(conversationID: RemoteConversationID(rawValue: conversationID)))]
+        // The app's own request IDs, which the Mac must accept.
+        let model = makeModel(host: host, makeRequestID: nil)
+        await model.loadOptions()
+        model.selectAgent("codex")
+        model.selectModel("gpt-6.1-sol")
+        model.selectEffort("xhigh")
+        model.updateMessage("  Fix the flaky test\n")
+
+        let start = Task { await model.start() }
+        try await waitUntil { host.startRequests.count == 1 }
+        XCTAssertEqual(model.phase, .starting)
+        XCTAssertEqual(model.sheetTitle, "New Codex session")
+        host.conversations.insert(conversationID)
+        await start.value
+
+        XCTAssertEqual(model.phase, .finished(.open(conversationID: conversationID)))
+        let request = try XCTUnwrap(host.startRequests.first)
+        XCTAssertEqual(request.workspaceID, workspaceID)
+        XCTAssertEqual(request.profileID, "codex")
+        XCTAssertEqual(request.model, "gpt-6.1-sol")
+        XCTAssertEqual(request.reasoningEffort, "xhigh")
+        XCTAssertEqual(request.text, "Fix the flaky test")
+        XCTAssertTrue(RemoteSessionStartPolicy.isValidClientRequestID(request.clientRequestID))
+
+        let preferences = ToasttyNewSessionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.lastAgentID, "codex")
+        XCTAssertEqual(preferences.lastWorkspaceID, workspaceID)
+        XCTAssertEqual(preferences.lastModel(forAgent: "codex"), "gpt-6.1-sol")
+        XCTAssertEqual(preferences.lastEffort(forAgent: "codex"), "xhigh")
+        XCTAssertEqual(preferences.recentModels(forAgent: "codex"), ["gpt-6.1-sol"])
+    }
+
+    func testStartedSessionThatNeverReachesTheListFinishesWithANotice() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.startOutcomes = [.answered(.started(conversationID: RemoteConversationID()))]
+        let model = makeModel(host: host, startedSessionTimeout: .milliseconds(100))
+        await model.loadOptions()
+        model.updateMessage("Fix the flaky test")
+
+        await model.start()
+
+        XCTAssertEqual(model.phase, .finished(.startedPending(agentName: "Claude")))
+    }
+
+    // MARK: - Workspace
+
+    func testSwitchingWorkspaceLoadsItsOptionsAndKeepsTheDraft() async throws {
+        let otherID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude(), codex()]))
+        host.workspaces = [
+            ToasttyNewSessionWorkspace(id: workspaceID, title: "toastty", parentTitle: nil),
+            ToasttyNewSessionWorkspace(id: otherID, title: "dotfiles", parentTitle: nil),
+        ]
+        host.optionsByWorkspace[otherID] = .loaded(RemoteSessionStartOptionsResponse(
+            permission: .allowed, workspace: .available, launchDirectory: "~/.dotfiles",
+            agents: [claude(efforts: ["high"]), codex()], supportsAttachments: true
+        ))
+        host.startOutcomes = [.unconfirmed, .unconfirmed]
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.selectAgent("claude")
+        model.selectModel("claude-fable-5-1")
+        model.selectEffort("xhigh")
+        model.updateMessage("Tidy the zsh config")
+        let file = attachment()
+        XCTAssertNil(model.addAttachments([file]))
+        await model.start()
+        XCTAssertEqual(model.errorMessage, ToasttyNewSessionModel.unreachableMessage)
+
+        let gate = host.holdOptions(for: otherID)
+        let switching = Task { await model.selectWorkspace(otherID) }
+        try await waitUntil { model.isLoadingWorkspace }
+        // Start waits for the new workspace's options.
+        XCTAssertEqual(model.workspaceTitle, "dotfiles")
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.canStart)
+        gate.resume()
+        await switching.value
+
+        XCTAssertFalse(model.isLoadingWorkspace)
+        XCTAssertEqual(model.options?.launchDirectory, "~/.dotfiles")
+        XCTAssertEqual(model.message, "Tidy the zsh config")
+        XCTAssertEqual(model.attachments, [file])
+        XCTAssertEqual(model.selectedAgentID, "claude")
+        XCTAssertEqual(model.model, "claude-fable-5-1")
+        // The agent here does not offer the effort that was picked.
+        XCTAssertNil(model.effort)
+        XCTAssertTrue(model.canStart)
+
+        await model.start()
+        let request = try XCTUnwrap(host.startRequests.last)
+        XCTAssertEqual(request.workspaceID, otherID)
+        XCTAssertEqual(request.attachments, [file])
+        // Another workspace makes a different request, with its own key.
+        XCTAssertEqual(host.startRequests.map(\.clientRequestID), ["request-1", "request-2"])
+    }
+
+    func testSwitchingToAWorkspaceWhereTheAgentCannotStartPicksAnother() async {
+        let otherID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude(), codex()]))
+        host.workspaces = [ToasttyNewSessionWorkspace(id: otherID, title: "dotfiles", parentTitle: nil)]
+        host.optionsByWorkspace[otherID] = options(agents: [piNotInstalled(), claude()])
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.selectAgent("codex")
+
+        await model.selectWorkspace(otherID)
+
+        XCTAssertEqual(model.selectedAgentID, "claude")
+    }
+
+    func testAnAnswerForAWorkspaceLeftBehindIsDropped() async throws {
+        let slowID = UUID()
+        let fastID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.workspaces = [
+            ToasttyNewSessionWorkspace(id: slowID, title: "slow", parentTitle: nil),
+            ToasttyNewSessionWorkspace(id: fastID, title: "fast", parentTitle: nil),
+        ]
+        host.optionsByWorkspace[slowID] = .loaded(RemoteSessionStartOptionsResponse(
+            permission: .allowed, workspace: .available, launchDirectory: "~/slow", agents: [claude()]
+        ))
+        host.optionsByWorkspace[fastID] = .loaded(RemoteSessionStartOptionsResponse(
+            permission: .allowed, workspace: .available, launchDirectory: "~/fast", agents: [claude()]
+        ))
+        let model = makeModel(host: host)
+        await model.loadOptions()
+
+        let gate = host.holdOptions(for: slowID)
+        let slow = Task { await model.selectWorkspace(slowID) }
+        try await waitUntil { model.isLoadingWorkspace }
+        await model.selectWorkspace(fastID)
+        gate.resume()
+        await slow.value
+
+        XCTAssertEqual(model.workspaceID, fastID)
+        XCTAssertEqual(model.options?.launchDirectory, "~/fast")
+        XCTAssertFalse(model.isLoadingWorkspace)
+    }
+
+    func testWorkspaceThatCouldNotLoadShowsTheRetryWithTheDraftKept() async {
+        let otherID = UUID()
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        host.workspaces = [ToasttyNewSessionWorkspace(id: otherID, title: "dotfiles", parentTitle: nil)]
+        host.optionsByWorkspace[otherID] = .unreachable
+        let model = makeModel(host: host)
+        await model.loadOptions()
+        model.updateMessage("Tidy the zsh config")
+        let file = attachment()
+        XCTAssertNil(model.addAttachments([file]))
+
+        await model.selectWorkspace(otherID)
+        XCTAssertEqual(model.phase, .unreachable)
+
+        host.optionsByWorkspace[otherID] = options(agents: [claude()])
+        await model.loadOptions()
+        XCTAssertEqual(model.phase, .form)
+        XCTAssertEqual(model.workspaceID, otherID)
+        XCTAssertEqual(model.message, "Tidy the zsh config")
+        XCTAssertEqual(model.attachments, [file])
+    }
+
+    func testASubspaceTheSheetOpenedInStaysListedAfterASwitch() async {
+        let parent = MobileWorkspace(id: UUID(), title: "toastty", conversations: [])
+        let subspace = MobileWorkspace(
+            id: UUID(), title: "fix-picker", conversations: [], parentWorkspaceID: parent.id
+        )
+        let otherSubspace = MobileWorkspace(
+            id: UUID(), title: "docs", conversations: [], parentWorkspaceID: parent.id
+        )
+        let controller = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: MobileHomeSnapshot(hostName: "mac", workspaces: [parent, subspace, otherSubspace]),
+            connectionState: .live
+        )
+        let model = ToasttyNewSessionModel(
+            workspaceID: subspace.id,
+            workspaceTitle: subspace.title,
+            host: controller,
+            preferences: ToasttyNewSessionPreferences(defaults: defaults)
+        )
+        await model.loadOptions()
+        XCTAssertEqual(model.workspaceChoices.map(\.id), [parent.id, subspace.id])
+
+        await model.selectWorkspace(parent.id)
+
+        XCTAssertEqual(model.workspaceID, parent.id)
+        XCTAssertEqual(model.workspaceChoices.map(\.id), [parent.id, subspace.id])
+    }
+
+    // MARK: - Helpers
+
+    private func makeModel(
+        host: FakeNewSessionHost,
+        now: @escaping () -> Date = Date.init,
+        makeRequestID: (() -> String)? = ToasttyNewSessionModelTests.sequentialRequestIDs(),
+        startedSessionTimeout: Duration = .seconds(5)
+    ) -> ToasttyNewSessionModel {
+        if let makeRequestID {
+            return ToasttyNewSessionModel(
+                workspaceID: workspaceID,
+                workspaceTitle: "toastty",
+                host: host,
+                preferences: ToasttyNewSessionPreferences(defaults: defaults),
+                now: now,
+                makeRequestID: makeRequestID,
+                startedSessionTimeout: startedSessionTimeout,
+                pollInterval: .milliseconds(10)
+            )
+        }
+        return ToasttyNewSessionModel(
+            workspaceID: workspaceID,
+            workspaceTitle: "toastty",
+            host: host,
+            preferences: ToasttyNewSessionPreferences(defaults: defaults),
+            now: now,
+            startedSessionTimeout: startedSessionTimeout,
+            pollInterval: .milliseconds(10)
+        )
+    }
+
+    private static func sequentialRequestIDs() -> () -> String {
+        var next = 0
+        return {
+            next += 1
+            return "request-\(next)"
+        }
+    }
+
+    private func options(
+        agents: [RemoteSessionStartAgent],
+        supportsAttachments: Bool = true
+    ) -> ToasttySessionStartOptionsOutcome {
+        .loaded(RemoteSessionStartOptionsResponse(
+            permission: .allowed,
+            workspace: .available,
+            launchDirectory: "~/repos/toastty",
+            agents: agents,
+            supportsAttachments: supportsAttachments
+        ))
+    }
+
+    private func attachment(bytes: Int = 4, filename: String = "note.txt") -> RemoteMessageAttachment {
+        RemoteMessageAttachment(filename: filename, data: Data(repeating: 65, count: bytes))
+    }
+
+    private func claude(
+        recentModels: [String] = ["claude-opus-5-5"],
+        efforts: [String] = ["low", "high", "xhigh"]
+    ) -> RemoteSessionStartAgent {
+        RemoteSessionStartAgent(
+            profileID: "claude", displayName: "Claude", availability: .available,
+            supportsModel: true, recentModels: recentModels, reasoningEfforts: efforts
+        )
+    }
+
+    private func codex() -> RemoteSessionStartAgent {
+        RemoteSessionStartAgent(
+            profileID: "codex", displayName: "Codex", availability: .available,
+            supportsModel: true, recentModels: ["gpt-6.1-sol"], reasoningEfforts: ["high", "xhigh"]
+        )
+    }
+
+    private func cursor() -> RemoteSessionStartAgent {
+        RemoteSessionStartAgent(
+            profileID: "cursor", displayName: "Cursor", availability: .available,
+            supportsModel: true, recentModels: ["auto"], reasoningEfforts: []
+        )
+    }
+
+    private func piNotInstalled() -> RemoteSessionStartAgent {
+        RemoteSessionStartAgent(
+            profileID: "pi", displayName: "Pi", availability: .notInstalled, supportsModel: true
+        )
+    }
+
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Condition was not met in time", file: file, line: line)
+    }
+}
+
+@MainActor
+private final class FakeNewSessionHost: ToasttyNewSessionHost {
+    /// Holds an options request until the test resumes it.
+    @MainActor
+    final class Gate {
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var isOpen = false
+
+        func wait() async {
+            guard isOpen == false else { return }
+            await withCheckedContinuation { continuation = $0 }
+        }
+
+        func resume() {
+            isOpen = true
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    /// Options for the sheet's first workspace and any not listed below.
+    var options: ToasttySessionStartOptionsOutcome
+    var optionsByWorkspace: [UUID: ToasttySessionStartOptionsOutcome] = [:]
+    var workspaces: [ToasttyNewSessionWorkspace] = []
+    var startOutcomes: [ToasttySessionStartOutcome] = []
+    var conversations: Set<UUID> = []
+    private(set) var startRequests: [RemoteSessionStartRequest] = []
+    private var gates: [UUID: Gate] = [:]
+
+    init(options: ToasttySessionStartOptionsOutcome) {
+        self.options = options
+    }
+
+    func holdOptions(for workspaceID: UUID) -> Gate {
+        let gate = Gate()
+        gates[workspaceID] = gate
+        return gate
+    }
+
+    func sessionStartWorkspaces(keeping keptWorkspaceIDs: Set<UUID>) -> [ToasttyNewSessionWorkspace] {
+        workspaces
+    }
+
+    func sessionStartOptions(workspaceID: UUID) async -> ToasttySessionStartOptionsOutcome {
+        if let gate = gates.removeValue(forKey: workspaceID) {
+            await gate.wait()
+        }
+        return optionsByWorkspace[workspaceID] ?? options
+    }
+
+    func startSession(_ request: RemoteSessionStartRequest) async -> ToasttySessionStartOutcome {
+        startRequests.append(request)
+        return startOutcomes.isEmpty ? .unconfirmed : startOutcomes.removeFirst()
+    }
+
+    func conversation(id: UUID) -> MobileConversation? {
+        guard conversations.contains(id) else { return nil }
+        return MobileConversation(
+            id: id, workspaceID: UUID(), workspaceTitle: "toastty", cwd: nil,
+            agent: .claude, title: "New session", state: MobileSessionStatus.working,
+            inputAvailability: .unavailable(reason: "working"), age: "now", lastActivity: ""
+        )
+    }
+}

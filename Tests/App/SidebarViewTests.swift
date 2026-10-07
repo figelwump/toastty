@@ -1517,7 +1517,7 @@ final class SidebarViewTests: XCTestCase {
         }
     }
 
-    func testNeedsApprovalSessionChildChipRemainsSingleLineAtMinimumSidebarWidth() throws {
+    func testNeedsApprovalChildSessionRowFitsAtMinimumSidebarWidth() throws {
         let readyFrame = try measuredWorkspaceRowFrame(childStatusKind: .ready)
         let approvalFrame = try measuredWorkspaceRowFrame(childStatusKind: .needsApproval)
 
@@ -1525,7 +1525,7 @@ final class SidebarViewTests: XCTestCase {
             approvalFrame.height,
             readyFrame.height,
             accuracy: 0.5,
-            "The needs-approval child chip must not make the row taller than another single-line status chip"
+            "An approval badge must not make the child session's normal row taller"
         )
         XCTAssertLessThanOrEqual(
             approvalFrame.maxX,
@@ -1683,6 +1683,60 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.2)
 
         XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[1])
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
+    }
+
+    func testSameWorkspaceForkHasNormalRowAndFocusesItsOwnPanel() throws {
+        let window = SidebarHoverTestWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let harness = try makeMultiSessionSidebarHarness(
+            sessionCount: 2,
+            providedWindow: window,
+            secondSessionIsChild: true
+        )
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            window.orderOut(nil)
+        }
+        let parent = try sessionPointerInteractionView(in: harness.hostingView, sessionID: harness.sessionIDs[0])
+        let child = try sessionPointerInteractionView(in: harness.hostingView, sessionID: harness.sessionIDs[1])
+        XCTAssertEqual(child.bounds.height, parent.bounds.height, accuracy: 0.5)
+        XCTAssertFalse(renderedTextValues(in: harness.hostingView).contains { $0.contains("↖ Session 1") })
+        XCTAssertFalse(renderedTextValues(in: harness.hostingView).contains { $0.contains("sub-agent") })
+
+        let point = NSPoint(x: child.bounds.midX, y: child.bounds.midY)
+        window.pointerLocation = child.convert(point, to: nil)
+        child.mouseEntered(with: try XCTUnwrap(pointerMouseEvent(
+            type: .mouseMoved, view: child, at: point, timestamp: 0, eventNumber: 0
+        )))
+        pumpMainRunLoop(duration: 0.8)
+        let rowID = SidebarSessionPresentation.SidebarSessionRowID(
+            workspaceID: harness.workspaceID,
+            sessionID: harness.sessionIDs[1],
+            panelID: harness.panelIDs[1]
+        )
+        XCTAssertTrue(HoverTipPresenter.shared.isVisible(id: rowID))
+        let card = try XCTUnwrap(renderedHoverCardView())
+        for (view, name) in [(harness.hostingView, "Fork normal rows"), (card, "Fork parent hover details")] {
+            let attachment = XCTAttachment(data: try XCTUnwrap(
+                renderedBitmap(for: view).representation(using: .png, properties: [:])
+            ), uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        HoverTipPresenter.shared.hideAll()
+
+        child.usesEventTrackingLoop = false
+        try click(view: child, at: point)
+        pumpMainRunLoop(duration: 0.2)
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[1])
+        parent.usesEventTrackingLoop = false
+        try click(view: parent, at: NSPoint(x: parent.bounds.midX, y: parent.bounds.midY))
+        pumpMainRunLoop(duration: 0.2)
+        XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.focusedPanelID, harness.panelIDs[0])
         XCTAssertEqual(harness.store.state.workspacesByID[harness.workspaceID]?.sidebarSessionPanelOrder, [])
     }
 
@@ -2062,7 +2116,70 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(rootView, name: "sidebar-subspaces-sorted")
     }
 
+    func testOffscreenSubspacesDriveScrollPillsAndClearWhenVisibleOrDone() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        // Keep the parent quiet so only the subspaces can supply these signals.
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "spawner", status: SessionStatus(kind: .idle, summary: "Idle"), at: Date()
+        )
+
+        func settle(height: CGFloat) {
+            harness.window.setContentSize(NSSize(width: ToastyTheme.sidebarWidth, height: height))
+            pumpMainRunLoop(duration: 0.6)
+            rootView.layoutSubtreeIfNeeded()
+        }
+        func hiddenBelowLabel() -> String? {
+            renderedTextValues(in: rootView).first { $0.contains("subspaces hidden below") }
+        }
+
+        settle(height: 160)
+        var label = try XCTUnwrap(hiddenBelowLabel(), "\(renderedTextValues(in: rootView))")
+        XCTAssertTrue(label.contains("4 subspaces hidden below"), label)
+        XCTAssertTrue(label.contains("1 unread"), label)
+        XCTAssertTrue(label.contains("working"), label)
+        try writeSidebarEvidence(rootView, name: "sidebar-offscreen-subspaces")
+
+        // A done mark suppresses the ready signal, as it does on the row itself.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        settle(height: 160)
+        label = try XCTUnwrap(hiddenBelowLabel())
+        XCTAssertFalse(label.contains("unread"), label)
+        XCTAssertTrue(label.contains("working"), label)
+
+        settle(height: 600)
+        try writeSidebarEvidence(rootView, name: "sidebar-visible-subspaces")
+        XCTAssertNil(hiddenBelowLabel())
+        // Collapsed rows use the group header's position, not stale row frames.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: nil))
+        settle(height: 600)
+        try clickSemanticText(prefix: "4 subspaces, expanded", in: rootView)
+        settle(height: 160)
+        label = try XCTUnwrap(hiddenBelowLabel())
+        XCTAssertTrue(label.contains("4 subspaces hidden below"), label)
+        XCTAssertTrue(label.contains("working"), label)
+        XCTAssertTrue(label.contains("1 unread"), label)
+        try writeSidebarEvidence(rootView, name: "sidebar-offscreen-collapsed-subspaces")
+
+        settle(height: 600)
+        XCTAssertNil(hiddenBelowLabel())
+    }
+
     func testSubspaceWaitingPillFollowsBackgroundShellStateAndFitsWithAnnotation() throws {
+        func waitForStatusWithoutWaitingChip(_ status: String, in rootView: NSView) {
+            let deadline = Date().addingTimeInterval(1)
+            repeat {
+                pumpMainRunLoop(duration: 0.05)
+                rootView.layoutSubtreeIfNeeded()
+                let text = renderedTextValues(in: rootView)
+                if text.contains("waiting") == false,
+                   text.contains(where: { $0.hasPrefix("qa-update-visitor-fixture, subspace, \(status)") }) {
+                    return
+                }
+            } while Date() < deadline
+        }
+
         for (width, annotation, showsPill, showsAnnotation) in [
             (ToastyTheme.sidebarWidth, "PR #58", true, true),
             (ToastyTheme.sidebarWidth, "ENG-1234-fix", true, false),
@@ -2105,8 +2222,7 @@ final class SidebarViewTests: XCTestCase {
                 status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve review command"),
                 at: now.addingTimeInterval(2)
             )
-            pumpMainRunLoop()
-            rootView.layoutSubtreeIfNeeded()
+            waitForStatusWithoutWaitingChip("needs approval", in: rootView)
             XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
             XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, needs approval") })
 
@@ -2116,8 +2232,7 @@ final class SidebarViewTests: XCTestCase {
                 status: SessionStatus(kind: .working, summary: "Working", detail: "Reading review findings"),
                 at: now.addingTimeInterval(3)
             )
-            pumpMainRunLoop()
-            rootView.layoutSubtreeIfNeeded()
+            waitForStatusWithoutWaitingChip("working", in: rootView)
             XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
             XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, working") })
 
@@ -2150,8 +2265,8 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
 
-        // The jump read launch-checklist, which would now sort last; it stays
-        // where the jump found it.
+        // The jump read launch-checklist, which now belongs at the top of
+        // the idle group; it stays where the jump found it while selected.
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
         XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("launch-checklist, subspace, ready") })
         XCTAssertEqual(
@@ -2166,10 +2281,45 @@ final class SidebarViewTests: XCTestCase {
         )
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
+        // Releasing the pin puts the most recently idle subspace first in
+        // its group, ahead of the idle workspace created before it.
         XCTAssertEqual(
             try subspaceRowOrder(in: rootView),
-            ["qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification", "launch-checklist"]
+            ["qa-mobile-navigation", "qa-update-visitor-fixture", "launch-checklist", "qa-private-app-verification"]
         )
+    }
+
+    func testNextActiveUsesPinnedSubspaceOrderDisplayedBySidebar() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID,
+            sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        pumpMainRunLoop(duration: 0.6)
+        for sessionID in ["ready-agent", "approval-agent"] {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Resumed"),
+                at: Date()
+            )
+        }
+        for workspaceID in [ids.approvalID, ids.readyUnreadID] {
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+            harness.store.send(.markPanelNotificationsRead(workspaceID: workspaceID, panelID: panelID))
+        }
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(
+            try subspaceRowOrder(in: harness.hostingView),
+            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
+        )
+
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID,
+            sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.approvalID)
     }
 
     func testSelectingASubspaceHighlightsItsParentCard() throws {
@@ -2866,7 +3016,11 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    private func makeMultiSessionSidebarHarness(sessionCount: Int, providedWindow: NSWindow? = nil) throws -> MultiSessionSidebarHarness {
+    private func makeMultiSessionSidebarHarness(
+        sessionCount: Int,
+        providedWindow: NSWindow? = nil,
+        secondSessionIsChild: Bool = false
+    ) throws -> MultiSessionSidebarHarness {
         XCTAssertGreaterThanOrEqual(sessionCount, 2)
         let panelIDs = (0..<sessionCount).map { _ in UUID() }
         let workspaceID = UUID()
@@ -2914,6 +3068,7 @@ final class SidebarViewTests: XCTestCase {
                 panelID: panelID,
                 windowID: windowID,
                 workspaceID: workspaceID,
+                parentSessionID: secondSessionIsChild && offset == 1 ? sessionIDs[0] : nil,
                 displayTitleOverride: "Session \(offset + 1)",
                 cwd: "/repo/sidebar",
                 repoRoot: "/repo",

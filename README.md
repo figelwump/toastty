@@ -53,7 +53,7 @@ To build from source, see [Building and Releasing](docs/building-and-releasing.m
   </tr>
 </table>
 
-A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toastty's pieces to use and when. Toastty delivers those skills to every supported agent it launches. The [worktree handoff examples](examples/skills/README.md) (`worktree-create`, `worktree-done`, and `worktree-cleanup`) package a conversation into a new Git worktree and subspace, open the handoff and a verification report beside it, and pin the PR to the sidebar. Other ideas to describe to your agent: start a workspace from a Linear or GitHub issue, open a subspace per PR to review, or split a spec into tasks.
+A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toastty's pieces to use and when. Toastty delivers those skills to managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches. The [worktree handoff examples](examples/skills/README.md) (`worktree-create`, `worktree-done`, and `worktree-cleanup`) package a conversation into a new Git worktree and subspace, open the handoff and a verification report beside it, and pin the PR to the sidebar. Other ideas to describe to your agent: start a workspace from a Linear or GitHub issue, open a subspace per PR to review, or split a spec into tasks.
 
 ## Features
 
@@ -61,7 +61,7 @@ A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toas
 
 <img src="docs/assets/readme/sidebar.png" alt="Toastty sidebar: a lumen workspace with idle and working sessions and a Subspaces group holding a ready checkout-redesign row with a PR #128 chip, a working subspace, and a done one; below, a docs-site session with an unread reply and an infra session waiting for approval" width="300" align="right">
 
-- **Live status** for Claude Code, Codex, Cursor, OpenCode, MiMo Code, and Pi. Type `claude`, `codex`, `cursor-agent`, `opencode`, `mimo`, or `pi` as usual, or launch from the `Agent` menu, top bar, or command palette. Any other CLI runs in a normal pane.
+- **Live status** for Claude Code, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi. Type `claude`, `codex`, `cursor-agent`, `grok`, `opencode`, `mimo`, or `pi` as usual, or launch from the `Agent` menu, top bar, or command palette. Any other CLI runs in a normal pane.
 - **Rows that need you are tinted:** green when ready, amber when waiting for approval, red on an error.
 - **Subspaces** nest task workspaces under the session that started them, each with its own status and chips such as `PR #128`.
 - Sessions that start their own subagents or background work show them as expandable rows.
@@ -107,7 +107,7 @@ See [Right Panel](docs/right-panel.md) for shortcuts, Recently Opened, and link 
 
 ### Toastty Mobile (TestFlight)
 
-Check on sessions and reply from your iPhone over your private tailnet. It is available through TestFlight for now; see [Remote Access](docs/remote-access.md).
+Check on sessions, reply, and start new sessions from your iPhone over your private tailnet. It is available through TestFlight for now; see [Remote Access](docs/remote-access.md).
 
 ## Automate it
 

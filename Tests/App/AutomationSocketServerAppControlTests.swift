@@ -132,10 +132,10 @@ struct AutomationSocketServerAppControlTests: AutomationSocketServerTestSupport 
         #expect(directoriesParameter?.stringArray("supportedProfileIDs") == ["codex", "claude"])
         #expect(directoriesParameter?["repeatable"] == .bool(true))
         #expect(modelParameter?.stringArray("supportedProfileIDs") == [
-            "codex", "claude", "cursor", "opencode", "mimocode", "pi",
+            "codex", "claude", "cursor", "grok", "opencode", "mimocode", "pi",
         ])
         #expect(reasoningParameter?.stringArray("supportedProfileIDs") == [
-            "codex", "claude", "pi",
+            "codex", "claude", "grok", "pi",
         ])
 
         let panelCloseDescriptor = commands.compactMap { entry -> [String: AutomationJSONValue]? in

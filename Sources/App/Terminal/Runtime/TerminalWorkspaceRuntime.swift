@@ -74,11 +74,16 @@ final class TerminalWorkspaceRuntime {
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
-    func registerPendingSplitSourceIfNeeded(previousState: AppState, nextState: AppState) {
+    func registerPendingSplitSourceIfNeeded(
+        previousState: AppState,
+        nextState: AppState,
+        sourcePanelID: UUID? = nil
+    ) {
         controllerStore.registerPendingSplitSourceIfNeeded(
             workspaceID: workspaceID,
             previousState: previousState,
-            nextState: nextState
+            nextState: nextState,
+            sourcePanelID: sourcePanelID
         )
     }
 

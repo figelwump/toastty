@@ -15,7 +15,9 @@ struct ToasttyWorkspaceView: View {
     @AppStorage private var storedWorkspaceSessionFilter: String
     @State private var spawnerFilter: ToasttySpawnerChip?
     @State private var infoConversation: ToasttySessionInfoSelection?
+    @State private var newSession: ToasttyNewSessionModel?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let defaults: UserDefaults
 
     init(
         workspaceID: UUID,
@@ -26,6 +28,7 @@ struct ToasttyWorkspaceView: View {
         self.workspaceID = workspaceID
         self.controller = controller
         self.openWorkspace = openWorkspace
+        self.defaults = defaults
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
             ToasttyWorkspaceSessionFilter.preferenceKey,
@@ -52,9 +55,28 @@ struct ToasttyWorkspaceView: View {
         .sheet(item: $infoConversation) { selection in
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }
+        .toasttyNewSessionSheet($newSession, controller: controller)
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            if controller.canStartSessions, let workspace = controller.workspace(id: workspaceID) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        newSession = ToasttyNewSessionModel(
+                            workspaceID: workspace.id,
+                            workspaceTitle: workspace.title,
+                            host: controller,
+                            preferences: ToasttyNewSessionPreferences(defaults: defaults)
+                        )
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("New session")
+                    .accessibilityIdentifier("toastty-mobile-workspace-new-session")
+                }
+            }
+        }
         .accessibilityIdentifier("toastty-mobile-workspace-detail")
         .onAppear {
             if ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) == nil {

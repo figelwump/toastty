@@ -262,16 +262,20 @@ CLI notes:
 | `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and run outputs. |
 | `RUN_LABEL` | timestamped `computer-use-*` value | Optional stable label for the remote Computer Use run. Prefer `--run-label` for explicit CLI usage. |
 | `TIMEOUT_SECONDS` | `300` | Default hard timeout for the Codex turn when `--timeout-seconds` is not passed. |
-| `CODEX_COMPUTER_USE_MODEL` | `gpt-5.3-codex-spark` | Codex model passed explicitly to `codex app-server` for Computer Use turns. |
-| `CODEX_COMPUTER_USE_REASONING_EFFORT` | `medium` | Codex reasoning effort passed explicitly to `codex app-server` for Computer Use turns. |
+| `CODEX_COMPUTER_USE_MODEL` | `gpt-6-luna` | Codex model passed explicitly to `codex app-server` for Computer Use turns. |
+| `CODEX_COMPUTER_USE_REASONING_EFFORT` | `high` | Codex reasoning effort passed explicitly to `codex app-server` for Computer Use turns. |
+| `CODEX_COMPUTER_USE_SERVICE_TIER` | `fast` | Codex service tier passed explicitly to `codex app-server`. Use `default` for standard mode. |
+
+The remote app-bundled CLI and account must support the selected model and service tier. An older bundled CLI can reject a model that works in the current app. If the runner selects the legacy bundle, it warns that overrides for both `CODEX_COMPUTER_USE_MODEL=<available-model>` and `CODEX_COMPUTER_USE_SERVICE_TIER=default` may be needed.
 
 CLI notes:
 
 - `--prompt <text>` sends explicit prompt text to the remote Codex app-server. If omitted, the wrapper uses the built-in `@Computer Use` Toastty `Get Started…` spike prompt.
 - `--prompt-file <path>` reads prompt text from a local file and copies that exact prompt into the artifact bundle as `prompt.txt`.
 - `--scope working-tree|head|ref` and `--ref <rev>` match the remote worktree export behavior from `scripts/remote/validate.sh`.
-- The wrapper builds Toastty remotely, launches it in an isolated runtime home, starts `/Applications/Codex.app/Contents/Resources/codex app-server` behind a PTY, tunnels that localhost port back over SSH, drives one JSON-RPC turn locally, then copies the artifact bundle back into `artifacts/remote-gui/<run-label>/`.
-- Result bundles include `result.json`, `client-summary.json`, `prompt.txt`, `remote/transcript.jsonl`, `remote/build.log`, `remote/app.log`, `remote/app-server.log`, `remote/app-server-session.log`, and `remote/launch.json`. `result.json` records the resolved Codex model, provider, service tier, and reasoning effort when the client reaches `thread/start`; setup failures before then record the configured model and reasoning effort.
+- The wrapper builds Toastty remotely, launches it in an isolated runtime home, and starts the selected app-bundled `codex app-server` behind a PTY. It prefers `/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`, then falls back to `/Applications/Codex.app/Contents/Resources/codex`. It tunnels that localhost port back over SSH, drives one JSON-RPC turn locally, then copies the artifact bundle back into `artifacts/remote-gui/<run-label>/`.
+- Result bundles include `result.json`, `client-summary.json`, `prompt.txt`, `remote/transcript.jsonl`, `remote/build.log`, `remote/app.log`, `remote/app-server.log`, `remote/app-server-session.log`, and `remote/launch.json`. The launch record includes the selected CLI path, version, and configured model settings. `result.json` records the resolved Codex model, provider, service tier, and reasoning effort when the client reaches `thread/start`; setup failures before then record the configured model settings.
+- Codex maps the configured `fast` tier to `priority`. A resolved service tier of `priority` in the result confirms that fast mode was selected.
 - `result.json` distinguishes `pass`, `agent_error`, `timeout`, and `setup_error`. Computer Use permission, app-discovery, or Apple Event authorization problems currently land as `setup_error`.
 - The app-server client enables MCP elicitations and narrowly auto-accepts known Computer Use app-access or tool-call approval prompts. `client-summary.json` records `mcpElicitationsAccepted` and `mcpElicitationsDeclined`; a declined or failed Computer Use approval is still reported through the normal failure fields.
 - The remote host must be awake, unlocked, logged into the GUI session, and have the Codex Computer Use plugin installed with the required macOS permissions granted.

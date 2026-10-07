@@ -43,8 +43,24 @@ struct RemoteMessageAttachmentTests {
         #expect(value.displayText == value.text + "\n[Attachment: bad.txt]")
     }
 
-    @Test func headerOnlyParsingUsesCanonicalAttachmentRouteAndStrictFraming() {
-        let route = RemoteAttachmentPolicy.sendPath
+    @Test func maximumSessionStartUploadFitsTransportWithoutEscapingBase64Slashes() throws {
+        let request = RemoteSessionStartRequest(
+            clientRequestID: String(repeating: "a", count: RemoteSessionStartPolicy.maximumClientRequestIDLength),
+            workspaceID: UUID(), profileID: String(repeating: "p", count: 64),
+            model: String(repeating: "m", count: RemoteSessionStartPolicy.maximumModelLength),
+            reasoningEffort: String(repeating: "e", count: RemoteSessionStartPolicy.maximumReasoningEffortLength),
+            text: String(repeating: "x", count: RemoteGatewayProtocol.maximumRequestBodyBytes),
+            attachments: (0..<2).map { _ in
+                .init(filename: "photo.jpg", data: Data(repeating: 255, count: RemoteAttachmentPolicy.maximumFileBytes))
+            }
+        )
+        let body = try request.encodedForTransport()
+        #expect(body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes)
+        #expect(try JSONDecoder().decode(RemoteSessionStartRequest.self, from: body) == request)
+    }
+
+    @Test(arguments: [RemoteAttachmentPolicy.sendPath, RemoteSessionStartPolicy.startWithAttachmentsPath])
+    func headerOnlyParsingUsesCanonicalAttachmentRouteAndStrictFraming(route: String) {
         let length = RemoteAttachmentPolicy.maximumEncodedBodyBytes
         let head = "POST \(route)?x=1 HTTP/1.1\r\nContent-Length: \(length)\r\n\r\n"
         guard case .request(let request, _) = RemoteGatewayHTTPRequest.parse(Data(head.utf8), headersOnly: true) else {
@@ -54,7 +70,7 @@ struct RemoteMessageAttachmentTests {
         #expect(request.path == route)
         #expect(request.body.isEmpty)
         #expect(RemoteGatewayHTTPRequest.parse(Data(head.utf8)) == .needMoreData)
-        for path in [route + "/", "/api/conversation.message.send", "/api/hello", "/api/../api/conversation.message.send-with-attachments"] {
+        for path in [route + "/", "/api/conversation.message.send", RemoteSessionStartPolicy.startPath, "/api/hello", "/api/.." + route] {
             let raw = "POST \(path) HTTP/1.1\r\nContent-Length: \(length)\r\n\r\n"
             #expect(RemoteGatewayHTTPRequest.parse(Data(raw.utf8), headersOnly: true) == .invalid)
         }

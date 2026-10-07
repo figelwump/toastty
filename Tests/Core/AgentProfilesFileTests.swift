@@ -146,6 +146,11 @@ struct AgentProfilesFileTests {
         displayName = "Cursor"
         argv = ["cursor-agent"]
         manualCommandNames = ["safe-cursor"]
+
+        [grok]
+        displayName = "Grok Build"
+        argv = ["agent-safehouse", "grok"]
+        manualCommandNames = ["safe-grok"]
         """
 
         let fileManager = InMemoryFileManager(templateContents: contents)
@@ -159,6 +164,7 @@ struct AgentProfilesFileTests {
             ["safe-open"],
             ["safe-mimo"],
             ["safe-cursor"],
+            ["safe-grok"],
         ])
     }
 
@@ -292,7 +298,7 @@ struct AgentProfilesFileTests {
         #expect(
             throws: AgentProfilesParseError(
                 line: 1,
-                message: "[gemini] manualCommandNames is supported only for [codex], [claude], [cursor], [opencode], [mimocode], and [pi]"
+                message: "[gemini] manualCommandNames is supported only for [codex], [claude], [cursor], [grok], [opencode], [mimocode], and [pi]"
             )
         ) {
             _ = try AgentProfilesFile.load(
@@ -350,24 +356,26 @@ struct AgentProfilesFileTests {
 
     @Test
     func loadRejectsBuiltInAgentNamesInManualCommandNames() throws {
-        let contents = """
-        [codex]
-        displayName = "Codex"
-        argv = ["codex"]
-        manualCommandNames = ["pi"]
-        """
-        let fileManager = InMemoryFileManager(templateContents: contents)
+        for commandName in ["pi", "grok"] {
+            let contents = """
+            [codex]
+            displayName = "Codex"
+            argv = ["codex"]
+            manualCommandNames = ["\(commandName)"]
+            """
+            let fileManager = InMemoryFileManager(templateContents: contents)
 
-        #expect(
-            throws: AgentProfilesParseError(
-                line: 1,
-                message: "[codex] manualCommandNames must not include built-in agent commands"
-            )
-        ) {
-            _ = try AgentProfilesFile.load(
-                fileManager: fileManager.fileManager,
-                homeDirectoryPath: fileManager.rootURL.path
-            )
+            #expect(
+                throws: AgentProfilesParseError(
+                    line: 1,
+                    message: "[codex] manualCommandNames must not include built-in agent commands"
+                )
+            ) {
+                _ = try AgentProfilesFile.load(
+                    fileManager: fileManager.fileManager,
+                    homeDirectoryPath: fileManager.rootURL.path
+                )
+            }
         }
     }
 

@@ -92,7 +92,7 @@ Toastty Skills…`. A missing user-skills directory is an empty catalog and is
 not created by this command.
 
 Running sessions keep the skills they launched with. Supported managed Codex,
-Claude Code, Cursor, OpenCode, MiMo Code, and Pi launches receive the current inventory
+Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches receive the current inventory
 when they start; unsupported launch shapes or provisioning failures proceed
 without Toastty skills.
 
@@ -313,9 +313,13 @@ spawning session. Pass `parent=none` for a top-level workspace, or
 `parent=<workspaceID>` to nest under a specific workspace in the same window.
 Subspaces do not appear as their own sidebar cards; they render as compact rows
 in a Subspaces group inside the parent card, sorted ready, needs approval,
-error, working, then idle, and the spawning session's row shows a ⑂ chip that
-filters the group to its subspaces. Nesting stays one level deep, so a parent
-that is itself a subspace resolves to its root. Closing a parent keeps its
+error, working, idle, then done. Within each status, subspaces sort by the
+latest status update from any of their sessions, newest first. Equal times use
+workspace order; subspaces with no update time follow those with an update time.
+Hovering over the list holds its order, and the selected row keeps its slot
+until selection changes. The spawning session's row shows a ⑂ chip that filters
+the group to its subspaces. Nesting stays one level deep, so a parent that is
+itself a subspace resolves to its root. Closing a parent keeps its
 subspaces open as top-level workspaces.
 
 An explicit `parent` that is not a workspace in the target window is rejected
@@ -545,9 +549,9 @@ Scratchpad actions are intended for agent and automation integrations. A managed
   single-line shell snippets rendered after `cd <cwd>` and before the final
   agent command; `env.NAME` entries are injected before Toastty's managed launch
   context on the final agent command and are not exported to
-  `initialCommands`; `model` selects a model for `codex`, `claude`, `cursor`, `opencode`,
-  `mimocode`, or `pi`; `reasoningEffort` selects reasoning for `codex`, `claude`,
-  or `pi`; and `initialPrompt` is appended only for supported profiles.
+  `initialCommands`; `model` selects a model for `codex`, `claude`, `cursor`, `grok`,
+  `opencode`, `mimocode`, or `pi`; `reasoningEffort` selects reasoning for
+  `codex`, `claude`, `grok`, or `pi`; and `initialPrompt` is appended only for supported profiles.
   OpenCode and MiMo Code reject `reasoningEffort` atomically and do not map it
   to `variant`. Omit either selection to retain the configured argv/provider
   default. Explicit selections replace safely parseable equivalent profile
@@ -560,13 +564,15 @@ Scratchpad actions are intended for agent and automation integrations. A managed
   characters, and no leading dash), while the provider CLI makes the final
   upstream validity decision after delivery.
   Callers own side effects and trust changes in `initialCommands`, such as
-  `direnv allow`. Built-in `codex`, `claude`, `cursor`, `opencode`, `mimocode`, and `pi` automation launches work
+  `direnv allow`. Built-in `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, and `pi` automation launches work
   even when the user has not created `~/.toastty/agents.toml`. CLI/app-control
   `agent.launch` preserves the current AppKit first responder; focus the target
   workspace or panel separately when it should become the interactive keyboard
   target. When an active managed session invokes `agent.launch`, Toastty records
-  that caller as the new session's parent so the child can appear nested in the
-  sidebar and contribute to the parent's orchestration status.
+  that caller as the new session's parent. Same-workspace sessions with their
+  own terminal panels have normal sidebar rows, with parent context in hover
+  details. Background agents without their own panels remain nested;
+  cross-workspace child sessions can also appear as navigation rows under the parent.
   The result's `command` is the composed invocation evidence, including managed
   instrumentation and environment assignments; inspect it without printing or
   logging unrelated environment values.
@@ -661,6 +667,7 @@ focus actions are appropriate only for user-authorized navigation.
 
 ```bash
 "$TOASTTY_CLI_PATH" query run annotation.keys
+"$TOASTTY_CLI_PATH" query run agent.profile.state profileID=codex
 "$TOASTTY_CLI_PATH" query run workspace.snapshot --workspace "$WORKSPACE_ID"
 "$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$PANEL_ID" contains="ready"
 "$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$OTHER_PANEL_ID" tail=80 includeScrollback=true
@@ -669,6 +676,7 @@ focus actions are appropriate only for user-authorized navigation.
 Prefer `query list --json` to discover the current canonical IDs. Common queries include:
 
 - `annotation.keys`
+- `agent.profile.state`
 - `workspace.list`
 - `workspace.snapshot`
 - `terminal.state` (returns `windowID`, `workspaceID`, `panelID`, and terminal metadata)
@@ -679,6 +687,26 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+
+`agent.profile.state` requires `profileID` and reports the executable that
+profile would run in Toastty's launch environment, skipping Toastty's command
+shims. Use it before checking a provider CLI's native launch or fork support.
+It reads configuration and filesystem metadata without launching an agent,
+starting a shell, or changing selection or focus. It takes no workspace or
+panel selector and is available to workspace-scoped callers.
+
+The result includes `profileID`, `displayName`, `command` (the profile's first
+argv entry), `argumentCount`, `source` (`configured` or `implicit`),
+`commandIsExplicitPath`, nullable `executablePath`, `resolved`,
+`fallbackProbeUsed`, `directExecutableProbeUsed`, and nullable `failure`.
+Profile arguments and environment values are not returned. If `resolved` is
+false, `failure` is `command_not_found`, `explicit_path_not_executable`, or
+`explicit_path_not_absolute`. Absolute paths are checked directly; relative
+and `~` paths are not resolved. The query does not run a new login-shell path
+probe. `fallbackProbeUsed` and `directExecutableProbeUsed` are diagnostic
+flags for those probes and are false on this query path. An unknown or
+unavailable profile fails the query. A wrapper profile reports the wrapper
+executable, not a provider hidden inside it.
 
 `terminal.visible-text` may target any terminal panel in a workspace the
 caller can automate, not only the caller's own panel. Reads by another session
@@ -982,7 +1010,7 @@ additional workspaces the user explicitly assigned.
 
 ### `session ingest-agent-event`
 
-Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, Cursor, OpenCode, MiMo Code, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, correlated Cursor hook events, Codex hook/notify events, and provider-native resume-record updates when the source supports them. Cursor hook input is capped at 65,536 bytes; oversized input is drained without being retained and then rejected so the provider's hook pipe can close cleanly.
+Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, correlated Cursor hook events, Codex hook/notify events, and provider-native resume-record updates when the source supports them. Cursor hook input is capped at 65,536 bytes; oversized input is drained without being retained and then rejected so the provider's hook pipe can close cleanly.
 
 ```
 toastty session ingest-agent-event --source <source> [--session <id>] [--panel <id>]
@@ -990,13 +1018,13 @@ toastty session ingest-agent-event --source <source> [--session <id>] [--panel <
 
 | Option | Required | Env var fallback | Description |
 |---|---|---|---|
-| `--source <source>` | yes | — | `claude-hooks`, `codex-hooks`, `codex-notify`, `cursor-hooks`, `opencode-plugin`, `mimocode-plugin`, or `pi-extension` |
+| `--source <source>` | yes | — | `claude-hooks`, `codex-hooks`, `codex-notify`, `cursor-hooks`, `grok-hooks`, `opencode-plugin`, `mimocode-plugin`, or `pi-extension` |
 | `--session <id>` | no | `TOASTTY_SESSION_ID` | Session ID |
 | `--panel <id>` | no | `TOASTTY_PANEL_ID` | Panel UUID |
 
 This command is not intended for third-party integrations. Custom agents should use `session status` and `session stop` directly.
 
-Toastty's built-in Claude, Codex, Cursor, OpenCode, MiMo Code, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If a helper cannot reach the app, it keeps the agent process alive. Cursor's launch-scoped forwarder suppresses delivery failures and writes no separate log; Codex's installed status-hook forwarder writes to `~/.toastty/codex-hooks/telemetry-failures.log`; Claude and Codex per-launch helpers write under `~/.toastty/run/managed-agent-launches/` (or the runtime-isolated equivalent), where files remain available until Toastty can prove the owning process exited. OpenCode and MiMo Code helper failures remain in their temporary per-session launch directories, and Pi writes its compact telemetry there while the session is active.
+Toastty's built-in Claude, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If a helper cannot reach the app, it keeps the agent process alive. Cursor's launch-scoped forwarder suppresses delivery failures and writes no separate log; Codex's installed status-hook forwarder writes to `~/.toastty/codex-hooks/telemetry-failures.log`; Claude and Codex per-launch helpers write under `~/.toastty/run/managed-agent-launches/` (or the runtime-isolated equivalent), where files remain available until Toastty can prove the owning process exited. OpenCode and MiMo Code helper failures remain in their temporary per-session launch directories, and Pi writes its compact telemetry there while the session is active.
 
 ## Environment variables
 

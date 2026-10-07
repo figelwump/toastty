@@ -4,10 +4,10 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 
 ## GitHub CI
 
-`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, pushes to `main`, and manual dispatch. Feature-branch pushes get automatic checks through their PR; manual dispatch can validate a branch before opening one. Pushes to `main` and manual dispatch run every job and are never cancelled, so each merged commit gets a full test run; a newer push to a PR cancels that PR's older run. PR job selection uses `.github/ci-paths.yml`:
+`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, pushes to `main`, and manual dispatch. Feature-branch pushes get automatic checks through their PR; manual dispatch can validate a branch before opening one. Pushes to `main` and manual dispatch run every job and are never cancelled, so each merged commit gets all automatic checks; a newer push to a PR cancels that PR's older run. PR job selection uses `.github/ci-paths.yml`:
 
 - Desktop sources, tests, scripts, and build inputs select the full macOS Debug test suite and an unsigned Release build.
-- Native iOS sources select Debug and Release simulator tests. PR Debug runs app/domain tests plus two fixture UI methods; Release runs app/domain tests. Shared protocol changes select both platforms.
+- Native iOS sources select Debug and Release simulator tests. Automatic Debug runs app/domain tests plus two fixture UI methods; Release runs app/domain tests. Both exclude the provisional numeric domain performance budget while retaining its large-page correctness check. Shared protocol changes select both platforms.
 - Web-panel sources and generated bundles select both apps, which embed the bundles, plus web-panel tests on Linux. `npm test` also checks generated bundle synchronization.
 - Documentation-only PR changes skip app jobs.
 
@@ -65,6 +65,31 @@ visual correctness, HTTP success, SPA readiness, or video playback. Persisted
 restoration, superseded navigation callbacks, and detached screenshot rejection
 require the separate runtime tests.
 
+### Remote session start
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote \
+  --validation-command 'python3 scripts/automation/remote-session-start-check.py'
+```
+
+This checks a session start from a paired device end to end on the remote
+host. Remote Access and the paired device must exist before Toastty launches,
+so the check starts its own second instance of the wrapper's build and stops it
+afterward. That instance uses a throwaway runtime home, a throwaway user home
+whose `agents.toml` names a fake `claude` script, two seeded test devices, and
+a loopback gateway port. It does not use a real agent, a real pairing, or
+Tailscale, and it does not touch the installed production app.
+
+The check acts as the phone over HTTP: it reads the start options, starts a
+session whose message begins with a dash, and repeats the request. It verifies
+that the new terminal ran the command with the chosen model, effort, and
+message; that the workspace's selected tab and focused panel did not change;
+that the session list shows the conversation under the returned ID; that the
+repeat started nothing; and that a device with **Start sessions** off is
+refused. It writes `remote-session-start.json` under the run's artifacts
+directory. This is state evidence from the automation socket and the gateway.
+It is not a screenshot, and it does not cover the iOS screens.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.
@@ -113,14 +138,25 @@ sv exec -- scripts/remote/test.sh \
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
-The `Toastty CI` workflow runs secret-free dispatcher and release-script tests, then separate Debug and Release simulator jobs. PR Debug uses `node ios/scripts/toastty-ios.mjs test --ui-tests smoke`: it runs every app/domain test and only `ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction` and `testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble` from the UI bundle. This shorter PR tier does not cover the other UI methods. Pushes to `main` and manual `Toastty CI` runs use the default full Debug UI suite; to validate a feature branch with full CI, select that branch in the workflow's **Run workflow** menu. `--ui-tests all` explicitly requests the same full Debug suite, and both UI selector values require Debug.
+The `Toastty CI` workflow runs secret-free dispatcher and release-script tests, then separate Debug and Release simulator jobs. Automatic PR and `main` Debug runs use `node ios/scripts/toastty-ios.mjs test --ui-tests smoke --skip-performance-budgets`. This retains app/domain functional tests and two UI methods: `ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction` covers fixture navigation, and `testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble` covers composing and enqueueing a message. Automatic Release runs use `--skip-performance-budgets` with the app/domain suites.
 
-Setting `TOASTTY_IOS_CONFIGURATION=Release` on the dispatcher selects only app/domain tests and enables internal test imports without defining `DEBUG`; fixture UI launches require Debug. The remote wrapper invokes xcodebuild directly, so select the same focused Release tier explicitly:
+`--skip-performance-budgets` excludes only the provisional 5,000-event numeric budget test. Its separate event/cursor correctness test still runs. The full UI suite has timing-sensitive fixture failures, and hosted simulator load makes the one-second benchmark threshold unreliable; automatic CI no longer enforces those checks. This does not establish that every full-UI failure is harmless. Investigate failures when running that coverage before a release or a change to the affected flow.
+
+Manual `Toastty CI` runs retain the full Debug UI suite and the numeric budget test in both configurations. Select the branch in the workflow's **Run workflow** menu to run this coverage before TestFlight or after event decode/reduce changes. The default dispatcher remains unchanged: `node ios/scripts/toastty-ios.mjs test` includes all Debug tests. `--ui-tests all` explicitly selects that UI coverage, and both UI selector values require Debug. Use the [controlled remote benchmark](../architecture/mobile-ios-domain-performance.md#reference-evidence) to distinguish a performance regression from hosted-runner contention.
+
+The `iOS TestFlight` workflow reuses successful trusted main CI for the exact
+release SHA instead of repeating simulator tests. Its CI gate and toolchain pin
+are described in [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow).
+Both ordinary iOS jobs and the archive job verify `.github/ios-xcode-version`;
+missing CI evidence or an unavailable pinned Xcode blocks release validation.
+
+Setting `TOASTTY_IOS_CONFIGURATION=Release` on the dispatcher selects the existing `ToasttyMobileApp-Release` scheme with only app/domain test targets and enables internal test imports without defining `DEBUG`. The UI test bundle is not built in this tier; fixture UI launches require Debug. Dispatcher test invocations pass `ONLY_ACTIVE_ARCH=YES`, letting the selected simulator determine the architecture without assuming the hosted runner architecture. App builds and signed archives retain their existing architecture settings. The remote wrapper invokes xcodebuild directly, so select the same focused Release tier explicitly:
 
 ```bash
 sv exec -- scripts/remote/test.sh --platform ios --scope working-tree \
   --run-label ios-release-tests -- \
-  -configuration Release ENABLE_TESTABILITY=YES \
+  -scheme ToasttyMobileApp-Release -configuration Release \
+  ENABLE_TESTABILITY=YES ONLY_ACTIVE_ARCH=YES \
   -only-testing:ToasttyMobileAppTests \
   -only-testing:ToasttyMobileDomainTests
 ```

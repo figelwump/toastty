@@ -90,6 +90,12 @@ public protocol GatewayClientProtocol: Sendable {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse
+    func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest
+    ) async throws -> RemoteSessionStartOptionsResponse
+    func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse
 }
 
 public extension GatewayClientProtocol {
@@ -125,6 +131,18 @@ public extension GatewayClientProtocol {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest
+    ) async throws -> RemoteSessionStartOptionsResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -331,6 +349,36 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
                 )
             }
             return decoded
+        }
+    }
+
+    public func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest
+    ) async throws -> RemoteSessionStartOptionsResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteSessionStartPolicy.optionsPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteSessionStartOptionsResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func startSession(
+        _ request: RemoteSessionStartRequest
+    ) async throws -> RemoteSessionStartResponse {
+        var urlRequest = try await makeNativeBearerRequest(
+            method: "POST",
+            path: request.attachments.isEmpty ? RemoteSessionStartPolicy.startPath : RemoteSessionStartPolicy.startWithAttachmentsPath,
+            body: try request.encodedForTransport(),
+            sendsOrigin: true
+        )
+        if !request.attachments.isEmpty { urlRequest.timeoutInterval = 150 }
+        let response = try await sendTransportRequest(urlRequest)
+        guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
+        return try decodeVersioned(RemoteSessionStartResponse.self, from: response.body) {
+            $0.protocolVersion
         }
     }
 
@@ -551,6 +599,21 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
             throw GatewayFailure.operationCompatibility(error)
         } catch {
             throw GatewayFailure.invalidResponse
+        }
+    }
+
+    private func decodeVersioned<Value: Decodable>(
+        _ type: Value.Type,
+        from body: Data,
+        protocolVersion: (Value) -> String
+    ) throws -> Value {
+        try mapCompatibility {
+            let decoded = try ConversationEventCoding.makeDecoder().decode(type, from: body)
+            let version = protocolVersion(decoded)
+            guard version == RemoteGatewayProtocol.version else {
+                throw GatewayCompatibilityError.unsupportedProtocolVersion(version)
+            }
+            return decoded
         }
     }
 

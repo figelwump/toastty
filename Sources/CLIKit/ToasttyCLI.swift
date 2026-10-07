@@ -81,6 +81,7 @@ enum CLICommand: Equatable {
     case sessionCodexHookEvent(sessionID: String, panelID: UUID?, event: CodexHookEvent)
     case sessionCodexNotifyCompletion(sessionID: String, panelID: UUID?, completion: CodexNotifyCompletion)
     case sessionCursorHookEvent(sessionID: String, panelID: UUID?, event: CursorHookEvent)
+    case sessionGrokHookEvent(sessionID: String, panelID: UUID?, event: GrokHookEvent)
     case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
     case sessionUpdateResumeRecord(sessionID: String, panelID: UUID?, agent: AgentKind, nativeSessionID: String, sessionFilePath: String, cwd: String?)
     /// A session name the provider reported through Toastty's plugin or
@@ -115,7 +116,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionCursorHookEvent, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderSessionName, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionCursorHookEvent, .sessionGrokHookEvent, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderSessionName, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -413,6 +414,12 @@ enum CLICommand: Equatable {
             if let generationID = event.generationID {
                 payload["generationID"] = .string(generationID)
             }
+            if let text = event.text {
+                payload["text"] = .string(text)
+            }
+            if let modelIdentifier = event.modelIdentifier {
+                payload["modelIdentifier"] = .string(modelIdentifier)
+            }
             if let status = event.status {
                 payload["kind"] = .string(status.kind.rawValue)
                 payload["summary"] = .string(status.summary)
@@ -422,6 +429,39 @@ enum CLICommand: Equatable {
             }
             return AutomationEventEnvelope(
                 eventType: "session.cursor_hook_event",
+                sessionID: sessionID,
+                panelID: panelID?.uuidString,
+                requestID: requestID,
+                payload: payload
+            )
+
+        case .sessionGrokHookEvent(let sessionID, let panelID, let event):
+            var payload: [String: AutomationJSONValue] = [
+                "kind": .string(event.kind.rawValue),
+                "nativeSessionID": .string(event.nativeSessionID),
+                "timestamp": .double(event.timestamp.timeIntervalSince1970),
+                "isSubagent": .bool(event.isSubagent),
+            ]
+            if let promptID = event.promptID {
+                payload["promptID"] = .string(promptID)
+            }
+            if let notificationType = event.notificationType {
+                payload["notificationType"] = .string(notificationType)
+            }
+            if let toolName = event.toolName {
+                payload["toolName"] = .string(toolName)
+            }
+            if let toolUseID = event.toolUseID {
+                payload["toolUseID"] = .string(toolUseID)
+            }
+            if let sessionFilePath = event.sessionFilePath {
+                payload["sessionFilePath"] = .string(sessionFilePath)
+            }
+            if let cwd = event.cwd {
+                payload["cwd"] = .string(cwd)
+            }
+            return AutomationEventEnvelope(
+                eventType: "session.grok_hook_event",
                 sessionID: sessionID,
                 panelID: panelID?.uuidString,
                 requestID: requestID,
@@ -579,6 +619,8 @@ enum CLICommand: Equatable {
             return "processed Codex notify completion for \(sessionID)"
         case .sessionCursorHookEvent(let sessionID, _, let event):
             return "processed Cursor hook \(event.hookEventName) for \(sessionID)"
+        case .sessionGrokHookEvent(let sessionID, _, let event):
+            return "processed Grok hook \(event.kind.rawValue) for \(sessionID)"
         case .sessionUpdateFiles(let sessionID, _, let files, _, _):
             let queuedFiles = response.result?.int("queuedFiles") ?? files.count
             return "queued \(queuedFiles) files for \(sessionID)"
@@ -808,7 +850,7 @@ public enum ToasttyCLI {
     static let usage = """
     Usage:
       toastty [--json] [--socket-path <path>] action list
-      toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+      toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
       toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive] [--resolved-codex-executable <path>] [--codex-home <path>] [--codex-process-path <path>]
       toastty [--json] [--socket-path <path>] agent managed-launch-preflight-decision --token <id>
       toastty [--json] [--socket-path <path>] doctor
@@ -816,7 +858,7 @@ public enum ToasttyCLI {
       toastty diagnostics submit --file <file> [--contact <text>] [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
-      toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+      toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
       toastty [--json] setup guide [--topic onboarding|workflows] [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
@@ -830,7 +872,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] session scope set [--session <id>] --workspace <id> [--workspace <id> ...]
       toastty [--json] [--socket-path <path>] session scope add [--session <id>] --workspace <id> [--workspace <id> ...]
       toastty [--json] [--socket-path <path>] session scope clear [--session <id>]
-      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|cursor-hooks|opencode-plugin|mimocode-plugin|pi-extension [--session <id>] [--panel <id>] [--respond-to-questions]
+      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|cursor-hooks|grok-hooks|opencode-plugin|mimocode-plugin|pi-extension [--session <id>] [--panel <id>] [--respond-to-questions]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
@@ -1085,10 +1127,13 @@ public enum ToasttyCLI {
         case "run":
             let parsed = try parseCommandArguments(
                 remainingArguments,
-                valueOptions: ["--window", "--workspace", "--panel", "--stdin"]
+                valueOptions: ["--window", "--workspace", "--tab", "--panel", "--stdin"]
             )
             guard let id = parsed.positionals.first, id.isEmpty == false else {
                 throw ToasttyCLIError.usage("\(kind.rawValue) run requires <id>\n\n\(usage)")
+            }
+            guard parsed.values("--tab").count <= 1 else {
+                throw ToasttyCLIError.usage("tabID must be supplied only once\n\n\(usage)")
             }
 
             var args: [String: AutomationJSONValue] = [:]
@@ -1104,6 +1149,12 @@ public enum ToasttyCLI {
                 }
                 args["workspaceID"] = .string(workspaceID)
             }
+            if let tabID = parsed.singleValue("--tab") {
+                guard UUID(uuidString: tabID) != nil else {
+                    throw ToasttyCLIError.usage("--tab must be a UUID\n\n\(usage)")
+                }
+                args["tabID"] = .string(tabID)
+            }
             if let panelID = parsed.singleValue("--panel") {
                 guard UUID(uuidString: panelID) != nil else {
                     throw ToasttyCLIError.usage("--panel must be a UUID\n\n\(usage)")
@@ -1113,6 +1164,9 @@ public enum ToasttyCLI {
 
             for argument in parsed.positionals.dropFirst() {
                 let assignment = try parseKeyValueAssignment(argument)
+                if assignment.key == "tabID", args["tabID"] != nil {
+                    throw ToasttyCLIError.usage("tabID must be supplied only once\n\n\(usage)")
+                }
                 recordAppControlValue(.string(assignment.value), for: assignment.key, in: &args)
             }
             if let stdinKey = parsed.singleValue("--stdin") {
@@ -1374,7 +1428,7 @@ public enum ToasttyCLI {
 
             let sourceValue = try requireValue("--source", in: parsed)
             guard let source = AgentEventSource(rawValue: sourceValue) else {
-                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-hooks, codex-notify, cursor-hooks, opencode-plugin, mimocode-plugin, pi-extension")
+                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-hooks, codex-notify, cursor-hooks, grok-hooks, opencode-plugin, mimocode-plugin, pi-extension")
             }
 
             return .sessionIngestAgentEvent(
@@ -1987,17 +2041,23 @@ public enum ToasttyCLI {
         return 0
     }
 
-    /// Cursor owns the hook producer, so read no more than the parser's limit
+    /// Cursor and Grok own their hook producers, so read no more than the parser's limit
     /// plus one sentinel byte. This preserves a precise oversized-payload
     /// error without buffering an unbounded provider payload in the short-lived
     /// hook process. Existing provider adapters retain their current input
     /// behavior until their separate contracts adopt the same boundary.
     private static func readAgentEventPayload(source: AgentEventSource) throws -> Data {
-        guard source == .cursorHooks else {
+        let maximumPayloadByteCount: Int
+        switch source {
+        case .cursorHooks:
+            maximumPayloadByteCount = CursorHookEventParser.maximumPayloadByteCount
+        case .grokHooks:
+            maximumPayloadByteCount = GrokHookEventParser.maximumPayloadByteCount
+        default:
             return FileHandle.standardInput.readDataToEndOfFile()
         }
 
-        let maximumReadCount = CursorHookEventParser.maximumPayloadByteCount + 1
+        let maximumReadCount = maximumPayloadByteCount + 1
         var payload = Data()
         while payload.count < maximumReadCount {
             let remainingCount = maximumReadCount - payload.count
@@ -2008,8 +2068,8 @@ public enum ToasttyCLI {
             }
             payload.append(chunk)
         }
-        if payload.count > CursorHookEventParser.maximumPayloadByteCount {
-            // Cursor writes the hook JSON to this process over a pipe. Drain
+        if payload.count > maximumPayloadByteCount {
+            // Providers write hook JSON to this process over a pipe. Drain
             // excess bytes without retaining them so the provider never sees
             // EPIPE merely because Toastty rejected an oversized observation.
             while let chunk = try FileHandle.standardInput.read(upToCount: 8 * 1024),
@@ -2114,6 +2174,12 @@ public enum ToasttyCLI {
                 }
             }
             return components.joined(separator: " ")
+
+        case .grokHooks:
+            // Use only recognized metadata in errors. Raw prompts, tools and
+            // provider failure messages never enter CLI diagnostics.
+            let kind = (object["hookEventName"] as? String).flatMap(GrokHookEvent.Kind.init(rawValue:))
+            return "hook_event_name=\(kind?.rawValue ?? "unknown") payload_bytes=\(payload.count)"
 
         case .mimocodePlugin, .opencodePlugin:
             let event = (object["event"] as? [String: Any]) ?? object

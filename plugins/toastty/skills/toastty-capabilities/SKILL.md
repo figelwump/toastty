@@ -69,14 +69,28 @@ panel IDs; do not select a workspace/tab or focus a panel to inspect it.
 `workspace.select` changes the user's visible workspace. Selection and focus
 actions are appropriate only for user-authorized navigation.
 
-Current split actions return the target `workspaceID` and the newly created
-terminal `panelID`. Check both fields before composing a follow-up
-`agent.launch`; never pass placeholders such as `undefined` or `null` through
-`--panel`. When controlling an older running Toastty version whose successful
-split response omits `panelID`, resolve the newly focused or newly added
-`slotPanelIDs` entry from `workspace.snapshot` before launching. A newly split
-terminal surface may take a moment to mount, so preserve a launch error rather
-than falling back to raw terminal input or another panel.
+Terminal split actions accept an explicit workspace, `tabID` (`--tab`), and
+source `panelID` (`--panel`). An explicit panel identifies its owning workspace
+and tab; supplied IDs must agree. Without explicit workspace, tab, panel, or
+window selectors, managed callers use their own workspace and tab. An omitted
+tab in the caller's workspace also uses the caller's tab. Other explicit
+workspaces use their selected tab. Invalid or stale targets fail instead of
+falling back to the current UI selection.
+
+Use `activate=false` with terminal split actions or `workspace.tab.create`
+when creation must preserve tab selection, panel focus, and right-panel focus.
+The default `activate=true` changes tab/panel selection within the target
+workspace; it does not select another workspace or window. `agent.launch`
+preserves selection and keyboard focus.
+
+Split and tab creation return `workspaceID`, `tabID`, and the new terminal's
+`panelID`. Check success and all three IDs, then pass them to `agent.launch`.
+Never rediscover the target from the UI's selected tab or focused panel, and
+never pass placeholders such as `undefined` or `null`. A fresh terminal may
+take a moment to mount. Preserve a launch error and keep its target IDs; do not
+fall back to raw terminal input or another panel. Feature-detect tab and
+activation parameters in the live descriptors. If an older app cannot return
+stable creation IDs or preserve the required selection, report that limitation.
 
 To find an already-open browser or local document in the current
 workspace, query `terminal.state` to obtain the `workspaceID`, then query
@@ -260,11 +274,11 @@ user requests either selection:
 
 Current provider translations are:
 
-- `model`: Codex, Claude Code, Cursor, OpenCode, MiMo Code, and Pi (`--model`).
+- `model`: Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi (`--model`).
 - `reasoningEffort`: Codex (`--config model_reasoning_effort=<TOML string>`),
-  Claude Code (`--effort`), and Pi (`--thinking`). Cursor, OpenCode, and MiMo
-  Code do not support it; never translate reasoning to `variant` or another
-  provider flag.
+  Claude Code (`--effort`), Grok Build (`--reasoning-effort`), and Pi (`--thinking`).
+  Cursor, OpenCode, and MiMo Code do not support it; never translate reasoning
+  to `variant` or another provider flag.
 
 Pass requested values unchanged in the structured action arguments and let the
 provider CLI make the final upstream validity decision after Toastty delivers

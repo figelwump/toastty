@@ -53,11 +53,12 @@ If the file fails to parse at startup, Toastty logs a warning and continues with
 ## Launch and restore behavior
 
 - Toastty sends `startupCommand` when the pane is created and again when a profiled pane is restored from persisted workspace state.
-- A restored managed Codex, Claude, OpenCode, MiMo Code, or Pi panel with a
-  valid native resume record runs the provider resume command instead of the
-  profile `startupCommand`. OpenCode and MiMo Code use the recorded native
-  session ID with `--session`; Pi uses its recorded session file path with
-  `pi --session`. If the record is missing or fails pre-launch validation,
+- A restored managed Codex, Claude, Grok Build, OpenCode, MiMo Code, or Pi
+  panel with a valid native resume record runs the provider resume command
+  instead of the profile `startupCommand`. Grok Build uses the recorded native
+  session ID with `grok --resume`; OpenCode and MiMo Code use the recorded
+  native session ID with `--session`; Pi uses its recorded session file path
+  with `pi --session`. If the record is missing or fails pre-launch validation,
   normal profile startup applies.
 - Profile bindings are persisted with workspace layouts, so the same profile comes back after relaunch.
 - While the referenced profile still exists, the panel-header badge resolves from the live profile definition rather than from the stored binding.

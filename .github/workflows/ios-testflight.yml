@@ -8,11 +8,6 @@ on:
         required: true
         type: boolean
         default: false
-      run_tests:
-        description: Run native Swift tests before archive
-        required: true
-        type: boolean
-        default: true
   push:
     branches:
       - main
@@ -21,7 +16,8 @@ on:
       - "ios/**"
       - "Sources/RemoteProtocol/**"
       - "Tests/RemoteProtocol/**"
-      - "scripts/ci/ios-testflight.sh"
+      - "scripts/ci/**"
+      - ".github/ios-xcode-version"
       - ".secrets"
       - ".node-version"
       - ".tool-versions"
@@ -39,15 +35,34 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+      actions: read
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
+
+      - name: Require main for upload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "TestFlight uploads are allowed only from main." >&2
+          exit 1
+
+      - name: Require trusted CI for the release source
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: node scripts/ci/require-ios-ci.mjs --sha "$RELEASE_SHA" --output artifacts/ios-release/ci-evidence.json
+
+      - name: Select pinned iOS Xcode
+        run: bash scripts/ci/select-ios-xcode.sh
 
       - name: Install pinned Tuist
         run: |
@@ -61,25 +76,9 @@ jobs:
       - name: Test release script
         run: node --test ios/Tests/ReleaseScriptTests/*.test.mjs
 
-      - name: Test native client
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload }}
-        run: node ios/scripts/toastty-ios.mjs test
-
-      - name: Test Release app and domain
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload }}
-        env:
-          TOASTTY_IOS_CONFIGURATION: Release
-          TOASTTY_IOS_RUN_ID: release-tests
-        run: node ios/scripts/toastty-ios.mjs test
-
-      - name: Require main for upload
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && github.ref != 'refs/heads/main' }}
-        run: |
-          echo "TestFlight uploads are allowed only from main." >&2
-          exit 1
-
       - name: Archive and validate TestFlight build
         env:
+          TOASTTY_IOS_VERIFIED_SHA: ${{ steps.ci.outputs.verified_sha }}
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
@@ -97,6 +96,7 @@ jobs:
         with:
           name: ios-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            artifacts/ios-release/ci-evidence.json
             artifacts/ios-release/**/export/*.ipa
             artifacts/ios-release/**/Toastty.xcarchive.tar.gz
             artifacts/ios-release/**/ExportOptions.plist

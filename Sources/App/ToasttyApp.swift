@@ -1212,12 +1212,15 @@ struct ToasttyApp: App {
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _webPanelRuntimeRegistry = StateObject(wrappedValue: webPanelRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
+        // A local, because the StateObject autoclosure cannot capture `self`.
+        let remoteSessionLauncher = agentLaunchService
         _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            runtimePaths: runtimePaths
+            runtimePaths: runtimePaths,
+            sessionLauncher: remoteSessionLauncher
         ))
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle

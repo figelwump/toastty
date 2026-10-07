@@ -444,6 +444,19 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 validate_static_configuration
+# Bind the archive to the clean source checked by the workflow gate.
+assert_verified_source() {
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    [[ -n "${TOASTTY_IOS_VERIFIED_SHA:-}" && "$SOURCE_COMMIT_SHA" == "$TOASTTY_IOS_VERIFIED_SHA" \
+      && "$(git -C "$ROOT_DIR" rev-parse HEAD)" == "$SOURCE_COMMIT_SHA" \
+      && "$SOURCE_COMMIT_SHA" == "${GITHUB_SHA:-}" ]] \
+      || fail "archive source must match the verified CI SHA and GitHub event SHA"
+    git -C "$ROOT_DIR" diff --quiet HEAD \
+      || fail "tracked source modified after checkout"
+  fi
+}
+SOURCE_COMMIT_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+assert_verified_source
 for command_name in base64 find git security sed sips tar tee tr tuist uuidgen xcodebuild xcrun; do
   require_command "$command_name"
 done
@@ -506,7 +519,6 @@ RELEASE_METADATA_PATH="$OUTPUT_DIR/release-metadata.txt"
 for path in "$ARCHIVE_PATH" "$ARCHIVE_PATH.tar.gz" "$EXPORT_PATH" "$DERIVED_DATA_PATH" "$EXPORT_OPTIONS_PLIST"; do
   [[ ! -e "$path" ]] || fail "release output already exists; choose a fresh build number or output directory: $path"
 done
-SOURCE_COMMIT_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 XCODE_VERSION="$(xcodebuild -version | tr '\n' ' ')"
 SWIFT_VERSION="$(xcrun swift --version | tr '\n' ' ')"
 IOS_SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
@@ -537,6 +549,7 @@ log "Generating the production iOS workspace."
   tuist generate --no-open
 ) 2>&1 | tee "$OUTPUT_DIR/generate.log"
 assert_ci_signing_build_settings
+assert_verified_source
 
 log "Archiving $SCHEME_NAME $CONFIGURATION."
 xcodebuild \

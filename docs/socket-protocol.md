@@ -216,6 +216,9 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `window.create`
 - `window.sidebar.toggle`
 - `workspace.create`
+- `workspace.set-parent`
+- `workspace.set-done`
+- `workspace.clear-done`
 - `workspace.select`
 - `workspace.move`
 - `workspace.rename`
@@ -248,8 +251,33 @@ Notable action-specific behavior:
   - `args.activate` is optional and defaults to `true`.
   - When `args.activate=false`, Toastty creates the workspace without changing
     the visible workspace selection.
+  - Optional `args.parent` is a workspace UUID in the target window or uses
+    `"none"` for a top-level workspace. When omitted, a managed caller creates
+    a subspace under its own workspace's root if that workspace is in the
+    target window; otherwise the new workspace is top level.
+  - Parent links stay one level deep. A parent that is itself a subspace
+    resolves to its root. A scoped caller needs access to both the requested
+    parent and that root.
   - Background-created workspaces remain marked as new until selected once.
-  - The action result includes `workspaceID` and `windowID`.
+  - The action result includes `workspaceID`, `windowID`, and nullable
+    `parentWorkspaceID`.
+- `workspace.set-parent`
+  - requires `args.parent`, a workspace UUID in the same window or `"none"`
+    to detach the target workspace. A subspace parent resolves to its root;
+    self-parenting and cycles are rejected.
+  - The caller needs access to the target workspace, requested parent, and root.
+    Reparenting retains the original spawning session when present; otherwise
+    it records the managed caller. Detaching clears the spawner and done mark.
+    Any subspaces of the target workspace move under the same root.
+- `workspace.set-done`, `workspace.clear-done`
+  - With no workspace or window selector, a managed caller targets its own
+    workspace. A caller whose session has ended must name the workspace.
+  - `workspace.set-done` rejects top-level workspaces. Repeating it preserves
+    the original mark time; `workspace.clear-done` removes the mark.
+  - The mark clears when a managed agent session in that workspace starts new
+    work. The turn that set it, restored sessions, and process watches do not
+    clear it. Both `workspace.list` and `workspace.snapshot` return a `done`
+    boolean.
 - `workspace.select`
   - requires `args.workspaceID` or `args.index` (1-based).
   - Changes the user's visible workspace. Use only for user-authorized
@@ -326,15 +354,15 @@ Notable action-specific behavior:
     cannot be overridden. Environment keys must use shell variable syntax,
     values must not contain NUL bytes, and duplicate definitions across
     `env.NAME`, `env`, and `environment` payloads are rejected.
-  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor automation
-    profiles, built-in Codex/Claude/Cursor profiles whose argv is exactly one direct
+  - `initialPrompt` is appended only for implicit Codex/Claude/Cursor/Grok/Pi automation
+    profiles, built-in Codex/Claude/Cursor/Grok/Pi profiles whose argv is exactly one direct
     first-party command, or profiles that declare
     `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
     prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
-    A direct Cursor launch inserts `--` before a prompt that begins
-    with `-`, preventing the prompt from being parsed as a Cursor CLI option.
-  - `model` is supported for `codex`, `claude`, `cursor`, `opencode`, `mimocode`, and
-    `pi`. `reasoningEffort` is supported for `codex`, `claude`, and `pi`.
+    A direct Cursor, Grok, or Pi launch inserts `--` before a prompt that begins
+    with `-`, preventing the prompt from being parsed as a CLI option.
+  - `model` is supported for `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, and
+    `pi`. `reasoningEffort` is supported for `codex`, `claude`, `grok`, and `pi`.
     OpenCode and MiMo Code reject `reasoningEffort` before target or panel
     mutation and never map it to `variant`.
   - omitted selections preserve the configured argv. Explicit selections
@@ -346,9 +374,11 @@ Notable action-specific behavior:
   - the result's `command` is evidence of the fully composed invocation,
     including initial-prompt placement and managed instrumentation.
   - When an active managed session invokes `agent.launch`, Toastty records that
-    caller as the new session's parent. Same-workspace child sessions are
-    surfaced as nested sidebar rows; cross-workspace children retain their
-    canonical row and carry parent context.
+    caller as the new session's parent. Same-workspace child sessions with
+    their own terminal panels have normal sidebar rows, with parent context
+    in hover details. Background agents without their own panels remain
+    nested; cross-workspace children retain their canonical row and can
+    appear as navigation rows under the parent.
 - `panel.scratchpad.set-content`
   - requires `args.sessionID`.
   - requires exactly one of `args.filePath` or `args.content`.
@@ -472,6 +502,7 @@ Queries preserve selection and focus, but can initialize runtime state:
 Common query IDs include:
 
 - `annotation.keys`
+- `agent.profile.state`
 - `workspace.list`
 - `workspace.snapshot`
 - `terminal.state`
@@ -481,6 +512,32 @@ Common query IDs include:
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+
+`agent.profile.state` requires `args.profileID` and takes no selectors. It
+returns the executable that profile would run in Toastty's launch environment,
+skipping Toastty's command shims. It launches no agent or shell and does not
+change selection or focus. Workspace scope does not restrict this query.
+
+The result contains `profileID`, `displayName`, `command` (argv[0]),
+`argumentCount`, `source` (`configured` or `implicit`), `commandIsExplicitPath`,
+nullable `executablePath`, `resolved`, `fallbackProbeUsed`,
+`directExecutableProbeUsed`, and nullable `failure`. Arguments and environment
+values are omitted. An unresolved command returns `resolved: false` with
+`failure` set to `command_not_found`, `explicit_path_not_executable`, or
+`explicit_path_not_absolute`. Absolute paths are checked directly; relative
+and `~` paths are not resolved. The query does not run a new login-shell path
+probe. `fallbackProbeUsed` and `directExecutableProbeUsed` are diagnostic
+flags for those probes and are false on this query path. An unknown or
+unavailable profile fails the query. Wrapper profiles resolve their wrapper
+executable, not the provider inside it.
+
+`workspace.snapshot` includes nullable `parentWorkspaceID` and
+`spawningSessionID`, plus `subspaceWorkspaceIDs`. Related workspaces outside
+the caller's scope are omitted, either as null fields or absent array entries.
+For a scoped caller, a null `parentWorkspaceID` does not prove the workspace
+is top level.
+Its `annotations` entries include `primary`, which identifies the annotation
+chosen for the subspace row.
 
 `annotation.keys` takes no selectors or arguments and returns
 `{keys: [String]}` in bytewise order. It lists every annotation key previously
@@ -630,14 +687,17 @@ Supported action IDs:
   - foreground navigation action: can change selected workspace, tab, focused
     panel, and active window
   - `args.windowID` is required when multiple windows exist
-  - first targets unread panels using the normal unread traversal order
-  - unread traversal still wraps within the current workspace before moving on
+  - first targets unread panels; within each priority group, navigation follows sidebar order downward from the current session row
+  - workspace order places each parent before its subspaces and follows the displayed subspace order, including pinned or frozen rows; session order uses the sidebar's stable creation order and any custom row order, including sessions in other tabs or collapsed subspaces
+  - when a sidebar has not rendered, subspaces use stored workspace order; hidden or newly added subspaces remain reachable after the recorded rows
+  - traversal visits rows below the current focus, then other windows in stored window order starting after the current window, then wraps to rows above the focus in the current window
+  - panels without session rows remain reachable in tab and layout order after the workspace's session rows; a focused plain terminal anchors at the workspace header when session rows exist, or at its layout position otherwise
   - a `ready` session only participates while unread; once visited it collapses back to `idle`
   - if no unread panel exists, it next falls back to managed-session panels whose live status is `needsApproval` or `error`
   - if no attention-required panel exists, it builds an active-session cycle anchored to the current focus
   - that active cycle first includes working panels ahead of the current focus, then later-flagged active panels that have not already appeared, then wrapped working panels, and finally the starting focused active panel when it still belongs to the cycle
   - repeated invocations continue through that same active cycle without repeating a target until the cycle wraps or the active set changes
-  - manual focus changes, window/workspace/layout changes, panel removals, active status-kind changes, later-flag changes, or unread/attention preemption reset the active cycle and rebuild it from the new focus
+  - manual focus changes, changes to sidebar order, window/workspace/layout changes, panel removals, active status-kind changes, later-flag changes, or unread/attention preemption reset the active cycle and rebuild it from the new focus
   - if no target exists, the selected sidebar row flashes instead of changing focus
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
@@ -866,7 +926,7 @@ Launch context environment:
   launch working directory
 - `TOASTTY_AGENT` with the managed provider ID
 - `TOASTTY_SKILLS_ROOT` for supported managed Codex, Claude Code, Cursor,
-  OpenCode, MiMo Code, and Pi launches, pointing at the delivered Toastty
+  Grok Build, OpenCode, MiMo Code, and Pi launches, pointing at the delivered Toastty
   plugin's `skills/` directory; absent when the shipped skills were not injected
 - `TOASTTY_USER_SKILLS_ROOT` with the user skill-package source directory
   (`~/.toastty/skills`, or its runtime-isolated equivalent)
@@ -907,7 +967,7 @@ Validation:
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
 - if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
-- explicit `profileID=codex`, `profileID=claude`, `profileID=cursor`, `profileID=opencode`,
+- explicit `profileID=codex`, `profileID=claude`, `profileID=cursor`, `profileID=grok`, `profileID=opencode`,
   `profileID=mimocode`, and `profileID=pi` can be launched by automation even
   when no `agents.toml` profile exists.
 - `initialCommands` entries must be non-blank single-line strings with no NUL
@@ -1421,6 +1481,34 @@ Result:
 - `eventType`
 - `status: "accepted" | "ignored"`
 - `stateVersion`
+
+### `session.grok_hook_event`
+
+Internal event produced by `session ingest-agent-event --source grok-hooks`.
+Manual wrappers should generally use `session.status` instead.
+
+Required: top-level `sessionID`, plus payload `kind` (a recognized native Grok
+event name), `nativeSessionID` (UUID), `timestamp` (finite Unix seconds), and
+`isSubagent` (boolean). Optional top-level `panelID` must match the active managed
+Grok session when provided.
+
+Optional payload fields:
+
+- `promptID`: UUID
+- `toolName`, `toolUseID`: strings, each at most 256 UTF-8 bytes
+- `notificationType`: string, at most 128 UTF-8 bytes
+- `sessionFilePath`, `cwd`: strings, each at most 4096 UTF-8 bytes
+
+Strings reject control characters. Paths preserve whitespace; other optional
+strings are trimmed. Tool arguments and output are not forwarded. Tool-call IDs
+correlate tool hooks that omit prompt IDs, within the active root conversation
+and prompt window. Nested and stale events cannot complete a newer turn.
+Working details describe the current tool category; permission notifications
+retain Needs approval until the associated call completes or the turn changes.
+`Stop` reports provisional Waiting; the later idle notification confirms Ready.
+
+The result contains `eventType`, `status: "accepted" | "ignored"`, and
+`stateVersion`.
 
 ### `session.codex_hook_event`
 

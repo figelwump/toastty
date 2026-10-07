@@ -251,7 +251,13 @@ private final class SidebarScrollViewportHeightReporterView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        scheduleRefresh()
+        if window == nil {
+            NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: nil)
+            boundsObservation = nil
+            observedClipView = nil
+        } else {
+            scheduleRefresh()
+        }
     }
 
     override func layout() {
@@ -266,20 +272,32 @@ private final class SidebarScrollViewportHeightReporterView: NSView {
     }
 
     private func refreshHeight() {
-        guard let clipView = enclosingScrollView?.contentView else { return }
+        guard window != nil, let clipView = enclosingScrollView?.contentView else { return }
 
         if observedClipView !== clipView {
+            NotificationCenter.default.removeObserver(
+                self, name: NSView.frameDidChangeNotification, object: observedClipView
+            )
+            // Resizing the clip view does not reliably send KVO bounds changes.
+            clipView.postsFrameChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(clipViewFrameDidChange(_:)),
+                name: NSView.frameDidChangeNotification, object: clipView
+            )
             observedClipView = clipView
             lastReportedHeight = nil
-            boundsObservation = clipView.observe(\.bounds, options: [.new]) { [weak self] _, change in
-                guard let height = change.newValue?.height else { return }
+            boundsObservation = clipView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor [weak self] in
-                    self?.reportHeight(height)
+                    self?.refreshHeight()
                 }
             }
         }
 
         reportHeight(clipView.bounds.height)
+    }
+
+    @objc private func clipViewFrameDidChange(_ notification: Notification) {
+        scheduleRefresh()
     }
 
     private func reportHeight(_ height: CGFloat) {
@@ -558,6 +576,7 @@ struct SidebarView: View {
     @State private var activeWorkspaceDrag: WorkspaceDragState?
     @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
     @State private var measuredSessionRowFramesByID: [SidebarSessionPresentation.SidebarSessionRowID: CGRect] = [:]
+    @State private var measuredSubspaceFrames: [SidebarSubspaceFrameID: CGRect] = [:]
     @State private var sidebarWorkspaceListViewportHeight: CGFloat = 0
     @State private var sidebarSessionRowDiagnosticsByPanelID: [UUID: SidebarSessionRowDiagnosticState] = [:]
     @State private var expandedSessionChildrenBySessionID: [String: Bool] = [:]
@@ -775,6 +794,9 @@ struct SidebarView: View {
                     .onPreferenceChange(SidebarSessionRowFramePreferenceKey.self) { framesByID in
                         measuredSessionRowFramesByID = framesByID
                     }
+                    .onPreferenceChange(SidebarSubspaceFramePreferenceKey.self) { frames in
+                        measuredSubspaceFrames = frames
+                    }
                     .onPreferenceChange(SidebarSessionGroupFramePreferenceKey.self) { frames in
                         measuredSessionGroupFrames = frames
                     }
@@ -925,11 +947,31 @@ struct SidebarView: View {
     private var sidebarHiddenSessionPillState: SidebarSessionPresentation.HiddenSessionPillState {
         guard activeWorkspaceDrag == nil, activeSessionDrag == nil else { return .empty }
 
+        let subspacesByParent = store.state.topLevelWorkspaceIDs(in: windowID).map { parentID in
+            let rows = subspaceRows(for: parentID, parentSessionStatuses: sidebarSessionStatuses(for: parentID))
+            let isCollapsed = collapsedSubspaceGroupParentIDs.contains(parentID)
+            let displayedRows = isCollapsed ? rows : SidebarSubspacePresentation.filteredRows(
+                rows, spawningSessionID: subspaceFilterSessionIDByParentID[parentID]
+            )
+            return (parentID, displayedRows)
+        }
+        var subspaceFrames: [UUID: CGRect] = [:]
+        for (parentID, rows) in subspacesByParent {
+            for row in rows {
+                // A collapsed group represents its rows at the header's position.
+                subspaceFrames[row.id] = collapsedSubspaceGroupParentIDs.contains(parentID)
+                    ? measuredSubspaceFrames[.group(parentID)]
+                    : measuredSubspaceFrames[.row(row.id)]
+            }
+        }
+
         return SidebarSessionPresentation.hiddenSessionPillState(
             orderedSessionRowIDs: currentSidebarSessionRowIDs(),
             measuredSessionRowFramesByID: measuredSessionRowFramesByID,
             unreadSessionRowIDs: currentUnreadSidebarSessionRowIDs(),
             workingSessionRowIDs: currentWorkingSidebarSessionRowIDs(),
+            subspaceRows: subspacesByParent.flatMap { $0.1 },
+            measuredSubspaceRowFramesByID: subspaceFrames,
             viewportHeight: sidebarWorkspaceListViewportHeight,
             visibleTop: ToastyTheme.sidebarTopPadding
         )
@@ -980,6 +1022,11 @@ struct SidebarView: View {
                 .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 3)
             }
             .buttonStyle(.plain)
+            .background {
+                SidebarSemanticTextBridge(text: SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel(pill))
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
             .accessibilityLabel(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel(pill))
             .accessibilityIdentifier("sidebar.hiddenSessions.\(pill.direction.accessibilityDirection)")
             .offset(y: pill.direction == .above ? ToastyTheme.sidebarTopPadding + 8 : -12)
@@ -1496,7 +1543,11 @@ struct SidebarView: View {
             workspaceSessionStatus.children
         )
         let collapsedChildNeedsAttention = childRowsNeedAttention && childRowsExpanded == false
-        let parentSessionName = parentSessionName(for: workspaceSessionStatus, in: workspace.id)
+        let launchParent = parentSession(for: workspaceSessionStatus)
+        let parentSessionName = launchParent?.displayTitleOverride
+            ?? launchParent?.providerSessionName
+            ?? launchParent?.agent.displayName
+        let parentTagName = launchParent?.workspaceID == workspace.id ? nil : parentSessionName
         let customTabTitle = SidebarSessionPresentation.sessionCustomTabTitle(
             for: workspaceSessionStatus,
             in: store.state.workspacesByID[workspaceSessionStatus.workspaceID]
@@ -1588,7 +1639,7 @@ struct SidebarView: View {
             childCount: workspaceSessionStatus.children.count,
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
-            parentSessionName: parentSessionName,
+            parentSessionName: parentTagName,
             spawnerChip: spawnerChip,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
@@ -2260,6 +2311,15 @@ struct SidebarView: View {
                 value: [
                     rowID: geometry.frame(in: .named(SidebarWorkspaceViewportCoordinateSpace.name))
                 ]
+            )
+        }
+    }
+
+    private func subspaceFrameMeasurement(id: SidebarSubspaceFrameID) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: SidebarSubspaceFramePreferenceKey.self,
+                value: [id: geometry.frame(in: .named(SidebarWorkspaceViewportCoordinateSpace.name))]
             )
         }
     }
@@ -3201,6 +3261,7 @@ struct SidebarView: View {
         let orderedRowIDs = orderedRows.map(\.id)
         subspaceOrderMemory.pinByParentID[parentWorkspaceID] = pin
         subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID] = orderedRowIDs
+        store.recordSidebarSubspaceOrder(orderedRowIDs, parentWorkspaceID: parentWorkspaceID)
 
         return VStack(alignment: .leading, spacing: 3) {
             subspacesGroupHeader(
@@ -3210,6 +3271,7 @@ struct SidebarView: View {
                 tally: tally,
                 isExpanded: isExpanded
             )
+            .background(subspaceFrameMeasurement(id: .group(parentWorkspaceID)))
 
             if isExpanded {
                 if filterSessionID != nil {
@@ -3249,6 +3311,9 @@ struct SidebarView: View {
         .padding(.bottom, 12)
         .id(SubspaceGroupScrollID(parentWorkspaceID: parentWorkspaceID))
         .accessibilityIdentifier("sidebar.workspace.subspaces.\(parentWorkspaceID.uuidString)")
+        .onDisappear {
+            store.clearSidebarSubspaceOrder(parentWorkspaceID: parentWorkspaceID)
+        }
         .onAppear {
             if needsAttention {
                 collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
@@ -3620,6 +3685,7 @@ struct SidebarView: View {
             )
         }
         .accessibilityIdentifier("sidebar.workspace.subspace.\(row.id.uuidString)")
+        .background(subspaceFrameMeasurement(id: .row(row.id)))
         .id(row.id)
         .contextMenu {
             let mergePresentation = subspaceMergeMenuPresentation(row)
@@ -3919,16 +3985,12 @@ struct SidebarView: View {
         expandedSessionChildrenBySessionID[sessionID] = true
     }
 
-    private func parentSessionName(
-        for workspaceSessionStatus: WorkspaceSessionStatus,
-        in workspaceID: UUID
-    ) -> String? {
+    private func parentSession(for workspaceSessionStatus: WorkspaceSessionStatus) -> SessionRecord? {
         guard let parentSessionID = workspaceSessionStatus.parentSessionID,
-              let parent = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: parentSessionID),
-              parent.workspaceID != workspaceID else {
+              parentSessionID != workspaceSessionStatus.sessionID else {
             return nil
         }
-        return parent.displayTitleOverride ?? parent.providerSessionName ?? parent.agent.displayName
+        return sessionRuntimeStore.sessionRegistry.activeSession(sessionID: parentSessionID)
     }
 
     private func childWorkspaceTagLabel(
@@ -4055,7 +4117,7 @@ struct SidebarView: View {
     ) {
         guard let target = SidebarSessionPresentation.hiddenSessionScrollTarget(
             for: pill.direction,
-            orderedWorkspaceIDs: store.window(id: windowID)?.workspaceIDs ?? []
+            orderedWorkspaceIDs: store.state.topLevelWorkspaceIDs(in: windowID)
         ) else {
             return
         }
@@ -4162,12 +4224,14 @@ struct SidebarView: View {
         guard let window = store.window(id: windowID) else {
             measuredWorkspaceRowFramesByID = [:]
             measuredSessionRowFramesByID = [:]
+            measuredSubspaceFrames = [:]
             cancelWorkspaceDrag()
             return
         }
 
         let workspaceIDs = Set(window.workspaceIDs)
         measuredWorkspaceRowFramesByID = measuredWorkspaceRowFramesByID.filter { workspaceIDs.contains($0.key) }
+        measuredSubspaceFrames = measuredSubspaceFrames.filter { workspaceIDs.contains($0.key.workspaceID) }
         let currentSessionRowIDs = Set(currentSidebarSessionRowIDs())
         measuredSessionRowFramesByID = measuredSessionRowFramesByID.filter { currentSessionRowIDs.contains($0.key) }
         if let activeWorkspaceDrag,
@@ -4301,6 +4365,28 @@ private struct WorkspaceRowFramePreferenceKey: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
 
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+private enum SidebarSubspaceFrameID: Hashable {
+    case row(UUID)
+    case group(UUID)
+
+    var workspaceID: UUID {
+        switch self {
+        case .row(let id), .group(let id): return id
+        }
+    }
+}
+
+private struct SidebarSubspaceFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [SidebarSubspaceFrameID: CGRect] = [:]
+
+    static func reduce(
+        value: inout [SidebarSubspaceFrameID: CGRect],
+        nextValue: () -> [SidebarSubspaceFrameID: CGRect]
+    ) {
         value.merge(nextValue(), uniquingKeysWith: { _, next in next })
     }
 }

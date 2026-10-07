@@ -15,6 +15,13 @@
         "failClosed": false
       }
     ],
+    "afterAgentResponse": [
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/cursor-hooks/forwarder.sh\" afterAgentResponse",
+        "timeout": 2,
+        "failClosed": false
+      }
+    ],
     "preToolUse": [
       {
         "command": "\"${CURSOR_PLUGIN_ROOT}/cursor-hooks/forwarder.sh\" preToolUse",

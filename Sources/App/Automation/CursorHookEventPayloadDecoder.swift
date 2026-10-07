@@ -60,8 +60,34 @@ enum CursorHookEventPayloadDecoder {
                 fieldName: "generationID"
             ),
             cloudHandoff: cloudHandoff,
-            status: status
+            status: status,
+            text: try optionalBoundedString(
+                payload, fieldName: "text",
+                limit: hookEventName == "afterAgentResponse"
+                    ? CursorHookEvent.maximumResponseTextUTF8Count
+                    : CursorHookEvent.maximumPromptTextUTF8Count
+            ),
+            modelIdentifier: normalizedOptionalText(try optionalBoundedString(
+                payload, fieldName: "modelIdentifier",
+                limit: CursorHookEvent.maximumModelIdentifierUTF8Count
+            ))
         )
+    }
+
+    private static func optionalBoundedString(
+        _ payload: [String: AutomationJSONValue],
+        fieldName: String,
+        limit: Int
+    ) throws -> String? {
+        guard let value = payload[fieldName] else { return nil }
+        if value == .null { return nil }
+        guard let text = payload.string(fieldName) else {
+            throw AutomationSocketError.invalidPayload("\(fieldName) must be a string")
+        }
+        guard text.utf8.count <= limit else {
+            throw AutomationSocketError.invalidPayload("\(fieldName) exceeds \(limit) UTF-8 bytes")
+        }
+        return text
     }
 
     private static func normalizedIdentifier(

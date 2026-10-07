@@ -117,6 +117,25 @@ final class RemoteAccessConversationFlagBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's synchronous options request into the main-actor
+/// session starter.
+final class RemoteAccessSessionStartBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func options(
+        _ request: RemoteSessionStartOptionsRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteSessionStartOptionsResponse {
+        MainActor.assumeIsolated {
+            service?.sessionStartOptions(request, device: device)
+                ?? RemoteSessionStartOptionsResponse(
+                    permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device),
+                    workspace: .notFound
+                )
+        }
+    }
+}
+
 enum RemoteAccessPreferences {
     static let defaultPort: UInt16 = 42871
     private static let enabledKey = "toastty.remoteAccess.enabled"
@@ -349,6 +368,8 @@ final class RemoteAccessService: ObservableObject {
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
     private let workspaceDoneBridge = RemoteAccessWorkspaceDoneBridge()
     private let conversationFlagBridge = RemoteAccessConversationFlagBridge()
+    private let sessionStartBridge = RemoteAccessSessionStartBridge()
+    private var sessionStarter: RemoteSessionStarter?
     private var coordinator = RemoteInputCoordinator()
     private let handler: RemoteGatewayRequestHandler
     private let server: any RemoteAccessGatewayServing
@@ -438,6 +459,7 @@ final class RemoteAccessService: ObservableObject {
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
+        sessionLauncher: (any RemoteSessionLaunching)? = nil,
         port: UInt16 = RemoteAccessPreferences.loadPort(),
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
@@ -497,6 +519,25 @@ final class RemoteAccessService: ObservableObject {
         readAcknowledgementBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
+        sessionStartBridge.service = self
+        sessionStarter = RemoteSessionStarter(
+            store: store,
+            launcher: sessionLauncher,
+            attachmentStore: attachmentStore,
+            deviceMayStart: { [weak self] deviceID in
+                guard let self, self.isEnabled else { return false }
+                return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false
+            },
+            recentModels: { [weak self] provider in self?.recentModels(for: provider) ?? [] },
+            publishSessionList: { [weak self] in self?.syncConversations() }
+        )
+        handler.sessionStartOptionsHandler = { [sessionStartBridge] request, device in
+            sessionStartBridge.options(request, device: device)
+        }
+        handler.sessionStartHandler = { [weak self] request, device in
+            guard let starter = self?.sessionStarter else { return .rejected(reason: .launchFailed) }
+            return await starter.start(request, device: device)
+        }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
             switch device.authKind {
@@ -1576,6 +1617,23 @@ final class RemoteAccessService: ObservableObject {
                 listChanged = true
             }
 
+            // SessionEnd retires Cursor's root identity while its terminal
+            // process can remain alive (for example after /clear).
+            if candidate.provider == .cursor,
+               candidate.nativeBindingConfirmation == nil,
+               let projector = projectionStore.projectorState(for: candidate.conversationID),
+               case .openPrompt = projector.inputAvailability {
+                let emitted = projectionStore.noteBinding(
+                    for: candidate.conversationID,
+                    reason: .runtimeResumed,
+                    clearsProviderSessionFilePath: true,
+                    bindingID: UUID(),
+                    at: candidate.updatedAt
+                )
+                broadcastEvents(emitted, for: candidate.conversationID)
+                listChanged = listChanged || !emitted.isEmpty
+            }
+
             // Maintain the panel↔conversation maps used by send delivery and
             // the local-input hook.
             if panelIDByConversationID[candidate.conversationID] != candidate.panelID {
@@ -1616,7 +1674,8 @@ final class RemoteAccessService: ObservableObject {
                 }
             }
 
-            if let activeSessionID = candidate.activeSessionID,
+            if candidate.provider != .cursor,
+               let activeSessionID = candidate.activeSessionID,
                let confirmation = candidate.nativeBindingConfirmation,
                candidate.registryState == .ready,
                confirmation.managedSessionID == activeSessionID,
@@ -1880,12 +1939,18 @@ final class RemoteAccessService: ObservableObject {
                 let nativeBindingConfirmation: ManagedNativeSessionBindingConfirmation? =
                     activeRecord.flatMap { record in
                         guard ProviderTranscriptSupport.isManagedProvider(record.agent),
-                              let resumeRecord = terminalState.resumeRecord,
                               let confirmation = sessionRuntimeStore.nativeSessionBindingConfirmation(
                                   for: record.sessionID
                               ),
                               confirmation.agent == record.agent,
-                              confirmation.panelID == panelID,
+                              confirmation.panelID == panelID else { return nil }
+                        // Cursor's hooks confirm a launch-scoped identity. It
+                        // has no file transcript or persisted resume contract.
+                        if record.agent == .cursor {
+                            return providerFeed?.nativeSessionID == confirmation.nativeSessionID
+                                ? confirmation : nil
+                        }
+                        guard let resumeRecord = terminalState.resumeRecord,
                               confirmation.nativeSessionID == resumeRecord.nativeSessionID,
                               confirmation.sessionFilePath == resumeRecord.sessionFilePath else {
                             return nil
@@ -2180,12 +2245,14 @@ final class RemoteAccessService: ObservableObject {
         runtimeBound: Bool
     ) -> Bool {
         tailersByConversationID.removeValue(forKey: conversationID)?.stop()
-        pendingSendCorrelator.discard(for: conversationID)
 
         guard let projector = projectionStore.projectorState(for: conversationID),
               projector.providerSessionFilePath != nil else {
             return false
         }
+        // A hook feed normally has no file. Only losing an actual file
+        // binding invalidates pending sends; a routine feed sync does not.
+        pendingSendCorrelator.discard(for: conversationID)
         if runtimeBound {
             let emitted = projectionStore.noteBinding(
                 for: conversationID,
@@ -2689,6 +2756,55 @@ final class RemoteAccessService: ObservableObject {
             detail: enabled ? "enabled" : "disabled"
         ))
         broadcastSessionList()
+    }
+
+    // MARK: - Session start
+
+    func sessionStartOptions(
+        _ request: RemoteSessionStartOptionsRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteSessionStartOptionsResponse {
+        sessionStarter?.options(for: request, device: device)
+            ?? RemoteSessionStartOptionsResponse(
+                permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device),
+                workspace: .notFound
+            )
+    }
+
+    /// Models that this provider's listed sessions report, most recently
+    /// active first, without repeats.
+    private func recentModels(for provider: AgentKind) -> [String] {
+        var seen: Set<String> = []
+        return buildConversationSummaries()
+            .filter { $0.provider == provider }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .compactMap { $0.executionProfile?.modelIdentifier }
+            // Only values a start request would accept back.
+            .filter {
+                RemoteSessionStartPolicy.isValidSelectionValue(
+                    $0, maximumLength: RemoteSessionStartPolicy.maximumModelLength
+                )
+            }
+            .filter { seen.insert($0).inserted }
+    }
+
+    func setDeviceSessionStart(_ enabled: Bool, for deviceID: UUID) {
+        guard let device = deviceStore.devices.first(where: { $0.id == deviceID }),
+              device.isRevoked == false else { return }
+        do {
+            guard try deviceStore.setSessionStartDisabled(enabled == false, forDevice: deviceID) else { return }
+        } catch {
+            reportDeviceManagementFailure("Could not update device permissions", error: error)
+            return
+        }
+        auditLog.record(RemoteAccessAuditEntry(
+            at: Date(),
+            action: .deviceScopesChanged,
+            deviceID: deviceID,
+            detail: enabled ? "start_enabled" : "start_disabled"
+        ))
+        deviceManagementError = nil
+        refreshDevices()
     }
 
     func setDeviceSendScope(_ enabled: Bool, for deviceID: UUID) {

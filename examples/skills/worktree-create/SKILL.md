@@ -158,10 +158,19 @@ or introduce another approval gate. If essential context was lost to compaction,
 consult the referenced artifacts or ask a focused question. Fresh sessions also
 need the actual request and constraints; do not invent scope or a finished plan.
 
-Look up the current session's Scratchpad using `panel.scratchpad.lookup`.
-If linked, export it and record its exact path/title/revision in the handoff.
-If unlinked, continue without scanning other panels. Surface lookup/export errors;
-do not silently omit an artifact that is the task's design source.
+List every Scratchpad bound to the current session with `panel.scratchpad.list`.
+Export each one with `panel.scratchpad.export` and its `documentID`, and record
+each export's path, title, purpose, revision, and whether it is the session
+default in the handoff. If none are bound, continue without scanning other
+panels. Surface list/lookup/export errors; do not silently omit an artifact
+that is the task's design source.
+
+If the live query list lacks `panel.scratchpad.list`, the app predates multiple
+Scratchpads per session and supports one linked Scratchpad. Use that path
+throughout: find it with `panel.scratchpad.lookup`, export it by `sessionID`,
+recreate it and any local HTML mocks with `createPolicy=new` and no `purpose`,
+skip `panel.scratchpad.make-default`, and verify with `panel.scratchpad.lookup`
+and `panel.scratchpad.state`.
 
 ## Launch
 
@@ -200,7 +209,7 @@ the task artifacts explicitly referenced by the handoff in the new workspace's
 right panel. Do this as part of creation, not as a later offer.
 Use the references assembled while writing the handoff; do not build a Markdown
 link parser or scan unrelated files or panels. Deduplicate identical artifacts.
-Include the associated plans, design documents, mocks, and linked Scratchpad,
+Include the associated plans, design documents, mocks, and bound Scratchpads,
 not instruction files, executable paths, logs, or every source-code citation.
 Record the artifact paths/URLs and titles in the handoff before launch.
 
@@ -215,18 +224,25 @@ Record the artifact paths/URLs and titles in the handoff before launch.
   workspace and placement. For local HTML mocks use the Scratchpad flow rather
   than starting an external browser. Use the applicable Toastty document or
   Scratchpad skill when preparing the artifact.
-- For the source session's linked Scratchpad, use its exported HTML to create a
-  Scratchpad for the returned child `sessionID` with `panel.scratchpad.set-content`
-  and its original title, using `createPolicy=new` to avoid overwriting a Scratchpad
-  the child has already created. Use separate new panels for distinct HTML mocks;
-  never overwrite one artifact with another. This is an independent copy for the
-  fork; retain the source panel and record the original document/revision as
-  provenance. Do not
-  rebind or close the source Scratchpad. Preserve supporting assets required to
-  render it; report anything that cannot be preserved.
+- Carry over every exported Scratchpad. First record the child's
+  `defaultDocumentID` from `panel.scratchpad.list`. Then, in listed order, create
+  a copy for the returned child `sessionID` with `panel.scratchpad.set-content`,
+  its exported HTML, original title and purpose, and `createPolicy=additional`.
+  Each copy opens in the child's right panel without replacing a Scratchpad the
+  child already created. Afterwards, if the source had a default and the recorded
+  child default was null, call `panel.scratchpad.make-default` with the source
+  default's copy. Create local HTML mocks the same way, as separate panels; never
+  overwrite one artifact with another. Do not use `createPolicy=new` here: it
+  unbinds the previous default, including an earlier copy.
+  These are independent copies for the fork; retain the source panels and record
+  each original document/revision as provenance. Do not rebind or close source
+  Scratchpads. Preserve supporting assets required to render them; report
+  anything that cannot be preserved.
 - Check every response for success. Verify document paths and right-panel
-  placement with the destination workspace snapshot; verify Scratchpad linkage,
-  content, and title with its supported queries. Use browser state queries for
+  placement with the destination workspace snapshot. Run `panel.scratchpad.list`
+  for the child session to confirm every carried-over copy is bound with its
+  title and the expected default, and check content with
+  `panel.scratchpad.state`. Use browser state queries for
   loading results without selecting or focusing the new workspace. Report
   partial failures with exact artifact and workspace identities; do not claim
   that referenced artifacts opened merely because the handoff opened.

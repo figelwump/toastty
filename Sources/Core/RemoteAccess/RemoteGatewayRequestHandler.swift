@@ -37,11 +37,21 @@ public final class RemoteGatewayRequestHandler {
         case deferredPreview(RemoteGatewayPreviewOperation)
         case attachmentUploadAuthorized(deviceID: UUID)
         case deferredAttachments(deviceID: UUID, body: Data)
+        case deferredSessionStartAttachments(deviceID: UUID, body: Data)
+        /// A validated start request. The launch is asynchronous, so the
+        /// transport resolves it with `resolveSessionStart`.
+        case deferredSessionStart(deviceID: UUID, request: RemoteSessionStartRequest)
         case upgradeToWebSocket(
             deviceID: UUID,
             authKind: RemoteDeviceAuthKind,
             upgradeResponseData: Data
         )
+    }
+
+    private enum SessionStartAttachmentDecode: Sendable {
+        case request(RemoteSessionStartRequest)
+        case rejected(RemoteSessionStartRejectionReason)
+        case protocolMismatch
     }
 
     public typealias QuestionAnswerHandler = (RemoteQuestionAnswerRequest, RemoteDeviceRecord) -> RemoteQuestionAnswerResult
@@ -58,6 +68,11 @@ public final class RemoteGatewayRequestHandler {
         RemoteConversationFlagRequest,
         RemoteDeviceRecord
     ) -> RemoteConversationFlagResult
+
+    public typealias SessionStartOptionsHandler = (
+        RemoteSessionStartOptionsRequest,
+        RemoteDeviceRecord
+    ) -> RemoteSessionStartOptionsResponse
 
     private enum AuthResult {
         case success(RemoteDeviceRecord)
@@ -102,13 +117,88 @@ public final class RemoteGatewayRequestHandler {
 
     public var attachmentSendHandler: (@MainActor (RemoteMessageSendRequest, RemoteDeviceRecord) async -> RemoteMessageSendResult)?
 
+    /// Describes what one device can start in one workspace.
+    public var sessionStartOptionsHandler: SessionStartOptionsHandler?
+    /// Opens a terminal and launches the agent. Invoked only by the
+    /// main-actor transport, after `resolveSessionStart` re-checks the device.
+    public var sessionStartHandler: (@MainActor (RemoteSessionStartRequest, RemoteDeviceRecord) async -> RemoteSessionStartResult)?
+
+    /// The device's permission can change between the request and this call,
+    /// so it is read again here. The launch handler reads it once more just
+    /// before it sends the command.
+    @MainActor
+    public func resolveSessionStart(deviceID: UUID, request: RemoteSessionStartRequest) async -> RemoteGatewayHTTPResponse {
+        let result: RemoteSessionStartResult
+        if let device = deviceStore.devices.first(where: { $0.id == deviceID }), device.canStartSessions {
+            if let sessionStartHandler {
+                result = await sessionStartHandler(request, device)
+            } else {
+                result = .rejected(reason: .launchFailed)
+            }
+        } else {
+            result = .rejected(reason: .permissionDenied)
+        }
+        switch result {
+        case .started:
+            auditLog.record(.init(at: Date(), action: .sessionStartAccepted, deviceID: deviceID))
+        case .rejected(let reason):
+            auditLog.record(.init(at: Date(), action: .sessionStartRejected, deviceID: deviceID, detail: reason.rawValue))
+        case .unrecognized:
+            // A decoding outcome on the client; the host never produces it.
+            break
+        }
+        return sessionStartResponse(result)
+    }
+
+    private func sessionStartResponse(_ result: RemoteSessionStartResult) -> RemoteGatewayHTTPResponse {
+        .json(body: (try? encoder.encode(RemoteSessionStartResponse(result: result))) ?? Data())
+    }
+
+    private func sessionStartRejection(_ reason: RemoteSessionStartRejectionReason, deviceID: UUID) -> RemoteGatewayHTTPResponse {
+        auditLog.record(.init(at: Date(), action: .sessionStartRejected, deviceID: deviceID, detail: reason.rawValue))
+        return sessionStartResponse(.rejected(reason: reason))
+    }
+
     /// Uses precisely the same method/origin/credential/scope policy as final
     /// dispatch, before the listener admits a large request body.
     public func authorizeAttachmentUpload(_ request: RemoteGatewayHTTPRequest, at date: Date) -> Outcome {
-        guard let policy = RemoteGatewayRoutePolicy.policy(for: request.path), policy.route == .messageSendWithAttachments else {
+        guard let policy = RemoteGatewayRoutePolicy.policy(for: request.path),
+              policy.route == .messageSendWithAttachments || policy.route == .sessionStartWithAttachments else {
             return .respond(.text(status: 400, reason: "Bad Request", "Invalid upload route"))
         }
         return handle(request, policy: policy, at: date, headersOnly: true)
+    }
+
+    @MainActor
+    public func resolveSessionStartAttachments(
+        deviceID: UUID,
+        body: Data,
+        onDecoded: @MainActor () -> Void = {}
+    ) async -> RemoteGatewayHTTPResponse {
+        // Large JSON and file-content checks do not block the Mac's UI.
+        let decoded = await Task.detached(priority: .userInitiated) {
+            () -> SessionStartAttachmentDecode in
+            guard body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes,
+                  let request = try? ConversationEventCoding.makeDecoder().decode(RemoteSessionStartRequest.self, from: body)
+            else { return .rejected(.invalidAttachments) }
+            guard request.protocolVersion == RemoteGatewayProtocol.version else { return .protocolMismatch }
+            guard !request.attachments.isEmpty,
+                  RemoteAttachmentPolicy.validationError(for: request.attachments) == nil
+            else { return .rejected(.invalidAttachments) }
+            guard RemoteGatewayRequestHandler.isValidSessionStart(request) else { return .rejected(.invalidRequest) }
+            return .request(request)
+        }.value
+        // Release the upload slot before waiting for a new terminal shell.
+        onDecoded()
+        guard !Task.isCancelled else { return sessionStartResponse(.rejected(reason: .permissionDenied)) }
+        let request: RemoteSessionStartRequest
+        switch decoded {
+        case .request(let value): request = value
+        case .rejected(let reason): return sessionStartRejection(reason, deviceID: deviceID)
+        case .protocolMismatch:
+            return errorResponse(status: 409, reason: "Conflict", code: "protocol_mismatch", message: "Unsupported protocol version")
+        }
+        return await resolveSessionStart(deviceID: deviceID, request: request)
     }
 
     @MainActor
@@ -328,6 +418,18 @@ public final class RemoteGatewayRequestHandler {
             }
         case .send:
             guard authenticated.scopes.contains(.send) else {
+                if policy.route == .sessionStart || policy.route == .sessionStartWithAttachments {
+                    // The start result has its own refusal, which the native
+                    // client decodes; a 403 would carry an error code it
+                    // does not know.
+                    auditLog.record(.init(
+                        at: date,
+                        action: .sessionStartRejected,
+                        deviceID: authenticated.id,
+                        detail: RemoteSessionStartRejectionReason.permissionDenied.rawValue
+                    ))
+                    return .respond(sessionStartResponse(.rejected(reason: .permissionDenied)))
+                }
                 if policy.route == .workspaceDone || policy.route == .conversationFlag {
                     // Not a message send, so it has neither a send result to
                     // return nor a send rejection to audit.
@@ -385,6 +487,19 @@ public final class RemoteGatewayRequestHandler {
             return handleWorkspaceDone(request, device: authenticated, at: date)
         case .conversationFlag:
             return handleConversationFlag(request, device: authenticated, at: date)
+        case .sessionStartOptions:
+            return handleSessionStartOptions(request, device: authenticated)
+        case .sessionStart:
+            return handleSessionStart(request, device: authenticated, at: date)
+        case .sessionStartWithAttachments:
+            guard authenticated.canStartSessions else {
+                return .respond(sessionStartRejection(.permissionDenied, deviceID: authenticated.id))
+            }
+            if headersOnly { return .attachmentUploadAuthorized(deviceID: authenticated.id) }
+            guard request.body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes else {
+                return .respond(.text(status: 413, reason: "Content Too Large", "Attachment request is too large"))
+            }
+            return .deferredSessionStartAttachments(deviceID: authenticated.id, body: request.body)
         case .questionAnswer:
             return handleQuestionAnswer(request, device: authenticated, at: date)
         case .messageSendWithAttachments:
@@ -673,6 +788,108 @@ public final class RemoteGatewayRequestHandler {
         }
         let body = (try? encoder.encode(RemoteConversationFlagResponse(result: result))) ?? Data()
         return .respond(.json(body: body))
+    }
+
+    private func handleSessionStartOptions(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord
+    ) -> Outcome {
+        guard request.body.count <= RemoteSessionStartPolicy.maximumOptionsBodyBytes,
+              let optionsRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteSessionStartOptionsRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected session start options JSON"
+            ))
+        }
+        guard optionsRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        let response = sessionStartOptionsHandler?(optionsRequest, device)
+            ?? RemoteSessionStartOptionsResponse(
+                permission: Self.sessionStartPermission(for: device),
+                workspace: .notFound
+            )
+        return .respond(.json(body: (try? encoder.encode(response)) ?? Data()))
+    }
+
+    public static func sessionStartPermission(for device: RemoteDeviceRecord) -> RemoteSessionStartPermission {
+        if device.scopes.contains(.send) == false { return .sendDisabled }
+        return device.sessionStartDisabled ? .startDisabled : .allowed
+    }
+
+    private func handleSessionStart(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+            return .respond(.text(status: 413, reason: "Content Too Large", "Start request is too large"))
+        }
+        guard let startRequest = try? ConversationEventCoding.makeDecoder().decode(
+            RemoteSessionStartRequest.self,
+            from: request.body
+        ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected session start JSON"
+            ))
+        }
+        guard startRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        func reject(_ reason: RemoteSessionStartRejectionReason) -> Outcome {
+            auditLog.record(.init(at: date, action: .sessionStartRejected, deviceID: device.id, detail: reason.rawValue))
+            return .respond(sessionStartResponse(.rejected(reason: reason)))
+        }
+        guard device.canStartSessions else { return reject(.permissionDenied) }
+        guard startRequest.attachments.isEmpty else { return reject(.invalidAttachments) }
+        guard Self.isValidSessionStart(startRequest) else { return reject(.invalidRequest) }
+        return .deferredSessionStart(deviceID: device.id, request: startRequest)
+    }
+
+    /// Bounds every field before anything reaches the launcher. The profile
+    /// and the workspace are resolved against live state later.
+    static func isValidSessionStart(_ request: RemoteSessionStartRequest) -> Bool {
+        guard RemoteSessionStartPolicy.isValidClientRequestID(request.clientRequestID),
+              request.profileID.isEmpty == false,
+              request.profileID.count <= 64,
+              (!request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !request.attachments.isEmpty),
+              request.text.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes,
+              request.text.contains("\u{0}") == false else {
+            return false
+        }
+        if let model = request.model,
+           RemoteSessionStartPolicy.isValidSelectionValue(
+               model,
+               maximumLength: RemoteSessionStartPolicy.maximumModelLength
+           ) == false {
+            return false
+        }
+        if let effort = request.reasoningEffort,
+           RemoteSessionStartPolicy.isValidSelectionValue(
+               effort,
+               maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength
+           ) == false {
+            return false
+        }
+        return true
     }
 
     private func handleQuestionAnswer(

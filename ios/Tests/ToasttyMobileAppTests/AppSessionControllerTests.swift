@@ -191,6 +191,7 @@ final class AppSessionControllerTests: XCTestCase {
 
         await controller.restoreIfNeeded()
         XCTAssertEqual(controller.state, .paired(.connecting))
+        XCTAssertNil(controller.appIconBadgeCount)
         let freshness = try XCTUnwrap(onFreshness)
 
         freshness(.connecting)
@@ -200,6 +201,7 @@ final class AppSessionControllerTests: XCTestCase {
         // must survive it so foregrounding resumes seamlessly.
         freshness(.stale)
         XCTAssertEqual(controller.state, .paired(.connecting))
+        XCTAssertNil(controller.appIconBadgeCount)
 
         freshness(.live)
         XCTAssertEqual(controller.state, .paired(.live))
@@ -337,6 +339,93 @@ final class AppSessionControllerTests: XCTestCase {
         await waitUntil { controller.state.isPaired }
         let installedCredential = await vault.currentCredential()
         XCTAssertNotNil(installedCredential)
+    }
+
+    func testBadgeCountsAttentionWithoutTreatingSelectionAsRead() throws {
+        let credential = try Self.credential(deviceName: "Badge iPhone")
+        let controller = makeController(vault: TestAppCredentialVault(initialCredential: credential), credential: credential)
+        XCTAssertEqual(controller.appIconBadgeCount, 7)
+        let ready = try XCTUnwrap(controller.homeController.snapshot.activitySessions.first { $0.state == .ready })
+        controller.homeController.open(ready)
+        XCTAssertEqual(controller.appIconBadgeCount, 7)
+
+        // A fresh host snapshot removes read, resolved, or closed sessions
+        // from attention. Opening the app alone did not clear the badge.
+        controller.applyLiveSnapshot(
+            MobileHomeSnapshot(hostName: "Mac", workspaces: []), connectionState: .live
+        )
+        XCTAssertEqual(controller.appIconBadgeCount, 0)
+    }
+
+    func testBadgeFollowsReadApprovalAndErrorStatusChanges() throws {
+        let credential = try Self.credential(deviceName: "Badge iPhone")
+        let controller = makeController(vault: TestAppCredentialVault(initialCredential: credential), credential: credential)
+        let workspaceID = UUID()
+        let conversationIDs = [UUID(), UUID(), UUID()]
+        func snapshot(_ states: [MobileSessionStatus]) -> MobileHomeSnapshot {
+            let sessions = zip(conversationIDs, states).map { id, state in
+                MobileConversation(id: id, workspaceID: workspaceID, workspaceTitle: "Workspace",
+                    cwd: nil, agent: .codex, title: "Session", state: state,
+                    inputAvailability: .unavailable(reason: "Test session"), age: "now", lastActivity: "")
+            }
+            return MobileHomeSnapshot(hostName: "Mac", workspaces: [
+                MobileWorkspace(id: workspaceID, title: "Workspace", conversations: sessions),
+            ])
+        }
+        controller.applyLiveSnapshot(snapshot([.ready, .needsApproval, .error]), connectionState: .live)
+        XCTAssertEqual(controller.appIconBadgeCount, 3)
+        controller.applyLiveSnapshot(snapshot([.idle, .needsApproval, .error]), connectionState: .live)
+        XCTAssertEqual(controller.appIconBadgeCount, 2, "Reading clears the completion")
+        controller.applyLiveSnapshot(snapshot([.idle, .working, .error]), connectionState: .live)
+        XCTAssertEqual(controller.appIconBadgeCount, 1, "An approved session resumes work")
+        controller.applyLiveSnapshot(snapshot([.idle, .working, .idle]), connectionState: .live)
+        XCTAssertEqual(controller.appIconBadgeCount, 0, "Resolving the error clears the remaining count")
+    }
+
+    func testBadgeDoesNotUseCachedDataEvenIfAppPresentationIsStillLive() throws {
+        let credential = try Self.credential(deviceName: "Badge iPhone")
+        let controller = makeController(vault: TestAppCredentialVault(initialCredential: credential), credential: credential)
+        for freshness: LiveProjectionFreshness in [.connecting, .reconnecting, .stale, .unreachable] {
+            controller.homeController.update(snapshot: ToasttyMobileFixture.home,
+                connectionState: .offline, freshness: freshness)
+            XCTAssertEqual(controller.state, .paired(.live))
+            XCTAssertNil(controller.appIconBadgeCount)
+        }
+        controller.applyLiveSnapshot(ToasttyMobileFixture.home, connectionState: .live)
+        XCTAssertEqual(controller.appIconBadgeCount, 7)
+        controller.beginPairing()
+        XCTAssertEqual(controller.appIconBadgeCount, 0)
+    }
+
+    func testBadgePreservesUnknownStateButClearsWhenPairingIsRemoved() async throws {
+        let credential = try Self.credential(deviceName: "Badge iPhone")
+        let vault = TestAppCredentialVault(initialCredential: credential)
+        _ = await vault.restore()
+        let controller = makeController(vault: vault, credential: credential)
+        XCTAssertEqual(controller.appIconBadgeCount, 7)
+        controller.markReconnecting()
+        XCTAssertNil(controller.appIconBadgeCount)
+        controller.markUnreachable()
+        XCTAssertNil(controller.appIconBadgeCount)
+        controller.applyLiveSnapshot(ToasttyMobileFixture.home, connectionState: .live)
+        XCTAssertEqual(controller.appIconBadgeCount, 7)
+        controller.markAuthorizationDenied()
+        XCTAssertEqual(controller.appIconBadgeCount, 0)
+        await controller.unpair(revoke: {})
+        XCTAssertEqual(controller.appIconBadgeCount, 0)
+    }
+
+    func testBadgeDistinguishesRestorationFromMissingOrInvalidPairing() async {
+        let cases: [(MobileCredentialLoadResult, Int?)] = [
+            (.locked, nil), (.failed(.keychainStatus(-1)), nil),
+            (.missing, 0), (.corrupt, 0), (.incompatible(storedVersion: 7), 0),
+        ]
+        for (result, expected) in cases {
+            let controller = makeController(vault: ScriptedRestorationVault(result: result))
+            XCTAssertNil(controller.appIconBadgeCount)
+            await controller.restoreIfNeeded()
+            XCTAssertEqual(controller.appIconBadgeCount, expected)
+        }
     }
 
     private func makeController(

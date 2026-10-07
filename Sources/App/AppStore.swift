@@ -62,6 +62,7 @@ final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
     typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
     typealias WindowActivationHandler = @MainActor (UUID) -> Void
+    typealias AppIsActiveProvider = @MainActor () -> Bool
     private static let newWindowCascadeOffset: Double = 30
     static let nextUnreadOrActionRequiredFallbackStatusKinds: Set<SessionStatusKind> = [
         .needsApproval,
@@ -113,9 +114,13 @@ final class AppStore: ObservableObject {
     private let persistUserSettings: Bool
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private let windowActivationHandler: WindowActivationHandler
+    private let appIsActiveProvider: AppIsActiveProvider
     private let recentRightPanelItemsStore: RightPanelRecentItemsStore
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
     private var nextActiveCycleState: NextActiveCycleState?
+    // The sidebar can pin or freeze subspace rows. Keep its last displayed
+    // order for navigation without publishing another view update.
+    private var sidebarSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     private var browserRecentItemIDByPanelID: [UUID: RecentRightPanelItemID] = [:]
     // Defaults belong to exact live sessions, not the selected panel or window.
     @Published private var defaultScratchpadDocumentIDsBySessionID: [String: UUID] = [:]
@@ -128,6 +133,7 @@ final class AppStore: ObservableObject {
         initialWorkspaceMergeMode: WorkspaceMergeMode = .mergeAndCleanUp,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit,
+        appIsActiveProvider: @escaping AppIsActiveProvider = { NSApplication.shared.isActive },
         recentRightPanelItemsStore: RightPanelRecentItemsStore = .inMemory()
     ) {
         self.state = state
@@ -139,6 +145,7 @@ final class AppStore: ObservableObject {
         persistUserSettings = persistTerminalFontPreference
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
         self.windowActivationHandler = windowActivationHandler
+        self.appIsActiveProvider = appIsActiveProvider
         self.recentRightPanelItemsStore = recentRightPanelItemsStore
         navigationOriginPanelID = resolvedNavigationPanelID
     }
@@ -204,6 +211,7 @@ final class AppStore: ObservableObject {
         self.state = state
         defaultScratchpadDocumentIDsBySessionID.removeAll()
         nextActiveCycleState = nil
+        sidebarSubspaceOrderByParentID.removeAll()
         navigationGeneration &+= 1
         navigationHistory.clear()
         navigationOriginPanelID = resolvedNavigationPanelID
@@ -1000,7 +1008,7 @@ final class AppStore: ObservableObject {
                     throw ScratchpadPanelError.updatePanelFailed(existing.panelID)
                 }
             }
-            markScratchpadUpdatedIfUnfocused(
+            markScratchpadUpdatedIfNotVisible(
                 workspaceID: existing.workspaceID,
                 panelID: existing.panelID
             )
@@ -1071,7 +1079,7 @@ final class AppStore: ObservableObject {
             throw ScratchpadPanelError.createPanelFailed
         }
 
-        markScratchpadUpdatedIfUnfocused(
+        markScratchpadUpdatedIfNotVisible(
             workspaceID: createdSelection.workspaceID,
             panelID: panelID
         )
@@ -1160,7 +1168,7 @@ final class AppStore: ObservableObject {
         ) else {
             throw ScratchpadPanelError.updatePanelFailed(existing.panelID)
         }
-        markScratchpadUpdatedIfUnfocused(
+        markScratchpadUpdatedIfNotVisible(
             workspaceID: existing.workspaceID,
             panelID: existing.panelID
         )
@@ -2006,6 +2014,14 @@ final class AppStore: ObservableObject {
         return .newWindow
     }
 
+    func recordSidebarSubspaceOrder(_ workspaceIDs: [UUID], parentWorkspaceID: UUID) {
+        sidebarSubspaceOrderByParentID[parentWorkspaceID] = workspaceIDs
+    }
+
+    func clearSidebarSubspaceOrder(parentWorkspaceID: UUID) {
+        sidebarSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
+    }
+
     private func nextUnreadOrActivePanelTarget(
         preferredWindowID: UUID?,
         sessionRuntimeStore: SessionRuntimeStore?,
@@ -2020,15 +2036,21 @@ final class AppStore: ObservableObject {
             matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
                 .union(Self.nextUnreadOrWorkingFallbackStatusKinds)
         ) ?? []
-        if let unreadTarget = state.nextUnreadPanel(
-            fromWindowID: selection.windowID,
+        let navigationOrder = SidebarPanelNavigationOrder(
+            state: state,
+            sessionRegistry: sessionRuntimeStore?.sessionRegistry,
+            displayedSubspaceOrderByParentID: sidebarSubspaceOrderByParentID,
+            windowID: selection.windowID,
             workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID,
-            isEligible: { workspace, panelID in
-                workspace.doneAt == nil || livePanelIDs.contains(panelID)
+            focusedPanelID: selection.workspace.focusedPanelID
+        )
+        if let unreadTarget = navigationOrder.all.first(where: { target in
+            guard let workspace = state.workspacesByID[target.workspaceID],
+                  workspace.tab(id: target.tabID)?.unreadPanelIDs.contains(target.panelID) == true else {
+                return false
             }
-        ) {
+            return workspace.doneAt == nil || livePanelIDs.contains(target.panelID)
+        }) {
             if updatingCycleState {
                 nextActiveCycleState = nil
             }
@@ -2156,43 +2178,44 @@ final class AppStore: ObservableObject {
             matching: Self.nextUnreadOrWorkingFallbackStatusKinds
         )
         let laterPanelIDs = sessionRuntimeStore.activeLaterPanelIDs()
+        let navigationOrder = SidebarPanelNavigationOrder(
+            state: state,
+            sessionRegistry: sessionRuntimeStore.sessionRegistry,
+            displayedSubspaceOrderByParentID: sidebarSubspaceOrderByParentID,
+            windowID: anchor.windowID,
+            workspaceID: anchor.workspaceID,
+            focusedPanelID: anchor.focusedPanelID
+        )
         var entries: [NextActiveCycleEntry] = []
         var seenPanelIDs = Set<UUID>()
 
         // Preserve read action-required priority while storing it in the
         // persisted cycle so repeated jumps can still reach working rows.
-        let actionRequiredTargets = orderedNextUnreadOrActiveFallbackTargets(
-            anchor: anchor,
-            matchingPanelIDs: actionRequiredPanelIDs
-        )
+        let actionRequiredTargets = navigationOrder.all.filter { actionRequiredPanelIDs.contains($0.panelID) }
         entries.append(contentsOf: actionRequiredTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .actionRequired)
         })
 
-        let forwardWorkingTargets = orderedNextUnreadOrActiveFallbackTargets(
-            anchor: anchor,
-            matchingPanelIDs: workingPanelIDs.subtracting(seenPanelIDs),
-            includeCurrentWorkspaceWrap: false
-        )
+        let forwardWorkingTargets = navigationOrder.forward.filter {
+            workingPanelIDs.contains($0.panelID) && !seenPanelIDs.contains($0.panelID)
+        }
         entries.append(contentsOf: forwardWorkingTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .workingForward)
         })
 
-        let laterTargets = orderedNextUnreadOrActiveFallbackTargets(
-            anchor: anchor,
-            matchingPanelIDs: laterPanelIDs.subtracting(seenPanelIDs)
-        )
+        let laterTargets = navigationOrder.all.filter {
+            laterPanelIDs.contains($0.panelID) && !seenPanelIDs.contains($0.panelID)
+        }
         entries.append(contentsOf: laterTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .later)
         })
 
-        let wrappedWorkingTargets = orderedNextUnreadOrActiveFallbackTargets(
-            anchor: anchor,
-            matchingPanelIDs: workingPanelIDs.subtracting(seenPanelIDs)
-        )
+        let wrappedWorkingTargets = navigationOrder.wrapped.filter {
+            workingPanelIDs.contains($0.panelID) && !seenPanelIDs.contains($0.panelID)
+        }
         entries.append(contentsOf: wrappedWorkingTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .workingWrapped)
@@ -2211,35 +2234,6 @@ final class AppStore: ObservableObject {
         }
 
         return entries
-    }
-
-    private func orderedNextUnreadOrActiveFallbackTargets(
-        anchor: NextActiveCycleAnchor,
-        matchingPanelIDs: Set<UUID>,
-        includeCurrentWorkspaceWrap: Bool = true
-    ) -> [PanelNavigationTarget] {
-        guard matchingPanelIDs.isEmpty == false else {
-            return []
-        }
-
-        var remainingPanelIDs = matchingPanelIDs
-        var orderedTargets: [PanelNavigationTarget] = []
-
-        while let target = state.nextMatchingPanel(
-            fromWindowID: anchor.windowID,
-            workspaceID: anchor.workspaceID,
-            tabID: anchor.selectedTabID,
-            focusedPanelID: anchor.focusedPanelID,
-            includeCurrentWorkspaceWrap: includeCurrentWorkspaceWrap,
-            matches: { _, panelID in
-            remainingPanelIDs.contains(panelID)
-            }
-        ) {
-            orderedTargets.append(target)
-            remainingPanelIDs.remove(target.panelID)
-        }
-
-        return orderedTargets
     }
 
     private func panelNavigationTarget(for panelID: UUID) -> PanelNavigationTarget? {
@@ -2565,15 +2559,30 @@ final class AppStore: ObservableObject {
         return workspace.tabID(containingPanelID: panelID)
     }
 
-    private func markScratchpadUpdatedIfUnfocused(workspaceID: UUID, panelID: UUID) {
-        guard let workspace = state.workspacesByID[workspaceID] else {
-            return
-        }
-        guard workspace.focusedPanelID != panelID,
-              workspace.rightAuxPanel.focusedPanelID != panelID else {
+    /// Scratchpad unread means "updated where you could not see it". An update to a
+    /// scratchpad that is on screen, focused or not, stays read; WorkspaceView clears
+    /// the unread mark once a background-updated scratchpad comes on screen.
+    private func markScratchpadUpdatedIfNotVisible(workspaceID: UUID, panelID: UUID) {
+        guard state.workspacesByID[workspaceID] != nil,
+              scratchpadIsVisible(workspaceID: workspaceID, panelID: panelID) == false else {
             return
         }
         _ = send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
+    }
+
+    /// Whether Toastty is the frontmost app. Unread marking and clearing both read
+    /// this so they agree on when on-screen content counts as seen.
+    var isAppActive: Bool {
+        appIsActiveProvider()
+    }
+
+    private func scratchpadIsVisible(workspaceID: UUID, panelID: UUID) -> Bool {
+        guard isAppActive,
+              let selection = state.workspaceSelection(containingWorkspaceID: workspaceID),
+              state.selectedWorkspaceID(in: selection.windowID) == workspaceID else {
+            return false
+        }
+        return selection.workspace.panelIsDisplayedInSelectedTab(panelID)
     }
 
     private func recordRecentRightPanelItemIfNeeded(

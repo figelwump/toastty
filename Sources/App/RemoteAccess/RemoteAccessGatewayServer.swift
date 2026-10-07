@@ -342,7 +342,8 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                 return
             case .request(let head, _):
                 connection.checkedHeaders = true
-                if head.path == RemoteAttachmentPolicy.sendPath {
+                if head.path == RemoteAttachmentPolicy.sendPath
+                    || head.path == RemoteSessionStartPolicy.startWithAttachmentsPath {
                     switch handler.authorizeAttachmentUpload(head, at: Date()) {
                     case .attachmentUploadAuthorized(let deviceID):
                         guard activeAttachmentConnectionID == nil else {
@@ -411,6 +412,34 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                         if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
                     }
                     let response = await self.handler.resolveAttachments(deviceID: deviceID, body: body)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredSessionStart(let deviceID, let startRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                // A launch waits for a new shell's first prompt, which can
+                // outlast the timeout meant for reading a request.
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveSessionStart(deviceID: deviceID, request: startRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredSessionStartAttachments(let deviceID, let body):
+                guard connection.admittedAttachmentUpload else { drop(connectionID); return }
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                    }
+                    let response = await self.handler.resolveSessionStartAttachments(deviceID: deviceID, body: body) {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                        connection.requestTimeoutTask?.cancel()
+                        connection.requestTimeoutTask = nil
+                    }
                     guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
                     self.sendPreviewResponse(response, connectionID: connectionID)
                 }

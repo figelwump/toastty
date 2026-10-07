@@ -7,14 +7,14 @@ final class TerminalStoreActionCoordinator {
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     private let metadataService: TerminalMetadataService
-    private let registerPendingSplitSourceIfNeeded: (UUID, AppState, AppState) -> Void
+    private let registerPendingSplitSourceIfNeeded: (UUID, AppState, AppState, UUID?) -> Void
     private let armCloseTransitionViewportDeferral: (UUID, Set<UUID>) -> Void
     private let armFocusedPanelResizeTrace: (UUID, UUID) -> Void
     private let requestWorkspaceFocusRestore: (UUID) -> Void
 
     init(
         metadataService: TerminalMetadataService,
-        registerPendingSplitSourceIfNeeded: @escaping (UUID, AppState, AppState) -> Void,
+        registerPendingSplitSourceIfNeeded: @escaping (UUID, AppState, AppState, UUID?) -> Void,
         armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void,
         armFocusedPanelResizeTrace: @escaping (UUID, UUID) -> Void,
         requestWorkspaceFocusRestore: @escaping (UUID) -> Void
@@ -55,6 +55,7 @@ final class TerminalStoreActionCoordinator {
         guard let store else { return false }
         refreshSplitSourcePanelCWDBeforeSplit(
             workspaceID: workspaceID,
+            action: action,
             state: store.state
         )
         return store.sendNavigation(action)
@@ -66,16 +67,23 @@ final class TerminalStoreActionCoordinator {
         nextState: AppState
     ) {
         switch action {
+        case .splitPanel(let workspaceID, let tabID, let panelID, _, let profileBinding, _):
+            guard profileBinding == nil,
+                  previousState.workspacesByID[workspaceID]?.tabID(containingPanelID: panelID) == tabID,
+                  nextState.workspacesByID[workspaceID]?.tabID(containingPanelID: panelID) == tabID else {
+                return
+            }
+            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState, panelID)
         case .splitFocusedSlot(workspaceID: let workspaceID, orientation: _):
-            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
+            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState, nil)
         case .splitFocusedSlotInDirection(workspaceID: let workspaceID, direction: _):
-            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
+            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState, nil)
         case .splitFocusedSlotInDirectionWithWorkingDirectory(
             workspaceID: let workspaceID,
             direction: _,
             workingDirectory: _
         ):
-            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
+            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState, nil)
         case .closePanel(panelID: let panelID):
             armCloseTransitionViewportDeferralIfNeeded(
                 closedPanelID: panelID,
@@ -103,10 +111,24 @@ final class TerminalStoreActionCoordinator {
 
     /// Refreshes the split source panel CWD from its tracked process PID so the
     /// reducer reads a fresh value when creating the new split panel.
-    private func refreshSplitSourcePanelCWDBeforeSplit(workspaceID: UUID, state: AppState) {
-        guard let workspace = state.workspacesByID[workspaceID],
-              let sourcePanelID = Self.resolvedActionPanelID(in: workspace),
-              let panelState = workspace.panels[sourcePanelID],
+    private func refreshSplitSourcePanelCWDBeforeSplit(
+        workspaceID: UUID,
+        action: AppAction,
+        state: AppState
+    ) {
+        guard let workspace = state.workspacesByID[workspaceID] else { return }
+        let sourcePanelID: UUID
+        if case .splitPanel(let actionWorkspaceID, let tabID, let panelID, _, _, _) = action {
+            guard actionWorkspaceID == workspaceID,
+                  workspace.tabID(containingPanelID: panelID) == tabID else {
+                return
+            }
+            sourcePanelID = panelID
+        } else {
+            guard let panelID = Self.resolvedActionPanelID(in: workspace) else { return }
+            sourcePanelID = panelID
+        }
+        guard let panelState = workspace.panelState(for: sourcePanelID),
               case .terminal = panelState else {
             return
         }

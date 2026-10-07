@@ -630,6 +630,7 @@ final class HomeScreenControllerTests: XCTestCase {
         // Fixture: 1 (2m) and 9 (5m) need approval, 4 has an error, 7 (9m),
         // 3 (18m), 10 (25m) and 8 (3h) are ready. 12 is ready too, but its
         // subspace is marked done, so it is left out.
+        XCTAssertEqual(controller.sessionsNeedingAttention().map(\.id), ids([1, 9, 4, 7, 3, 10, 8]))
         XCTAssertEqual(
             controller.sessionsNeedingAttention(excluding: ids([7])[0]).map(\.id),
             ids([1, 9, 4, 3, 10, 8])
@@ -638,6 +639,11 @@ final class HomeScreenControllerTests: XCTestCase {
             controller.sessionsNeedingAttention(excluding: ids([1])[0]).map(\.id),
             ids([9, 4, 7, 3, 10, 8])
         )
+        let readySubspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000012")!
+        controller.setSubspaceDone(readySubspaceID, isDone: true)
+        XCTAssertEqual(controller.sessionsNeedingAttention().count, 6)
+        controller.setSubspaceDone(readySubspaceID, isDone: false)
+        XCTAssertEqual(controller.sessionsNeedingAttention().count, 7)
     }
 
     func testConnectionNoticeClassifiesTransportFailures() {
@@ -773,5 +779,103 @@ final class HomeScreenControllerTests: XCTestCase {
         ToasttyMobileFixture.home.activitySessions.first {
             $0.state.bucket == bucket && predicate($0)
         }
+    }
+}
+
+@MainActor
+final class SessionStartControllerTests: XCTestCase {
+    func testStartingSessionsNeedsALiveMacThatAcceptsThem() {
+        let controller = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.example")!),
+            snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        XCTAssertFalse(controller.canStartSessions)
+        controller.update(
+            snapshot: ToasttyMobileFixture.home, connectionState: .live, freshness: .live,
+            hostSupportsSessionStart: true
+        )
+        XCTAssertTrue(controller.canStartSessions)
+        controller.update(snapshot: ToasttyMobileFixture.home, connectionState: .offline, freshness: .stale)
+        XCTAssertFalse(controller.canStartSessions)
+    }
+
+    func testWithoutAConnectionNothingIsSentAndTheStartIsUnconfirmed() async {
+        let controller = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.example")!),
+            snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        let options = await controller.sessionStartOptions(workspaceID: ToasttyMobileFixture.previewWorkspaceID)
+        let outcome = await controller.startSession(RemoteSessionStartRequest(
+            clientRequestID: "request-1", workspaceID: ToasttyMobileFixture.previewWorkspaceID,
+            profileID: "claude", text: "Hi"
+        ))
+        XCTAssertEqual(options, .unreachable)
+        XCTAssertEqual(outcome, .unconfirmed)
+    }
+
+    func testFixtureStartAddsTheSessionToItsWorkspace() async throws {
+        let controller = HomeScreenController(
+            runtimeMode: .fixture, snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        XCTAssertTrue(controller.canStartSessions)
+
+        let outcome = await controller.startSession(RemoteSessionStartRequest(
+            clientRequestID: "request-1", workspaceID: ToasttyMobileFixture.previewWorkspaceID,
+            profileID: "codex", model: "gpt-6.1-sol", text: "Fix the flaky test"
+        ))
+
+        guard case .answered(.started(let conversationID)) = outcome else {
+            return XCTFail("Expected a start, got \(outcome)")
+        }
+        let conversation = try XCTUnwrap(controller.conversation(id: conversationID.rawValue))
+        XCTAssertEqual(conversation.workspaceID, ToasttyMobileFixture.previewWorkspaceID)
+        XCTAssertEqual(conversation.agent, .codex)
+        XCTAssertEqual(conversation.executionProfile?.modelIdentifier, "gpt-6.1-sol")
+        XCTAssertTrue(controller.openConversation(id: conversationID.rawValue))
+    }
+
+    func testWorkspaceChoicesAreTopLevelPlusAKeptSubspaceUnderItsParent() {
+        let parent = MobileWorkspace(id: UUID(), title: "toastty", conversations: [])
+        let other = MobileWorkspace(id: UUID(), title: "dotfiles", conversations: [])
+        let subspace = MobileWorkspace(
+            id: UUID(), title: "fix-picker", conversations: [], parentWorkspaceID: parent.id
+        )
+        let controller = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: MobileHomeSnapshot(hostName: "mac", workspaces: [parent, other, subspace]),
+            connectionState: .live
+        )
+        let topLevel = controller.snapshot.topLevelWorkspaces.map(\.id)
+        XCTAssertEqual(Set(topLevel), [parent.id, other.id])
+
+        XCTAssertEqual(controller.sessionStartWorkspaces(keeping: []).map(\.id), topLevel)
+        // A subspace the sheet opened in is listed right after its parent.
+        let kept = controller.sessionStartWorkspaces(keeping: [subspace.id])
+        let parentIndex = kept.firstIndex { $0.id == parent.id }!
+        XCTAssertEqual(kept[parentIndex + 1], ToasttyNewSessionWorkspace(
+            id: subspace.id, title: "fix-picker", parentTitle: "toastty"
+        ))
+        XCTAssertEqual(kept.count, 3)
+    }
+
+    func testHomeStartsInTheLastUsedWorkspaceWhileTheMacStillListsIt() {
+        let controller = HomeScreenController(
+            runtimeMode: .fixture, snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        let first = controller.snapshot.topLevelWorkspaces.first?.id
+        let last = controller.snapshot.topLevelWorkspaces.last?.id
+        XCTAssertNotEqual(first, last)
+
+        XCTAssertEqual(controller.defaultSessionStartWorkspace(lastUsed: last)?.id, last)
+        XCTAssertEqual(controller.defaultSessionStartWorkspace(lastUsed: nil)?.id, first)
+        // A workspace closed on the Mac falls back to Home's first one.
+        XCTAssertEqual(controller.defaultSessionStartWorkspace(lastUsed: UUID())?.id, first)
+
+        let empty = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: MobileHomeSnapshot(hostName: "mac", workspaces: []),
+            connectionState: .live
+        )
+        XCTAssertNil(empty.defaultSessionStartWorkspace(lastUsed: last))
     }
 }

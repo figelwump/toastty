@@ -108,7 +108,7 @@ test('main pushes and manual runs require every job to pass', () => {
     MACOS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
 });
 
-test('PR Debug selects UI smoke while main and manual Debug retain all UI tests', () => {
+test('automatic iOS runs keep functional coverage; manual runs include full UI and budgets', () => {
   const iosJob = workflow.jobs.ios;
   const command = iosJob.steps.find((step) => step.name === 'Test native client').run;
   const prefix = 'node ios/scripts/toastty-ios.mjs test ';
@@ -123,15 +123,29 @@ test('PR Debug selects UI smoke while main and manual Debug retain all UI tests'
   };
 
   for (const [eventName, configuration, selector, timeout] of [
-    ['pull_request', 'Debug', '--ui-tests smoke', 45],
-    ['pull_request', 'Release', '', 45],
-    ['push', 'Debug', '', 60],
-    ['push', 'Release', '', 45],
+    ['pull_request', 'Debug', '--ui-tests smoke --skip-performance-budgets', 45],
+    ['pull_request', 'Release', '--skip-performance-budgets', 45],
+    ['push', 'Debug', '--ui-tests smoke --skip-performance-budgets', 45],
+    ['push', 'Release', '--skip-performance-budgets', 45],
     ['workflow_dispatch', 'Debug', '', 60],
     ['workflow_dispatch', 'Release', '', 45],
   ]) {
     assert.equal(evaluate(command.slice(prefix.length), eventName, configuration), selector);
     assert.equal(evaluate(iosJob['timeout-minutes'], eventName, configuration), timeout);
+    const result = spawnSync(process.execPath, [
+      new URL('ios/scripts/toastty-ios.mjs', root).pathname,
+      'test', ...selector.split(' ').filter(Boolean), '--dry-run',
+    ], {
+      env: { ...process.env, TOASTTY_IOS_CONFIGURATION: configuration },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const args = JSON.parse(result.stdout).steps.at(-1).args;
+    assert.equal(args.some((arg) => arg.startsWith('-skip-testing:')), eventName !== 'workflow_dispatch');
+    assert.equal(args.some((arg) => arg.startsWith('-only-testing:ToasttyMobileUITests/')),
+      configuration === 'Debug' && eventName !== 'workflow_dispatch');
+    assert.ok(!args.includes('-skip-testing:ToasttyMobileAppTests'));
+    assert.ok(!args.includes('-skip-testing:ToasttyMobileDomainTests'));
   }
 });
 
@@ -149,4 +163,53 @@ test('every web-panel package is covered by the web test command', () => {
 test('Mac artifacts include result bundles without uploading DerivedData', () => {
   const upload = workflow.jobs.macos.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload.with.path, 'artifacts/ci-macos/*.xcresult');
+});
+
+const releaseWorkflow = parse(read('.github/workflows/ios-testflight.yml'));
+test('TestFlight requires exact-source CI before signed archive and has no test bypass', () => {
+  const job = releaseWorkflow.jobs.testflight;
+  assert.deepEqual(Object.keys(releaseWorkflow.jobs), ['testflight']);
+  assert.deepEqual(Object.keys(releaseWorkflow.on.workflow_dispatch.inputs), ['upload']);
+  assert.deepEqual(job.permissions, { contents: 'read', actions: 'read' });
+  assert.equal(job.if, "${{ github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true' }}");
+  const checkout = job.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
+  assert.equal(checkout.with.ref, '${{ github.sha }}');
+  const gateIndex = job.steps.findIndex((step) => step.id === 'ci');
+  const archiveIndex = job.steps.findIndex((step) => step.name === 'Archive and validate TestFlight build');
+  assert.ok(gateIndex > 0 && archiveIndex > gateIndex);
+  const gate = job.steps[gateIndex];
+  assert.equal(gate.if, undefined);
+  assert.equal(gate['continue-on-error'], undefined);
+  assert.equal(gate.env.GH_TOKEN, '${{ github.token }}');
+  assert.equal(gate.env.RELEASE_SHA, '${{ github.sha }}');
+  assert.equal(gate.run, 'node scripts/ci/require-ios-ci.mjs --sha "$RELEASE_SHA" --output artifacts/ios-release/ci-evidence.json');
+  const archive = job.steps[archiveIndex];
+  assert.equal(archive.env.TOASTTY_IOS_VERIFIED_SHA, '${{ steps.ci.outputs.verified_sha }}');
+  assert.equal(archive.if, undefined);
+  assert.ok(!job.steps.some((step) => step.run?.includes('toastty-ios.mjs test')));
+  const upload = job.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.ok(upload.with.path.split('\n').includes('artifacts/ios-release/ci-evidence.json'));
+  assert.equal(upload.with['retention-days'], 90);
+});
+
+test('iOS CI and archiving select the same pinned Xcode before generation', () => {
+  for (const job of [workflow.jobs.ios, releaseWorkflow.jobs.testflight]) {
+    assert.equal(job['runs-on'], 'macos-26');
+    const pin = job.steps.findIndex((step) => step.run === 'bash scripts/ci/select-ios-xcode.sh');
+    const install = job.steps.findIndex((step) => step.name === 'Install pinned Tuist');
+    assert.ok(pin >= 0 && install > pin);
+  }
+  assert.deepEqual(selected('.github/ios-xcode-version'), ['ios']);
+  for (const script of ['require-ios-ci.mjs', 'select-ios-xcode.sh', 'ios-testflight.sh']) {
+    assert.deepEqual(selected(`scripts/ci/${script}`), ['ios', 'macos']);
+  }
+});
+
+test('full CI gate blocks every non-success graph result, including abandoned runners', () => {
+  for (const name of ['IOS', 'MACOS', 'WEB']) {
+    for (const result of ['skipped', 'failure', 'cancelled', 'abandoned', '', 'pending']) {
+      assert.notEqual(gate({ FULL_RUN: 'true', IOS_RESULT: 'success', MACOS_RESULT: 'success',
+        WEB_RESULT: 'success', [`${name}_RESULT`]: result }).status, 0);
+    }
+  }
 });

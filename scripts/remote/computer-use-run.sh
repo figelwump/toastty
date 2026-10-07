@@ -14,8 +14,11 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
 KEEP_REMOTE=0
 PROMPT_FILE=""
 PROMPT_TEXT=""
-CODEX_COMPUTER_USE_MODEL="${CODEX_COMPUTER_USE_MODEL:-gpt-5.3-codex-spark}"
-CODEX_COMPUTER_USE_REASONING_EFFORT="${CODEX_COMPUTER_USE_REASONING_EFFORT:-medium}"
+CODEX_COMPUTER_USE_MODEL="${CODEX_COMPUTER_USE_MODEL:-gpt-6-luna}"
+CODEX_COMPUTER_USE_REASONING_EFFORT="${CODEX_COMPUTER_USE_REASONING_EFFORT:-high}"
+CODEX_COMPUTER_USE_SERVICE_TIER="${CODEX_COMPUTER_USE_SERVICE_TIER:-fast}"
+CURRENT_CODEX_APP_CLI="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+LEGACY_CODEX_APP_CLI="/Applications/Codex.app/Contents/Resources/codex"
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
 REMOTE_HOST="${TOASTTY_REMOTE_GUI_HOST:-}"
@@ -75,8 +78,9 @@ Required local environment:
 Optional local environment:
   TOASTTY_REMOTE_GUI_REPO_ROOT          Absolute Toastty repo path on the remote host
   TOASTTY_REMOTE_GUI_ROOT               Remote directory that will hold disposable worktrees and runs
-  CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-5.3-codex-spark)
-  CODEX_COMPUTER_USE_REASONING_EFFORT   Codex reasoning effort for app-server turns (default: medium)
+  CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-6-luna)
+  CODEX_COMPUTER_USE_REASONING_EFFORT   Codex reasoning effort for app-server turns (default: high)
+  CODEX_COMPUTER_USE_SERVICE_TIER       Codex service tier for app-server turns (default: fast)
 
 Default prompt:
   @Computer Use Toastty is already running on this Mac. Use computer use only.
@@ -190,12 +194,17 @@ run_remote_preflight() {
   if ! output="$(
     ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$REMOTE_REPO_ROOT" \
-      "$REMOTE_GUI_ROOT" <<'EOF' 2>&1
+      "$REMOTE_GUI_ROOT" \
+      "$CURRENT_CODEX_APP_CLI" \
+      "$LEGACY_CODEX_APP_CLI" <<'EOF' 2>&1
 set -euo pipefail
 remote_repo_root="$1"
 remote_gui_root="$2"
 git -C "$remote_repo_root" rev-parse --is-inside-work-tree >/dev/null
-test -x /Applications/Codex.app/Contents/Resources/codex
+test -x "$3" || test -x "$4" || {
+  printf 'No app-bundled Codex CLI found at %s or %s\n' "$3" "$4" >&2
+  exit 1
+}
 mkdir -p "$remote_gui_root/worktrees" "$remote_gui_root/runs"
 test -w "$remote_gui_root/worktrees"
 test -w "$remote_gui_root/runs"
@@ -227,6 +236,7 @@ remote_gui_root=$REMOTE_GUI_ROOT
 prompt_file=$PROMPT_FILE
 codex_model=$CODEX_COMPUTER_USE_MODEL
 codex_reasoning_effort=$CODEX_COMPUTER_USE_REASONING_EFFORT
+codex_service_tier=$CODEX_COMPUTER_USE_SERVICE_TIER
 EOF
 }
 
@@ -234,10 +244,11 @@ configured_model_json() {
   jq -cn \
     --arg name "$CODEX_COMPUTER_USE_MODEL" \
     --arg reasoningEffort "$CODEX_COMPUTER_USE_REASONING_EFFORT" \
+    --arg serviceTier "$CODEX_COMPUTER_USE_SERVICE_TIER" \
     '{
       name: $name,
       provider: null,
-      serviceTier: null,
+      serviceTier: $serviceTier,
       reasoningEffort: $reasoningEffort
     }'
 }
@@ -368,7 +379,17 @@ run_remote_prepare_mode() {
   local app_bundle="$derived_path/Build/Products/Debug/Toastty.app"
   local app_binary="$app_bundle/Contents/MacOS/Toastty"
   local instance_json="$runtime_home/instance.json"
-  local codex_cli="/Applications/Codex.app/Contents/Resources/codex"
+  local codex_cli="$CURRENT_CODEX_APP_CLI"
+  if [[ ! -x "$codex_cli" ]]; then
+    codex_cli="$LEGACY_CODEX_APP_CLI"
+  fi
+  [[ -x "$codex_cli" ]] || fail "No app-bundled Codex CLI found in ChatGPT.app or Codex.app"
+  local codex_version
+  codex_version="$("$codex_cli" --version)" || fail "Codex CLI at $codex_cli failed --version"
+  if [[ "$codex_cli" == "$LEGACY_CODEX_APP_CLI" ]]; then
+    warn "Using the legacy Codex app; its CLI may require overrides for CODEX_COMPUTER_USE_MODEL and CODEX_COMPUTER_USE_SERVICE_TIER"
+  fi
+  log "Using $codex_cli ($codex_version)" >&2
   local app_server_launchd_label="com.giantthings.toastty.cu-appserver.${run_hash_value}"
   local app_server_plist="$remote_run_root/app-server.plist"
   local app_server_launcher="$remote_run_root/app-server-launch.sh"
@@ -463,6 +484,7 @@ export PATH="$(dirname "$codex_cli"):\$PATH"
 exec script -q "$app_server_session_log" "$codex_cli" app-server \
   -c "model=\"${CODEX_COMPUTER_USE_MODEL}\"" \
   -c "model_reasoning_effort=\"${CODEX_COMPUTER_USE_REASONING_EFFORT}\"" \
+  -c "service_tier=\"${CODEX_COMPUTER_USE_SERVICE_TIER}\"" \
   --listen "ws://127.0.0.1:${app_server_port}"
 EOF
   chmod +x "$app_server_launcher"
@@ -519,6 +541,9 @@ EOF
   "appPid": ${app_pid},
   "codexModel": "$(json_escape "$CODEX_COMPUTER_USE_MODEL")",
   "codexReasoningEffort": "$(json_escape "$CODEX_COMPUTER_USE_REASONING_EFFORT")",
+  "codexServiceTier": "$(json_escape "$CODEX_COMPUTER_USE_SERVICE_TIER")",
+  "codexCLI": "$(json_escape "$codex_cli")",
+  "codexVersion": "$(json_escape "$codex_version")",
   "appServerPort": ${app_server_port},
   "appServerPid": ${app_server_pid},
   "appServerListenerPid": $(if [[ -n "$app_server_listener_pid" ]]; then printf '%s' "$app_server_listener_pid"; else printf 'null'; fi),
@@ -723,6 +748,7 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
       "$remote_run_root" \
       "$CODEX_COMPUTER_USE_MODEL" \
       "$CODEX_COMPUTER_USE_REASONING_EFFORT" \
+      "$CODEX_COMPUTER_USE_SERVICE_TIER" \
       > >(tee "$remote_prepare_stdout") \
       2> >(tee "$remote_prepare_stderr" >&2) <<'EOF'; then
 set -euo pipefail
@@ -732,9 +758,11 @@ run_label="$3"
 remote_run_root="$4"
 codex_model="$5"
 codex_reasoning_effort="$6"
+codex_service_tier="$7"
 cd "$remote_worktree_dir"
 CODEX_COMPUTER_USE_MODEL="$codex_model" \
 CODEX_COMPUTER_USE_REASONING_EFFORT="$codex_reasoning_effort" \
+CODEX_COMPUTER_USE_SERVICE_TIER="$codex_service_tier" \
   /bin/bash "$script_path" \
   --run-label "$run_label" \
   --remote-prepare \

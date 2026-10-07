@@ -50,7 +50,7 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.ios == 'true'
     runs-on: macos-26
-    timeout-minutes: ${{ github.event_name != 'pull_request' && matrix.configuration == 'Debug' && 60 || 45 }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && matrix.configuration == 'Debug' && 60 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +69,9 @@ jobs:
         with:
           node-version-file: .node-version
 
+      - name: Select pinned iOS Xcode
+        run: bash scripts/ci/select-ios-xcode.sh
+
       - name: Install pinned Tuist
         run: |
           brew install mise
@@ -82,7 +85,8 @@ jobs:
         run: node --test ios/Tests/ScriptTests/*.test.mjs ios/Tests/ReleaseScriptTests/*.test.mjs
 
       - name: Test native client
-        run: node ios/scripts/toastty-ios.mjs test ${{ github.event_name == 'pull_request' && matrix.configuration == 'Debug' && '--ui-tests smoke' || '' }}
+        # Full UI and hardware-sensitive budgets remain available on manual runs.
+        run: node ios/scripts/toastty-ios.mjs test ${{ github.event_name != 'workflow_dispatch' && (matrix.configuration == 'Debug' && '--ui-tests smoke --skip-performance-budgets' || '--skip-performance-budgets') || '' }}
 
       - name: Upload iOS test artifacts
         if: always()

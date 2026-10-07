@@ -91,6 +91,9 @@ final class TerminalFocusCoordinator {
         guard let textView = firstResponder as? NSTextView else {
             return false
         }
-        return textView.isFieldEditor
+        // Annotation comments are multiline text views, not field editors.
+        // AppKit restores their responder on activation; a delayed terminal
+        // restore must not replace it after the parent window becomes key.
+        return textView.isFieldEditor || textView is BrowserAnnotationCommentInputView
     }
 }

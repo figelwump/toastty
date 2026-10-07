@@ -67,6 +67,7 @@ final class AppControlExecutor {
         guard let action = AppControlActionID.resolve(rawID) else {
             throw AutomationSocketError.invalidPayload("unsupported action: \(rawID)")
         }
+        try validateTabParameter(args, descriptor: action.descriptor)
 
         switch action {
         case .windowCreate:
@@ -302,10 +303,7 @@ final class AppControlExecutor {
             )
 
         case .workspaceTabCreate:
-            return .init(
-                didMutateState: try requiredStore().sendNavigation(.createWorkspaceTab(workspaceID: try resolveWorkspaceID(args: args), seed: nil)),
-                result: nil
-            )
+            return try createTerminalTab(args: args)
 
         case .workspaceTabSelect:
             let workspaceID = try resolveWorkspaceID(args: args)
@@ -633,18 +631,11 @@ final class AppControlExecutor {
             guard let profileID = normalizedOptionalText(args.stringValue("profileID")) else {
                 throw AutomationSocketError.invalidPayload("profileID is required")
             }
-            let workspaceID = try optionalUUIDParameter("workspaceID", args: args)
-            let panelID = try optionalUUIDParameter("panelID", args: args)
-            if let targetWorkspaceID = try resolveAgentLaunchExistingWorkspaceID(
-                workspaceID: workspaceID,
-                panelID: panelID
-            ) {
-                try enforceWorkspaceAutomationAccess(targetWorkspaceID)
-            }
+            let target = try resolveTerminalActionTarget(args: args, forLaunch: true)
             let result = try agentLaunchService.launch(
                 profileID: profileID,
-                workspaceID: workspaceID,
-                panelID: panelID,
+                workspaceID: target.workspaceID,
+                panelID: target.panelID,
                 cwd: normalizedOptionalText(args.stringValue("cwd")),
                 environment: try agentLaunchEnvironment(args: args),
                 model: args.stringValue("model"),
@@ -665,6 +656,7 @@ final class AppControlExecutor {
                 "sessionID": .string(result.sessionID),
                 "windowID": .string(result.windowID.uuidString),
                 "workspaceID": .string(result.workspaceID.uuidString),
+                "tabID": .string(target.tabID.uuidString),
                 "panelID": .string(result.panelID.uuidString),
                 "command": .string(result.commandLine),
             ]
@@ -788,18 +780,12 @@ final class AppControlExecutor {
             guard let profileID = normalizedOptionalText(args.stringValue("profileID")) else {
                 throw AutomationSocketError.invalidPayload("profileID is required")
             }
-            let workspaceID = try optionalUUIDParameter("workspaceID", args: args)
-            let panelID = try optionalUUIDParameter("panelID", args: args)
-            if let targetWorkspaceID = try resolveAgentLaunchExistingWorkspaceID(
-                workspaceID: workspaceID,
-                panelID: panelID
-            ) {
-                try enforceWorkspaceAutomationAccess(targetWorkspaceID)
-            }
+            let target = try resolveTerminalActionTarget(args: args, forLaunch: true)
             return AsyncAgentLaunchPreparation(
                 profileID: profileID,
-                workspaceID: workspaceID,
-                panelID: panelID,
+                workspaceID: target.workspaceID,
+                tabID: target.tabID,
+                panelID: target.panelID,
                 cwd: normalizedOptionalText(args.stringValue("cwd")),
                 environment: try agentLaunchEnvironment(args: args),
                 model: args.stringValue("model"),
@@ -840,6 +826,7 @@ final class AppControlExecutor {
             "sessionID": .string(result.sessionID),
             "windowID": .string(result.windowID.uuidString),
             "workspaceID": .string(result.workspaceID.uuidString),
+            "tabID": .string(preparation.tabID.uuidString),
             "panelID": .string(result.panelID.uuidString),
             "command": .string(result.commandLine),
         ]
@@ -857,6 +844,7 @@ final class AppControlExecutor {
         guard let query = AppControlQueryID.resolve(rawID) else {
             throw AutomationSocketError.invalidPayload("unsupported query: \(rawID)")
         }
+        try validateTabParameter(args, descriptor: query.descriptor)
 
         switch query {
         case .annotationKeys:
@@ -974,29 +962,8 @@ final class AppControlExecutor {
     }
 }
 
-private extension AppControlExecutor {
-    struct AsyncAgentLaunchPreparation {
-        let profileID: String
-        let workspaceID: UUID?
-        let panelID: UUID?
-        let cwd: String?
-        let environment: [String: String]
-        let model: String?
-        let reasoningEffort: String?
-        let initialPrompt: String?
-        let initialCommands: [String]
-        let forkFromSessionID: String?
-        let additionalDirectories: [String]
-        let inheritedScopedWorkspaceIDs: Set<UUID>?
-        let parentSessionID: String?
-    }
-
-    enum BrowserZoomAction {
-        case increase
-        case decrease
-        case reset
-    }
-
+// Shared by the terminal-target resolver in AppControlTerminalTarget.swift.
+extension AppControlExecutor {
     func requiredStore() throws -> AppStore {
         guard let store else {
             throw AutomationSocketError.internalError("app store unavailable")
@@ -1004,27 +971,10 @@ private extension AppControlExecutor {
         return store
     }
 
-    func withRequestContext<T>(
-        _ context: AutomationRequestContext,
-        _ body: () throws -> T
-    ) rethrows -> T {
-        let previousContext = currentRequestContext
-        currentRequestContext = context
-        defer { currentRequestContext = previousContext }
-        return try body()
-    }
-
     func requestContext() -> AutomationRequestContext {
         currentRequestContext ?? AutomationRequestContext(
             callerSessionID: nil,
             commandName: "app_control"
-        )
-    }
-
-    func callerMayAutomate(_ workspaceID: UUID) -> Bool {
-        sessionRuntimeStore.allowsWorkspaceAutomation(
-            callerSessionID: requestContext().callerSessionID,
-            of: workspaceID
         )
     }
 
@@ -1045,6 +995,124 @@ private extension AppControlExecutor {
             )
             throw AutomationSocketError.scopeDenied(workspaceID: workspaceID)
         }
+    }
+
+    func callerManagedSession() -> SessionRecord? {
+        guard let callerSessionID = requestContext().callerSessionID,
+              let session = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
+              session.agent != .processWatch else {
+            return nil
+        }
+        return session
+    }
+
+    func optionalBooleanParameter(
+        _ name: String,
+        args: [String: AutomationJSONValue],
+        defaultValue: Bool
+    ) throws -> Bool {
+        guard args[name] != nil else { return defaultValue }
+        guard let value = args.boolValue(name) else {
+            throw AutomationSocketError.invalidPayload("\(name) must be a boolean")
+        }
+        return value
+    }
+
+    func resolveWorkspaceSelection(args: [String: AutomationJSONValue]) throws -> WindowWorkspaceSelection {
+        let store = try requiredStore()
+        if let rawWorkspaceID = args.stringValue("workspaceID") {
+            guard let workspaceID = UUID(uuidString: rawWorkspaceID) else {
+                throw AutomationSocketError.invalidPayload("workspaceID must be a UUID")
+            }
+            guard let selection = store.state.workspaceSelection(containingWorkspaceID: workspaceID) else {
+                throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+            }
+            if let rawWindowID = args.stringValue("windowID") {
+                guard let windowID = UUID(uuidString: rawWindowID) else {
+                    throw AutomationSocketError.invalidPayload("windowID must be a UUID")
+                }
+                guard selection.windowID == windowID else {
+                    throw AutomationSocketError.invalidPayload("workspaceID does not belong to windowID")
+                }
+            }
+            return selection
+        }
+
+        if let rawWindowID = args.stringValue("windowID") {
+            guard let windowID = UUID(uuidString: rawWindowID) else {
+                throw AutomationSocketError.invalidPayload("windowID must be a UUID")
+            }
+            guard let selection = store.state.workspaceSelection(in: windowID) else {
+                throw AutomationSocketError.invalidPayload("windowID does not exist")
+            }
+            return selection
+        }
+
+        if let selection = store.state.soleWorkspaceSelection() {
+            return selection
+        }
+
+        if store.state.windows.isEmpty {
+            throw AutomationSocketError.invalidPayload("no window is available")
+        }
+
+        throw AutomationSocketError.invalidPayload("workspaceID or windowID is required when multiple windows exist")
+    }
+
+    func optionalUUIDParameter(
+        _ key: String,
+        args: [String: AutomationJSONValue]
+    ) throws -> UUID? {
+        guard let value = args[key] else {
+            return nil
+        }
+        guard case .string(let rawValue) = value,
+              let uuid = UUID(uuidString: rawValue) else {
+            throw AutomationSocketError.invalidPayload("\(key) must be a UUID")
+        }
+        return uuid
+    }
+}
+
+private extension AppControlExecutor {
+    struct AsyncAgentLaunchPreparation {
+        let profileID: String
+        let workspaceID: UUID
+        let tabID: UUID
+        let panelID: UUID
+        let cwd: String?
+        let environment: [String: String]
+        let model: String?
+        let reasoningEffort: String?
+        let initialPrompt: String?
+        let initialCommands: [String]
+        let forkFromSessionID: String?
+        let additionalDirectories: [String]
+        let inheritedScopedWorkspaceIDs: Set<UUID>?
+        let parentSessionID: String?
+    }
+
+    enum BrowserZoomAction {
+        case increase
+        case decrease
+        case reset
+    }
+
+    func withRequestContext<T>(
+        _ context: AutomationRequestContext,
+        _ body: () throws -> T
+    ) rethrows -> T {
+        let previousContext = currentRequestContext
+        currentRequestContext = context
+        defer { currentRequestContext = previousContext }
+        return try body()
+    }
+
+    func callerMayAutomate(_ workspaceID: UUID) -> Bool {
+        sessionRuntimeStore.allowsWorkspaceAutomation(
+            callerSessionID: requestContext().callerSessionID,
+            of: workspaceID
+        )
     }
 
     func enforceSelectedWorkspaceAutomationAccess(windowID: UUID) throws {
@@ -1075,31 +1143,6 @@ private extension AppControlExecutor {
                 "expectedSessionID does not match the active managed session for panelID \(panelID.uuidString)"
             )
         }
-    }
-
-    func resolveAgentLaunchExistingWorkspaceID(
-        workspaceID: UUID?,
-        panelID: UUID?
-    ) throws -> UUID? {
-        let store = try requiredStore()
-        if let panelID {
-            guard let location = locatePanel(panelID) else {
-                throw AutomationSocketError.invalidPayload("panelID does not exist")
-            }
-            if let workspaceID, workspaceID != location.workspaceID {
-                throw AutomationSocketError.invalidPayload("panelID does not belong to workspaceID")
-            }
-            return location.workspaceID
-        }
-
-        if let workspaceID {
-            guard store.state.workspacesByID[workspaceID] != nil else {
-                throw AutomationSocketError.invalidPayload("workspaceID does not exist")
-            }
-            return workspaceID
-        }
-
-        return store.selectedWorkspace?.id
     }
 
     func inheritedWorkspaceScopeForChildLaunch() -> Set<UUID>? {
@@ -1138,15 +1181,6 @@ private extension AppControlExecutor {
 
     /// The calling managed agent session, if the request came from one.
     /// Process watches are not agents and never count as spawners.
-    func callerManagedSession() -> SessionRecord? {
-        guard let callerSessionID = requestContext().callerSessionID,
-              let session = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
-              session.agent != .processWatch else {
-            return nil
-        }
-        return session
-    }
-
     func parentSessionIDForChildLaunch() -> String? {
         guard let callerSessionID = requestContext().callerSessionID,
               let caller = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
@@ -1207,56 +1241,45 @@ private extension AppControlExecutor {
         return (workspaceID, panelID, webState)
     }
 
-    func splitInDirection(_ direction: SlotSplitDirection, args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
-        let workspaceID = try resolveWorkspaceID(args: args)
-        let store = try requiredStore()
-        return try performSplit(workspaceID: workspaceID) {
-            store.sendNavigation(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: direction))
-        }
-    }
-
     func split(_ orientation: SplitOrientation, args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
-        let workspaceID = try resolveWorkspaceID(args: args)
-        let store = try requiredStore()
-        return try performSplit(workspaceID: workspaceID) {
-            store.sendNavigation(.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation))
-        }
+        try splitInDirection(orientation == .horizontal ? .right : .down, args: args)
     }
 
     func splitWithProfile(direction: SlotSplitDirection, args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
-        let workspaceID = try resolveWorkspaceID(args: args)
-        let profileBinding = try profileBinding(args: args)
-        return try performSplit(workspaceID: workspaceID) {
-            terminalRuntimeRegistry.splitFocusedSlotInDirectionWithTerminalProfile(
-                workspaceID: workspaceID,
-                direction: direction,
-                profileBinding: profileBinding
-            )
-        }
+        try splitInDirection(direction, args: args, profileBinding: profileBinding(args: args))
     }
 
-    func performSplit(
-        workspaceID: UUID,
-        mutation: () -> Bool
+    func splitInDirection(
+        _ direction: SlotSplitDirection,
+        args: [String: AutomationJSONValue],
+        profileBinding: TerminalProfileBinding? = nil
     ) throws -> AppControlActionOutcome {
+        let target = try resolveTerminalActionTarget(args: args, forLaunch: false)
+        let activate = try optionalBooleanParameter("activate", args: args, defaultValue: true)
         let store = try requiredStore()
-        guard let workspaceBeforeSplit = store.state.workspacesByID[workspaceID] else {
-            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        guard let tabBeforeSplit = store.state.workspacesByID[target.workspaceID]?.tab(id: target.tabID) else {
+            throw AutomationSocketError.invalidPayload("tabID does not exist")
         }
-        let previousPanelIDs = Set(workspaceBeforeSplit.panels.keys)
+        let previousPanelIDs = Set(tabBeforeSplit.panels.keys)
 
-        guard mutation() else {
+        guard terminalRuntimeRegistry.sendSplitAction(
+            workspaceID: target.workspaceID,
+            action: .splitPanel(
+                workspaceID: target.workspaceID, tabID: target.tabID, panelID: target.panelID,
+                direction: direction, profileBinding: profileBinding, activate: activate
+            )
+        ) else {
             return .init(didMutateState: false, result: nil)
         }
-        guard let workspaceAfterSplit = store.state.workspacesByID[workspaceID] else {
+        guard let tabAfterSplit = store.state.workspacesByID[target.workspaceID]?.tab(id: target.tabID) else {
             throw AutomationSocketError.internalError(
-                "split succeeded but the target workspace disappeared"
+                "split succeeded but the target tab disappeared"
             )
         }
-        let createdPanelIDs = Set(workspaceAfterSplit.panels.keys).subtracting(previousPanelIDs)
+        let createdPanelIDs = Set(tabAfterSplit.panels.keys).subtracting(previousPanelIDs)
         guard createdPanelIDs.count == 1,
               let panelID = createdPanelIDs.first,
-              case .terminal = workspaceAfterSplit.panels[panelID] else {
+              case .terminal = tabAfterSplit.panels[panelID] else {
             throw AutomationSocketError.internalError(
                 "split succeeded without exactly one new terminal panel"
             )
@@ -1265,7 +1288,8 @@ private extension AppControlExecutor {
         return .init(
             didMutateState: true,
             result: [
-                "workspaceID": .string(workspaceID.uuidString),
+                "workspaceID": .string(target.workspaceID.uuidString),
+                "tabID": .string(target.tabID.uuidString),
                 "panelID": .string(panelID.uuidString),
             ]
         )
@@ -1619,18 +1643,6 @@ private extension AppControlExecutor {
         return value
     }
 
-    func optionalBooleanParameter(
-        _ name: String,
-        args: [String: AutomationJSONValue],
-        defaultValue: Bool
-    ) throws -> Bool {
-        guard args[name] != nil else { return defaultValue }
-        guard let value = args.boolValue(name) else {
-            throw AutomationSocketError.invalidPayload("\(name) must be a boolean")
-        }
-        return value
-    }
-
     func panelCloseError(
         _ reason: FocusedPanelCommandController.CloseRejectionReason
     ) -> AutomationSocketError {
@@ -1777,47 +1789,6 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("windowID does not exist")
         }
         return windowID
-    }
-
-    func resolveWorkspaceSelection(args: [String: AutomationJSONValue]) throws -> WindowWorkspaceSelection {
-        let store = try requiredStore()
-        if let rawWorkspaceID = args.stringValue("workspaceID") {
-            guard let workspaceID = UUID(uuidString: rawWorkspaceID) else {
-                throw AutomationSocketError.invalidPayload("workspaceID must be a UUID")
-            }
-            guard let selection = store.state.workspaceSelection(containingWorkspaceID: workspaceID) else {
-                throw AutomationSocketError.invalidPayload("workspaceID does not exist")
-            }
-            if let rawWindowID = args.stringValue("windowID") {
-                guard let windowID = UUID(uuidString: rawWindowID) else {
-                    throw AutomationSocketError.invalidPayload("windowID must be a UUID")
-                }
-                guard selection.windowID == windowID else {
-                    throw AutomationSocketError.invalidPayload("workspaceID does not belong to windowID")
-                }
-            }
-            return selection
-        }
-
-        if let rawWindowID = args.stringValue("windowID") {
-            guard let windowID = UUID(uuidString: rawWindowID) else {
-                throw AutomationSocketError.invalidPayload("windowID must be a UUID")
-            }
-            guard let selection = store.state.workspaceSelection(in: windowID) else {
-                throw AutomationSocketError.invalidPayload("windowID does not exist")
-            }
-            return selection
-        }
-
-        if let selection = store.state.soleWorkspaceSelection() {
-            return selection
-        }
-
-        if store.state.windows.isEmpty {
-            throw AutomationSocketError.invalidPayload("no window is available")
-        }
-
-        throw AutomationSocketError.invalidPayload("workspaceID or windowID is required when multiple windows exist")
     }
 
     func resolveWorkspaceID(args: [String: AutomationJSONValue]) throws -> UUID {
@@ -2237,6 +2208,7 @@ private extension AppControlExecutor {
         return [
             "windowID": .string(windowID.uuidString),
             "workspaceID": .string(workspaceID.uuidString),
+            "tabID": workspace.tabID(containingPanelID: panelID).map { .string($0.uuidString) } ?? .null,
             "panelID": .string(panelID.uuidString),
             "title": .string(currentTerminalTitle(panelID: panelID, terminalState: terminalState)),
             "cwd": .string(terminalState.cwd),
@@ -2946,20 +2918,6 @@ private extension AppControlExecutor {
                     "primary": .bool(key == workspace.primaryAnnotationKey),
                 ])
             }
-    }
-
-    func optionalUUIDParameter(
-        _ key: String,
-        args: [String: AutomationJSONValue]
-    ) throws -> UUID? {
-        guard let value = args[key] else {
-            return nil
-        }
-        guard case .string(let rawValue) = value,
-              let uuid = UUID(uuidString: rawValue) else {
-            throw AutomationSocketError.invalidPayload("\(key) must be a UUID")
-        }
-        return uuid
     }
 
     static func sha256Hex(_ string: String) -> String {
