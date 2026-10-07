@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The merge control under a subspace's title in the top bar: the Merge
 /// button with a menu that picks what it does, its in-progress form while
-/// the agent works on the merge, the cleanup that follows a Merge and Clean
-/// Up, or the done label. It takes the subtitle slot, so it has to fit the
+/// the agent works on the merge, the cleanup that follows a Merge and Clean,
+/// or the done label. It takes the subtitle slot, so it has to fit the
 /// 16pt the top bar leaves under the title.
 struct WorkspaceHeaderMergeControl: View {
     let presentation: WorkspaceMergePresentation

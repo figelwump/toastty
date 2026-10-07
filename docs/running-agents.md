@@ -442,7 +442,7 @@ need the user's review and a new `worktree-done` request.
 A subspace with a `github-pr` annotation shows a Merge button under its title
 in the top bar. The arrow beside it picks what the button does:
 
-- **Merge and Clean Up**, the default, labels the button **Merge & Clean Up
+- **Merge and Clean**, the default, labels the button **Merge & Clean
   PR #N**. After the pull request merges, Toastty closes the workspace, removes
   its worktree, and deletes its branches.
 - **Just Merge** labels the button **Merge PR #N** and leaves the workspace in
@@ -480,7 +480,7 @@ merge prerequisite, the button offers the merge again; answer the agent in
 its session and the done mark still lands when it finishes. Top-level
 workspaces do not show the button, because only a subspace holds a done mark.
 
-After a Merge and Clean Up, the done mark does not end the work. The agent
+After a Merge and Clean, the done mark does not end the work. The agent
 usually turns on auto-merge, so the pull request merges only when its checks
 pass. Until then the button reads **Cleans Up When PR #N Merges**. Toastty
 checks the pull request with `gh pr view` every 30 seconds. When it has merged,

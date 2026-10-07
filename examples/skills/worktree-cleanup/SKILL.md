@@ -75,7 +75,7 @@ repeated runs are harmless.
 `--pr <number>` limits the report and cleanup to one PR, fetched directly. With
 `--pr`, `--workspace <id>` names the only workspace cleanup may close; the row is
 skipped unless that workspace is the match and is still marked done. Toastty's
-Merge and Clean Up button runs the script this way. Each cleaned-up row's JSON
+Merge and Clean button runs the script this way. Each cleaned-up row's JSON
 `cleanup_status` is `cleaned`, `partial`, `stopped`, or `skipped`.
 
 Report what was cleaned up, including any sessions or busy terminals that closing

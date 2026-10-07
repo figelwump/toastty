@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import ToasttyApp
 
-/// Runs Merge and Clean Up's cleanup for real: the live command runner, the
+/// Runs Merge and Clean's cleanup for real: the live command runner, the
 /// cleanup script bundled in the app, the `toastty` CLI from the app bundle,
 /// and an automation socket server bound to the store. Git works on a
 /// disposable repository with a local bare origin, and a fake `gh` reports

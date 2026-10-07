@@ -14,7 +14,7 @@ enum WorkspaceMergeMode: String, CaseIterable, Sendable {
     var menuTitle: String {
         switch self {
         case .mergeAndCleanUp:
-            return "Merge and Clean Up"
+            return "Merge and Clean"
         case .mergeOnly:
             return "Just Merge"
         }
@@ -23,7 +23,7 @@ enum WorkspaceMergeMode: String, CaseIterable, Sendable {
 
 /// What a subspace with a pull request shows for merging it: the Merge
 /// button in the user's chosen mode, its in-progress form, the cleanup that
-/// follows a Merge and Clean Up, or the done label. Top-level workspaces and
+/// follows a Merge and Clean, or the done label. Top-level workspaces and
 /// subspaces without a `github-pr` annotation show nothing.
 enum WorkspaceMergePresentation: Equatable {
     case ready(pullRequest: String, mode: WorkspaceMergeMode)
@@ -85,7 +85,7 @@ enum WorkspaceMergePresentation: Equatable {
     static func actionTitle(mode: WorkspaceMergeMode, pullRequest: String) -> String {
         switch mode {
         case .mergeAndCleanUp:
-            return "Merge & Clean Up \(pullRequest)"
+            return "Merge & Clean \(pullRequest)"
         case .mergeOnly:
             return "Merge \(pullRequest)"
         }
@@ -164,7 +164,7 @@ struct WorkspaceMergeController {
         /// cannot be handed the merge prompt.
         case profileCannotTakePrompt(profileID: String)
         case launchFailed(String)
-        /// Merge and Clean Up needs the task's checkout, and no session or
+        /// Merge and Clean needs the task's checkout, and no session or
         /// terminal in the workspace has a directory to find it from.
         case noCheckoutPath
         /// The `github-pr` annotation names no pull request number.

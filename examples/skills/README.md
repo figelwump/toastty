@@ -22,7 +22,7 @@ that workspace. It checks that the worktree matches the PR, enables auto-merge,
 and marks the workspace done, which its subspace row shows as a check; it never
 closes its own workspace.
 
-In Toastty, the subspace's **Merge & Clean Up** button does both steps: it asks
+In Toastty, the subspace's **Merge & Clean** button does both steps: it asks
 the task's agent to run `worktree-done`, and after the PR merges Toastty runs
 `worktree-cleanup`'s script on that one PR and workspace.
 

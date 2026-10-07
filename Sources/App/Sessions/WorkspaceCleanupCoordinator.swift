@@ -172,7 +172,7 @@ struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
     }
 }
 
-/// Carries out Merge and Clean Up after the agent's part. Once the workspace
+/// Carries out Merge and Clean after the agent's part. Once the workspace
 /// is marked done it checks the pull request with `gh`, and when the pull
 /// request has merged it runs the bundled `worktree-cleanup` status script on
 /// that one pull request and workspace. The script closes the workspace,
@@ -231,7 +231,7 @@ final class WorkspaceCleanupCoordinator {
 
     // MARK: - Requests
 
-    /// Records that the user chose Merge and Clean Up for `workspaceID`. A
+    /// Records that the user chose Merge and Clean for `workspaceID`. A
     /// later Just Merge replaces it with `cancelCleanup`.
     func requestCleanup(workspaceID: UUID, pullRequestNumber: Int, repoPath: String) {
         guard requests[workspaceID]?.phase != .cleaningUp else { return }

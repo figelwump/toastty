@@ -339,7 +339,7 @@ struct WorkspaceMergeTests {
         let fixture = try WorkspaceMergeFixture()
         fixture.store.setWorkspaceMergeMode(.mergeAndCleanUp)
         fixture.startAgent(repoRoot: "/work/toastty-fix-question")
-        #expect(fixture.presentation?.title == "Merge & Clean Up PR #59")
+        #expect(fixture.presentation?.title == "Merge & Clean PR #59")
 
         fixture.merge()
 

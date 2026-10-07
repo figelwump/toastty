@@ -54,7 +54,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// Merges the user started with a workspace's Merge button and that the
     /// target agent has not finished or dropped yet, by workspace.
     @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
-    /// Merge and Clean Up requests by workspace, published for the Merge
+    /// Merge and Clean requests by workspace, published for the Merge
     /// button. `WorkspaceCleanupCoordinator` owns and updates them.
     @Published private(set) var workspaceCleanupRequests: [UUID: WorkspaceCleanupRequest] = [:]
     /// Set once at launch; runs the cleanups that the Merge button requests.

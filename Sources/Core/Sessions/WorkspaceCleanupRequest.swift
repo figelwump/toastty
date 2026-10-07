@@ -1,6 +1,6 @@
 import Foundation
 
-/// A cleanup the user asked for with Merge and Clean Up: once the workspace's
+/// A cleanup the user asked for with Merge and Clean: once the workspace's
 /// pull request merges, Toastty closes the workspace, removes its worktree,
 /// and deletes its branches. It outlives the merge request, because the agent
 /// can stop to ask about a prerequisite and set the done mark in a later turn,
