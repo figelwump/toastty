@@ -2116,7 +2116,70 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(rootView, name: "sidebar-subspaces-sorted")
     }
 
+    func testOffscreenSubspacesDriveScrollPillsAndClearWhenVisibleOrDone() throws {
+        let (harness, ids) = try makeSubspacesHarness()
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        // Keep the parent quiet so only the subspaces can supply these signals.
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "spawner", status: SessionStatus(kind: .idle, summary: "Idle"), at: Date()
+        )
+
+        func settle(height: CGFloat) {
+            harness.window.setContentSize(NSSize(width: ToastyTheme.sidebarWidth, height: height))
+            pumpMainRunLoop(duration: 0.6)
+            rootView.layoutSubtreeIfNeeded()
+        }
+        func hiddenBelowLabel() -> String? {
+            renderedTextValues(in: rootView).first { $0.contains("subspaces hidden below") }
+        }
+
+        settle(height: 160)
+        var label = try XCTUnwrap(hiddenBelowLabel(), "\(renderedTextValues(in: rootView))")
+        XCTAssertTrue(label.contains("4 subspaces hidden below"), label)
+        XCTAssertTrue(label.contains("1 unread"), label)
+        XCTAssertTrue(label.contains("working"), label)
+        try writeSidebarEvidence(rootView, name: "sidebar-offscreen-subspaces")
+
+        // A done mark suppresses the ready signal, as it does on the row itself.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        settle(height: 160)
+        label = try XCTUnwrap(hiddenBelowLabel())
+        XCTAssertFalse(label.contains("unread"), label)
+        XCTAssertTrue(label.contains("working"), label)
+
+        settle(height: 600)
+        try writeSidebarEvidence(rootView, name: "sidebar-visible-subspaces")
+        XCTAssertNil(hiddenBelowLabel())
+        // Collapsed rows use the group header's position, not stale row frames.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: nil))
+        settle(height: 600)
+        try clickSemanticText(prefix: "4 subspaces, expanded", in: rootView)
+        settle(height: 160)
+        label = try XCTUnwrap(hiddenBelowLabel())
+        XCTAssertTrue(label.contains("4 subspaces hidden below"), label)
+        XCTAssertTrue(label.contains("working"), label)
+        XCTAssertTrue(label.contains("1 unread"), label)
+        try writeSidebarEvidence(rootView, name: "sidebar-offscreen-collapsed-subspaces")
+
+        settle(height: 600)
+        XCTAssertNil(hiddenBelowLabel())
+    }
+
     func testSubspaceWaitingPillFollowsBackgroundShellStateAndFitsWithAnnotation() throws {
+        func waitForStatusWithoutWaitingChip(_ status: String, in rootView: NSView) {
+            let deadline = Date().addingTimeInterval(1)
+            repeat {
+                pumpMainRunLoop(duration: 0.05)
+                rootView.layoutSubtreeIfNeeded()
+                let text = renderedTextValues(in: rootView)
+                if text.contains("waiting") == false,
+                   text.contains(where: { $0.hasPrefix("qa-update-visitor-fixture, subspace, \(status)") }) {
+                    return
+                }
+            } while Date() < deadline
+        }
+
         for (width, annotation, showsPill, showsAnnotation) in [
             (ToastyTheme.sidebarWidth, "PR #58", true, true),
             (ToastyTheme.sidebarWidth, "ENG-1234-fix", true, false),
@@ -2159,8 +2222,7 @@ final class SidebarViewTests: XCTestCase {
                 status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve review command"),
                 at: now.addingTimeInterval(2)
             )
-            pumpMainRunLoop()
-            rootView.layoutSubtreeIfNeeded()
+            waitForStatusWithoutWaitingChip("needs approval", in: rootView)
             XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
             XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, needs approval") })
 
@@ -2170,8 +2232,7 @@ final class SidebarViewTests: XCTestCase {
                 status: SessionStatus(kind: .working, summary: "Working", detail: "Reading review findings"),
                 at: now.addingTimeInterval(3)
             )
-            pumpMainRunLoop()
-            rootView.layoutSubtreeIfNeeded()
+            waitForStatusWithoutWaitingChip("working", in: rootView)
             XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
             XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, working") })
 
