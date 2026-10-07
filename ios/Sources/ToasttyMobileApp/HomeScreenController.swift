@@ -522,11 +522,11 @@ final class HomeScreenController {
             .first { $0.id == id }
     }
 
-    /// Sessions other than `conversationID` that want the user, for the
-    /// conversation screen's Next button. Approvals come first because they
+    /// Sessions that want the user, for the app badge and the conversation
+    /// screen's Next button. Approvals come first because they
     /// block an agent, then errors, then unread finished turns; within a
-    /// status, Home's recency order applies.
-    func sessionsNeedingAttention(excluding conversationID: UUID) -> [MobileConversation] {
+    /// status, Home's recency order applies. Next excludes its current session.
+    func sessionsNeedingAttention(excluding conversationID: UUID? = nil) -> [MobileConversation] {
         // A finished turn in a subspace marked done is one the user already
         // waved off, often the very turn that set the mark.
         let doneSubspaceIDs = Set(snapshot.workspaces.lazy.filter {

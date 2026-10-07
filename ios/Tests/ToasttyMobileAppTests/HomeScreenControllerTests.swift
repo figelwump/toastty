@@ -630,6 +630,7 @@ final class HomeScreenControllerTests: XCTestCase {
         // Fixture: 1 (2m) and 9 (5m) need approval, 4 has an error, 7 (9m),
         // 3 (18m), 10 (25m) and 8 (3h) are ready. 12 is ready too, but its
         // subspace is marked done, so it is left out.
+        XCTAssertEqual(controller.sessionsNeedingAttention().map(\.id), ids([1, 9, 4, 7, 3, 10, 8]))
         XCTAssertEqual(
             controller.sessionsNeedingAttention(excluding: ids([7])[0]).map(\.id),
             ids([1, 9, 4, 3, 10, 8])
@@ -638,6 +639,11 @@ final class HomeScreenControllerTests: XCTestCase {
             controller.sessionsNeedingAttention(excluding: ids([1])[0]).map(\.id),
             ids([9, 4, 7, 3, 10, 8])
         )
+        let readySubspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000012")!
+        controller.setSubspaceDone(readySubspaceID, isDone: true)
+        XCTAssertEqual(controller.sessionsNeedingAttention().count, 6)
+        controller.setSubspaceDone(readySubspaceID, isDone: false)
+        XCTAssertEqual(controller.sessionsNeedingAttention().count, 7)
     }
 
     func testConnectionNoticeClassifiesTransportFailures() {

@@ -4,6 +4,22 @@ import XCTest
 @testable import ToasttyMobileDomain
 
 final class ToasttyMobileAppConfigurationTests: XCTestCase {
+    func testSystemBadgeIsDisabledInOrdinaryFixturesTestsAndPreviews() {
+        for key in ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCODE_RUNNING_FOR_PREVIEWS"] {
+            let configuration = ToasttyMobileAppConfiguration(environment: [key: "1"], infoDictionary: [:])
+            XCTAssertFalse(configuration.enablesSystemAppIconBadge)
+        }
+        XCTAssertTrue(ToasttyMobileAppConfiguration(environment: [:], infoDictionary: [:]).enablesSystemAppIconBadge)
+#if DEBUG
+        let fixture = ToasttyMobileAppConfiguration(environment: ["TOASTTY_MOBILE_USE_FIXTURE": "1"], infoDictionary: [:])
+        XCTAssertFalse(fixture.enablesSystemAppIconBadge)
+        let badgeFixture = ToasttyMobileAppConfiguration(environment: [
+            "TOASTTY_MOBILE_USE_FIXTURE": "1", "TOASTTY_MOBILE_FIXTURE_APP_BADGE": "1",
+        ], infoDictionary: [:])
+        XCTAssertTrue(badgeFixture.enablesSystemAppIconBadge)
+#endif
+    }
+
     func testUnconfiguredAppStartsEmptyForPairing() {
         let configuration = ToasttyMobileAppConfiguration(
             environment: [:],
