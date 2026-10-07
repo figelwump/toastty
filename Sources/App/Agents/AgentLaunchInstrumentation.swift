@@ -793,29 +793,6 @@ private extension AgentLaunchInstrumentation {
                 ],
             ],
         ]
-        let agentPostToolUseCommandHook: [String: Any] = [
-            "matcher": "Agent",
-            "hooks": [
-                [
-                    "type": "command",
-                    "command": command,
-                ],
-            ],
-        ]
-        let taskPostToolUseCommandHook: [String: Any] = [
-            "matcher": "Task",
-            "hooks": [
-                [
-                    "type": "command",
-                    "command": command,
-                ],
-            ],
-        ]
-
-        let questionCommandHook: [String: Any] = [
-            "matcher": "AskUserQuestion",
-            "hooks": [["type": "command", "command": command]],
-        ]
         // Give the response runner time to release the host lease before
         // Claude cancels the command itself, using the same response limit.
         let permissionCommandHook: [String: Any] = [
@@ -831,10 +808,11 @@ private extension AgentLaunchInstrumentation {
         appendClaudeHookEntry(commandHook, to: "SessionEnd", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "SubagentStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "SubagentStop", in: &hooks)
-        appendClaudeHookEntry(agentPostToolUseCommandHook, to: "PostToolUse", in: &hooks)
-        appendClaudeHookEntry(taskPostToolUseCommandHook, to: "PostToolUse", in: &hooks)
-        appendClaudeHookEntry(questionCommandHook, to: "PostToolUse", in: &hooks)
-        appendClaudeHookEntry(questionCommandHook, to: "PostToolUseFailure", in: &hooks)
+        appendClaudeHookEntry(commandHook, to: "TeammateIdle", in: &hooks)
+        // Child tool completion clears an approval even if the teammate uses
+        // no further tools before returning to idle. Use one hook per event.
+        appendClaudeHookEntry(wildcardCommandHook, to: "PostToolUse", in: &hooks)
+        appendClaudeHookEntry(wildcardCommandHook, to: "PostToolUseFailure", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PreToolUse", in: &hooks)
         appendClaudeHookEntry(permissionCommandHook, to: "PermissionRequest", in: &hooks)
         // Keep both PermissionRequest and Notification coverage. Claude surfaces

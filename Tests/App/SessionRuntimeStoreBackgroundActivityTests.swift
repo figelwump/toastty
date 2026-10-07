@@ -361,6 +361,237 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func claudeTeammateIdleBeforeSpawnRetainsMetadataForNextTurn() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_210)
+        let sessionID = "sess-claude-teammate-late-spawn"
+        let rootStatus = SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn complete")
+        let executionProfile = SessionAgentExecutionProfile(modelIdentifier: "claude-sonnet-4", reasoningEffort: "high")
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(sessionID: sessionID, status: rootStatus, at: now)
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .finished, agentID: "reviewer@team"),
+            at: now.addingTimeInterval(1)
+        ) == false)
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(
+                phase: .spawned,
+                agentID: "reviewer@team",
+                displayName: "Reviewer",
+                command: "Inspect the diff",
+                executionProfile: executionProfile
+            ),
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID.isEmpty == true)
+        #expect(store.workspaceStatuses(for: workspaceID, at: now.addingTimeInterval(2)).first?.status == rootStatus)
+
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .started, agentID: "reviewer@team"),
+            at: now.addingTimeInterval(3)
+        ))
+        let activity = try #require(store.sessionRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID["reviewer@team"])
+        #expect(activity.displayName == "Reviewer")
+        #expect(activity.command == "Inspect the diff")
+        #expect(activity.executionProfile == executionProfile)
+        #expect(activity.preserveWhenUnlisted)
+        #expect(activity.startedAt == now.addingTimeInterval(3))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .finished, agentID: "reviewer@team"),
+            at: now.addingTimeInterval(4)
+        ))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .toolUse, agentID: "reviewer@team", detail: "Late child tool event"),
+            at: now.addingTimeInterval(5)
+        ) == false)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID.isEmpty == true)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status == rootStatus)
+    }
+
+    @Test(arguments: [false, true])
+    func claudeTeammateRuntimeStateDoesNotCrossSessionLifecycles(resetStore: Bool) {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_220)
+        let sessionID = "sess-claude-teammate-restart"
+        let approvalStatus = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command")
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .ready, summary: "Ready"), at: now)
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .spawned, agentID: "reviewer@team"),
+            at: now
+        ))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .permission, agentID: "reviewer@team", detail: approvalStatus.detail),
+            at: now.addingTimeInterval(1)
+        ))
+        if resetStore {
+            store.reset()
+        } else {
+            store.stopSession(sessionID: sessionID, at: now.addingTimeInterval(2))
+        }
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now.addingTimeInterval(3)
+        )
+        // A new lifecycle can report the same approval payload and timestamp.
+        // The old teammate must not reopen or restore its old root status.
+        store.updateStatus(sessionID: sessionID, status: approvalStatus, at: now.addingTimeInterval(1))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .started, agentID: "reviewer@team"),
+            at: now.addingTimeInterval(4)
+        ) == false)
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .finished, agentID: "reviewer@team"),
+            at: now.addingTimeInterval(5)
+        ) == false)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID.isEmpty == true)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status == approvalStatus)
+    }
+
+    @Test
+    func rootStatusWithSamePayloadAndTimestampSupersedesClaudeTeammateApproval() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_230)
+        let sessionID = "sess-claude-teammate-root-supersession"
+        let approvalDate = now.addingTimeInterval(1)
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .ready, summary: "Ready"), at: now)
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .spawned, agentID: "reviewer@team"),
+            at: now
+        ))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .permission, agentID: "reviewer@team", detail: "Approve command"),
+            at: approvalDate
+        ))
+        let approvalStatus = try #require(store.sessionRegistry.sessionsByID[sessionID]?.status)
+        store.updateStatus(sessionID: sessionID, status: approvalStatus, at: approvalDate)
+
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .toolCompleted, agentID: "reviewer@team"),
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status == approvalStatus)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.statusUpdatedAt == approvalDate)
+    }
+
+    @Test
+    func claudeTeammateParallelToolApprovalsResolveOnlyMatchingCalls() {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_240)
+        let sessionID = "sess-claude-teammate-parallel-approvals"
+        let rootStatus = SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn complete")
+        let agentID = "reviewer@team"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(sessionID: sessionID, status: rootStatus, at: now)
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .spawned, agentID: agentID),
+            at: now
+        ))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .permission, agentID: agentID, toolUseID: "call-1", detail: "Approve first command"),
+            at: now.addingTimeInterval(1)
+        ))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .permission, agentID: agentID, toolUseID: "call-2", detail: "Approve second command"),
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .permission, agentID: agentID, detail: "Permission notification"),
+            at: now.addingTimeInterval(3)
+        ))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .toolCompleted, agentID: agentID, toolUseID: "unrelated-call"),
+            at: now.addingTimeInterval(4)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status?.kind == .needsApproval)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status?.detail == "Permission notification")
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .toolCompleted, agentID: agentID, toolUseID: "call-2"),
+            at: now.addingTimeInterval(5)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status?.kind == .needsApproval)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status?.detail == "Approve first command")
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .finished, agentID: agentID),
+            at: now.addingTimeInterval(6)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status == rootStatus)
+    }
+
+    @Test
     func codexSubagentHooksFinishAndAuthoritativelyReopenActivity() throws {
         let store = SessionRuntimeStore()
         defer { store.reset() }

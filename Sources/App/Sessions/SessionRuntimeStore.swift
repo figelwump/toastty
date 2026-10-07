@@ -119,6 +119,10 @@ final class SessionRuntimeStore: ObservableObject {
     private var resumeGraceRepublishExpiry: Date?
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private var codexSubagentReconcilerBySessionID: [String: CodexSubagentReconciler] = [:]
+    /// Teammate metadata outlives each active turn so a resumed teammate can
+    /// reuse its row without keeping an idle teammate in the waiting count.
+    private var claudeTeammateTemplatesBySessionID: [String: [String: SessionBackgroundActivity]] = [:]
+    private var claudeTeammateApprovalsBySessionID: [String: ClaudeTeammateApprovalState] = [:]
     private static let backgroundActivityFinishTombstoneTTL: TimeInterval = 120
     private static let pendingPanelParentSessionIDTTL: TimeInterval = 120
     private static let maximumPidlessSubagentBackgroundActivityAge: TimeInterval = 30 * 60
@@ -133,6 +137,24 @@ final class SessionRuntimeStore: ObservableObject {
     /// kind the session transitioned from when `ready` was first requested.
     private struct PendingHookReady: Equatable {
         let previousKind: SessionStatusKind?
+    }
+
+    private struct ClaudeTeammateApprovalKey: Hashable {
+        let agentID: String
+        let toolUseID: String?
+    }
+
+    private struct ClaudeTeammateApproval {
+        let status: SessionStatus
+        let requestedAt: Date
+    }
+
+    private struct ClaudeTeammateApprovalState {
+        let priorStatus: SessionStatus?
+        var pendingByKey: [ClaudeTeammateApprovalKey: ClaudeTeammateApproval]
+        var lastWrittenKey: ClaudeTeammateApprovalKey
+        var lastWrittenStatus: SessionStatus
+        var lastWrittenAt: Date
     }
 
     enum CodexStatusInfoEvent: Equatable {
@@ -267,6 +289,8 @@ final class SessionRuntimeStore: ObservableObject {
         providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
         codexSubagentReconcilerBySessionID = [:]
+        claudeTeammateTemplatesBySessionID = [:]
+        claudeTeammateApprovalsBySessionID = [:]
         pendingPanelParentSessionIDs = [:]
         for task in providerSessionNameRefreshTaskBySessionID.values {
             task.cancel()
@@ -552,6 +576,8 @@ final class SessionRuntimeStore: ObservableObject {
         }
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
+        claudeTeammateTemplatesBySessionID.removeValue(forKey: sessionID)
+        claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
         completedHookLifecycleSessionIDs.remove(sessionID)
         clearHookTransitionState(sessionID: sessionID)
@@ -673,6 +699,10 @@ final class SessionRuntimeStore: ObservableObject {
         status: SessionStatus,
         at now: Date
     ) {
+        // A root event owns the status even when its payload and timestamp
+        // match the last teammate approval. Later child events cannot restore
+        // the status that preceded that root event.
+        claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
         updateStatus(
             sessionID: sessionID,
             status: status,
@@ -2090,6 +2120,176 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     @discardableResult
+    func handleClaudeSubagentEvent(
+        sessionID: String,
+        event: ClaudeSubagentEvent,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .claude else {
+            return false
+        }
+        discardSupersededClaudeTeammateApprovals(sessionID: sessionID)
+
+        switch event.phase {
+        case .spawned:
+            let previousTemplate = claudeTeammateTemplatesBySessionID[sessionID]?[event.agentID]
+            let previousActivity = previousTemplate ?? record.backgroundActivitiesByID[event.agentID]
+            let executionProfile = SessionAgentExecutionProfile(
+                modelIdentifier: event.executionProfile?.modelIdentifier ?? previousActivity?.executionProfile?.modelIdentifier,
+                reasoningEffort: event.executionProfile?.reasoningEffort ?? previousActivity?.executionProfile?.reasoningEffort
+            )
+            let template = SessionBackgroundActivity(
+                id: event.agentID,
+                kind: .subagent,
+                displayName: event.displayName ?? previousActivity?.displayName,
+                command: event.command ?? previousActivity?.command,
+                executionProfile: executionProfile,
+                preserveWhenUnlisted: true,
+                startedAt: now,
+                lastUpdatedAt: now
+            )
+            claudeTeammateTemplatesBySessionID[sessionID, default: [:]][event.agentID] = template
+            // Keep the template even when an earlier idle event tombstoned the
+            // row. Only a later authoritative start can reopen that teammate.
+            let didUpdate = updateBackgroundActivity(sessionID: sessionID, activity: template, at: now)
+            return didUpdate || previousTemplate != template
+
+        case .started:
+            guard var activity = claudeTeammateTemplatesBySessionID[sessionID]?[event.agentID] else {
+                return false
+            }
+            activity.startedAt = now
+            activity.lastUpdatedAt = now
+            return reopenBackgroundActivity(sessionID: sessionID, activity: activity, at: now)
+
+        case .finished:
+            let didFinish = finishBackgroundActivity(sessionID: sessionID, activityID: event.agentID, at: now)
+            let didResolveApproval = resolveClaudeTeammateApproval(sessionID: sessionID, event: event, at: now)
+            return didFinish || didResolveApproval
+
+        case .toolUse, .toolCompleted:
+            guard claudeTeammateTemplatesBySessionID[sessionID]?[event.agentID] != nil else {
+                guard event.phase == .toolUse else { return false }
+                claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
+                updateStatus(
+                    sessionID: sessionID,
+                    status: SessionStatus(kind: .working, summary: "Working", detail: event.detail),
+                    at: now
+                )
+                return true
+            }
+            let didResolveApproval = resolveClaudeTeammateApproval(sessionID: sessionID, event: event, at: now)
+            guard var activity = sessionRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID[event.agentID] else {
+                return didResolveApproval
+            }
+            activity.lastUpdatedAt = now
+            let didUpdate = updateBackgroundActivity(sessionID: sessionID, activity: activity, at: now)
+            return didUpdate || didResolveApproval
+
+        case .permission:
+            let status = SessionStatus(kind: .needsApproval, summary: event.summary ?? "Needs approval", detail: event.detail)
+            guard claudeTeammateTemplatesBySessionID[sessionID]?[event.agentID] != nil else {
+                claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
+                updateStatus(sessionID: sessionID, status: status, at: now)
+                return true
+            }
+            var key = ClaudeTeammateApprovalKey(agentID: event.agentID, toolUseID: event.toolUseID)
+            var approvals = claudeTeammateApprovalsBySessionID[sessionID] ?? ClaudeTeammateApprovalState(
+                priorStatus: record.status,
+                pendingByKey: [:],
+                lastWrittenKey: key,
+                lastWrittenStatus: status,
+                lastWrittenAt: now
+            )
+            if event.toolUseID == nil {
+                // Permission notifications can repeat a request without its
+                // tool ID. Update that teammate's displayed or latest request
+                // rather than adding an unresolvable extra approval.
+                if approvals.lastWrittenKey.agentID == event.agentID,
+                   approvals.pendingByKey[approvals.lastWrittenKey] != nil {
+                    key = approvals.lastWrittenKey
+                } else if let latest = approvals.pendingByKey
+                    .filter({ $0.key.agentID == event.agentID })
+                    .max(by: { $0.value.requestedAt < $1.value.requestedAt }) {
+                    key = latest.key
+                }
+            }
+            approvals.pendingByKey[key] = ClaudeTeammateApproval(
+                status: status,
+                requestedAt: approvals.pendingByKey[key]?.requestedAt ?? now
+            )
+            updateClaudeTeammateApprovalStatus(sessionID: sessionID, status: status, at: now)
+            approvals.lastWrittenKey = key
+            approvals.lastWrittenStatus = sessionRegistry.sessionsByID[sessionID]?.status ?? status
+            approvals.lastWrittenAt = sessionRegistry.sessionsByID[sessionID]?.statusUpdatedAt ?? now
+            claudeTeammateApprovalsBySessionID[sessionID] = approvals
+            return true
+        }
+    }
+
+    private func discardSupersededClaudeTeammateApprovals(sessionID: String) {
+        guard let approvals = claudeTeammateApprovalsBySessionID[sessionID],
+              let record = sessionRegistry.sessionsByID[sessionID] else { return }
+        if record.status != approvals.lastWrittenStatus || record.statusUpdatedAt != approvals.lastWrittenAt {
+            claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
+        }
+    }
+
+    private func updateClaudeTeammateApprovalStatus(sessionID: String, status: SessionStatus, at now: Date) {
+        updateStatus(
+            sessionID: sessionID,
+            status: status,
+            isUIOnlyReadyCollapse: false,
+            statusUpdateSource: "claude_teammate",
+            codexHookEvent: nil,
+            at: now
+        )
+    }
+
+    private func resolveClaudeTeammateApproval(sessionID: String, event: ClaudeSubagentEvent, at now: Date) -> Bool {
+        discardSupersededClaudeTeammateApprovals(sessionID: sessionID)
+        guard var approvals = claudeTeammateApprovalsBySessionID[sessionID] else {
+            return false
+        }
+        let resolvedKeys = approvals.pendingByKey.keys.filter { key in
+            key.agentID == event.agentID && (
+                event.phase == .finished || key.toolUseID == nil || key.toolUseID == event.toolUseID
+            )
+        }
+        guard resolvedKeys.isEmpty == false else { return false }
+        for key in resolvedKeys {
+            approvals.pendingByKey.removeValue(forKey: key)
+        }
+        let latestRemainingKey = approvals.pendingByKey.max { lhs, rhs in
+            if lhs.value.requestedAt != rhs.value.requestedAt {
+                return lhs.value.requestedAt < rhs.value.requestedAt
+            }
+            if lhs.key.agentID != rhs.key.agentID {
+                return lhs.key.agentID < rhs.key.agentID
+            }
+            return (lhs.key.toolUseID ?? "") < (rhs.key.toolUseID ?? "")
+        }?.key
+        let remainingKey = approvals.pendingByKey[approvals.lastWrittenKey] != nil
+            ? approvals.lastWrittenKey : latestRemainingKey
+        guard let remainingKey, let remainingApproval = approvals.pendingByKey[remainingKey] else {
+            claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
+            updateClaudeTeammateApprovalStatus(
+                sessionID: sessionID,
+                status: approvals.priorStatus ?? SessionStatus(kind: .ready, summary: "Ready"),
+                at: now
+            )
+            return true
+        }
+        updateClaudeTeammateApprovalStatus(sessionID: sessionID, status: remainingApproval.status, at: now)
+        approvals.lastWrittenKey = remainingKey
+        approvals.lastWrittenStatus = sessionRegistry.sessionsByID[sessionID]?.status ?? remainingApproval.status
+        approvals.lastWrittenAt = sessionRegistry.sessionsByID[sessionID]?.statusUpdatedAt ?? now
+        claudeTeammateApprovalsBySessionID[sessionID] = approvals
+        return true
+    }
+
+    @discardableResult
     func handleGrokHookEvent(sessionID: String, event: GrokHookEvent, at now: Date) -> GrokHookState.Update? {
         guard sessionRegistry.activeSession(sessionID: sessionID)?.agent == .grok else { return nil }
         var state = grokHookStatesBySessionID[sessionID] ?? GrokHookState()
@@ -2703,6 +2903,8 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
+        claudeTeammateTemplatesBySessionID.removeValue(forKey: sessionID)
+        claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
         cancelProviderSessionNameRefresh(sessionID: sessionID)
         cancelProviderSessionNamePolling(sessionID: sessionID)
         providerSessionNamePolledSourceBySessionID.removeValue(forKey: sessionID)

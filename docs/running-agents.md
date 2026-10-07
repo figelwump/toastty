@@ -357,9 +357,11 @@ When the profile ID is `claude`, Toastty:
    - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
-   - `PostToolUse` for `Agent` and `Task` — tracks asynchronously launched Claude subagents with available launch metadata
-   - `SubagentStart` — tracks children launched by Claude dynamic workflows
+   - `PostToolUse` — tracks launched subagents and named teammates with available metadata; child tool completion clears that child's approval
+   - `PostToolUseFailure` — clears completed child approvals and question requests
+   - `SubagentStart` — tracks Workflow children and resumes known teammates
    - `SubagentStop` — removes completed Claude subagent rows
+   - `TeammateIdle` — removes an idle teammate's active row when Claude supplies its agent ID
    - `PreToolUse` (wildcard matcher) — fires before any tool use
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
    - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
@@ -935,7 +937,22 @@ their child IDs, so `SubagentStart` creates one generic row per Workflow child;
 those lifecycle-owned rows remain visible through Claude's aggregate Workflow
 snapshot until their matching `SubagentStop` events arrive.
 
-Toastty-owned provider integrations report this activity through the internal
+Named in-process teammates are registered from Claude's `teammate_spawned`
+response. Their lifetime entries in a root Stop snapshot do not count as pending
+work. `SubagentStart` reopens a known teammate, and `SubagentStop` or
+`TeammateIdle` removes its active row. An idle teammate can stay alive without
+keeping the workspace in **Waiting**. A real shell job still keeps it waiting
+until Claude's next Stop snapshot removes that job. These events were verified
+with Claude Code 2.1.293 in in-process mode; split-pane teammates are not covered.
+
+A known teammate's tool events update its own activity instead of setting the
+main session to **Working**. Child approval requests still show **Needs approval**.
+When the child continues or finishes, Toastty restores the prior main status
+unless a newer main event has replaced it. New managed launches receive the
+updated hooks; an already-running Claude process must be relaunched to use them.
+
+Toastty-owned provider integrations report this activity through internal
+provider events such as `session.claude_subagent_event`, or through the
 `session background-activity` CLI command and `session.background_activity`
 socket event. Custom agents should normally use the ordinary `session status`,
 `session update-files`, and `session stop` commands instead.
