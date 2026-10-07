@@ -258,7 +258,10 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertEqual(merges.map(\.1), [.mergeAndCleanUp, .mergeOnly])
 
         // While the merge is under way the key does nothing and is consumed.
-        sessionRuntimeStore.beginWorkspaceMergeRequest(workspaceID: taskWorkspaceID, sessionID: nil)
+        let pullRequest = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/59"))
+        sessionRuntimeStore.setWorkspaceMergeRequests([
+            taskWorkspaceID: WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: "/work/task", phase: .merging(thenCleanUp: true)),
+        ])
         XCTAssertTrue(interceptor.handle(.mergeWorkspacePullRequest, appOwnedWindowID: windowID))
         XCTAssertEqual(merges.count, 2)
     }

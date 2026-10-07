@@ -887,10 +887,10 @@ struct ToasttyApp: App {
         let sessionRuntimeStore = SessionRuntimeStore(agentHookDispatcher: agentHookDispatcher)
         sessionRuntimeStore.bind(store: store)
         // Kept alive by the session runtime store, which the Merge button reads.
-        _ = WorkspaceCleanupCoordinator(
+        _ = WorkspaceMergeCoordinator(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
-            runner: WorkspaceCleanupLiveCommandRunner(
+            runner: WorkspaceMergeLiveCommandRunner(
                 socketPath: socketPath,
                 cliExecutablePath: cliExecutablePath
             ),
@@ -1184,7 +1184,6 @@ struct ToasttyApp: App {
                 commandPaletteController?.isPresented ?? false
             }
         )
-        let workspaceMergeLaunchService = agentLaunchService
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1199,13 +1198,8 @@ struct ToasttyApp: App {
                 commandPaletteController?.toggle(originWindowID: originWindowID) ?? false
             },
             requestWorkspaceMerge: { workspaceID, mode in
-                WorkspaceMergeController.live(
-                    store: store,
-                    sessionRuntimeStore: sessionRuntimeStore,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                    agentCatalogStore: agentCatalogStore,
-                    agentLaunchService: workspaceMergeLaunchService
-                ).requestMerge(workspaceID: workspaceID, mode: mode)
+                WorkspaceMergeController.live(store: store, sessionRuntimeStore: sessionRuntimeStore)
+                    .requestMerge(workspaceID: workspaceID, mode: mode)
             }
         )
         _store = StateObject(wrappedValue: store)
@@ -1727,7 +1721,6 @@ struct ToasttyApp: App {
         let toasttyConfig = ToasttyConfigStore.load()
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
-        store.setPullRequestMergePrompt(toasttyConfig.pullRequestMergePrompt)
         // Only newly enqueued hook events observe the reloaded path; queued
         // and running invocations drain with their captured path.
         agentHookDispatcher.updateScriptPath(toasttyConfig.agentHookScriptPath)
@@ -2101,7 +2094,6 @@ struct ToasttyApp: App {
     ) {
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
-        store.setPullRequestMergePrompt(toasttyConfig.pullRequestMergePrompt)
         applyConfiguredDefaultTerminalProfile(
             to: store,
             terminalProfileCatalog: terminalProfileCatalog,

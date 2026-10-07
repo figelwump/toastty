@@ -3,30 +3,33 @@ import Foundation
 import Testing
 @testable import ToasttyApp
 
-/// Runs Merge and Clean's cleanup and Close Without Merging for real: the
-/// live command runner, the cleanup script bundled in the app, the `toastty`
-/// CLI from the app bundle, and an automation socket server bound to the
-/// store. Git works on a disposable repository with a local bare origin, and
-/// a fake `gh` reports the pull request in a given state.
+/// Runs Merge and Clean and Close Without Merging for real: the live command
+/// runner, the pull request script bundled in the app, the `toastty` CLI
+/// from the app bundle, and an automation socket server bound to the store.
+/// Git works on a disposable repository with a local bare origin, and a fake
+/// `gh` reports the pull request in a given state and records merges.
 @MainActor
-struct WorkspaceCleanupEndToEndTests: AutomationSocketServerTestSupport {
+struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
     @Test
-    func mergedPullRequestClosesTheWorkspaceRemovesTheWorktreeAndDeletesTheBranches() async throws {
-        try await withScenario(pullRequestState: "MERGED") { scenario in
-            scenario.coordinator.requestCleanup(
-                workspaceID: scenario.taskWorkspaceID,
-                pullRequestNumber: 7,
-                repoPath: scenario.worktree
-            )
-            scenario.store.send(.setWorkspaceDone(workspaceID: scenario.taskWorkspaceID, doneAt: Date()))
-
+    func mergeAndCleanMergesThePullRequestThenClosesTheWorkspaceAndRemovesTheWorktree() async throws {
+        try await withScenario(pullRequestState: "OPEN") { scenario in
             // The script calls back into this test's socket server; the main
             // actor stays free while it runs.
-            for _ in 0..<600 where scenario.sessionRuntimeStore.workspaceCleanupRequests[scenario.taskWorkspaceID] != nil {
+            await scenario.coordinator.merge(
+                workspaceID: scenario.taskWorkspaceID,
+                pullRequest: scenario.pullRequest,
+                repoPath: scenario.worktree,
+                thenCleanUp: true
+            )?.value
+            #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedPullRequestMarker))
+
+            // The first check after the merge finds it merged and cleans up.
+            for _ in 0..<600 where scenario.sessionRuntimeStore.workspaceMergeRequests[scenario.taskWorkspaceID] != nil {
                 try await Task.sleep(for: .milliseconds(50))
             }
 
-            #expect(scenario.sessionRuntimeStore.workspaceCleanupRequests[scenario.taskWorkspaceID] == nil)
+            #expect(scenario.sessionRuntimeStore.workspaceMergeRequests[scenario.taskWorkspaceID] == nil)
             #expect(scenario.notifications.count == 1)
             #expect(
                 scenario.notifications.first?.hasPrefix("Cleaned up PR #7: task-7: closed task-7") == true,
@@ -35,8 +38,10 @@ struct WorkspaceCleanupEndToEndTests: AutomationSocketServerTestSupport {
             #expect(scenario.store.state.workspacesByID[scenario.taskWorkspaceID] == nil)
             #expect(scenario.store.state.workspacesByID[scenario.parentWorkspaceID] != nil)
             #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
-            #expect(try git(["branch", "--list", "task-7"], in: scenario.repo).isEmpty)
-            #expect(try git(["ls-remote", "--heads", "origin", "task-7"], in: scenario.repo).isEmpty)
+            let localBranch = try git(["branch", "--list", "task-7"], in: scenario.repo)
+            let remoteBranch = try git(["ls-remote", "--heads", "origin", "task-7"], in: scenario.repo)
+            #expect(localBranch.isEmpty)
+            #expect(remoteBranch.isEmpty)
         }
     }
 
@@ -46,18 +51,18 @@ struct WorkspaceCleanupEndToEndTests: AutomationSocketServerTestSupport {
             // Close Without Merging needs no done mark.
             await scenario.coordinator.closeWithoutMerging(
                 workspaceID: scenario.taskWorkspaceID,
-                pullRequestNumber: 7,
-                pullRequestURL: "https://github.com/test/repo/pull/7",
+                pullRequest: scenario.pullRequest,
                 repoPath: scenario.worktree
             )?.value
 
-            #expect(scenario.sessionRuntimeStore.workspaceCleanupRequests[scenario.taskWorkspaceID] == nil)
+            #expect(scenario.sessionRuntimeStore.workspaceMergeRequests[scenario.taskWorkspaceID] == nil)
             #expect(scenario.failureAlerts.isEmpty, "\(scenario.failureAlerts)")
             #expect(
                 scenario.notifications.first?.hasPrefix("Closed PR #7 without merging: task-7: closed PR #7; closed task-7") == true,
                 "\(scenario.notifications)"
             )
             #expect(FileManager.default.fileExists(atPath: scenario.closedPullRequestMarker))
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedPullRequestMarker) == false)
             #expect(scenario.store.state.workspacesByID[scenario.taskWorkspaceID] == nil)
             #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
             let localBranch = try git(["branch", "--list", "task-7"], in: scenario.repo)
@@ -72,11 +77,13 @@ struct WorkspaceCleanupEndToEndTests: AutomationSocketServerTestSupport {
         let repo: String
         let worktree: String
         let closedPullRequestMarker: String
+        let mergedPullRequestMarker: String
+        let pullRequest = WorkspacePullRequestLink(annotationURL: "https://github.com/test/repo/pull/7")!
         let store: AppStore
         let sessionRuntimeStore: SessionRuntimeStore
         let parentWorkspaceID: UUID
         let taskWorkspaceID: UUID
-        var coordinator: WorkspaceCleanupCoordinator!
+        var coordinator: WorkspaceMergeCoordinator!
         var notifications: [String] = []
         var failureAlerts: [String] = []
 
@@ -84,6 +91,7 @@ struct WorkspaceCleanupEndToEndTests: AutomationSocketServerTestSupport {
             repo: String,
             worktree: String,
             closedPullRequestMarker: String,
+            mergedPullRequestMarker: String,
             store: AppStore,
             sessionRuntimeStore: SessionRuntimeStore,
             parentWorkspaceID: UUID,
@@ -92,6 +100,7 @@ struct WorkspaceCleanupEndToEndTests: AutomationSocketServerTestSupport {
             self.repo = repo
             self.worktree = worktree
             self.closedPullRequestMarker = closedPullRequestMarker
+            self.mergedPullRequestMarker = mergedPullRequestMarker
             self.store = store
             self.sessionRuntimeStore = sessionRuntimeStore
             self.parentWorkspaceID = parentWorkspaceID
@@ -133,14 +142,22 @@ struct WorkspaceCleanupEndToEndTests: AutomationSocketServerTestSupport {
             "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "url": "https://github.com/test/repo/pull/7",
             "statusCheckRollup": [], "body": "",
         ]
-        let pullRequestJSON = String(decoding: try JSONSerialization.data(withJSONObject: pullRequest), as: UTF8.self)
+        var mergedPullRequest = pullRequest
+        mergedPullRequest["state"] = "MERGED"
+        func json(_ object: [String: Any]) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        }
         let closedPullRequestMarker = root.appendingPathComponent("pr-7-closed").path
+        let mergedPullRequestMarker = root.appendingPathComponent("pr-7-merged").path
         let fakeGh = fakeBin.appendingPathComponent("gh")
+        // `pr view` takes the number from the script and the URL from the
+        // coordinator's check.
         try """
         #!/bin/sh
         case "$1 $2" in
-          "repo view") echo '{"nameWithOwner":"test/repo","defaultBranchRef":{"name":"main"}}' ;;
-          "pr view") echo '\(pullRequestJSON)' ;;
+          "repo view") echo '{"nameWithOwner":"test/repo","defaultBranchRef":{"name":"main"},"mergeCommitAllowed":true}' ;;
+          "pr view") if [ -e '\(mergedPullRequestMarker)' ]; then echo '\(try json(mergedPullRequest))'; else echo '\(try json(pullRequest))'; fi ;;
+          "pr merge") [ "$3" = 7 ] && [ "$4" = --merge ] && [ "$6" = '\(head)' ] && touch '\(mergedPullRequestMarker)' ;;
           "pr close") [ "$3" = 7 ] && touch '\(closedPullRequestMarker)' ;;
           *) echo "unexpected gh call: $*" >&2; exit 1 ;;
         esac
@@ -171,15 +188,16 @@ struct WorkspaceCleanupEndToEndTests: AutomationSocketServerTestSupport {
             repo: repo,
             worktree: worktree,
             closedPullRequestMarker: closedPullRequestMarker,
+            mergedPullRequestMarker: mergedPullRequestMarker,
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
             parentWorkspaceID: parentWorkspaceID,
             taskWorkspaceID: taskWorkspaceID
         )
-        scenario.coordinator = WorkspaceCleanupCoordinator(
+        scenario.coordinator = WorkspaceMergeCoordinator(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
-            runner: WorkspaceCleanupLiveCommandRunner(
+            runner: WorkspaceMergeLiveCommandRunner(
                 socketPath: socketPath,
                 cliExecutablePath: cliPath,
                 pathOverride: "\(fakeBin.path):/usr/bin:/bin"

@@ -453,73 +453,68 @@ The choice applies to every workspace and is kept across launches.
 workspace without a Merge button, the key goes to the terminal as usual. The
 subspace's sidebar context menu offers both actions.
 
-The merge itself is the same in both modes. Clicking the button sends a merge
-prompt to an agent session in that workspace, as if you had typed it there. The built-in prompt says you reviewed the pull request
-and want it merged, and tells the agent to use the `worktree-done` skill if it
-has one, or otherwise to merge the pull request and run `workspace.set-done`.
-Set `pull-request-merge-prompt` in the [config file](configuration.md) to send
-your own prompt instead.
+Toastty merges the pull request itself, with no agent and no skills
+installed. It needs `gh`, `git`, and `python3` on your login shell's `PATH`, and
+`gh` must be signed in. The `github-pr` annotation must link to the pull
+request on GitHub. Clicking the button is your acceptance of the version in the
+worktree, so Toastty checks that the merge is that version before it changes
+anything:
 
-- The prompt goes to the most recently active agent session that is waiting
-  for input, typed as you would type it. Text already sitting unsent in that
-  agent's input is submitted together with the prompt, so clear it first.
-- If no agent session is waiting for input, for example because the agent or
-  one of its sub-agents is still working, Toastty asks you to wait for the turn
-  to end, so that you accept finished work.
-- If no agent session is running, Toastty starts the agent that last ran in the
-  workspace, or the first profile in `agents.toml`, in a terminal that is at
-  its shell prompt, with the merge prompt as its first message. The profile
-  has to accept a first message: a built-in `codex`, `claude`, or `cursor`
-  command with no extra arguments does, and any other profile needs
-  `initialPromptPlacement = "trailing"`. Otherwise start the agent yourself and
-  click **Merge** again.
+- The workspace's checkout must be the pull request's worktree, and the
+  worktree must be clean and at exactly the pull request's head commit. The
+  pull request must target the repository's default branch.
+- Toastty refuses a pull request with merge conflicts, failing checks, or a
+  branch that GitHub requires to be updated first. It also refuses one whose
+  description lists merge prerequisites: an "Activation order", "Merge order",
+  "Rollout", or "Depends on" section, or a link to a pull request in another
+  repository. Merge that pull request yourself once its prerequisites are done.
+- A draft is marked ready first. If required checks are still running, or
+  GitHub is waiting on a required review, Toastty turns on auto-merge, so
+  GitHub merges once they pass. Checks that are not required do not hold the
+  merge back. The merge method is the first one the repository allows: a merge
+  commit, then squash, then rebase.
 
-While the agent works on the request the button reads **Merging PR #N…**. It
-becomes **Done · PR #N** when the workspace is marked done. If the agent's turn
-ends without the done mark, for example because it stopped to ask about a
-merge prerequisite, the button offers the merge again; answer the agent in
-its session and the done mark still lands when it finishes. Top-level
-workspaces do not show the button, because only a subspace holds a done mark.
+While Toastty merges, the button reads **Merging PR #N…**. When the pull request
+has merged or auto-merge is on, Toastty marks the workspace done, and a Merge
+Only ends there with **Done · PR #N**. If a check fails, an alert gives the
+reason and nothing changes. Top-level workspaces do not show the button,
+because only a subspace holds a done mark.
 
-After a Merge and Clean, the done mark does not end the work. The agent
-usually turns on auto-merge, so the pull request merges only when its checks
-pass. Until then the button reads **Cleans Up When PR #N Merges**. Toastty
-checks the pull request with `gh pr view` every 30 seconds. When it has merged,
-Toastty runs the cleanup script that `worktree-cleanup` uses, limited to that
-pull request and that workspace, and a notification reports the result.
+After a Merge and Clean that turned on auto-merge, the button reads **Cleans Up
+When PR #N Merges**. Toastty checks the pull request with `gh pr view` every 30
+seconds. When it has merged, Toastty closes the workspace, removes the worktree,
+and deletes the local and remote branch, and a notification reports the result.
 
-- The script makes the same checks as `worktree-cleanup`. It skips the cleanup
-  when the worktree has uncommitted changes or is not at the merged commit,
-  when the workspace has unsaved documents, or when the workspace is no longer
-  marked done. Closing the workspace ends its agent sessions and running
-  commands.
+- Toastty checks again before it cleans up. It skips the cleanup when the
+  worktree has uncommitted changes or is not at the merged commit, when the
+  workspace has unsaved documents or a terminal in another worktree, or when
+  the workspace is no longer marked done. Closing the workspace ends its agent
+  sessions and running commands.
 - A cleanup that stops before it closes the workspace leaves the workspace
   open, and the button reads **Cleanup Stopped · PR #N**. Its tooltip gives the
   reason. Its menu offers **Retry Clean Up** and **Don't Clean Up**. A cleanup
   that closes the workspace and then cannot remove the worktree or a branch
-  reports what it kept in a notification; run `worktree-cleanup` to finish it. A pull request that closes without
+  reports what it kept in a notification. A pull request that closes without
   merging, or three failed `gh` checks in a row, also stops the cleanup.
 - New work in the workspace clears its done mark and drops the cleanup, because
   the merge is no longer the version you accepted.
-- A pending cleanup is kept across launches. Toastty needs `gh`, `git`, and
-  `python3` on your login shell's `PATH`, and `gh` must be signed in.
+- A pending cleanup is kept across launches.
 
 To abandon a task instead, choose **Close Without Merging…** from the arrow
 menu or the subspace's sidebar context menu. It is a one-time action, not a
 mode, so the button and `Option+Shift+M` never close a pull request. After you
-confirm, Toastty itself runs the cleanup script, with no agent involved: it
-closes the pull request on GitHub, closes the workspace, removes the worktree,
-and deletes the local branch. The branch stays on GitHub, so you can reopen the
-pull request. The button reads **Closing PR #N…** meanwhile.
+confirm, Toastty closes the pull request on GitHub, closes the workspace,
+removes the worktree, and deletes the local branch. The branch stays on GitHub,
+so you can reopen the pull request. The button reads **Closing PR #N…**
+meanwhile.
 
-- The script checks everything before its first change. The worktree must be
+- Toastty checks everything before its first change. The worktree must be
   clean and at exactly the pull request's head commit, and the branch on GitHub
   must be at that commit too, so no work exists only locally. The workspace must
-  pass the same checks as a cleanup, and the `github-pr` annotation must have the
-  pull request's URL, which must belong to the worktree's repository. If any check
-  fails, the pull request stays open and an alert gives the reason. The workspace
-  is checked again after the pull request closes; if it changed, for example with
-  new unsaved edits, it stays open.
+  pass the same checks as a cleanup, except that it need not be done. If any
+  check fails, the pull request stays open and an alert gives the reason. The
+  workspace is checked again after the pull request closes; if it changed, for
+  example with new unsaved edits, it stays open.
 - A pull request that is already closed is cleaned up the same way. A merged
   pull request is refused.
 

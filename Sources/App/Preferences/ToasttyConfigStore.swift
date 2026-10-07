@@ -8,7 +8,6 @@ struct ToasttyConfig: Equatable {
     var agentHookScriptPath: String?
     var urlRoutingPreferences = URLRoutingPreferences()
     var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
-    var pullRequestMergePrompt: String?
 }
 
 enum ToasttyConfigStore {
@@ -21,7 +20,6 @@ enum ToasttyConfigStore {
     private static let urlOpeningAlternateBrowserPlacementKey = "url-opening-alternate-browser-placement"
     private static let localDocumentOpeningPlacementKey = "local-document-opening-placement"
     private static let localDocumentOpeningAlternatePlacementKey = "local-document-opening-alternate-placement"
-    private static let pullRequestMergePromptKey = "pull-request-merge-prompt"
     private static let configDirectoryName = ".toastty"
     private static let legacyConfigDirectoryName = ".config/toastty"
     private static let configFileName = "config"
@@ -180,10 +178,6 @@ enum ToasttyConfigStore {
                       let parsed = LocalDocumentOpenPlacement(rawValue: parsedValue) else { continue }
                 config.localDocumentRoutingPreferences.alternateOpeningPlacement = parsed
 
-            case pullRequestMergePromptKey:
-                guard let parsed = parseString(value) else { continue }
-                config.pullRequestMergePrompt = WorkspaceMergePrompt.normalizedCustomPrompt(parsed)
-
             default:
                 continue
             }
@@ -262,14 +256,6 @@ enum ToasttyConfigStore {
             "# Supported values: rightPanel, newTab. Legacy rootRight is still accepted.",
             "# The default is newTab.",
             "# local-document-opening-alternate-placement = newTab",
-            "",
-            "# pull-request-merge-prompt is the text the Merge button sends to",
-            "# a workspace's agent, in place of the built-in prompt. The button",
-            "# shows on a subspace that has a github-pr annotation. The built-in",
-            "# prompt asks the agent to use the worktree-done skill, or to merge",
-            "# the pull request itself, and then mark the workspace done.",
-            "# Use one line, for example a slash command that runs your own skill.",
-            "# pull-request-merge-prompt = \"/worktree-done\"",
         ]
 
         if config.terminalFontSizePoints != nil
@@ -277,8 +263,7 @@ enum ToasttyConfigStore {
             || config.enableAgentCommandShims == false
             || config.agentHookScriptPath != nil
             || config.urlRoutingPreferences != URLRoutingPreferences()
-            || config.localDocumentRoutingPreferences != LocalDocumentRoutingPreferences()
-            || config.pullRequestMergePrompt != nil {
+            || config.localDocumentRoutingPreferences != LocalDocumentRoutingPreferences() {
             lines.append("")
         }
 
@@ -326,10 +311,6 @@ enum ToasttyConfigStore {
             lines.append(
                 "\(localDocumentOpeningAlternatePlacementKey) = \(config.localDocumentRoutingPreferences.alternateOpeningPlacement.rawValue)"
             )
-        }
-
-        if let pullRequestMergePrompt = config.pullRequestMergePrompt {
-            lines.append("\(pullRequestMergePromptKey) = \(encodeString(pullRequestMergePrompt))")
         }
 
         return lines

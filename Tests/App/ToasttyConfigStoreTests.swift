@@ -101,31 +101,6 @@ final class ToasttyConfigStoreTests: XCTestCase {
         )
     }
 
-    func testLoadParsesPullRequestMergePromptAsOneLine() throws {
-        let homeDirectoryURL = try makeTemporaryHomeDirectory()
-        let configURL = ToasttyConfigStore.configFileURL(
-            homeDirectoryPath: homeDirectoryURL.path,
-            environment: [:]
-        )
-        try FileManager.default.createDirectory(
-            at: configURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        // A "#" inside the quotes is part of the prompt, and an escaped line
-        // break must not survive: it would submit the prompt early.
-        try #"""
-        pull-request-merge-prompt = "Ship PR #59 now.\nThen mark it done."  # custom
-        """#.write(to: configURL, atomically: true, encoding: .utf8)
-
-        let config = ToasttyConfigStore.load(
-            homeDirectoryPath: homeDirectoryURL.path,
-            environment: [:]
-        )
-
-        XCTAssertEqual(config.pullRequestMergePrompt, "Ship PR #59 now. Then mark it done.")
-        XCTAssertNil(ToasttyConfig().pullRequestMergePrompt)
-    }
-
     func testLoadKeepsAbsoluteAgentHookPathAndDefaultsToNil() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let configURL = ToasttyConfigStore.configFileURL(
@@ -289,14 +264,6 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # Supported values: rightPanel, newTab. Legacy rootRight is still accepted.
             # The default is newTab.
             # local-document-opening-alternate-placement = newTab
-
-            # pull-request-merge-prompt is the text the Merge button sends to
-            # a workspace's agent, in place of the built-in prompt. The button
-            # shows on a subspace that has a github-pr annotation. The built-in
-            # prompt asks the agent to use the worktree-done skill, or to merge
-            # the pull request itself, and then mark the workspace done.
-            # Use one line, for example a slash command that runs your own skill.
-            # pull-request-merge-prompt = "/worktree-done"
 
             """
         )

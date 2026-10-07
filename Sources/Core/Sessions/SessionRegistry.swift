@@ -504,13 +504,6 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             .first
     }
 
-    /// The status kind a session's row shows: its reported status, or working
-    /// while it waits on child work or resumes after it. `nil` when the
-    /// session has not reported a status yet.
-    public func effectiveStatusKind(of record: SessionRecord, at now: Date = Date()) -> SessionStatusKind? {
-        Self.projectedStatus(from: record, at: now)?.status.kind
-    }
-
     public func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
         let activeRecordsByID = activeRecordsByID()
         let orderBySessionID = Dictionary(

@@ -702,7 +702,6 @@ struct WorkspaceView: View {
         if let mergePresentation = WorkspaceMergePresentation.make(
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
-            cleanup: sessionRuntimeStore.workspaceCleanupRequests[workspace.id],
             mode: store.workspaceMergeMode
         ) {
             // A pull request subspace gives the whole slot to its merge
@@ -712,10 +711,10 @@ struct WorkspaceView: View {
                 merge: { requestWorkspaceMerge(workspace.id, store.workspaceMergeMode) },
                 setMode: { store.setWorkspaceMergeMode($0) },
                 retryCleanup: {
-                    sessionRuntimeStore.workspaceCleanupCoordinator?.retryCleanup(workspaceID: workspace.id)
+                    sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: workspace.id)
                 },
                 cancelCleanup: {
-                    sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: workspace.id)
+                    sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: workspace.id)
                 },
                 closeWithoutMerging: { requestWorkspaceClose(workspace.id) }
             )

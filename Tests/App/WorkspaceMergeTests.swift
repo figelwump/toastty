@@ -5,7 +5,7 @@ import Testing
 @testable import ToasttyApp
 
 /// A task subspace with a pull request annotation, plus a merge controller
-/// whose terminal and agent-launch effects are recorded instead of run.
+/// whose coordinator calls and alerts are recorded instead of run.
 @MainActor
 private final class WorkspaceMergeFixture {
     let store: AppStore
@@ -15,22 +15,13 @@ private final class WorkspaceMergeFixture {
     let taskPanelID: UUID
     let start = Date(timeIntervalSince1970: 1_700_000_000)
 
-    var sentPrompts: [(prompt: String, panelID: UUID)] = []
-    var launches: [(profileID: String, panelID: UUID, prompt: String)] = []
+    var merges: [(workspaceID: UUID, pullRequest: WorkspacePullRequestLink, repoPath: String, thenCleanUp: Bool)] = []
+    var closes: [(workspaceID: UUID, pullRequest: WorkspacePullRequestLink, repoPath: String)] = []
     var problems: [WorkspaceMergeController.Problem] = []
-    var cleanupRequests: [(workspaceID: UUID, pullRequestNumber: Int, repoPath: String)] = []
-    var cancelledCleanups: [UUID] = []
     var closeConfirmations: [String] = []
     var confirmsClose = true
-    var closes: [(workspaceID: UUID, pullRequestNumber: Int, pullRequestURL: String, repoPath: String)] = []
-    var launchError: Error?
-    var profiles = [
-        AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"]),
-        AgentProfile(id: "claude", displayName: "Claude Code", argv: ["claude"]),
-    ]
-    var promptState = TerminalPromptState.idleAtPrompt
 
-    init(pullRequest: String? = "PR #59") throws {
+    init(pullRequestURL: String? = "https://github.com/example/toastty/pull/59") throws {
         store = AppStore(persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
         windowID = selection.windowID
@@ -42,65 +33,39 @@ private final class WorkspaceMergeFixture {
             Set(store.state.workspacesByID.keys).subtracting(existingWorkspaceIDs).first
         )
         taskPanelID = try #require(store.state.workspacesByID[taskWorkspaceID]?.focusedPanelID)
-        // Most tests cover the merge itself; the cleanup tests opt in.
-        store.setWorkspaceMergeMode(.mergeOnly)
         store.send(.setWorkspaceParent(
             workspaceID: taskWorkspaceID,
             parentWorkspaceID: selection.workspaceID,
             spawningSessionID: nil
         ))
-        if let pullRequest {
-            store.send(.setWorkspaceAnnotation(
-                workspaceID: taskWorkspaceID,
-                key: "github-pr",
-                annotation: try #require(WorkspaceAnnotation.validated(
-                    text: pullRequest,
-                    url: "https://github.com/example/toastty/pull/59"
-                ))
-            ))
-        }
+        store.send(.setWorkspaceAnnotation(
+            workspaceID: taskWorkspaceID,
+            key: "github-pr",
+            annotation: try #require(WorkspaceAnnotation.validated(text: "PR #59", url: pullRequestURL))
+        ))
+        store.send(.updateTerminalPanelMetadata(panelID: taskPanelID, title: nil, cwd: "/work/toastty-fix-question"))
     }
 
     var controller: WorkspaceMergeController {
         WorkspaceMergeController(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
-            agentProfiles: { [unowned self] in profiles },
-            sendPrompt: { [unowned self] prompt, panelID in
-                sentPrompts.append((prompt, panelID))
-                return true
+            merge: { [unowned self] workspaceID, pullRequest, repoPath, thenCleanUp in
+                merges.append((workspaceID, pullRequest, repoPath, thenCleanUp))
             },
-            promptState: { [unowned self] _ in promptState },
-            launchAgent: { [unowned self] profileID, workspaceID, panelID, prompt in
-                launches.append((profileID, panelID, prompt))
-                // The real launch prepares skills before the agent starts.
-                await Task.yield()
-                if let launchError {
-                    throw launchError
-                }
-                let sessionID = "launched-\(launches.count)"
-                // A just-launched agent has not reported a status yet.
-                startAgent(sessionID: sessionID, agent: try #require(AgentKind(rawValue: profileID)), status: nil)
-                return sessionID
+            closeWithoutMerging: { [unowned self] workspaceID, pullRequest, repoPath in
+                closes.append((workspaceID, pullRequest, repoPath))
             },
-            requestCleanup: { [unowned self] workspaceID, pullRequestNumber, repoPath in
-                cleanupRequests.append((workspaceID, pullRequestNumber, repoPath))
-            },
-            cancelCleanup: { [unowned self] in cancelledCleanups.append($0) },
-            presentProblem: { [unowned self] problem, _ in problems.append(problem) },
+            presentProblem: { [unowned self] problem, _, _ in problems.append(problem) },
             confirmClose: { [unowned self] pullRequest in
                 closeConfirmations.append(pullRequest)
                 return confirmsClose
-            },
-            closeWithoutMerging: { [unowned self] workspaceID, pullRequestNumber, pullRequestURL, repoPath in
-                closes.append((workspaceID, pullRequestNumber, pullRequestURL, repoPath))
             }
         )
     }
 
     /// Clicks the Merge button in the mode the store holds, or in `mode`.
-    @discardableResult
-    func merge(_ mode: WorkspaceMergeMode? = nil) -> Task<Void, Never>? {
+    func merge(_ mode: WorkspaceMergeMode? = nil) {
         controller.requestMerge(workspaceID: taskWorkspaceID, mode: mode ?? store.workspaceMergeMode)
     }
 
@@ -113,228 +78,50 @@ private final class WorkspaceMergeFixture {
         )
     }
 
-    /// Starts an agent session in the task workspace. It reports idle, as an
-    /// agent waiting at its input does, unless `status` is `nil`.
-    func startAgent(
-        sessionID: String = "task-agent",
-        agent: AgentKind = .claude,
-        status: SessionStatusKind? = .idle,
-        repoRoot: String? = nil
-    ) {
-        sessionRuntimeStore.startSession(
-            sessionID: sessionID,
-            agent: agent,
-            panelID: taskPanelID,
-            windowID: windowID,
-            workspaceID: taskWorkspaceID,
-            cwd: nil,
-            repoRoot: repoRoot,
-            at: start
-        )
-        if let status {
-            report(status, sessionID: sessionID, at: 0)
-        }
-    }
-
-    func report(_ kind: SessionStatusKind, sessionID: String = "task-agent", at offset: TimeInterval) {
-        sessionRuntimeStore.updateStatus(
-            sessionID: sessionID,
-            status: SessionStatus(kind: kind, summary: "\(kind)", detail: nil),
-            at: start.addingTimeInterval(offset)
-        )
+    func setRequest(_ phase: WorkspaceMergeRequest.Phase) throws {
+        let link = try #require(WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/59"))
+        sessionRuntimeStore.setWorkspaceMergeRequests([
+            taskWorkspaceID: WorkspaceMergeRequest(pullRequest: link, repoPath: "/work/task", phase: phase),
+        ])
     }
 }
 
 @MainActor
 struct WorkspaceMergeTests {
     @Test
-    func mergeSendsThePromptToTheAgentAtRestAndFollowsItToDone() throws {
+    func mergeHandsThePullRequestAndCheckoutToTheCoordinatorInTheChosenMode() throws {
         let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent()
-        fixture.report(.working, at: 1)
-        fixture.report(.ready, at: 2)
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
+        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeAndCleanUp))
+        #expect(fixture.presentation?.title == "Merge & Clean PR #59")
+        // An agent's repository root wins over a terminal's directory.
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "task-agent",
+            agent: .claude,
+            panelID: fixture.taskPanelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.taskWorkspaceID,
+            cwd: "/work/toastty-fix-question/Sources",
+            repoRoot: "/work/toastty-fix-question-root",
+            at: fixture.start
+        )
+
+        fixture.merge()
+        fixture.store.setWorkspaceMergeMode(.mergeOnly)
         #expect(fixture.presentation?.title == "Merge PR #59")
-
         fixture.merge()
 
-        #expect(fixture.sentPrompts.count == 1)
-        #expect(fixture.sentPrompts.first?.panelID == fixture.taskPanelID)
-        let prompt = try #require(fixture.sentPrompts.first?.prompt)
-        #expect(prompt.contains("PR #59"))
-        #expect(prompt.contains("worktree-done"))
-        #expect(prompt.contains("workspace.set-done"))
-        #expect(prompt.contains("\n") == false)
-        #expect(fixture.presentation?.title == "Merging PR #59…")
-
-        // A second click while the agent has the request does nothing.
-        fixture.merge()
-        #expect(fixture.sentPrompts.count == 1)
-
-        // The agent picks the prompt up, pauses on an approval, then marks
-        // the workspace done in the middle of its turn.
-        fixture.report(.working, at: 3)
-        fixture.report(.needsApproval, at: 4)
-        #expect(fixture.presentation?.title == "Merging PR #59…")
-        fixture.store.send(.setWorkspaceDone(workspaceID: fixture.taskWorkspaceID, doneAt: fixture.start))
-
-        #expect(fixture.presentation?.title == "Done · PR #59")
-        #expect(fixture.sessionRuntimeStore.workspaceMergeRequests.isEmpty)
-        fixture.report(.ready, at: 5)
-        #expect(fixture.presentation?.title == "Done · PR #59")
+        #expect(fixture.merges.map(\.thenCleanUp) == [true, false])
+        let merge = try #require(fixture.merges.first)
+        #expect(merge.workspaceID == fixture.taskWorkspaceID)
+        #expect(merge.pullRequest.number == 59)
+        #expect(merge.pullRequest.url == "https://github.com/example/toastty/pull/59")
+        #expect(merge.repoPath == "/work/toastty-fix-question-root")
         #expect(fixture.problems.isEmpty)
     }
 
     @Test
-    func mergeOffersTheButtonAgainWhenTheTurnEndsWithoutTheDoneMark() throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent()
-        fixture.report(.idle, at: 1)
-
-        fixture.merge()
-        // Reading the panel collapses an unread ready status to idle; a
-        // status change at rest is not the merge turn ending.
-        fixture.report(.idle, at: 2)
-        #expect(fixture.presentation?.title == "Merging PR #59…")
-
-        // The agent stops to ask about a prerequisite instead of merging.
-        fixture.report(.working, at: 3)
-        fixture.report(.ready, at: 4)
-
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
-    }
-
-    @Test
-    func mergeOffersTheButtonAgainWhenTheAgentExits() throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent()
-        fixture.merge()
-        #expect(fixture.presentation?.title == "Merging PR #59…")
-
-        fixture.sessionRuntimeStore.stopSession(sessionID: "task-agent", at: fixture.start.addingTimeInterval(5))
-
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
-    }
-
-    @Test
-    func mergeAsksTheUserToWaitWhileTheAgentIsMidTurn() throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent()
-        fixture.report(.working, at: 1)
-
-        fixture.merge()
-
-        #expect(fixture.problems == [.agentBusy])
-        #expect(fixture.sentPrompts.isEmpty)
-        #expect(fixture.launches.isEmpty)
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
-    }
-
-    @Test
-    func mergeStartsTheWorkspacesLastAgentWhenNoneIsRunning() async throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent(sessionID: "earlier", agent: .claude)
-        fixture.sessionRuntimeStore.stopSession(sessionID: "earlier", at: fixture.start.addingTimeInterval(1))
-
-        let launch = try #require(fixture.merge())
-        // The button shows progress while the agent launches, and a second
-        // click does not start a second agent.
-        #expect(fixture.presentation?.title == "Merging PR #59…")
-        #expect(fixture.merge() == nil)
-        await launch.value
-
-        // Claude ran here last, so it wins over the first configured profile.
-        #expect(fixture.launches.map(\.profileID) == ["claude"])
-        #expect(fixture.launches.first?.panelID == fixture.taskPanelID)
-        #expect(fixture.launches.first?.prompt.contains("PR #59") == true)
-        #expect(fixture.sentPrompts.isEmpty)
-        #expect(fixture.presentation?.title == "Merging PR #59…")
-
-        fixture.report(.working, sessionID: "launched-1", at: 2)
-        fixture.store.send(.setWorkspaceDone(workspaceID: fixture.taskWorkspaceID, doneAt: fixture.start))
-        #expect(fixture.presentation?.title == "Done · PR #59")
-    }
-
-    @Test
-    func mergeOffersTheButtonAgainWhenTheAgentCannotLaunch() async throws {
-        let fixture = try WorkspaceMergeFixture()
-
-        // A profile with extra arguments cannot take a first message unless
-        // it declares where the prompt goes.
-        fixture.launchError = AgentLaunchError.initialPromptUnsupported(profileID: "codex")
-        await fixture.merge()?.value
-        #expect(fixture.problems == [.profileCannotTakePrompt(profileID: "codex")])
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
-
-        fixture.launchError = AgentLaunchError.panelBusy(runningCommand: "make")
-        await fixture.merge()?.value
-        #expect(fixture.problems.last == .launchFailed("The target terminal is still busy: make"))
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
-    }
-
-    @Test
-    func mergeWaitsWhileTheAgentsSubAgentsStillRun() throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent()
-        fixture.report(.working, at: 1)
-        // The agent's own turn ended, but its row still shows working.
-        _ = fixture.sessionRuntimeStore.updateBackgroundActivity(
-            sessionID: "task-agent",
-            activity: SessionBackgroundActivity(
-                id: "review",
-                kind: .subagent,
-                displayName: "Review",
-                startedAt: fixture.start,
-                lastUpdatedAt: fixture.start
-            ),
-            at: fixture.start.addingTimeInterval(2)
-        )
-        fixture.report(.ready, at: 3)
-
-        fixture.merge()
-
-        #expect(fixture.problems == [.agentBusy])
-        #expect(fixture.sentPrompts.isEmpty)
-    }
-
-    @Test
-    func mergeExplainsWhenNoAgentCanStart() throws {
-        let fixture = try WorkspaceMergeFixture()
-
-        // The only terminal is running something, so an agent cannot start.
-        fixture.promptState = .busy
-        fixture.merge()
-        #expect(fixture.problems == [.noIdleTerminal])
-
-        fixture.promptState = .idleAtPrompt
-        fixture.profiles = []
-        fixture.merge()
-        #expect(fixture.problems == [.noIdleTerminal, .noAgentProfile])
-
-        #expect(fixture.launches.isEmpty)
-        #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeOnly))
-    }
-
-    @Test
-    func configuredPromptReplacesTheBuiltInPrompt() throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent()
-        fixture.store.setPullRequestMergePrompt("/ship-it")
-
-        fixture.merge()
-
-        #expect(fixture.sentPrompts.map(\.prompt) == ["/ship-it"])
-    }
-
-    @Test
     func onlyASubspaceWithAPullRequestGetsTheMergeControl() throws {
-        let withoutPullRequest = try WorkspaceMergeFixture(pullRequest: nil)
-        #expect(withoutPullRequest.presentation == nil)
-        withoutPullRequest.startAgent()
-        withoutPullRequest.merge()
-        #expect(withoutPullRequest.sentPrompts.isEmpty)
-
-        // A top-level workspace cannot hold the done mark that ends a merge.
+        // A top-level workspace cannot hold the done mark that records a merge.
         let fixture = try WorkspaceMergeFixture()
         fixture.store.send(.setWorkspaceParent(
             workspaceID: fixture.taskWorkspaceID,
@@ -342,82 +129,57 @@ struct WorkspaceMergeTests {
             spawningSessionID: nil
         ))
         #expect(fixture.presentation == nil)
+        fixture.merge()
+        #expect(fixture.merges.isEmpty)
+        #expect(fixture.problems.isEmpty)
     }
 
     @Test
-    func mergeAndCleanUpRecordsTheCleanupForTheTasksCheckout() throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.store.setWorkspaceMergeMode(.mergeAndCleanUp)
-        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
+    func mergeAndCloseNeedAGitHubPullRequestURL() throws {
+        let fixture = try WorkspaceMergeFixture(pullRequestURL: nil)
         #expect(fixture.presentation?.title == "Merge & Clean PR #59")
 
         fixture.merge()
+        fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
 
-        #expect(fixture.sentPrompts.count == 1)
-        #expect(fixture.cleanupRequests.count == 1)
-        #expect(fixture.cleanupRequests.first?.workspaceID == fixture.taskWorkspaceID)
-        #expect(fixture.cleanupRequests.first?.pullRequestNumber == 59)
-        #expect(fixture.cleanupRequests.first?.repoPath == "/work/toastty-fix-question")
-        #expect(fixture.cancelledCleanups.isEmpty)
+        #expect(fixture.problems == [.noPullRequestURL, .noPullRequestURL])
+        #expect(fixture.closeConfirmations.isEmpty)
+        #expect(fixture.merges.isEmpty)
+        #expect(fixture.closes.isEmpty)
     }
 
     @Test
-    func justMergeDropsAnEarlierCleanupRequest() throws {
+    func requestPhasesReplaceTheButton() throws {
         let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
+        try fixture.setRequest(.merging(thenCleanUp: true))
+        #expect(fixture.presentation?.title == "Merging PR #59…")
+        // A second click while the merge runs does nothing.
+        fixture.merge()
+        #expect(fixture.merges.isEmpty)
 
-        fixture.merge(.mergeOnly)
-
-        #expect(fixture.sentPrompts.count == 1)
-        #expect(fixture.cleanupRequests.isEmpty)
-        #expect(fixture.cancelledCleanups == [fixture.taskWorkspaceID])
-    }
-
-    @Test
-    func mergeAndCleanUpRecordsTheCleanupOnlyOnceTheLaunchedAgentHasThePrompt() async throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.launchError = AgentLaunchError.panelBusy(runningCommand: "make")
-        await fixture.merge(.mergeAndCleanUp)?.value
-        #expect(fixture.cleanupRequests.isEmpty)
-
-        fixture.launchError = nil
-        await fixture.merge(.mergeAndCleanUp)?.value
-        #expect(fixture.cleanupRequests.map(\.pullRequestNumber) == [59])
-    }
-
-    @Test
-    func cleanupStatesReplaceTheDoneLabel() throws {
-        let fixture = try WorkspaceMergeFixture()
-        let workspace = try #require(fixture.store.state.workspacesByID[fixture.taskWorkspaceID])
-        var cleanup = WorkspaceCleanupRequest(pullRequestNumber: 59, repoPath: "/work/task")
-        func presentation(_ workspace: WorkspaceState) -> WorkspaceMergePresentation? {
-            WorkspaceMergePresentation.make(workspace: workspace, request: nil, cleanup: cleanup, mode: .mergeAndCleanUp)
-        }
-
-        // Before the done mark, the button still offers the merge.
-        #expect(presentation(workspace) == .ready(pullRequest: "PR #59", mode: .mergeAndCleanUp))
-
-        var doneWorkspace = workspace
-        doneWorkspace.doneAt = fixture.start
-        cleanup.phase = .awaitingMerge
-        #expect(presentation(doneWorkspace)?.title == "Cleans Up When PR #59 Merges")
-        #expect(presentation(doneWorkspace)?.canCancelCleanup == true)
-        cleanup.phase = .cleaningUp
-        #expect(presentation(doneWorkspace)?.title == "Cleaning Up PR #59…")
-        #expect(presentation(doneWorkspace)?.canCancelCleanup == false)
-        cleanup.phase = .failed(reason: "skipped: worktree has uncommitted changes")
-        #expect(presentation(doneWorkspace) == .cleanupFailed(
+        fixture.store.send(.setWorkspaceDone(workspaceID: fixture.taskWorkspaceID, doneAt: fixture.start))
+        try fixture.setRequest(.awaitingMerge)
+        #expect(fixture.presentation?.title == "Cleans Up When PR #59 Merges")
+        #expect(fixture.presentation?.canCancelCleanup == true)
+        try fixture.setRequest(.cleaningUp)
+        #expect(fixture.presentation?.title == "Cleaning Up PR #59…")
+        #expect(fixture.presentation?.canCancelCleanup == false)
+        try fixture.setRequest(.failed(reason: "the worktree has uncommitted changes"))
+        #expect(fixture.presentation == .cleanupFailed(
             pullRequest: "PR #59",
-            reason: "skipped: worktree has uncommitted changes"
+            reason: "the worktree has uncommitted changes"
         ))
-        cleanup.phase = .closing
-        #expect(presentation(workspace)?.title == "Closing PR #59…")
+        fixture.sessionRuntimeStore.setWorkspaceMergeRequests([:])
+        #expect(fixture.presentation?.title == "Done · PR #59")
+
+        fixture.store.send(.setWorkspaceDone(workspaceID: fixture.taskWorkspaceID, doneAt: nil))
+        try fixture.setRequest(.closing)
+        #expect(fixture.presentation?.title == "Closing PR #59…")
     }
 
     @Test
     func closeWithoutMergingRunsOnlyAfterTheUserConfirms() throws {
         let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
         fixture.confirmsClose = false
 
         fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
@@ -428,44 +190,19 @@ struct WorkspaceMergeTests {
         fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
         #expect(fixture.closes.count == 1)
         #expect(fixture.closes.first?.workspaceID == fixture.taskWorkspaceID)
-        #expect(fixture.closes.first?.pullRequestNumber == 59)
-        #expect(fixture.closes.first?.pullRequestURL == "https://github.com/example/toastty/pull/59")
+        #expect(fixture.closes.first?.pullRequest.url == "https://github.com/example/toastty/pull/59")
         #expect(fixture.closes.first?.repoPath == "/work/toastty-fix-question")
-        // Closing never touches the agent.
-        #expect(fixture.sentPrompts.isEmpty)
-        #expect(fixture.launches.isEmpty)
+        #expect(fixture.merges.isEmpty)
     }
 
     @Test
     func closeWithoutMergingIsOfferedOnlyWhileTheButtonIsReady() throws {
         let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
-        fixture.merge()
-        #expect(fixture.presentation?.title == "Merging PR #59…")
+        try fixture.setRequest(.merging(thenCleanUp: false))
 
         fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
 
         #expect(fixture.closeConfirmations.isEmpty)
         #expect(fixture.closes.isEmpty)
-    }
-
-    @Test
-    func closeWithoutMergingNeedsThePullRequestURL() throws {
-        let fixture = try WorkspaceMergeFixture()
-        fixture.startAgent(repoRoot: "/work/toastty-fix-question")
-        fixture.store.send(.setWorkspaceAnnotation(
-            workspaceID: fixture.taskWorkspaceID,
-            key: "github-pr",
-            annotation: try #require(WorkspaceAnnotation.validated(text: "PR #59", url: nil))
-        ))
-
-        fixture.controller.requestClose(workspaceID: fixture.taskWorkspaceID)
-
-        #expect(fixture.closeConfirmations.isEmpty)
-        #expect(fixture.closes.isEmpty)
-        guard case .cannotClose? = fixture.problems.first else {
-            Issue.record("expected a cannotClose problem, got \(fixture.problems)")
-            return
-        }
     }
 }

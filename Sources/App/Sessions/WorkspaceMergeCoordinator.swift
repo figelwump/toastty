@@ -4,7 +4,7 @@ import Foundation
 
 /// What one command run produced. `exitCode` is `nil` when the command did
 /// not start or did not finish in time; `failure` then says why.
-struct WorkspaceCleanupCommandResult: Equatable, Sendable {
+struct WorkspaceMergeCommandResult: Equatable, Sendable {
     var exitCode: Int32?
     var stdout: String
     var stderr: String
@@ -23,14 +23,14 @@ struct WorkspaceCleanupCommandResult: Equatable, Sendable {
     }
 }
 
-/// Runs `gh` and the cleanup script. The live runner works on its own thread,
+/// Runs `gh` and the pull request script. The live runner works on its own thread,
 /// never on the main actor, because the script calls back into this app's
 /// automation socket to list and close workspaces.
-protocol WorkspaceCleanupCommandRunning: Sendable {
-    func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceCleanupCommandResult
+protocol WorkspaceMergeCommandRunning: Sendable {
+    func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult
 }
 
-struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
+struct WorkspaceMergeLiveCommandRunner: WorkspaceMergeCommandRunning {
     let socketPath: String
     let cliExecutablePath: String?
     /// Replaces the login shell's PATH; integration tests use it to put a
@@ -40,7 +40,7 @@ struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
     private static let terminationGracePeriod: TimeInterval = 2
     private static let resolvedPath = PathCache()
 
-    func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceCleanupCommandResult {
+    func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
         let environment = environment()
         return await withCheckedContinuation { continuation in
             let thread = Thread {
@@ -51,7 +51,7 @@ struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
                     timeout: timeout
                 ))
             }
-            thread.name = "toastty-workspace-cleanup"
+            thread.name = "toastty-workspace-merge"
             thread.qualityOfService = .utility
             thread.start()
         }
@@ -83,7 +83,7 @@ struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
         directory: String,
         environment: [String: String],
         timeout: TimeInterval
-    ) -> WorkspaceCleanupCommandResult {
+    ) -> WorkspaceMergeCommandResult {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/env")
         process.arguments = arguments
@@ -100,7 +100,7 @@ struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
         do {
             try process.run()
         } catch {
-            return WorkspaceCleanupCommandResult(
+            return WorkspaceMergeCommandResult(
                 exitCode: nil,
                 stdout: "",
                 stderr: "",
@@ -131,7 +131,7 @@ struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
             }
         }
         _ = drained.wait(timeout: .now() + terminationGracePeriod)
-        return WorkspaceCleanupCommandResult(
+        return WorkspaceMergeCommandResult(
             exitCode: failure == nil ? process.terminationStatus : nil,
             stdout: output.stdout,
             stderr: output.stderr,
@@ -173,33 +173,33 @@ struct WorkspaceCleanupLiveCommandRunner: WorkspaceCleanupCommandRunning {
     }
 }
 
-/// Carries out Merge and Clean after the agent's part. Once the workspace
-/// is marked done it checks the pull request with `gh`, and when the pull
-/// request has merged it runs the bundled `worktree-cleanup` status script on
-/// that one pull request and workspace. The script closes the workspace,
-/// removes the worktree, and deletes the branches, with the same checks the
-/// skill uses. Requests are shown through `SessionRuntimeStore` and saved in
-/// user defaults. It also runs Close Without Merging, which uses the same
-/// script in its `--close-unmerged` mode.
+/// Runs what a subspace's Merge button asks for, with the bundled
+/// `workspace-pull-request.py` script. Merge has the script merge the pull
+/// request, or turn on auto-merge while checks run, and then marks the
+/// workspace done. After a Merge and Clean it checks the pull request with
+/// `gh` until it merges, then has the script close the workspace, remove the
+/// worktree, and delete the branches. Close Without Merging has the script
+/// close the pull request and clean up. The script checks everything before
+/// its first change. Requests are shown through `SessionRuntimeStore`, and
+/// the ones waiting for a merge are saved in user defaults.
 @MainActor
-final class WorkspaceCleanupCoordinator {
+final class WorkspaceMergeCoordinator {
     static let pollInterval: Duration = .seconds(30)
     /// Failed `gh` checks in a row before the request shows as failed.
     static let maximumPollFailures = 3
     static let pullRequestCheckTimeout: TimeInterval = 30
-    static let cleanupTimeout: TimeInterval = 300
-    static let scriptSubpath = "WorkflowExamples/skills/worktree-cleanup/scripts/worktree-status.py"
-    private static let persistenceKey = "toastty.workspaceCleanupRequests"
+    static let scriptTimeout: TimeInterval = 300
+    private static let persistenceKey = "toastty.workspaceMergeRequests"
 
     private weak var store: AppStore?
     private weak var sessionRuntimeStore: SessionRuntimeStore?
-    private let runner: any WorkspaceCleanupCommandRunning
+    private let runner: any WorkspaceMergeCommandRunning
     private let scriptPath: String?
     private let userDefaults: UserDefaults?
     private let pollInterval: Duration
     private let notify: @MainActor (_ title: String, _ body: String) -> Void
     private let presentFailure: @MainActor (_ title: String, _ message: String) -> Void
-    private var requests: [UUID: WorkspaceCleanupRequest] = [:]
+    private var requests: [UUID: WorkspaceMergeRequest] = [:]
     private var pollTasks: [UUID: Task<Void, Never>] = [:]
     private var pollFailureCounts: [UUID: Int] = [:]
     private var storeObserverToken: UUID?
@@ -207,12 +207,12 @@ final class WorkspaceCleanupCoordinator {
     init(
         store: AppStore,
         sessionRuntimeStore: SessionRuntimeStore,
-        runner: any WorkspaceCleanupCommandRunning,
-        scriptPath: String? = Bundle.main.resourceURL?.appendingPathComponent(scriptSubpath).path,
+        runner: any WorkspaceMergeCommandRunning,
+        scriptPath: String? = Bundle.main.url(forResource: "workspace-pull-request", withExtension: "py")?.path,
         userDefaults: UserDefaults? = ToasttyAppDefaults.current,
-        pollInterval: Duration = WorkspaceCleanupCoordinator.pollInterval,
-        notify: @escaping @MainActor (_ title: String, _ body: String) -> Void = WorkspaceCleanupCoordinator.sendNotification,
-        presentFailure: @escaping @MainActor (_ title: String, _ message: String) -> Void = WorkspaceCleanupCoordinator.presentAlert
+        pollInterval: Duration = WorkspaceMergeCoordinator.pollInterval,
+        notify: @escaping @MainActor (_ title: String, _ body: String) -> Void = WorkspaceMergeCoordinator.sendNotification,
+        presentFailure: @escaping @MainActor (_ title: String, _ message: String) -> Void = WorkspaceMergeCoordinator.presentAlert
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -222,7 +222,7 @@ final class WorkspaceCleanupCoordinator {
         self.pollInterval = pollInterval
         self.notify = notify
         self.presentFailure = presentFailure
-        sessionRuntimeStore.workspaceCleanupCoordinator = self
+        sessionRuntimeStore.workspaceMergeCoordinator = self
         // Through `update`, so saved requests are shown and their checks
         // start, before the reconcile below drops the ones that no longer apply.
         for (workspaceID, request) in Self.loadRequests(userDefaults: userDefaults) {
@@ -236,17 +236,25 @@ final class WorkspaceCleanupCoordinator {
 
     // MARK: - Requests
 
-    /// Records that the user chose Merge and Clean for `workspaceID`. A
-    /// later Merge Only replaces it with `cancelCleanup`.
-    func requestCleanup(workspaceID: UUID, pullRequestNumber: Int, repoPath: String) {
-        guard requests[workspaceID]?.isRunning != true else { return }
-        pollFailureCounts[workspaceID] = nil
-        update(workspaceID, WorkspaceCleanupRequest(pullRequestNumber: pullRequestNumber, repoPath: repoPath))
-        if let state = store?.state {
-            reconcile(state: state)
+    /// Merges the pull request, or turns on auto-merge, and marks the
+    /// workspace done. With `thenCleanUp`, the request then waits for the
+    /// merge and cleans up after it. A refusal shows why and changes nothing.
+    @discardableResult
+    func merge(
+        workspaceID: UUID,
+        pullRequest: WorkspacePullRequestLink,
+        repoPath: String,
+        thenCleanUp: Bool
+    ) -> Task<Void, Never>? {
+        guard requests[workspaceID]?.isRunning != true else { return nil }
+        let request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .merging(thenCleanUp: thenCleanUp))
+        update(workspaceID, request)
+        return Task { [weak self] in
+            await self?.runMerge(workspaceID: workspaceID, request: request, thenCleanUp: thenCleanUp)
         }
     }
 
+    /// Drops a cleanup that is waiting for the merge or that failed.
     func cancelCleanup(workspaceID: UUID) {
         guard let request = requests[workspaceID], request.isRunning == false else { return }
         update(workspaceID, nil)
@@ -257,20 +265,17 @@ final class WorkspaceCleanupCoordinator {
     /// on GitHub, so the pull request can be reopened. The script checks
     /// everything before its first change, so a refusal leaves the pull
     /// request open. Replaces any pending cleanup.
-    /// `pullRequestURL` lets the script check that the number names a pull
-    /// request in the checkout's repository.
     @discardableResult
     func closeWithoutMerging(
         workspaceID: UUID,
-        pullRequestNumber: Int,
-        pullRequestURL: String,
+        pullRequest: WorkspacePullRequestLink,
         repoPath: String
     ) -> Task<Void, Never>? {
         guard requests[workspaceID]?.isRunning != true else { return nil }
-        let request = WorkspaceCleanupRequest(pullRequestNumber: pullRequestNumber, repoPath: repoPath, phase: .closing)
+        let request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .closing)
         update(workspaceID, request)
         return Task { [weak self] in
-            await self?.runClose(workspaceID: workspaceID, request: request, pullRequestURL: pullRequestURL)
+            await self?.runClose(workspaceID: workspaceID, request: request)
         }
     }
 
@@ -289,9 +294,7 @@ final class WorkspaceCleanupCoordinator {
             let next = request.reconciled(
                 workspaceExists: workspace != nil,
                 isDone: workspace?.doneAt != nil,
-                pullRequestNumber: annotation.flatMap {
-                    WorkspaceCleanupRequest.pullRequestNumber(text: $0.text, url: $0.url)
-                }
+                pullRequest: WorkspacePullRequestLink(annotationURL: annotation?.url)
             )
             if next != request {
                 update(workspaceID, next)
@@ -301,21 +304,21 @@ final class WorkspaceCleanupCoordinator {
 
     /// The one place requests change: publishes them, saves them, and starts
     /// or stops the pull request checks to match.
-    private func update(_ workspaceID: UUID, _ request: WorkspaceCleanupRequest?) {
+    private func update(_ workspaceID: UUID, _ request: WorkspaceMergeRequest?) {
         let previous = requests[workspaceID]
         requests[workspaceID] = request
         if previous != request {
             ToasttyLog.info(
-                "Workspace cleanup request changed",
+                "Workspace merge request changed",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
-                    "pull_request": request.map { String($0.pullRequestNumber) } ?? "none",
+                    "pull_request": request.map { String($0.pullRequest.number) } ?? "none",
                     "phase": request.map { Self.phaseName($0.phase) } ?? "none",
                 ]
             )
         }
-        sessionRuntimeStore?.setWorkspaceCleanupRequests(requests)
+        sessionRuntimeStore?.setWorkspaceMergeRequests(requests)
         saveRequests()
         if request?.phase == .awaitingMerge {
             if pollTasks[workspaceID] == nil {
@@ -334,13 +337,45 @@ final class WorkspaceCleanupCoordinator {
         }
     }
 
+    // MARK: - Merge
+
+    private func runMerge(workspaceID: UUID, request: WorkspaceMergeRequest, thenCleanUp: Bool) async {
+        let outcome = await runScript("merge", workspaceID: workspaceID, request: request)
+        guard requests[workspaceID] == request else { return }
+        let pullRequest = "PR #\(request.pullRequest.number)"
+        guard outcome.status == "merged" || outcome.status == "queued" else {
+            update(workspaceID, nil)
+            presentFailure("Unable to Merge \(pullRequest)", outcome.detail)
+            return
+        }
+        // The workspace may have closed, or moved to another pull request,
+        // while the script ran; the done mark belongs to this one only.
+        let annotation = store?.state.workspacesByID[workspaceID]?
+            .annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
+        guard let store, WorkspacePullRequestLink(annotationURL: annotation?.url) == request.pullRequest else {
+            update(workspaceID, nil)
+            return
+        }
+        // The done mark records that the user accepted this version. New work
+        // in the workspace clears it, and with it a pending cleanup.
+        store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
+        if thenCleanUp {
+            var waiting = request
+            waiting.phase = .awaitingMerge
+            update(workspaceID, waiting)
+        } else {
+            update(workspaceID, nil)
+        }
+    }
+
     // MARK: - Pull request checks
 
     /// Checks the pull request once. Returns whether to check again later.
     private func checkPullRequest(workspaceID: UUID) async -> Bool {
         guard let request = requests[workspaceID], request.phase == .awaitingMerge else { return false }
+        let number = request.pullRequest.number
         let result = await runner.run(
-            arguments: ["gh", "pr", "view", String(request.pullRequestNumber), "--json", "state"],
+            arguments: ["gh", "pr", "view", request.pullRequest.url, "--json", "state"],
             directory: request.repoPath,
             timeout: Self.pullRequestCheckTimeout
         )
@@ -353,7 +388,7 @@ final class WorkspaceCleanupCoordinator {
             return false
         case "CLOSED":
             pollTasks[workspaceID] = nil
-            fail(workspaceID, request, "PR #\(request.pullRequestNumber) was closed without merging.")
+            fail(workspaceID, request, "PR #\(number) was closed without merging.")
             return false
         case "OPEN":
             pollFailureCounts[workspaceID] = nil
@@ -362,29 +397,25 @@ final class WorkspaceCleanupCoordinator {
             let failures = (pollFailureCounts[workspaceID] ?? 0) + 1
             pollFailureCounts[workspaceID] = failures
             ToasttyLog.warning(
-                "Workspace cleanup could not check its pull request",
+                "Workspace merge could not check its pull request",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
-                    "pull_request": String(request.pullRequestNumber),
+                    "pull_request": String(number),
                     "failures": String(failures),
                     "problem": result.problemSummary,
                 ]
             )
             if failures >= Self.maximumPollFailures {
                 pollTasks[workspaceID] = nil
-                fail(
-                    workspaceID,
-                    request,
-                    "Could not check PR #\(request.pullRequestNumber) with gh: \(result.problemSummary)"
-                )
+                fail(workspaceID, request, "Could not check PR #\(number) with gh: \(result.problemSummary)")
                 return false
             }
             return true
         }
     }
 
-    private static func pullRequestState(from result: WorkspaceCleanupCommandResult) -> String? {
+    private static func pullRequestState(from result: WorkspaceMergeCommandResult) -> String? {
         guard result.exitCode == 0,
               let object = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any] else {
             return nil
@@ -392,23 +423,24 @@ final class WorkspaceCleanupCoordinator {
         return object["state"] as? String
     }
 
-    // MARK: - Cleanup
+    // MARK: - Cleanup and close
 
-    private func runCleanup(workspaceID: UUID, request: WorkspaceCleanupRequest) async {
+    private func runCleanup(workspaceID: UUID, request: WorkspaceMergeRequest) async {
         let workspaceTitle = store?.state.workspacesByID[workspaceID]?.title ?? "the workspace"
         var running = request
         running.phase = .cleaningUp
         update(workspaceID, running)
 
-        let outcome = await runScript(["--cleanup-merged"], workspaceID: workspaceID, request: request)
+        let outcome = await runScript("clean-up", workspaceID: workspaceID, request: request)
         let workspaceClosed = store?.state.workspacesByID[workspaceID] == nil
+        let pullRequest = "PR #\(request.pullRequest.number)"
         if outcome.status == "cleaned" {
             update(workspaceID, nil)
-            notify("Cleaned up PR #\(request.pullRequestNumber)", "\(workspaceTitle): \(outcome.detail)")
+            notify("Cleaned up \(pullRequest)", "\(workspaceTitle): \(outcome.detail)")
         } else if workspaceClosed {
             // The workspace is gone, so its button cannot show what is left.
             update(workspaceID, nil)
-            notify("Cleanup of PR #\(request.pullRequestNumber) did not finish", "\(workspaceTitle): \(outcome.detail)")
+            notify("Cleanup of \(pullRequest) did not finish", "\(workspaceTitle): \(outcome.detail)")
         } else {
             fail(workspaceID, request, outcome.detail)
             // New work or a changed pull request during the run drops the
@@ -419,18 +451,14 @@ final class WorkspaceCleanupCoordinator {
         }
     }
 
-    private func runClose(workspaceID: UUID, request: WorkspaceCleanupRequest, pullRequestURL: String) async {
+    private func runClose(workspaceID: UUID, request: WorkspaceMergeRequest) async {
         let workspaceTitle = store?.state.workspacesByID[workspaceID]?.title ?? "the workspace"
-        let outcome = await runScript(
-            ["--close-unmerged", "--pr-url", pullRequestURL],
-            workspaceID: workspaceID,
-            request: request
-        )
+        let outcome = await runScript("close", workspaceID: workspaceID, request: request)
         // Nothing is left to wait for, whatever the outcome.
         if requests[workspaceID] == request {
             update(workspaceID, nil)
         }
-        let pullRequest = "PR #\(request.pullRequestNumber)"
+        let pullRequest = "PR #\(request.pullRequest.number)"
         if outcome.status == "cleaned" {
             notify("Closed \(pullRequest) without merging", "\(workspaceTitle): \(outcome.detail)")
         } else if store?.state.workspacesByID[workspaceID] == nil {
@@ -440,35 +468,37 @@ final class WorkspaceCleanupCoordinator {
         }
     }
 
-    /// Runs the cleanup script on one pull request and workspace in the
-    /// given mode and reads what it did.
+    /// Runs the pull request script on one pull request and workspace and
+    /// reads what it did.
     private func runScript(
-        _ modeArguments: [String],
+        _ action: String,
         workspaceID: UUID,
-        request: WorkspaceCleanupRequest
-    ) async -> CleanupOutcome {
-        let outcome: CleanupOutcome
+        request: WorkspaceMergeRequest
+    ) async -> ScriptOutcome {
+        let outcome: ScriptOutcome
         if let scriptPath, FileManager.default.fileExists(atPath: scriptPath) {
             let result = await runner.run(
-                arguments: ["python3", scriptPath, "--json"] + modeArguments + [
-                    "--pr", String(request.pullRequestNumber),
+                arguments: [
+                    "python3", scriptPath, action,
+                    "--pr", String(request.pullRequest.number),
+                    "--pr-url", request.pullRequest.url,
                     "--workspace", workspaceID.uuidString,
                     "--repo", request.repoPath,
                 ],
                 directory: request.repoPath,
-                timeout: Self.cleanupTimeout
+                timeout: Self.scriptTimeout
             )
-            outcome = Self.cleanupOutcome(from: result, pullRequestNumber: request.pullRequestNumber)
+            outcome = Self.scriptOutcome(from: result)
         } else {
-            outcome = CleanupOutcome(status: nil, detail: "The cleanup script is missing from this Toastty build.")
+            outcome = ScriptOutcome(status: nil, detail: "The pull request script is missing from this Toastty build.")
         }
         ToasttyLog.info(
-            "Workspace cleanup script finished",
+            "Workspace pull request script finished",
             category: .terminal,
             metadata: [
                 "workspace_id": workspaceID.uuidString,
-                "pull_request": String(request.pullRequestNumber),
-                "mode": modeArguments[0],
+                "pull_request": String(request.pullRequest.number),
+                "action": action,
                 "status": outcome.status ?? "none",
                 "detail": outcome.detail,
             ]
@@ -476,37 +506,26 @@ final class WorkspaceCleanupCoordinator {
         return outcome
     }
 
-    struct CleanupOutcome: Equatable {
-        /// The script's `cleanup_status`: cleaned, partial, stopped, or
-        /// skipped; `nil` when the script did not clean up the row at all.
+    struct ScriptOutcome: Equatable {
+        /// The script's status: merged, queued, or refused for a merge;
+        /// cleaned, partial, stopped, or skipped for a cleanup or close;
+        /// failed, or `nil` when the script printed no report.
         var status: String?
         var detail: String
     }
 
-    static func cleanupOutcome(from result: WorkspaceCleanupCommandResult, pullRequestNumber: Int) -> CleanupOutcome {
+    static func scriptOutcome(from result: WorkspaceMergeCommandResult) -> ScriptOutcome {
         guard result.exitCode == 0 else {
-            return CleanupOutcome(status: nil, detail: "The cleanup script failed: \(result.problemSummary)")
+            return ScriptOutcome(status: nil, detail: "The pull request script failed: \(result.problemSummary)")
         }
         guard let object = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
-              let rows = object["prs"] as? [[String: Any]] else {
-            return CleanupOutcome(status: nil, detail: "The cleanup script printed no report.")
+              let status = object["status"] as? String else {
+            return ScriptOutcome(status: nil, detail: "The pull request script printed no report.")
         }
-        guard let row = rows.first(where: { ($0["pr"] as? Int) == pullRequestNumber }) else {
-            return CleanupOutcome(
-                status: nil,
-                detail: "The cleanup script found no worktree for PR #\(pullRequestNumber)."
-            )
-        }
-        if let status = row["cleanup_status"] as? String {
-            return CleanupOutcome(status: status, detail: row["cleanup"] as? String ?? status)
-        }
-        // A merged PR whose worktree is not clean at the merged head is
-        // blocked; the reason says what is in the way.
-        let reason = (row["reason"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return CleanupOutcome(status: nil, detail: reason ?? "The cleanup script did not clean up PR #\(pullRequestNumber).")
+        return ScriptOutcome(status: status, detail: object["detail"] as? String ?? status)
     }
 
-    private func fail(_ workspaceID: UUID, _ request: WorkspaceCleanupRequest, _ reason: String) {
+    private func fail(_ workspaceID: UUID, _ request: WorkspaceMergeRequest, _ reason: String) {
         var failed = request
         failed.phase = .failed(reason: reason)
         update(workspaceID, failed)
@@ -526,12 +545,12 @@ final class WorkspaceCleanupCoordinator {
         }
     }
 
-    private static func loadRequests(userDefaults: UserDefaults?) -> [UUID: WorkspaceCleanupRequest] {
+    private static func loadRequests(userDefaults: UserDefaults?) -> [UUID: WorkspaceMergeRequest] {
         guard let data = userDefaults?.data(forKey: persistenceKey),
-              let saved = try? JSONDecoder().decode([String: WorkspaceCleanupRequest].self, from: data) else {
+              let saved = try? JSONDecoder().decode([String: WorkspaceMergeRequest].self, from: data) else {
             return [:]
         }
-        var requests: [UUID: WorkspaceCleanupRequest] = [:]
+        var requests: [UUID: WorkspaceMergeRequest] = [:]
         for (key, request) in saved {
             guard let workspaceID = UUID(uuidString: key) else { continue }
             requests[workspaceID] = request.persisted
@@ -539,9 +558,9 @@ final class WorkspaceCleanupCoordinator {
         return requests
     }
 
-    private static func phaseName(_ phase: WorkspaceCleanupRequest.Phase) -> String {
+    private static func phaseName(_ phase: WorkspaceMergeRequest.Phase) -> String {
         switch phase {
-        case .awaitingDone: return "awaiting_done"
+        case .merging(let thenCleanUp): return thenCleanUp ? "merging_then_clean_up" : "merging"
         case .awaitingMerge: return "awaiting_merge"
         case .cleaningUp: return "cleaning_up"
         case .failed: return "failed"

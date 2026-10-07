@@ -10,8 +10,7 @@ this task's PR once the repository's required checks pass. It does not authorize
 merging other PRs, deployment, or a release. Do not invoke it on the user's
 behalf merely because implementation is finished.
 
-Cleanup happens from outside this workspace: with `worktree-cleanup`, or by
-Toastty itself after its Merge and Clean button. Do not close
+Cleanup happens from outside this workspace with `worktree-cleanup`. Do not close
 this workspace, remove its worktree, or delete its branch from inside it.
 
 ## Verify the accepted version
@@ -59,8 +58,8 @@ Stop and report, without merging, when:
    merging or enabling auto-merge.
 
 Report the PR, the accepted commit, and whether it merged or will merge when
-checks pass. Mention that the workspace and worktree are removed after the merge,
-by Toastty when the user chose Merge and Clean, or else by `worktree-cleanup`. Keep the `github-pr` workspace chip; do not clear it when marking done.
+checks pass. Mention that `worktree-cleanup` removes the workspace and worktree
+after the merge. Keep the `github-pr` workspace chip; do not clear it when marking done.
 
 `--match-head-commit` checks the head only when auto-merge is enabled. GitHub
 keeps auto-merge on if someone with write access pushes later, so a later commit

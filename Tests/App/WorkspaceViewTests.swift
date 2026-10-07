@@ -1668,24 +1668,13 @@ final class WorkspaceViewTests: XCTestCase {
         harness.store.setWorkspaceMergeMode(.mergeAndCleanUp)
         pumpMainRunLoop(duration: 0.05)
 
-        harness.sessionRuntimeStore.startSession(
-            sessionID: "task-agent",
-            agent: .claude,
-            panelID: harness.panelID,
-            windowID: harness.windowID,
-            workspaceID: harness.workspaceID,
-            cwd: nil,
-            repoRoot: nil,
-            at: Date(timeIntervalSince1970: 1_700_000_000)
-        )
-        harness.sessionRuntimeStore.beginWorkspaceMergeRequest(
-            workspaceID: harness.workspaceID,
-            sessionID: "task-agent"
-        )
+        let pullRequest = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/59"))
+        var request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: "/work/task", phase: .merging(thenCleanUp: true))
+        harness.sessionRuntimeStore.setWorkspaceMergeRequests([harness.workspaceID: request])
         pumpMainRunLoop(duration: 0.05)
         try writeTopBarEvidence(harness, name: "topbar-merge-merging")
 
-        // While the agent has the request the control is not a button.
+        // While the merge runs the control is not a button.
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
 
@@ -1695,16 +1684,16 @@ final class WorkspaceViewTests: XCTestCase {
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
 
-        var cleanup = WorkspaceCleanupRequest(pullRequestNumber: 59, repoPath: "/work/task", phase: .awaitingMerge)
-        harness.sessionRuntimeStore.setWorkspaceCleanupRequests([harness.workspaceID: cleanup])
+        request.phase = .awaitingMerge
+        harness.sessionRuntimeStore.setWorkspaceMergeRequests([harness.workspaceID: request])
         pumpMainRunLoop(duration: 0.05)
         try writeTopBarEvidence(harness, name: "topbar-merge-awaiting-cleanup")
-        cleanup.phase = .cleaningUp
-        harness.sessionRuntimeStore.setWorkspaceCleanupRequests([harness.workspaceID: cleanup])
+        request.phase = .cleaningUp
+        harness.sessionRuntimeStore.setWorkspaceMergeRequests([harness.workspaceID: request])
         pumpMainRunLoop(duration: 0.05)
         try writeTopBarEvidence(harness, name: "topbar-merge-cleaning-up")
-        cleanup.phase = .failed(reason: "skipped: worktree has uncommitted changes")
-        harness.sessionRuntimeStore.setWorkspaceCleanupRequests([harness.workspaceID: cleanup])
+        request.phase = .failed(reason: "the worktree has uncommitted changes")
+        harness.sessionRuntimeStore.setWorkspaceMergeRequests([harness.workspaceID: request])
         pumpMainRunLoop(duration: 0.05)
         try writeTopBarEvidence(harness, name: "topbar-merge-cleanup-failed")
         XCTAssertEqual(mergeRequests, [harness.workspaceID])

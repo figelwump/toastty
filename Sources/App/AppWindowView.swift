@@ -44,13 +44,7 @@ struct AppWindowView: View {
     }
 
     private var workspaceMergeController: WorkspaceMergeController {
-        WorkspaceMergeController.live(
-            store: store,
-            sessionRuntimeStore: sessionRuntimeStore,
-            terminalRuntimeRegistry: terminalRuntimeRegistry,
-            agentCatalogStore: agentCatalogStore,
-            agentLaunchService: agentLaunchService
-        )
+        WorkspaceMergeController.live(store: store, sessionRuntimeStore: sessionRuntimeStore)
     }
 
     private var sidebarToggleHasUnreadBadge: Bool {

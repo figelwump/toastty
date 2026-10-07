@@ -3714,16 +3714,16 @@ struct SidebarView: View {
             Button(presentation.title) {}
                 .disabled(true)
             Button("Retry Clean Up") {
-                sessionRuntimeStore.workspaceCleanupCoordinator?.retryCleanup(workspaceID: row.id)
+                sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: row.id)
             }
             Button("Don't Clean Up") {
-                sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: row.id)
+                sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)
             }
         case .awaitingMerge:
             Button(presentation.title) {}
                 .disabled(true)
             Button("Don't Clean Up") {
-                sessionRuntimeStore.workspaceCleanupCoordinator?.cancelCleanup(workspaceID: row.id)
+                sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)
             }
         case .merging, .cleaningUp, .closing, .done:
             Button(presentation.title) {}
@@ -3740,7 +3740,6 @@ struct SidebarView: View {
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[row.id],
-                cleanup: sessionRuntimeStore.workspaceCleanupRequests[row.id],
                 mode: store.workspaceMergeMode
               ) else {
             return nil

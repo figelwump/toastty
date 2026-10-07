@@ -1037,7 +1037,6 @@ final class DisplayShortcutInterceptor {
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
-                cleanup: sessionRuntimeStore.workspaceCleanupRequests[workspace.id],
                 mode: store.workspaceMergeMode
               ) else {
             return false

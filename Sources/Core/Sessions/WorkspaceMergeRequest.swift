@@ -1,149 +1,115 @@
 import Foundation
-import RemoteProtocol
 
-/// A merge the user asked for with a workspace's Merge button, tracked from
-/// the click until the agent finishes it or drops it. Runtime-only: after a
-/// relaunch the button offers Merge again.
-public struct WorkspaceMergeRequest: Equatable, Sendable {
-    /// How long the session may stay at rest after the prompt before the
-    /// request counts as never picked up. Covers a freshly launched agent
-    /// that is still starting.
-    public static let turnStartTimeout: TimeInterval = 90
+/// The pull request a workspace's `github-pr` annotation links to.
+public struct WorkspacePullRequestLink: Codable, Equatable, Sendable {
+    public let number: Int
+    /// The pull request's canonical URL, `https://github.com/<owner>/<repo>/pull/<number>`.
+    /// The pull request script checks it against the checkout's repository,
+    /// because a number alone could name a pull request in another repository.
+    public let url: String
 
-    /// The managed session the merge prompt went to, or `nil` while the
-    /// agent that will receive it is still launching.
-    public let sessionID: String?
-    public let requestedAt: Date
-    /// Whether that session has been seen busy since the request. Until it
-    /// has, a session at rest has not picked the prompt up yet, rather than
-    /// finished with it.
-    public var turnStarted: Bool
-
-    public init(sessionID: String?, requestedAt: Date, turnStarted: Bool = false) {
-        self.sessionID = sessionID
-        self.requestedAt = requestedAt
-        self.turnStarted = turnStarted
-    }
-
-    public enum End: String, Equatable, Sendable {
-        /// The workspace's done mark was set, which is how the merge
-        /// workflow reports success.
-        case workspaceDone = "workspace_done"
-        /// The agent's turn ended without the done mark, for example because
-        /// it stopped to ask about a prerequisite.
-        case turnEnded = "turn_ended"
-        case sessionStopped = "session_stopped"
-        case turnNeverStarted = "turn_never_started"
-    }
-
-    public enum Step: Equatable, Sendable {
-        case pending(WorkspaceMergeRequest)
-        case ended(End)
-    }
-
-    /// Where the request stands given the workspace's done mark and what the
-    /// target session is doing. Pass `nil` for `sessionActivity` while the
-    /// agent is still launching and has no session yet.
-    public func advanced(
-        isWorkspaceDone: Bool,
-        sessionActivity: WorkspaceMergeSessionActivity?,
-        now: Date
-    ) -> Step {
-        if isWorkspaceDone {
-            return .ended(.workspaceDone)
+    /// Reads a GitHub pull request URL, including one that points at a page
+    /// of the pull request such as `/files`; `nil` for anything else.
+    public init?(annotationURL: String?) {
+        guard let annotationURL,
+              let components = URLComponents(string: annotationURL),
+              components.scheme == "https",
+              components.host?.lowercased() == "github.com" else {
+            return nil
         }
-        switch sessionActivity {
-        case .stopped:
-            return .ended(.sessionStopped)
-        case .busy:
+        let parts = components.path.split(separator: "/")
+        guard parts.count >= 4,
+              parts[2] == "pull",
+              parts[3].allSatisfy(\.isASCIIDigit),
+              let number = Int(parts[3]) else {
+            return nil
+        }
+        self.number = number
+        url = "https://github.com/\(parts[0])/\(parts[1])/pull/\(number)"
+    }
+}
+
+/// What a subspace's Merge button is doing for its pull request, from the
+/// click until nothing is left to do. Toastty merges the pull request itself;
+/// after a Merge and Clean it waits for the merge, then closes the workspace,
+/// removes its worktree, and deletes its branches. Close Without Merging goes
+/// through it too. Saved across launches while it waits for the merge,
+/// because auto-merge can wait on checks for longer than Toastty runs.
+public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
+    public enum Phase: Codable, Equatable, Sendable {
+        /// The pull request script is merging the pull request or turning on
+        /// auto-merge. With `thenCleanUp`, the request then waits for the
+        /// merge; otherwise it ends.
+        case merging(thenCleanUp: Bool)
+        /// The workspace is done; the pull request has not merged yet.
+        case awaitingMerge
+        case cleaningUp
+        /// Cleanup did not finish. The workspace stays, and the user can retry
+        /// or dismiss the request.
+        case failed(reason: String)
+        /// Close Without Merging is running: the script closes the pull
+        /// request, then cleans up as it does after a merge.
+        case closing
+    }
+
+    public let pullRequest: WorkspacePullRequestLink
+    /// A checkout inside the task's worktree. The pull request script finds
+    /// the repository's main checkout from it.
+    public let repoPath: String
+    public var phase: Phase
+
+    public init(pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase) {
+        self.pullRequest = pullRequest
+        self.repoPath = repoPath
+        self.phase = phase
+    }
+
+    /// The request after a change to its workspace, or `nil` when it no longer
+    /// applies. `pullRequest` is what the workspace's `github-pr` annotation
+    /// links to now. A running script keeps its request until it reports
+    /// back, because the script itself can close the workspace.
+    public func reconciled(workspaceExists: Bool, isDone: Bool, pullRequest: WorkspacePullRequestLink?) -> Self? {
+        if isRunning {
+            return self
+        }
+        guard workspaceExists, pullRequest == self.pullRequest else {
+            return nil
+        }
+        // New work in the workspace clears its done mark, and with it the
+        // user's acceptance of the version that was to merge.
+        return isDone ? self : nil
+    }
+
+    /// Whether the pull request script is running for this request.
+    public var isRunning: Bool {
+        switch phase {
+        case .merging, .cleaningUp, .closing:
+            return true
+        case .awaitingMerge, .failed:
+            return false
+        }
+    }
+
+    /// The state to save, or `nil` for none. A cleanup that a quit
+    /// interrupted starts over, which is safe because the script rechecks
+    /// everything before each change. An interrupted merge or close is not
+    /// repeated: the user starts it again if the workspace is still there.
+    public var persisted: Self? {
+        switch phase {
+        case .cleaningUp:
             var next = self
-            next.turnStarted = true
-            return .pending(next)
-        case .notReady, .resting, nil:
-            if turnStarted {
-                return .ended(.turnEnded)
-            }
-            if now.timeIntervalSince(requestedAt) >= Self.turnStartTimeout {
-                return .ended(.turnNeverStarted)
-            }
-            return .pending(self)
+            next.phase = .awaitingMerge
+            return next
+        case .merging, .closing:
+            return nil
+        case .awaitingMerge, .failed:
+            return self
         }
     }
 }
 
-/// What a managed agent session is doing, as far as a merge request cares.
-public enum WorkspaceMergeSessionActivity: Equatable, Sendable {
-    /// The session ended, or the registry no longer knows it.
-    case stopped
-    /// The session has not reported a status yet, as right after launch.
-    case notReady
-    /// Waiting for input: idle, an unread finished turn, or a failed turn.
-    case resting
-    /// Mid-turn: working, paused on an approval, waiting on child work, or
-    /// resuming after it.
-    case busy
-}
-
-/// Where a workspace's merge prompt can go.
-public enum WorkspaceMergeTarget: Equatable, Sendable {
-    /// An agent session waiting for input, which can take the prompt as its
-    /// next turn.
-    case session(SessionRecord)
-    /// Agent sessions are running, and none is waiting for input.
-    case busy
-    /// No agent session is running. `lastAgent` is the agent that most
-    /// recently ran here, when the registry still remembers one.
-    case noSession(lastAgent: AgentKind?)
-}
-
-public extension SessionStatusKind {
-    /// Mid-turn: working, or paused on an approval inside the turn.
-    static func isBusy(_ kind: SessionStatusKind?) -> Bool {
-        kind == .working || kind == .needsApproval
-    }
-}
-
-public extension SessionRegistry {
-    /// Uses the status a session's row shows, not only the one it reported:
-    /// a session whose own turn ended while its sub-agents still run is busy.
-    func mergeSessionActivity(sessionID: String, at now: Date = Date()) -> WorkspaceMergeSessionActivity {
-        guard let record = sessionsByID[sessionID], record.isActive else {
-            return .stopped
-        }
-        return mergeSessionActivity(of: record, at: now)
-    }
-
-    private func mergeSessionActivity(of record: SessionRecord, at now: Date) -> WorkspaceMergeSessionActivity {
-        guard let kind = effectiveStatusKind(of: record, at: now) else {
-            return .notReady
-        }
-        return SessionStatusKind.isBusy(kind) ? .busy : .resting
-    }
-
-    /// Picks the session that should receive a workspace's merge prompt: the
-    /// most recently updated agent session that is waiting for input.
-    func mergeTarget(workspaceID: UUID, at now: Date = Date()) -> WorkspaceMergeTarget {
-        let agentSessions = sessionsByID.values.filter {
-            $0.workspaceID == workspaceID && $0.agent != .processWatch
-        }
-        let activeSessions = agentSessions.filter(\.isActive)
-        let restingSession = activeSessions
-            .filter { mergeSessionActivity(of: $0, at: now) == .resting }
-            .max { lhs, rhs in
-                if lhs.updatedAt != rhs.updatedAt {
-                    return lhs.updatedAt < rhs.updatedAt
-                }
-                return lhs.sessionID > rhs.sessionID
-            }
-        if let restingSession {
-            return .session(restingSession)
-        }
-        if activeSessions.isEmpty == false {
-            return .busy
-        }
-        let lastStopped = agentSessions.max { lhs, rhs in
-            (lhs.stoppedAt ?? lhs.updatedAt) < (rhs.stoppedAt ?? rhs.updatedAt)
-        }
-        return .noSession(lastAgent: lastStopped?.agent)
+private extension Character {
+    var isASCIIDigit: Bool {
+        isASCII && isNumber
     }
 }

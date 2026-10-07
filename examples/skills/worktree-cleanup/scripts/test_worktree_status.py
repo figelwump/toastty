@@ -19,21 +19,10 @@ args = sys.argv[1:]
 if args[:2] == ["repo", "view"]:
     print(json.dumps({"nameWithOwner": "test/repo", "defaultBranchRef": {"name": "main"}}))
 elif args[:2] == ["pr", "list"]:
-    print(json.dumps(state["prs"][:state.get("list_limit", len(state["prs"]))]))
+    print(json.dumps(state["prs"]))
 elif args[:2] == ["pr", "view"]:
     pr = next(p for p in state["prs"] if p["number"] == int(args[2]))
-    print(json.dumps(pr))
-elif args[:2] == ["pr", "close"]:
-    # Logged with the Toastty calls, so tests can check the order of changes.
-    with open(os.environ["FAKE_TOASTTY_LOG"], "a") as log:
-        log.write("gh " + " ".join(args) + "\n")
-    if state.get("fail_pr_close"):
-        sys.exit("GraphQL: could not close pull request")
-    # "after_pr_close" replaces the workspace list, as if the user changed a
-    # workspace while gh was closing the PR.
-    if "after_pr_close" in state:
-        state["workspaces"] = state.pop("after_pr_close")
-        json.dump(state, open(os.environ["FAKE_STATE"], "w"))
+    print(json.dumps({"mergeable": pr["mergeable"], "mergeStateStatus": pr["mergeStateStatus"]}))
 else:
     sys.exit(f"unexpected gh call: {args}")
 '''
@@ -143,7 +132,6 @@ class CleanupTests(unittest.TestCase):
         row = self.status("--cleanup-merged")[1]
         self.assertEqual(row["verdict"], "cleanup")
         self.assertIn("removed worktree", row["cleanup"])
-        self.assertEqual(row["cleanup_status"], "cleaned")
         self.assertFalse(path.exists())
         self.assertEqual(self.git("branch", "--list", branch), "")
         self.assertFalse(self.remote_has(branch))
@@ -178,7 +166,6 @@ class CleanupTests(unittest.TestCase):
         self.extra_state["dirty_on_close"] = {self.workspaces[-1]["workspaceID"]: str(path)}
         row = self.status("--cleanup-merged")[1]
         self.assertTrue(row["cleanup"].startswith("partial: closed task-1"), row["cleanup"])
-        self.assertEqual(row["cleanup_status"], "partial")
         self.assertIn("worktree kept", row["cleanup"])
         self.assertTrue((path / "last-write.txt").exists())
         self.assertNotEqual(self.git("branch", "--list", branch), "")
@@ -220,7 +207,6 @@ class CleanupTests(unittest.TestCase):
         self.git("worktree", "lock", str(path))
         row = self.status("--cleanup-merged")[1]
         self.assertIn("locked", row["cleanup"])
-        self.assertEqual(row["cleanup_status"], "skipped")
         self.assertTrue(path.exists())
         self.assertEqual(self.closed(), [])
 
@@ -241,18 +227,7 @@ class CleanupTests(unittest.TestCase):
         self.git("push", "-q", "-f", "origin", f"{replacement}:refs/heads/{branch}")
         row = self.status("--cleanup-merged")[1]
         self.assertIn("remote branch kept", row["cleanup"])
-        self.assertEqual(row["cleanup_status"], "partial")
         self.assertEqual(self.git("ls-remote", "--heads", "origin", branch).split()[0], replacement)
-
-    def test_unreachable_origin_makes_cleanup_partial(self):
-        branch, path = self.task(1)
-        self.git("remote", "set-url", "origin", str(self.root / "missing.git"))
-        row = self.status("--cleanup-merged")[1]
-        self.assertEqual(row["cleanup_status"], "partial")
-        self.assertIn("could not query origin", row["cleanup"])
-        self.assertFalse(path.exists())
-        self.git("remote", "set-url", "origin", str(self.origin))
-        self.assertTrue(self.remote_has(branch))
 
     def test_refuses_cleanup_from_a_scoped_session(self):
         _, path = self.task(1)
@@ -300,153 +275,6 @@ class CleanupTests(unittest.TestCase):
         self.assertIn("user confirms", rows[2]["reason"])
         self.assertEqual(rows[3]["verdict"], "ready")
         self.assertIn("Depends on section", rows[4]["reason"])
-
-    def test_pr_limits_cleanup_to_that_pull_request(self):
-        _, first = self.task(1)
-        _, second = self.task(2)
-        rows = self.status("--cleanup-merged", "--pr", "2")
-        self.assertEqual(set(rows), {2})
-        self.assertEqual(rows[2]["cleanup_status"], "cleaned")
-        self.assertIn("removed worktree", rows[2]["cleanup"])
-        self.assertTrue(first.exists())
-        self.assertFalse(second.exists())
-        self.assertEqual(len(self.closed()), 1)
-
-    def test_workspace_must_be_the_named_one_and_still_done(self):
-        _, path = self.task(1)
-        workspace_id = self.workspaces[-1]["workspaceID"]
-        row = self.status("--cleanup-merged", "--pr", "1", "--workspace", workspace_id)[1]
-        self.assertIn("no longer marked done", row["cleanup"])
-        self.assertEqual(row["cleanup_status"], "skipped")
-        row = self.status("--cleanup-merged", "--pr", "1",
-                          "--workspace", "00000000-0000-0000-0000-0000000000ee")[1]
-        self.assertIn("matching workspace is not", row["cleanup"])
-        self.assertTrue(path.exists())
-        self.assertEqual(self.closed(), [])
-        # Done when the script first lists workspaces, then reopened before the close.
-        self.workspaces[-1]["done"] = True
-        self.extra_state["later_workspaces"] = [dict(self.workspaces[-1], done=False)]
-        row = self.status("--cleanup-merged", "--pr", "1", "--workspace", workspace_id)[1]
-        self.assertIn("no longer marked done", row["cleanup"])
-        self.assertTrue(path.exists())
-        self.extra_state = {}
-        row = self.status("--cleanup-merged", "--pr", "1", "--workspace", workspace_id)[1]
-        self.assertEqual(row["cleanup_status"], "cleaned")
-        self.assertFalse(path.exists())
-
-    def test_pr_outside_the_list_window_still_gets_a_row(self):
-        _, path = self.task(1)
-        self.extra_state["list_limit"] = 0
-        rows = self.status("--cleanup-merged", "--pr", "1")
-        self.assertEqual(rows[1]["cleanup_status"], "cleaned")
-        self.assertFalse(path.exists())
-
-    def test_repo_given_as_the_worktree_being_removed(self):
-        branch, path = self.task(1)
-        self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces,
-                                               "own": OWN_WORKSPACE}))
-        result = subprocess.run([sys.executable, str(SCRIPT), "--json", "--cleanup-merged", "--pr", "1",
-                                 "--repo", str(path)], env=self.env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        row = json.loads(result.stdout)["prs"][0]
-        self.assertIn("removed worktree", row["cleanup"])
-        self.assertFalse(path.exists())
-        self.assertEqual(self.git("branch", "--list", branch), "")
-
-    def close_unmerged(self, number, url=None):
-        workspace_id = f"00000000-0000-0000-0000-{number:012d}"
-        url = url or f"https://github.com/test/repo/pull/{number}"
-        return self.status("--close-unmerged", "--pr", str(number), "--pr-url", url,
-                           "--workspace", workspace_id)[number]
-
-    def actions(self):
-        return [line for line in self.log.read_text().splitlines() if "workspace.list" not in line
-                and "terminal.state" not in line] if self.log.exists() else []
-
-    def test_close_unmerged_closes_pr_then_cleans_up_but_keeps_remote_branch(self):
-        branch, path = self.task(1, state="OPEN", session=True)
-        row = self.close_unmerged(1)
-        self.assertEqual(row["cleanup_status"], "cleaned", row["cleanup"])
-        self.assertIn("closed PR #1", row["cleanup"])
-        self.assertIn("kept the branch on GitHub", row["cleanup"])
-        actions = self.actions()
-        self.assertEqual(actions[0], "gh pr close 1")
-        self.assertIn("workspace.close", actions[1])
-        self.assertFalse(path.exists())
-        self.assertEqual(self.git("branch", "--list", branch), "")
-        self.assertTrue(self.remote_has(branch))
-
-    def test_close_unmerged_changes_nothing_when_work_exists_only_locally(self):
-        _, dirty = self.task(1, state="OPEN")
-        (dirty / "notes.txt").write_text("unsaved\n")
-        _, ahead = self.task(2, state="OPEN")
-        self.commit(ahead, "local only")
-        for number in (1, 2):
-            row = self.close_unmerged(number)
-            self.assertEqual(row["cleanup_status"], "skipped", row["cleanup"])
-        self.assertEqual(self.actions(), [])
-        self.assertTrue(dirty.exists() and ahead.exists())
-
-    def test_close_unmerged_checks_the_workspace_before_closing_the_pr(self):
-        _, path = self.task(1, state="OPEN")
-        self.workspaces[-1]["unsavedDocumentCount"] = 1
-        row = self.close_unmerged(1)
-        self.assertIn("unsaved document changes", row["cleanup"])
-        row = self.status("--close-unmerged", "--pr", "1", "--pr-url", "https://github.com/test/repo/pull/1",
-                          "--workspace", "00000000-0000-0000-0000-0000000000ee")[1]
-        self.assertIn("matching workspace is not", row["cleanup"])
-        self.assertEqual(self.actions(), [])
-        self.assertTrue(path.exists())
-
-    def test_close_unmerged_keeps_a_workspace_that_changed_while_the_pr_closed(self):
-        _, path = self.task(1, state="OPEN")
-        self.extra_state["after_pr_close"] = [dict(self.workspaces[-1], unsavedDocumentCount=1)]
-        row = self.close_unmerged(1)
-        self.assertEqual(row["cleanup_status"], "partial")
-        self.assertIn("closed PR #1", row["cleanup"])
-        self.assertIn("unsaved document changes; workspace kept", row["cleanup"])
-        self.assertEqual(self.closed(), [])
-        self.assertTrue(path.exists())
-
-    def test_close_unmerged_refuses_a_pr_url_from_another_repository(self):
-        _, path = self.task(1, state="OPEN")
-        row = self.close_unmerged(1, url="https://github.com/other/repo/pull/1")
-        self.assertEqual(row["cleanup_status"], "skipped")
-        self.assertIn("is not this repository's PR #1", row["cleanup"])
-        self.assertEqual(self.actions(), [])
-        self.assertTrue(path.exists())
-
-    def test_close_unmerged_keeps_the_local_branch_when_github_lost_it(self):
-        branch, path = self.task(1, state="CLOSED")
-        self.git("push", "-q", "origin", "--delete", branch)
-        row = self.close_unmerged(1)
-        self.assertEqual(row["cleanup_status"], "skipped")
-        self.assertIn("only copy of the work", row["cleanup"])
-        self.assertEqual(self.actions(), [])
-        self.assertTrue(path.exists())
-        self.assertNotEqual(self.git("branch", "--list", branch), "")
-
-    def test_close_unmerged_stops_when_gh_cannot_close_the_pr(self):
-        _, path = self.task(1, state="OPEN")
-        self.extra_state["fail_pr_close"] = True
-        row = self.close_unmerged(1)
-        self.assertEqual(row["cleanup_status"], "stopped")
-        self.assertIn("could not close PR #1", row["cleanup"])
-        self.assertEqual(self.closed(), [])
-        self.assertTrue(path.exists())
-
-    def test_close_unmerged_refuses_a_merged_pr_and_cleans_up_an_already_closed_one(self):
-        _, merged = self.task(1)
-        row = self.close_unmerged(1)
-        self.assertIn("has merged", row["cleanup"])
-        self.assertTrue(merged.exists())
-        branch, closed = self.task(2, state="CLOSED")
-        row = self.close_unmerged(2)
-        self.assertEqual(row["cleanup_status"], "cleaned", row["cleanup"])
-        self.assertNotIn("closed PR", row["cleanup"])
-        self.assertFalse(closed.exists())
-        self.assertTrue(self.remote_has(branch))
-        self.assertFalse(any(line.startswith("gh pr close") for line in self.actions()))
 
     def test_cleanup_refuses_without_toastty(self):
         _, path = self.task(1)
