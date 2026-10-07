@@ -77,6 +77,14 @@ export function validateBuildSettings(value, expected) {
   requireEqual("CODE_SIGN_STYLE", settings.CODE_SIGN_STYLE, "Automatic");
   requireEqual("TOASTTY_MOBILE_APP_DISPLAY_NAME", settings.TOASTTY_MOBILE_APP_DISPLAY_NAME, expected.displayName);
   requireEqual("TOASTTY_MOBILE_URL_SCHEME", settings.TOASTTY_MOBILE_URL_SCHEME, expected.urlScheme);
+  const conditions = String(settings.SWIFT_ACTIVE_COMPILATION_CONDITIONS ?? "").split(/\s+/);
+  const hasPushProbe = conditions.includes("TOASTTY_MOBILE_PUSH_PROBE");
+  if (expected.pushProbe && !hasPushProbe) {
+    throw new Error("Push probe compilation condition is missing from the Debug build");
+  }
+  if (!expected.pushProbe && hasPushProbe) {
+    throw new Error("Push probe compilation condition is present in a normal Debug build");
+  }
 
   if (!settings.TARGET_BUILD_DIR || !settings.FULL_PRODUCT_NAME) {
     throw new Error("xcodebuild settings are missing TARGET_BUILD_DIR or FULL_PRODUCT_NAME");
@@ -117,6 +125,9 @@ export function validateDevelopmentProfile(profile, expected) {
     expected.team,
   );
   requireEqual("provisioning get-task-allow", entitlements["get-task-allow"], true);
+  if (expected.pushProbe) {
+    requireEqual("provisioning aps-environment", entitlements["aps-environment"], "development");
+  }
 
   const devices = Array.isArray(profile.ProvisionedDevices) ? profile.ProvisionedDevices : [];
   if (!devices.includes(expected.deviceUDID)) {
@@ -148,17 +159,25 @@ export function validateSignedEntitlements(entitlements, expected) {
     expected.team,
   );
   requireEqual("signed get-task-allow", entitlements["get-task-allow"], true);
+  if (expected.pushProbe) {
+    requireEqual("signed aps-environment", entitlements["aps-environment"], "development");
+  }
 }
 
 function main(argv) {
   const options = parseArgs(argv);
   const settingsPath = requireOption(options, "settings");
+  const pushProbeFlag = options["push-probe"] ?? "0";
+  if (pushProbeFlag !== "0" && pushProbeFlag !== "1") {
+    throw new Error("--push-probe must be 0 or 1");
+  }
   const expected = {
     bundleID: requireOption(options, "bundle-id"),
     deviceUDID: requireOption(options, "device-udid"),
     displayName: requireOption(options, "display-name"),
     team: requireOption(options, "team"),
     urlScheme: requireOption(options, "url-scheme"),
+    pushProbe: pushProbeFlag === "1",
   };
 
   const appPath = validateBuildSettings(

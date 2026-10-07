@@ -131,6 +131,11 @@ Tuist or Xcode.
 For App Store Connect signing, validation, upload, and internal TestFlight
 distribution, see [iOS Release CI](ios-release-ci.md).
 
+For the opt-in development iPhone push receiver and Cloudflare sandbox sender,
+see the [APNs delivery test](../workers/push/README.md). This test replaces the
+normal app only in the fixed development Debug build. It is not enabled in
+normal builds or Release.
+
 ## Validate
 
 ```bash

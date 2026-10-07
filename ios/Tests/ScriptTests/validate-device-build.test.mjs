@@ -160,6 +160,36 @@ test("signed entitlement parsing rejects a differently signed app", () => {
   );
 });
 
+test("push probe requires its compiled receiver and development APNs entitlements in both signatures", () => {
+  const probeExpected = { ...expected, pushProbe: true };
+  assert.throws(() => validateBuildSettings(settings(), probeExpected), /compilation condition is missing/);
+  validateBuildSettings(settings({
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG TOASTTY_MOBILE_PUSH_PROBE",
+  }), probeExpected);
+  assert.throws(() => validateBuildSettings(settings({
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG TOASTTY_MOBILE_PUSH_PROBE",
+  }), { ...expected, pushProbe: false }), /present in a normal Debug build/);
+
+  for (const apsEnvironment of [undefined, "production", "development"]) {
+    const entitlements = {
+      ...profile().Entitlements,
+      ...(apsEnvironment === undefined ? {} : { "aps-environment": apsEnvironment }),
+    };
+    const validateProfile = () => validateDevelopmentProfile(profile({ Entitlements: entitlements }), probeExpected);
+    const validateSignature = () => validateSignedEntitlements(entitlements, probeExpected);
+    if (apsEnvironment === "development") {
+      validateProfile();
+      validateSignature();
+    } else {
+      assert.throws(validateProfile, /provisioning aps-environment mismatch/);
+      assert.throws(validateSignature, /signed aps-environment mismatch/);
+    }
+    // Existing device builds do not require or reject an unrelated push entitlement.
+    validateDevelopmentProfile(profile({ Entitlements: entitlements }), expected);
+    validateSignedEntitlements(entitlements, expected);
+  }
+});
+
 test("validator CLI consumes plist output and verifies the signed app with PATH stubs", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "toastty-build-validator-"));
   const bin = path.join(root, "bin");

@@ -35,6 +35,11 @@ function runDispatcher(args, environment = {}) {
     "TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX",
     "TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM",
     "TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE",
+    "TUIST_TOASTTY_MOBILE_PUSH_PROBE",
+    "TUIST_TOASTTY_MOBILE_PROD_TEST",
+    "TUIST_TOASTTY_MOBILE_BUNDLE_ID",
+    "TOASTTY_MOBILE_BUNDLE_ID",
+    "TOASTTY_NATIVE_DEVICE_BUILD_CONFIGURATION",
   ]) {
     delete childEnvironment[key];
   }
@@ -260,6 +265,51 @@ test("native-device rejects conflicting or incomplete options before spawning", 
   const missingDevice = runDispatcher(["native-device", "--device"], { PATH: "" });
   assert.equal(missingDevice.status, 1);
   assert.match(missingDevice.stderr, /--device requires a value/);
+});
+
+test("push probe dry-run uses the fixed development identity and preserves explicit opt-in", () => {
+  const result = runDispatcher(["native-device", "--build-only", "--dry-run"], {
+    PATH: "",
+    TUIST_TOASTTY_MOBILE_PUSH_PROBE: "1",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const plan = JSON.parse(result.stdout);
+  assert.equal(plan.pushProbe, true);
+  assert.equal(plan.buildOnly, true);
+  assert.equal(plan.bundleID, "com.giantthings.toastty.mobile.dev");
+  assert.equal(plan.environment.TUIST_TOASTTY_MOBILE_PUSH_PROBE, "1");
+
+  const normal = runDispatcher(["native-device", "--dry-run"], { PATH: "" });
+  assert.equal(normal.status, 0, normal.stderr);
+  assert.equal(JSON.parse(normal.stdout).pushProbe, false);
+});
+
+test("push probe rejects Release, prod-test, custom identity, and simulator commands before tools run", () => {
+  for (const [command, environment, message] of [
+    ["native-device", { TOASTTY_IOS_CONFIGURATION: "Release" }, /requires Debug/],
+    ["native-device", { TOASTTY_NATIVE_DEVICE_BUILD_CONFIGURATION: "Release" }, /requires Debug/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PROD_TEST: "1" }, /cannot use prod-test/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_BUNDLE_ID: "com.example.other" }, /fixed physical-device/],
+    ["native-device", { TOASTTY_MOBILE_BUNDLE_ID: "com.example.other" }, /fixed physical-device/],
+    ["generate", {}, /requires native-device/],
+    ["build", {}, /requires native-device/],
+    ["test", {}, /requires native-device/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PUSH_PROBE: "maybe" }, /must be a boolean/],
+  ]) {
+    const result = runDispatcher([command, "--dry-run"], {
+      PATH: "",
+      TUIST_TOASTTY_MOBILE_PUSH_PROBE: "1",
+      ...environment,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, message);
+  }
+  const generation = runDispatcher(["generate", "--dry-run"], {
+    PATH: "",
+    TUIST_TOASTTY_MOBILE_PUSH_PROBE: "1",
+    TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE: "1",
+  });
+  assert.equal(generation.status, 0, generation.stderr);
 });
 
 test("a booted iOS 17 device is rejected in favor of creating on the newest compatible runtime", () => {

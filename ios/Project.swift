@@ -118,6 +118,17 @@ let debugBundleID = manifestValue(
     ["TUIST_TOASTTY_MOBILE_BUNDLE_ID", "TOASTTY_MOBILE_BUNDLE_ID"],
     default: defaultDebugBundleID
 )
+let usesPushProbe = manifestFlag("TUIST_TOASTTY_MOBILE_PUSH_PROBE")
+if usesPushProbe {
+    guard usesFixedDeviceDebugIdentity, debugBundleID == fixedDeviceDebugBundleID, !usesProdTestIdentity else {
+        fatalError("TUIST_TOASTTY_MOBILE_PUSH_PROBE requires the fixed physical-device Debug identity and cannot use prod-test.")
+    }
+    for key in ["TOASTTY_IOS_CONFIGURATION", "TOASTTY_NATIVE_DEVICE_BUILD_CONFIGURATION"] {
+        if let configuration = environment[key], configuration != "Debug" {
+            fatalError("TUIST_TOASTTY_MOBILE_PUSH_PROBE requires Debug configuration.")
+        }
+    }
+}
 let debugDisplayName = bundleSuffix == ".dev.local"
     ? "Toastty Dev"
     : "Toastty \((bundleSuffix.split(separator: ".").last ?? "dev").prefix(12))"
@@ -139,6 +150,12 @@ var appSettings: SettingsDictionary = [
 
 appSettings["CODE_SIGN_STYLE"] = "Automatic"
 appSettings["DEVELOPMENT_TEAM"] = SettingValue(stringLiteral: developmentTeam)
+if usesPushProbe {
+    // Keep the APNs receiver and development entitlement out of Release even
+    // when both configurations come from this same generated project.
+    appSettings["SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]"] = "$(inherited) DEBUG TOASTTY_MOBILE_PUSH_PROBE"
+    appSettings["CODE_SIGN_ENTITLEMENTS[config=Debug]"] = "Entitlements/PushProbe.entitlements"
+}
 if let releaseProvisioningProfile {
     appSettings["CODE_SIGN_STYLE[config=Release]"] = "Manual"
     appSettings["PROVISIONING_PROFILE_SPECIFIER[config=Release]"] = SettingValue(stringLiteral: releaseProvisioningProfile)
