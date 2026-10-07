@@ -190,70 +190,84 @@ test("push probe requires its compiled receiver and development APNs entitlement
   }
 });
 
-test("validator CLI consumes plist output and verifies the signed app with PATH stubs", () => {
+test("validator CLI parses real plist Date and Data values without forwarding certificate data", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "toastty-build-validator-"));
   const bin = path.join(root, "bin");
   const appPath = path.join(root, "Debug-iphoneos", "Toastty.app");
   mkdirSync(bin, { recursive: true });
   mkdirSync(appPath, { recursive: true });
-  writeFileSync(path.join(appPath, "Info.plist"), "stub-info");
-  writeFileSync(path.join(appPath, "embedded.mobileprovision"), "stub-profile");
+  const plist = (body) => `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>${body}</dict></plist>`;
+  const identityEntitlements = `
+    <key>application-identifier</key><string>${expected.team}.${expected.bundleID}</string>
+    <key>com.apple.developer.team-identifier</key><string>${expected.team}</string>
+    <key>get-task-allow</key><true/>
+    <key>aps-environment</key><string>development</string>`;
+  writeFileSync(path.join(appPath, "Info.plist"), plist(`
+    <key>CFBundleIdentifier</key><string>${expected.bundleID}</string>
+    <key>CFBundleDisplayName</key><string>${expected.displayName}</string>
+    <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key>
+    <array><string>${expected.urlScheme}</string></array></dict></array>`));
+  writeFileSync(path.join(appPath, "embedded.mobileprovision"), "stub-cms");
 
   const settingsPath = path.join(root, "settings.json");
   writeFileSync(settingsPath, JSON.stringify(settings({
     TARGET_BUILD_DIR: path.dirname(appPath),
     FULL_PRODUCT_NAME: path.basename(appPath),
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG TOASTTY_MOBILE_PUSH_PROBE",
   })));
 
-  const plistStub = `#!${process.execPath}
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const input = fs.readFileSync(0, "utf8");
-if (args.at(-1) !== "-") {
-  process.stdout.write(process.env.STUB_INFO);
-} else if (input === "PROFILE_PLIST") {
-  process.stdout.write(process.env.STUB_PROFILE);
-} else if (input === "ENTITLEMENTS_PLIST") {
-  process.stdout.write(process.env.STUB_ENTITLEMENTS);
-} else {
-  process.exit(9);
-}
+  const securityStub = `#!${process.execPath}
+process.stdout.write(process.env.STUB_PROFILE);
 `;
-  const securityStub = `#!${process.execPath}\nprocess.stdout.write("PROFILE_PLIST");\n`;
   const codesignStub = `#!${process.execPath}
 if (process.argv.includes("--verify")) process.exit(0);
-process.stdout.write("ENTITLEMENTS_PLIST");
+process.stdout.write(process.env.STUB_ENTITLEMENTS);
 `;
-  writeFileSync(path.join(bin, "plutil"), plistStub, { mode: 0o755 });
   writeFileSync(path.join(bin, "security"), securityStub, { mode: 0o755 });
   writeFileSync(path.join(bin, "codesign"), codesignStub, { mode: 0o755 });
 
-  const result = spawnSync(process.execPath, [
-    validatorPath,
-    "--settings", settingsPath,
-    "--bundle-id", expected.bundleID,
-    "--device-udid", expected.deviceUDID,
-    "--display-name", expected.displayName,
-    "--team", expected.team,
-    "--url-scheme", expected.urlScheme,
-  ], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: bin,
-      STUB_INFO: JSON.stringify({
-        CFBundleIdentifier: expected.bundleID,
-        CFBundleDisplayName: expected.displayName,
-        CFBundleURLTypes: [{ CFBundleURLSchemes: [expected.urlScheme] }],
-      }),
-      STUB_PROFILE: JSON.stringify(profile()),
-      STUB_ENTITLEMENTS: JSON.stringify({
-        "application-identifier": `${expected.team}.${expected.bundleID}`,
-        "com.apple.developer.team-identifier": expected.team,
-        "get-task-allow": true,
-      }),
-    },
-  });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, appPath);
+  for (const [expiration, device, enterprise, error] of [
+    ["2099-01-01T00:00:00Z", expected.deviceUDID, false, null],
+    ["2020-01-01T00:00:00Z", expected.deviceUDID, false, /expired/],
+    ["2099-01-01T00:00:00Z", "OTHER-DEVICE", false, /does not include device/],
+    ["2099-01-01T00:00:00Z", expected.deviceUDID, true, /enterprise profile/],
+    [null, expected.deviceUDID, false, /invalid expiration/],
+    ["malformed", expected.deviceUDID, false, /could not be decoded/],
+  ]) {
+    const result = spawnSync(process.execPath, [
+      validatorPath,
+      "--settings", settingsPath,
+      "--bundle-id", expected.bundleID,
+      "--device-udid", expected.deviceUDID,
+      "--display-name", expected.displayName,
+      "--team", expected.team,
+      "--url-scheme", expected.urlScheme,
+      "--push-probe", "1",
+    ], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        STUB_PROFILE: expiration === "malformed" ? "not a plist" : plist(`
+          <key>TeamIdentifier</key><array><string>${expected.team}</string></array>
+          <key>ProvisionedDevices</key><array><string>${device}</string></array>
+          <key>ProvisionsAllDevices</key><${enterprise ? "true" : "false"}/>
+          ${expiration === null ? "" : `<key>ExpirationDate</key><date>${expiration}</date>`}
+          <key>DeveloperCertificates</key><array><data>AQID</data></array>
+          <key>Entitlements</key><dict>${identityEntitlements}</dict>`),
+        STUB_ENTITLEMENTS: plist(identityEntitlements),
+      },
+    });
+    if (error) {
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, error);
+      assert.equal(result.stdout, "");
+    } else {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, appPath);
+    }
+    assert.doesNotMatch(result.stderr + result.stdout, /DeveloperCertificates|AQID|import plistlib/);
+  }
 });

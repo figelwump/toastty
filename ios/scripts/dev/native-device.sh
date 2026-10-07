@@ -431,6 +431,7 @@ require_command grep
 require_command node
 require_command plutil
 require_command ps
+require_command python3
 require_command security
 require_command tail
 require_command tuist

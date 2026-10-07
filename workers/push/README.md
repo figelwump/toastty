@@ -66,7 +66,9 @@ replace an APNs key. Store the key's PEM `.p8` contents in the secure vault as
 `TOASTTY_APNS_PRIVATE_KEY`, its key ID as `TOASTTY_APNS_KEY_ID`, and the Apple
 team ID as `TOASTTY_APNS_TEAM_ID`. Never paste values into chat or repository files.
 
-Connect the development iPhone. From the repository root, the following command
+Connect the development iPhone. Set `TOASTTY_IOS_DEVELOPMENT_TEAM` to your Apple
+team ID; the physical-device dispatcher requires it explicitly. From the
+repository root, the following command
 builds and validates a signed Debug receiver. It may update Apple's development
 provisioning profile. It does not install or launch the app:
 

@@ -29,13 +29,14 @@ function requireOption(options, name) {
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
-    encoding: options.encoding ?? "utf8",
+    encoding: options.encoding === undefined ? "utf8" : options.encoding,
     input: options.input,
   });
   if (result.error) throw new Error(`Failed to run ${command}: ${result.error.message}`);
   if (result.status !== 0) {
     const detail = String(result.stderr || result.stdout || "").trim();
-    throw new Error(`${command} ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`);
+    const label = options.label ?? `${command} ${args.join(" ")}`;
+    throw new Error(`${label} failed${detail ? `: ${detail}` : ""}`);
   }
   return result.stdout;
 }
@@ -53,6 +54,45 @@ function plistDataJSON(data, label) {
   } catch (error) {
     throw new Error(`${label} did not decode to JSON: ${error.message}`);
   }
+}
+
+function provisioningProfileJSON(data) {
+  // Provisioning profiles contain Date and Data values that plutil cannot
+  // convert to JSON. Decode the plist, then return only the validation fields.
+  const raw = run("python3", ["-I", "-c", `
+import datetime
+import json
+import plistlib
+import sys
+
+try:
+    profile = plistlib.loads(sys.stdin.buffer.read())
+    if not isinstance(profile, dict):
+        raise ValueError("Expected a plist dictionary")
+    expiration = profile.get("ExpirationDate")
+    if isinstance(expiration, datetime.datetime):
+        expiration = expiration.replace(tzinfo=datetime.timezone.utc).isoformat()
+    else:
+        expiration = None
+    entitlements = profile.get("Entitlements", {})
+    fields = {
+        "TeamIdentifier": profile.get("TeamIdentifier"),
+        "ProvisionedDevices": profile.get("ProvisionedDevices"),
+        "ProvisionsAllDevices": profile.get("ProvisionsAllDevices"),
+        "ExpirationDate": expiration,
+        "Entitlements": {key: entitlements.get(key) for key in [
+            "application-identifier",
+            "com.apple.developer.team-identifier",
+            "get-task-allow",
+            "aps-environment",
+        ]},
+    }
+    sys.stdout.write(json.dumps(fields))
+except Exception:
+    print("Provisioning profile could not be decoded for validation", file=sys.stderr)
+    sys.exit(1)
+`], { input: data, label: "Provisioning profile decoder" });
+  return JSON.parse(raw);
 }
 
 function requireEqual(label, actual, expected) {
@@ -104,6 +144,7 @@ export function validateAppInfo(info, expected) {
 }
 
 export function validateDevelopmentProfile(profile, expected) {
+  // Keep the fields read here in provisioningProfileJSON's projection.
   const teams = Array.isArray(profile.TeamIdentifier) ? profile.TeamIdentifier : [];
   if (!teams.includes(expected.team)) {
     throw new Error(
@@ -195,7 +236,7 @@ function main(argv) {
 
   validateAppInfo(plistFileJSON(infoPath), expected);
   const decodedProfile = run("security", ["cms", "-D", "-i", profilePath], { encoding: null });
-  validateDevelopmentProfile(plistDataJSON(decodedProfile, "provisioning profile"), expected);
+  validateDevelopmentProfile(provisioningProfileJSON(decodedProfile), expected);
   run("codesign", ["--verify", "--deep", "--strict", appPath]);
   const signedEntitlements = run(
     "codesign",
