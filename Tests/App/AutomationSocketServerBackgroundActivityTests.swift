@@ -309,7 +309,14 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
     func sessionTeammateLifecyclePreservesActiveAgentsAndReopensFinishedAgent() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
-            try makeServer(socketPath: socketPath)
+            // Keep Ready visible regardless of the test host's focus state.
+            try makeServer(
+                socketPath: socketPath,
+                sessionRuntimeStore: SessionRuntimeStore(
+                    sendSessionStatusNotification: { _, _, _, _, _ in },
+                    isApplicationActive: { false }
+                )
+            )
         }
         defer {
             withExtendedLifetime(server.server) {}
@@ -626,7 +633,14 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
     func sessionTeammateApprovalRestoresRootStatusAndPreservesSiblingApprovals() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
-            try makeServer(socketPath: socketPath)
+            // Keep Ready visible regardless of the test host's focus state.
+            try makeServer(
+                socketPath: socketPath,
+                sessionRuntimeStore: SessionRuntimeStore(
+                    sendSessionStatusNotification: { _, _, _, _, _ in },
+                    isApplicationActive: { false }
+                )
+            )
         }
         defer {
             withExtendedLifetime(server.server) {}
