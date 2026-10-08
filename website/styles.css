@@ -313,7 +313,9 @@ h1 em { display: block; color: var(--amber); font-style: normal; }
 }
 
 /* ---------- Later sections ---------- */
-.split2 { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; margin-top: 40px; align-items: start; }
+/* The section header sits in the left column so the demo beside it starts level with the eyebrow. */
+.split2 { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+.split2 .lead + .feats { margin-top: 36px; }
 .split2 > * { min-width: 0; }
 .feats { list-style: none; margin: 0; padding: 0; }
 .feats li { padding: 13px 0; border-bottom: 1px solid var(--rule); }
@@ -410,10 +412,11 @@ a { color: inherit; }
    ios/Sources/ToasttyMobileApp/ToasttyDesignTokens.swift. The stage is designed at 440x900 px
    (a 390x844 screen inside its frame) and scaled to its column by website/mobile.js. */
 .mobile-sec .sec-eyebrow .beta { vertical-align: 1px; }
-.mobile-sec .feats { margin-top: 36px; }
-.mobile-grid { display: grid; grid-template-columns: 1fr 440px; gap: 56px; align-items: start; }
+.mobile-sec .lead + .feats { margin-top: 36px; }
+/* The phone is designed at 440px and scaled down so its height roughly matches the text beside it. */
+.mobile-grid { display: grid; grid-template-columns: 1fr 360px; gap: 56px; align-items: start; }
 .mobile-grid > * { min-width: 0; }
-.mstage-col { justify-self: center; width: 100%; max-width: 440px; }
+.mstage-col { justify-self: center; width: 100%; max-width: 360px; }
 .mstage-wrap { position: relative; width: 100%; }
 .mstage { position: absolute; left: 0; top: 0; width: 440px; height: 900px; transform-origin: 0 0; }
 .mfade { position: absolute; inset: 0; background: var(--paper); opacity: 0; pointer-events: none; }
