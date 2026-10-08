@@ -25,7 +25,9 @@ Run `worktree-status.py` and summarize its verdicts:
 - **ready**: open, not draft, GitHub reports it mergeable with required checks
   met, no check failing or still running, the worktree is clean at exactly
   the PR head, and the description lists no merge prerequisites.
-- **cleanup**: merged, and the worktree is clean at exactly the merged PR head.
+- **cleanup**: merged, and the worktree is clean at exactly the PR head. A
+  detached worktree may instead be at the PR merge commit, when its workspace
+  has one unambiguous PR URL chip for this repository.
 - **blocked**: anything else. Give the reason it prints. A description with an
   "Activation order", "Merge order", "Rollout", or "Depends on" section, or a
   link to a PR in another repository, blocks the PR even when CI is green.
@@ -69,7 +71,10 @@ leaving everything in place, when the workspace match is ambiguous; when the
 workspace is this session's own, holds another worktree or another PR's chip, or
 has unsaved documents; or when the worktree is locked. It rereads the workspaces
 just before closing each one, rechecks the worktree just before removing it, and
-deletes each branch only while it still points at the merged commit. It never touches blocked rows or worktrees without a PR, and
+deletes each branch only while it still points at the PR head and is not checked
+out in another worktree. Detached cleanup keeps the default branch and branches
+used by another open PR. Detached worktrees require the same PR URL chip on each
+workspace recheck. Their exact HEAD is checked again before removal. It never touches blocked rows or worktrees without a PR, and
 repeated runs are harmless.
 
 Report what was cleaned up, including any sessions or busy terminals that closing

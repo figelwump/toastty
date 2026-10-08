@@ -594,10 +594,16 @@ seconds. When it has merged, Toastty closes the workspace, removes the worktree,
 and deletes the local and remote branch, and a notification reports the result.
 
 - Toastty checks again before it cleans up. It skips the cleanup when the
-  worktree has uncommitted changes or is not at the merged commit, when the
+  worktree has uncommitted changes or is not at the PR head, when the
   workspace has unsaved documents or a terminal in another worktree, or when
   the workspace is no longer marked done. Closing the workspace ends its agent
   sessions and running commands.
+- A detached release worktree can also be cleaned up at the PR head or its
+  merge commit. Its workspace must have one unambiguous `github-pr` URL for
+  that PR. Toastty checks the URL and exact worktree commit again before
+  cleanup. Branches are deleted only at the PR head, and a branch checked out
+  in another worktree is kept. Detached cleanup also keeps the default branch
+  and branches used by another open PR. This exception applies only after a merge.
 - A cleanup that stops before it closes the workspace leaves the workspace
   open, and the button reads **Cleanup Stopped · PR #N**. Its tooltip gives the
   reason. Its menu offers **Retry Clean Up** and **Don't Clean Up**. A cleanup
@@ -633,8 +639,9 @@ merges only PRs the user names. With `--cleanup-merged`, it closes the task
 workspace, removes the worktree and deletes the branches for merged PRs, using the
 `workspace.list` query to find each workspace. Closing a workspace ends its agent
 sessions and running terminal commands, and the cleanup report names what it
-ended; a workspace with unsaved documents is skipped. Releases and deployments are outside this
-workflow.
+ended; a workspace with unsaved documents is skipped. The same detached-worktree
+checks apply here. This cleans up release worktrees; it does not perform a release
+or deployment.
 
 ## User-created skills
 
