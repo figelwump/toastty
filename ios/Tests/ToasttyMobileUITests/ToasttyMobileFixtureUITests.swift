@@ -1472,6 +1472,90 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-gated-send-optimistic", of: app)
     }
 
+    func testWorkingTurnQueuesByDefaultStopsAndOffersSteer() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "queue-steer"]
+        )
+        let workingCard = app.buttons["toastty-mobile-grouped-card-\(workingConversationID)"]
+        XCTAssertTrue(scrollHomeTo(workingCard, in: app))
+        workingCard.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+
+        // Collapsed while working: the field is open and Stop is the only
+        // button next to it. The composer no longer repeats "Agent working".
+        let input = composerInput(in: app)
+        let stop = app.buttons["toastty-mobile-composer-stop"]
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(input.isEnabled)
+        XCTAssertTrue(stop.exists)
+        XCTAssertFalse(send.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
+
+        // Typing expands the card: attach, the Queue chip, Stop, and Send.
+        input.tap()
+        input.typeText("Also add a UI test")
+        let mode = app.buttons["toastty-mobile-composer-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(mode.label, "Queue selected")
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertEqual(send.label, "Queue message")
+        XCTAssertTrue(stop.exists)
+        attachScreenshot(named: "fixture-queue-steer-expanded", of: app)
+
+        send.tap()
+        let queued = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-1"]
+        XCTAssertTrue(queued.waitForExistence(timeout: 5))
+        XCTAssertTrue(queued.label.contains("Also add a UI test"))
+        XCTAssertTrue(queued.label.contains("Queued"))
+        // Queueing never locks the composer the way a prompt send does.
+        XCTAssertTrue(input.isEnabled)
+        XCTAssertEqual(input.value as? String, "Message Codex…")
+
+        // The chip offers Steer; choosing it changes what Send does and the
+        // choice resets to Queue after the send.
+        input.tap()
+        input.typeText("Use 300 ms, not 400")
+        mode.tap()
+        let steerChoice = app.buttons["toastty-mobile-composer-mode-steer"]
+        XCTAssertTrue(steerChoice.waitForExistence(timeout: 5))
+        steerChoice.tap()
+        XCTAssertEqual(mode.label, "Steer selected")
+        XCTAssertEqual(send.label, "Steer message")
+        send.tap()
+        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-2"]
+        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("x")
+        XCTAssertEqual(mode.label, "Queue selected")
+        app.buttons["toastty-mobile-queued-remove-fixture-queued-1"].tap()
+        XCTAssertFalse(queued.waitForExistence(timeout: 2))
+
+        // Edit puts the queued text back into the field.
+        app.keys["delete"].tap()
+        input.typeText("Then run the suite")
+        send.tap()
+        let second = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-3"]
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        app.buttons["toastty-mobile-queued-edit-fixture-queued-3"].tap()
+        XCTAssertFalse(second.waitForExistence(timeout: 2))
+        XCTAssertEqual(input.value as? String, "Then run the suite")
+        send.tap()
+        let third = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-4"]
+        XCTAssertTrue(third.waitForExistence(timeout: 5))
+
+        // Stop holds the queue; the paused row offers to send it next.
+        stop.tap()
+        XCTAssertFalse(stop.waitForExistence(timeout: 2))
+        XCTAssertTrue(third.label.contains("Paused"))
+        let resume = app.buttons["toastty-mobile-queued-resume-fixture-queued-4"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-queue-steer-stopped", of: app)
+        resume.tap()
+        XCTAssertFalse(resume.waitForExistence(timeout: 2))
+        XCTAssertTrue(third.label.contains("Queued"))
+    }
+
     func testGatedSendWithChangingComposerHeightJumpsToLiveEdgeAndFollowsAppendedTail() {
         let app = launchFixtureApp(
             environment: [

@@ -275,6 +275,61 @@ private extension RemoteProtocolGoldenTests {
             try fixture("send-result-accepted.json", RemoteMessageSendResult.accepted(epoch: epoch)),
             try fixture("send-result-uncertain.json", RemoteMessageSendResult.uncertain),
             try fixture("send-result-duplicate.json", RemoteMessageSendResult.duplicate),
+            try fixture(
+                "send-request-queue.json",
+                RemoteMessageSendRequest(
+                    conversationID: conversationID,
+                    clientRequestID: "ios-request-0002",
+                    expectedInputEpoch: epoch,
+                    text: "Also add a UI test for it.",
+                    deliveryMode: .queue
+                )
+            ),
+            try fixture("send-result-queued.json", RemoteMessageSendResult.queued(position: 2)),
+            try fixture(
+                "conversation-input-control.json",
+                RemoteConversationInputControl(
+                    turnEpoch: epoch,
+                    canQueue: true,
+                    canSteer: true,
+                    canInterrupt: true,
+                    queuedMessages: [
+                        RemoteQueuedMessage(
+                            clientRequestID: "ios-request-0002",
+                            text: "Also add a UI test for it.",
+                            enqueuedAt: timestamp
+                        ),
+                        RemoteQueuedMessage(
+                            clientRequestID: "ios-request-0003",
+                            text: "Then run the suite.",
+                            attachmentCount: 1,
+                            enqueuedAt: timestamp.addingTimeInterval(5)
+                        ),
+                    ],
+                    isQueuePaused: true
+                )
+            ),
+            try fixture(
+                "queue-update-request.json",
+                RemoteConversationQueueUpdateRequest(
+                    conversationID: conversationID,
+                    action: .remove,
+                    clientRequestID: "ios-request-0002"
+                )
+            ),
+            try fixture(
+                "queue-update-response.json",
+                RemoteConversationQueueUpdateResponse(result: .updated)
+            ),
+            try fixture(
+                "interrupt-request.json",
+                RemoteConversationInterruptRequest(conversationID: conversationID, expectedTurnEpoch: epoch)
+            ),
+            try fixture("interrupt-response-accepted.json", RemoteConversationInterruptResponse(result: .accepted)),
+            try fixture(
+                "interrupt-response-rejected-turn_mismatch.json",
+                RemoteConversationInterruptResponse(result: .rejected(reason: .turnMismatch))
+            ),
         ]
 
         let rejectionReasons: [RemoteMessageRejectionReason] = [
@@ -287,6 +342,10 @@ private extension RemoteProtocolGoldenTests {
             .localDraftPresent,
             .pendingInteraction,
             .emptyText,
+            .queueFull,
+            .notWorking,
+            .turnMismatch,
+            .steerUnavailable,
         ]
         fixtures += try rejectionReasons.map { reason in
             try fixture(

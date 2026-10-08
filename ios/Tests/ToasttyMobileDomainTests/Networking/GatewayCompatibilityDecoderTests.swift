@@ -678,7 +678,8 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         cwd: Any? = nil,
         statusDetail: Any? = nil,
         executionProfile: Any? = nil,
-        placement: [String: Any] = [:]
+        placement: [String: Any] = [:],
+        inputControl: Any? = nil
     ) throws -> Data {
         var conversation: [String: Any] = [
             "conversationID": "11111111-1111-1111-1111-111111111111",
@@ -703,6 +704,9 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         }
         if let statusDetail {
             conversation["statusDetail"] = statusDetail
+        }
+        if let inputControl {
+            conversation["inputControl"] = inputControl
         }
         return try JSONSerialization.data(withJSONObject: [
             "protocolVersion": "1.0",
@@ -767,5 +771,63 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
             latestSequence: 1,
             updatedAt: Date(timeIntervalSince1970: 1_786_200_000)
         )
+    }
+}
+
+// MARK: - Queue, steer, and stop controls
+
+extension GatewayCompatibilityDecoderTests {
+    func testInputControlIsAdditiveAndLenient() throws {
+        let turnEpoch: [String: Any] = ["bindingID": "33333333-3333-3333-3333-333333333333", "counter": 42]
+        let present = try decoder.decodeSessionListResponse(sessionSnapshotData(
+            inputAvailability: ["kind": "unavailable", "reason": "working"],
+            preview: NSNull(),
+            inputControl: [
+                "turnEpoch": turnEpoch,
+                "canQueue": true,
+                "canSteer": true,
+                "canInterrupt": true,
+                "isQueuePaused": true,
+                "queuedMessages": [
+                    ["clientRequestID": "q-1", "text": "first", "enqueuedAt": "2026-08-08T14:40:00.125Z"],
+                    ["clientRequestID": "q-2", "text": "second", "attachmentCount": 2, "enqueuedAt": "2026-08-08T14:40:05.125Z"],
+                ],
+            ]
+        ))
+        let control = try XCTUnwrap(try XCTUnwrap(present.conversations.first).inputControl)
+        XCTAssertEqual(control.turnEpoch?.counter, 42)
+        XCTAssertTrue(control.canQueue)
+        XCTAssertTrue(control.canSteer)
+        XCTAssertTrue(control.canInterrupt)
+        XCTAssertTrue(control.isQueuePaused)
+        XCTAssertEqual(control.queuedMessages.map(\.clientRequestID), ["q-1", "q-2"])
+        XCTAssertEqual(control.queuedMessages.map(\.attachmentCount), [0, 2])
+        XCTAssertEqual(
+            try XCTUnwrap(present.presentation().workspaces.first?.conversations.first).inputControl,
+            control
+        )
+
+        // An older host omits the object; a malformed one reads as absent.
+        let absent = try decoder.decodeSessionListResponse(sessionSnapshotData(
+            inputAvailability: ["kind": "unavailable", "reason": "working"], preview: NSNull()
+        ))
+        XCTAssertNil(try XCTUnwrap(absent.conversations.first).inputControl)
+        let malformed = try decoder.decodeSessionListResponse(sessionSnapshotData(
+            inputAvailability: ["kind": "unavailable", "reason": "working"], preview: NSNull(),
+            inputControl: ["turnEpoch": "not-an-epoch"]
+        ))
+        XCTAssertNil(try XCTUnwrap(malformed.conversations.first).inputControl)
+        let minimal = try decoder.decodeSessionListResponse(sessionSnapshotData(
+            inputAvailability: ["kind": "unavailable", "reason": "working"], preview: NSNull(),
+            inputControl: ["canQueue": true]
+        ))
+        XCTAssertEqual(try XCTUnwrap(minimal.conversations.first).inputControl, RemoteConversationInputControl(canQueue: true))
+    }
+
+    func testQueuedSendResultDecodes() throws {
+        let queued = try decoder.decodeSendResult(Data(#"{"position":2,"status":"queued"}"#.utf8))
+        XCTAssertEqual(queued, .queued(position: 2))
+        let rejected = try decoder.decodeSendResult(Data(#"{"reason":"steer_unavailable","status":"rejected"}"#.utf8))
+        XCTAssertEqual(rejected, .rejected(reason: .steerUnavailable))
     }
 }

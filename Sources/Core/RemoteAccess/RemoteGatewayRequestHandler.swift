@@ -68,6 +68,14 @@ public final class RemoteGatewayRequestHandler {
         RemoteConversationFlagRequest,
         RemoteDeviceRecord
     ) -> RemoteConversationFlagResult
+    public typealias QueueUpdateHandler = (
+        RemoteConversationQueueUpdateRequest,
+        RemoteDeviceRecord
+    ) -> RemoteConversationQueueUpdateResult
+    public typealias InterruptHandler = (
+        RemoteConversationInterruptRequest,
+        RemoteDeviceRecord
+    ) -> RemoteConversationInterruptResult
 
     public typealias SessionStartOptionsHandler = (
         RemoteSessionStartOptionsRequest,
@@ -95,6 +103,8 @@ public final class RemoteGatewayRequestHandler {
     private let readAcknowledgementHandler: ReadAcknowledgementHandler?
     private let workspaceDoneHandler: WorkspaceDoneHandler?
     private let conversationFlagHandler: ConversationFlagHandler?
+    private let queueUpdateHandler: QueueUpdateHandler?
+    private let interruptHandler: InterruptHandler?
     private let nativeIdentityForTesting: String?
     private var configuration: RemoteGatewayConfiguration
     private var pairingRateLimiter: RemoteAccessRateLimiter
@@ -223,6 +233,7 @@ public final class RemoteGatewayRequestHandler {
         } else { result = .rejected(reason: .invalidAttachments) }
         switch result {
         case .accepted: auditLog.record(.init(at: Date(), action: .remoteSendAccepted, deviceID: deviceID))
+        case .queued: auditLog.record(.init(at: Date(), action: .remoteSendQueued, deviceID: deviceID))
         case .uncertain: auditLog.record(.init(at: Date(), action: .remoteSendUncertain, deviceID: deviceID))
         case .rejected(let reason): auditLog.record(.init(at: Date(), action: .remoteSendRejected, deviceID: deviceID, detail: reason.rawValue))
         case .duplicate: break
@@ -261,6 +272,8 @@ public final class RemoteGatewayRequestHandler {
         readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
         workspaceDoneHandler: WorkspaceDoneHandler? = nil,
         conversationFlagHandler: ConversationFlagHandler? = nil,
+        queueUpdateHandler: QueueUpdateHandler? = nil,
+        interruptHandler: InterruptHandler? = nil,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
     ) {
@@ -274,6 +287,8 @@ public final class RemoteGatewayRequestHandler {
             readAcknowledgementHandler: readAcknowledgementHandler,
             workspaceDoneHandler: workspaceDoneHandler,
             conversationFlagHandler: conversationFlagHandler,
+            queueUpdateHandler: queueUpdateHandler,
+            interruptHandler: interruptHandler,
             // The public production entry point can never inject identity.
             nativeIdentityForTesting: nil,
             pairingRateLimiter: pairingRateLimiter,
@@ -294,6 +309,8 @@ public final class RemoteGatewayRequestHandler {
         readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
         workspaceDoneHandler: WorkspaceDoneHandler? = nil,
         conversationFlagHandler: ConversationFlagHandler? = nil,
+        queueUpdateHandler: QueueUpdateHandler? = nil,
+        interruptHandler: InterruptHandler? = nil,
         nativeIdentityForTesting: String?,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
@@ -307,6 +324,8 @@ public final class RemoteGatewayRequestHandler {
         self.readAcknowledgementHandler = readAcknowledgementHandler
         self.workspaceDoneHandler = workspaceDoneHandler
         self.conversationFlagHandler = conversationFlagHandler
+        self.queueUpdateHandler = queueUpdateHandler
+        self.interruptHandler = interruptHandler
         self.nativeIdentityForTesting = nativeIdentityForTesting
         self.pairingRateLimiter = pairingRateLimiter
         self.authRateLimiter = authRateLimiter
@@ -430,7 +449,20 @@ public final class RemoteGatewayRequestHandler {
                     ))
                     return .respond(sessionStartResponse(.rejected(reason: .permissionDenied)))
                 }
-                if policy.route == .workspaceDone || policy.route == .conversationFlag {
+                if policy.route == .conversationInterrupt {
+                    auditLog.record(RemoteAccessAuditEntry(
+                        at: date,
+                        action: .remoteInterruptRejected,
+                        deviceID: authenticated.id,
+                        detail: "send_scope_denied"
+                    ))
+                    let body = (try? encoder.encode(RemoteConversationInterruptResponse(
+                        result: .rejected(reason: .sendScopeDenied)
+                    ))) ?? Data()
+                    return .respond(.json(status: 403, reason: "Forbidden", body: body))
+                }
+                if policy.route == .workspaceDone || policy.route == .conversationFlag
+                    || policy.route == .conversationQueueUpdate {
                     // Not a message send, so it has neither a send result to
                     // return nor a send rejection to audit.
                     return .respond(errorResponse(
@@ -487,6 +519,10 @@ public final class RemoteGatewayRequestHandler {
             return handleWorkspaceDone(request, device: authenticated, at: date)
         case .conversationFlag:
             return handleConversationFlag(request, device: authenticated, at: date)
+        case .conversationQueueUpdate:
+            return handleQueueUpdate(request, device: authenticated, at: date)
+        case .conversationInterrupt:
+            return handleInterrupt(request, device: authenticated, at: date)
         case .sessionStartOptions:
             return handleSessionStartOptions(request, device: authenticated)
         case .sessionStart:
@@ -790,6 +826,85 @@ public final class RemoteGatewayRequestHandler {
         return .respond(.json(body: body))
     }
 
+    private func handleQueueUpdate(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= Self.maximumWorkspaceDoneBodyBytes,
+              let updateRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationQueueUpdateRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected queue update JSON"
+            ))
+        }
+        guard updateRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        let result = queueUpdateHandler?(updateRequest, device) ?? .conversationNotFound
+        if result == .updated {
+            auditLog.record(.init(
+                at: date,
+                action: .remoteQueueUpdated,
+                deviceID: device.id,
+                detail: updateRequest.action.rawValue
+            ))
+        }
+        let body = (try? encoder.encode(RemoteConversationQueueUpdateResponse(result: result))) ?? Data()
+        return .respond(.json(body: body))
+    }
+
+    private func handleInterrupt(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= Self.maximumWorkspaceDoneBodyBytes,
+              let interruptRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationInterruptRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected interrupt JSON"
+            ))
+        }
+        guard interruptRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        let result = interruptHandler?(interruptRequest, device) ?? .rejected(reason: .unsupported)
+        switch result {
+        case .accepted:
+            auditLog.record(.init(at: date, action: .remoteInterruptAccepted, deviceID: device.id))
+        case .rejected(let reason):
+            auditLog.record(.init(
+                at: date,
+                action: .remoteInterruptRejected,
+                deviceID: device.id,
+                detail: reason.rawValue
+            ))
+        }
+        let body = (try? encoder.encode(RemoteConversationInterruptResponse(result: result))) ?? Data()
+        return .respond(.json(body: body))
+    }
+
     private func handleSessionStartOptions(
         _ request: RemoteGatewayHTTPRequest,
         device: RemoteDeviceRecord
@@ -937,6 +1052,8 @@ public final class RemoteGatewayRequestHandler {
         switch result {
         case .accepted:
             auditLog.record(RemoteAccessAuditEntry(at: date, action: .remoteSendAccepted, deviceID: device.id))
+        case .queued:
+            auditLog.record(RemoteAccessAuditEntry(at: date, action: .remoteSendQueued, deviceID: device.id))
         case .rejected(let reason):
             auditLog.record(RemoteAccessAuditEntry(at: date, action: .remoteSendRejected, deviceID: device.id, detail: reason.rawValue))
         case .uncertain:

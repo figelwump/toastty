@@ -47,6 +47,12 @@ protocol LiveConnectionRuntime: Sendable {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse?
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse?
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse?
     func sessionStartOptions(
         _ request: RemoteSessionStartOptionsRequest
     ) async throws -> RemoteSessionStartOptionsResponse?
@@ -56,6 +62,18 @@ protocol LiveConnectionRuntime: Sendable {
 }
 
 extension LiveConnectionRuntime {
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse? {
+        nil
+    }
+
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse? {
+        nil
+    }
+
     func setWorkspaceDone(
         _ request: RemoteWorkspaceDoneRequest
     ) async throws -> RemoteWorkspaceDoneResponse? {
@@ -195,6 +213,18 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse? {
         try await coordinator.setConversationFlag(request)
+    }
+
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse? {
+        try await coordinator.updateQueue(request)
+    }
+
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse? {
+        try await coordinator.interrupt(request)
     }
 
     func sessionStartOptions(
@@ -461,10 +491,17 @@ final class LiveSessionsController {
             },
             acknowledgeRead: { [runtime] request in
                 try await runtime.acknowledgeConversationRead(request)
+            },
+            updateQueue: { [runtime] request in
+                try await runtime.updateQueue(request)
+            },
+            interrupt: { [runtime] request in
+                try await runtime.interrupt(request)
             }
         )
         controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }
         controller.consumeConnectionState(coordinatorState)
+        controller.consumeInputControl(inputControl(for: conversationID))
         activeConversationController = controller
         await controller.start()
 
@@ -577,7 +614,19 @@ final class LiveSessionsController {
                 .map(\.projectionGeneration)
                 .max()
         }
+        if let controller = activeConversationController {
+            controller.consumeInputControl(inputControl(for: controller.conversationID))
+        }
         applyPresentation()
+    }
+
+    /// The host's queue, steer, and stop controls for a conversation from
+    /// the latest session snapshot, only when the host advertises them.
+    private func inputControl(for conversationID: UUID) -> RemoteConversationInputControl? {
+        guard coordinatorState.capabilities.contains(.conversationInputControl) else { return nil }
+        return sessionsState.snapshot?.conversations
+            .first { $0.conversationID.rawValue == conversationID }?
+            .inputControl
     }
 
     private func handleTerminal(_ phase: ConnectionCoordinatorPhase) {

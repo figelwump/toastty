@@ -117,6 +117,36 @@ final class RemoteAccessConversationFlagBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's authenticated queue edit into the main-actor-owned
+/// send queue.
+final class RemoteAccessQueueUpdateBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func update(
+        _ request: RemoteConversationQueueUpdateRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationQueueUpdateResult {
+        MainActor.assumeIsolated {
+            service?.performQueueUpdate(request, device: device) ?? .conversationNotFound
+        }
+    }
+}
+
+/// Bridges the gateway's authenticated interrupt into the main-actor-owned
+/// terminal delivery path.
+final class RemoteAccessInterruptBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationInterruptResult {
+        MainActor.assumeIsolated {
+            service?.performRemoteInterrupt(request, device: device) ?? .rejected(reason: .notBound)
+        }
+    }
+}
+
 /// Bridges the gateway's synchronous options request into the main-actor
 /// session starter.
 final class RemoteAccessSessionStartBridge: @unchecked Sendable {
@@ -221,6 +251,7 @@ struct RemotePendingSendCorrelator: Sendable {
         var clientRequestID: String
         var trimmedText: String
         var displayText: String?
+        var deliveryMode: RemoteMessageDeliveryMode
     }
 
     private var pendingSendsByConversationID: [RemoteConversationID: [PendingSend]] = [:]
@@ -229,11 +260,16 @@ struct RemotePendingSendCorrelator: Sendable {
         Set(pendingSendsByConversationID.keys)
     }
 
-    mutating func record(_ request: RemoteMessageSendRequest, deliveredText: String? = nil) {
+    mutating func record(
+        _ request: RemoteMessageSendRequest,
+        deliveredText: String? = nil,
+        deliveryMode: RemoteMessageDeliveryMode = .prompt
+    ) {
         let pendingSend = PendingSend(
             clientRequestID: request.clientRequestID,
             trimmedText: (deliveredText ?? request.text).trimmingCharacters(in: .whitespacesAndNewlines),
-            displayText: request.attachments.isEmpty ? nil : request.displayText
+            displayText: request.attachments.isEmpty ? nil : request.displayText,
+            deliveryMode: deliveryMode
         )
         var pendingSends = pendingSendsByConversationID[request.conversationID, default: []]
         pendingSends.append(pendingSend)
@@ -277,6 +313,7 @@ struct RemotePendingSendCorrelator: Sendable {
             if let displayText = pending.displayText { stampedPayload.text = displayText }
             stampedPayload.origin = .remote
             stampedPayload.clientRequestID = pending.clientRequestID
+            stampedPayload.deliveryMode = pending.deliveryMode == .prompt ? nil : pending.deliveryMode
             var stamped = observation
             stamped.payload = .transcript(.userMessage(stampedPayload))
             return stamped
@@ -374,9 +411,24 @@ final class RemoteAccessService: ObservableObject {
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
     private let workspaceDoneBridge = RemoteAccessWorkspaceDoneBridge()
     private let conversationFlagBridge = RemoteAccessConversationFlagBridge()
+    private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
+    private let interruptBridge = RemoteAccessInterruptBridge()
     private let sessionStartBridge = RemoteAccessSessionStartBridge()
     private var sessionStarter: RemoteSessionStarter?
     private var coordinator = RemoteInputCoordinator()
+    /// Messages held for the next open prompt, per conversation.
+    private var sendQueue = RemoteSendQueue()
+    /// Staged attachment directories owned by queued entries, so a removed or
+    /// expired entry can release its files.
+    private var stagedAttachmentsByQueuedRequestID: [String: RemoteMessageAttachmentStore.Staged] = [:]
+    /// Steer types into a running TUI, so it is limited to providers whose
+    /// behavior for input during a turn is verified. Claude Code holds such
+    /// input in its own queue until the turn ends, which Toastty's queue
+    /// already covers.
+    static let steerCapableProviders: Set<AgentKind> = [.codex]
+    /// A steer's confirming user message arrives when the provider next reads
+    /// its input, which can be well after a long tool call.
+    private static let steerConfirmationTimeout: Duration = .seconds(180)
     private let handler: RemoteGatewayRequestHandler
     private let server: any RemoteAccessGatewayServing
     private let port: UInt16
@@ -527,6 +579,12 @@ final class RemoteAccessService: ObservableObject {
             },
             conversationFlagHandler: { [conversationFlagBridge] request, device in
                 conversationFlagBridge.setFlag(request, device: device)
+            },
+            queueUpdateHandler: { [queueUpdateBridge] request, device in
+                queueUpdateBridge.update(request, device: device)
+            },
+            interruptHandler: { [interruptBridge] request, device in
+                interruptBridge.interrupt(request, device: device)
             }
         )
         self.server = gatewayServerFactory(handler)
@@ -547,6 +605,8 @@ final class RemoteAccessService: ObservableObject {
         readAcknowledgementBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
+        queueUpdateBridge.service = self
+        interruptBridge.service = self
         sessionStartBridge.service = self
         sessionStarter = RemoteSessionStarter(
             store: store,
@@ -903,6 +963,7 @@ final class RemoteAccessService: ObservableObject {
             .union(activeSessionIDByConversationID.keys)
             .union(panelIDByConversationID.keys)
             .union(pendingSendCorrelator.conversationIDs)
+            .union(sendQueue.conversationIDs)
             .union(projectionStore.registeredConversationIDs)
         for conversationID in trackedConversationIDs {
             removeConversationState(conversationID)
@@ -1836,6 +1897,9 @@ final class RemoteAccessService: ObservableObject {
             // the projection so the session list and send gate agree.
             syncCoordinatorAvailability(for: candidate.conversationID)
 
+            if let projector = projectionStore.projectorState(for: candidate.conversationID) {
+                expireStaleQueueEntries(for: candidate.conversationID, bindingID: projector.bindingID)
+            }
         }
 
         // Conversations whose panels disappeared or whose current runtime can
@@ -1846,11 +1910,16 @@ final class RemoteAccessService: ObservableObject {
             .union(activeSessionIDByConversationID.keys)
             .union(panelIDByConversationID.keys)
             .union(pendingSendCorrelator.conversationIDs)
+            .union(sendQueue.conversationIDs)
             .union(projectionStore.registeredConversationIDs)
         for conversationID in trackedConversationIDs where seenConversationIDs.contains(conversationID) == false {
             removeConversationState(conversationID)
             listChanged = true
         }
+
+        // Deliver queued messages only now, after bindings, panel maps, and
+        // availability are settled for every conversation.
+        drainSendQueues()
 
         let controllableSessions = buildConversationSummaries().filter {
             ProviderTranscriptSupport.isManagedProvider($0.provider)
@@ -1869,6 +1938,11 @@ final class RemoteAccessService: ObservableObject {
     /// this is safe to call on every sync.
     private func syncCoordinatorAvailability(for conversationID: RemoteConversationID) {
         guard let projector = projectionStore.projectorState(for: conversationID) else { return }
+        defer {
+            // The coordinator only tracks a turn once it knows the
+            // conversation, which `setProviderAvailability` below guarantees.
+            coordinator.setTurnEpoch(projector.turnEpoch, for: conversationID)
+        }
         if let authority = bootstrappedPromptAuthorityByConversationID[conversationID] {
             guard case .openPrompt(let epoch) = projector.inputAvailability,
                   epoch == authority.inputEpoch else {
@@ -1929,8 +2003,9 @@ final class RemoteAccessService: ObservableObject {
             guard emitted.isEmpty == false else { return }
             self.syncCoordinatorAvailability(for: conversationID)
             self.broadcastEvents(emitted, for: conversationID)
+            self.drainSendQueue(for: conversationID)
             ToasttyLog.debug(
-                "Claude remote prompt stabilization completed",
+                "Remote prompt stabilization completed",
                 category: .automation,
                 metadata: [
                     "conversation_id": conversationID.rawValue.uuidString,
@@ -2151,6 +2226,8 @@ final class RemoteAccessService: ObservableObject {
         providerFeedIdentityByConversationID.removeValue(forKey: conversationID)
         providerFeedLastFingerprintByConversationID.removeValue(forKey: conversationID)
         pendingSendCorrelator.discard(for: conversationID)
+        discardQueuedEntries(sendQueue.removeAll(for: conversationID))
+        sendQueue.removeConversation(conversationID)
         if let panelID = panelIDByConversationID.removeValue(forKey: conversationID),
            conversationIDByPanelID[panelID] == conversationID {
             conversationIDByPanelID.removeValue(forKey: panelID)
@@ -2189,6 +2266,7 @@ final class RemoteAccessService: ObservableObject {
                     isFlaggedForLater: candidate.isFlaggedForLater,
                     turnStartedAt: candidate.turnStartedAt,
                     lastTurnDuration: candidate.lastTurnDuration,
+                    inputControl: inputControl(for: candidate),
                     projectionGeneration: projector.generation,
                     latestSequence: projector.latestSequence,
                     updatedAt: max(projector.updatedAt, candidate.updatedAt)
@@ -2453,6 +2531,7 @@ final class RemoteAccessService: ObservableObject {
                 for: conversationID,
                 sessionListChanged: previousProfile != projectionStore.projectorState(for: conversationID)?.executionProfile
             )
+            drainSendQueue(for: conversationID)
 
         case .fileReplaced:
             // Unreconcilable rewrite: discard this conversation's sequence
@@ -2601,21 +2680,396 @@ final class RemoteAccessService: ObservableObject {
         if !Task.isCancelled, let currentDevice = deviceStore.devices.first(where: {
             $0.id == device.id && !$0.isRevoked && $0.authKind == .native && $0.scopes.contains(.send)
         }) {
-            result = performRemoteSend(request, device: currentDevice, deliveredText: staged.deliveryText(for: request))
+            result = performRemoteSend(request, device: currentDevice, deliveredText: staged.deliveryText(for: request), staged: staged)
         } else { result = .rejected(reason: .sendScopeDenied) }
         switch result {
-        case .accepted, .uncertain: break
+        case .accepted, .uncertain, .queued: break
         case .rejected, .duplicate: await attachmentStore.discard(staged)
         }
         return result
     }
 
+    private func deliveryContext(
+        for conversationID: RemoteConversationID,
+        panelID: UUID,
+        device: RemoteDeviceRecord
+    ) -> RemoteInputCoordinator.DeliveryContext {
+        let promptState = terminalRuntimeRegistry.promptState(panelID: panelID)
+        // A managed agent TUI commonly reports `.busy` even when its own
+        // provider lifecycle says the composer is open. Provider availability
+        // remains authoritative; this check only rejects a missing or exited
+        // surface.
+        return RemoteInputCoordinator.DeliveryContext(
+            deviceHasSendScope: device.scopes.contains(.send),
+            sessionWritesEnabled: sessionWritePolicy.isEnabled(for: conversationID),
+            isBoundToLiveSurface: activeSessionIDByConversationID[conversationID] != nil,
+            isSurfaceReadyForInput: promptState != .unavailable && promptState != .exited
+        )
+    }
+
+    // MARK: - Queue, steer, and stop
+
+    /// Holds a message on the Mac for the next open prompt. Accepted whenever
+    /// the conversation could accept a live send later; the open-prompt gate
+    /// runs at delivery time, not here.
+    private func enqueueRemoteSend(
+        _ request: RemoteMessageSendRequest,
+        device: RemoteDeviceRecord,
+        staged: RemoteMessageAttachmentStore.Staged?
+    ) -> RemoteMessageSendResult {
+        let conversationID = request.conversationID
+        guard isReady,
+              let panelID = panelIDByConversationID[conversationID],
+              let projector = projectionStore.projectorState(for: conversationID) else {
+            return .rejected(reason: .notBound)
+        }
+        if coordinator.hasProcessed(request.clientRequestID, for: conversationID) {
+            return .duplicate
+        }
+        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
+        if let rejection = RemoteInputCoordinator.commonRejection(for: request, context: context) {
+            return .rejected(reason: rejection)
+        }
+        // The phone queued against the runtime it saw. A different binding
+        // means a resumed or relaunched agent; the client must re-read state.
+        guard request.expectedInputEpoch.bindingID == projector.bindingID else {
+            return .rejected(reason: .turnMismatch)
+        }
+        let entry = RemoteSendQueue.Entry(
+            request: request,
+            deviceID: device.id,
+            bindingID: projector.bindingID,
+            deliveredText: staged?.deliveryText(for: request),
+            enqueuedAt: Date()
+        )
+        let result: RemoteMessageSendResult
+        switch sendQueue.enqueue(entry) {
+        case .queued(let position):
+            if let staged { stagedAttachmentsByQueuedRequestID[request.clientRequestID] = staged }
+            result = .queued(position: position)
+        case .duplicate:
+            result = .duplicate
+        case .full:
+            result = .rejected(reason: .queueFull)
+        }
+        ToasttyLog.info(
+            "Remote send queued",
+            category: .automation,
+            metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "client_request_id": request.clientRequestID,
+                "result": String(describing: result),
+                "queue_depth": String(sendQueue.entries(for: conversationID).count),
+            ]
+        )
+        if case .queued = result {
+            broadcastSessionList()
+            // The prompt may already be open (the turn ended while the phone
+            // still showed it working); deliver without waiting for a sync.
+            drainSendQueue(for: conversationID)
+        }
+        return result
+    }
+
+    /// Types a message into the running turn. Same terminal path as a prompt
+    /// send; the turn gate replaces the open-prompt gate.
+    private func performRemoteSteer(
+        _ request: RemoteMessageSendRequest,
+        device: RemoteDeviceRecord,
+        deliveredText: String?
+    ) -> RemoteMessageSendResult {
+        let conversationID = request.conversationID
+        guard isReady,
+              let panelID = panelIDByConversationID[conversationID],
+              let projector = projectionStore.projectorState(for: conversationID) else {
+            return .rejected(reason: .notBound)
+        }
+        guard Self.steerCapableProviders.contains(projector.provider) else {
+            return .rejected(reason: .steerUnavailable)
+        }
+        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
+        switch coordinator.evaluateSteer(request, context: context) {
+        case .duplicate:
+            return .duplicate
+        case .reject(let reason):
+            return .rejected(reason: reason)
+        case .accept(let turnEpoch):
+            let delivery = terminalRuntimeRegistry.sendRemoteText(
+                deliveredText ?? request.text,
+                submit: true,
+                panelID: panelID,
+                focusPolicy: .preserveFirstResponder
+            )
+            switch delivery {
+            case .unavailable:
+                return .rejected(reason: .surfaceUnavailable)
+            case .uncertain:
+                coordinator.markSteerUncertain(request)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: Self.steerConfirmationTimeout, deliveryMode: .steer)
+                broadcastSessionList()
+                return .uncertain
+            case .delivered:
+                coordinator.markSteerDelivered(request)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: Self.steerConfirmationTimeout, deliveryMode: .steer)
+                ToasttyLog.info(
+                    "Remote steer delivered",
+                    category: .automation,
+                    metadata: [
+                        "conversation_id": conversationID.rawValue.uuidString,
+                        "client_request_id": request.clientRequestID,
+                    ]
+                )
+                broadcastSessionList()
+                return .accepted(epoch: turnEpoch)
+            }
+        }
+    }
+
+    func performQueueUpdate(
+        _ request: RemoteConversationQueueUpdateRequest,
+        device _: RemoteDeviceRecord
+    ) -> RemoteConversationQueueUpdateResult {
+        let conversationID = request.conversationID
+        guard isReady, panelIDByConversationID[conversationID] != nil else {
+            return .conversationNotFound
+        }
+        let result: RemoteConversationQueueUpdateResult
+        switch request.action {
+        case .remove:
+            if let clientRequestID = request.clientRequestID,
+               let removed = sendQueue.remove(clientRequestID: clientRequestID, for: conversationID) {
+                discardQueuedEntries([removed])
+                // Every device that queued or saw it learns it will not be
+                // typed; the removing device also drops its own record.
+                noteQueuedSendDropped(removed, for: conversationID)
+                result = .updated
+            } else {
+                result = .unchanged
+            }
+        case .resume:
+            result = sendQueue.resume(conversationID) ? .updated : .unchanged
+        }
+        ToasttyLog.info(
+            "Remote queue update evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "action": request.action.rawValue,
+                "result": result.rawValue,
+            ]
+        )
+        if result == .updated {
+            broadcastSessionList()
+            if request.action == .resume { drainSendQueue(for: conversationID) }
+        }
+        return result
+    }
+
+    /// Sends the provider's interrupt key for the turn the client names and
+    /// holds the queue, so nothing starts a new turn right after the stop.
+    func performRemoteInterrupt(
+        _ request: RemoteConversationInterruptRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationInterruptResult {
+        let conversationID = request.conversationID
+        guard isReady, let panelID = panelIDByConversationID[conversationID] else {
+            return .rejected(reason: .notBound)
+        }
+        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
+        let result: RemoteConversationInterruptResult
+        switch coordinator.evaluateInterrupt(
+            for: conversationID,
+            expectedTurnEpoch: request.expectedTurnEpoch,
+            context: context
+        ) {
+        case .reject(let reason):
+            result = .rejected(reason: reason)
+        case .accept:
+            let delivery = terminalRuntimeRegistry.sendRemoteInterrupt(
+                panelID: panelID,
+                focusPolicy: .preserveFirstResponder
+            )
+            if delivery == .delivered {
+                sendQueue.pause(conversationID)
+                result = .accepted
+            } else {
+                result = .rejected(reason: .surfaceUnavailable)
+            }
+        }
+        ToasttyLog.info(
+            "Remote interrupt evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "result": String(describing: result),
+            ]
+        )
+        if result == .accepted {
+            broadcastSessionList()
+        }
+        return result
+    }
+
+    private func drainSendQueues() {
+        for conversationID in sendQueue.conversationIDs {
+            drainSendQueue(for: conversationID)
+        }
+    }
+
+    /// Delivers the next queued entry when, and only when, the coordinator
+    /// reports an open prompt. One entry per open prompt: delivery consumes
+    /// the prompt, and the rest wait for the turn it starts to end.
+    private func drainSendQueue(for conversationID: RemoteConversationID) {
+        guard isReady, let entry = sendQueue.next(for: conversationID) else { return }
+        guard case .openPrompt(let epoch) = coordinator.availability(for: conversationID) else { return }
+        guard entry.bindingID == epoch.bindingID else {
+            expireStaleQueueEntries(for: conversationID, bindingID: epoch.bindingID)
+            return
+        }
+        guard let device = deviceStore.devices.first(where: {
+            $0.id == entry.deviceID && !$0.isRevoked && $0.scopes.contains(.send)
+        }) else {
+            // The device lost send access since it queued the message.
+            if let removed = sendQueue.remove(clientRequestID: entry.clientRequestID, for: conversationID) {
+                discardQueuedEntries([removed])
+            }
+            logQueueDelivery(entry, for: conversationID, outcome: "device_send_denied")
+            noteQueuedSendDropped(entry, for: conversationID)
+            broadcastSessionList()
+            drainSendQueue(for: conversationID)
+            return
+        }
+        var request = entry.request
+        request.deliveryMode = .prompt
+        request.expectedInputEpoch = epoch
+        let result = performRemoteSend(
+            request,
+            device: device,
+            deliveredText: entry.deliveredText,
+            recordedDeliveryMode: .queue
+        )
+        let dropsEntry: Bool
+        switch result {
+        case .accepted, .uncertain, .duplicate:
+            dropsEntry = true
+        case .queued:
+            // Unreachable: the drained request is a prompt send.
+            dropsEntry = false
+        case .rejected(let reason):
+            switch reason {
+            case .sendScopeDenied, .sessionWritesDisabled, .emptyText, .invalidAttachments,
+                 .attachmentStorageUnavailable, .queueFull, .notWorking, .turnMismatch, .steerUnavailable:
+                // Nothing a later prompt would change.
+                dropsEntry = true
+            case .notBound, .surfaceUnavailable, .promptNotOpen, .epochMismatch,
+                 .localDraftPresent, .pendingInteraction:
+                dropsEntry = false
+            }
+        }
+        logQueueDelivery(entry, for: conversationID, outcome: String(describing: result))
+        if dropsEntry {
+            if let removed = sendQueue.remove(clientRequestID: entry.clientRequestID, for: conversationID) {
+                // A delivered entry's staged files are now the agent's to read;
+                // only the bookkeeping entry is released here.
+                stagedAttachmentsByQueuedRequestID.removeValue(forKey: removed.clientRequestID)
+            }
+            if case .rejected = result {
+                noteQueuedSendDropped(entry, for: conversationID)
+            }
+            broadcastSessionList()
+        }
+    }
+
+    /// Tells the queuing client that its message left the queue without being
+    /// typed, through the same journal receipt a lost echo produces, so the
+    /// phone never waits forever on a message the Mac will not deliver.
+    private func noteQueuedSendDropped(
+        _ entry: RemoteSendQueue.Entry,
+        for conversationID: RemoteConversationID
+    ) {
+        let emitted = projectionStore.noteSendDeliveryUnconfirmed(
+            for: conversationID,
+            clientRequestID: entry.clientRequestID,
+            at: Date()
+        )
+        broadcastEvents(emitted, for: conversationID)
+    }
+
+    /// Drops entries queued against a binding other than the current one.
+    private func expireStaleQueueEntries(for conversationID: RemoteConversationID, bindingID: UUID) {
+        let stale = sendQueue.removeAll(for: conversationID, notMatchingBindingID: bindingID)
+        guard stale.isEmpty == false else { return }
+        discardQueuedEntries(stale)
+        for entry in stale {
+            logQueueDelivery(entry, for: conversationID, outcome: "expired_binding_changed")
+            noteQueuedSendDropped(entry, for: conversationID)
+        }
+        broadcastSessionList()
+    }
+
+    private func discardQueuedEntries(_ entries: [RemoteSendQueue.Entry]) {
+        for entry in entries {
+            guard let staged = stagedAttachmentsByQueuedRequestID.removeValue(forKey: entry.clientRequestID) else { continue }
+            Task { [attachmentStore] in await attachmentStore.discard(staged) }
+        }
+    }
+
+    private func logQueueDelivery(
+        _ entry: RemoteSendQueue.Entry,
+        for conversationID: RemoteConversationID,
+        outcome: String
+    ) {
+        ToasttyLog.info(
+            "Remote queued send evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "client_request_id": entry.clientRequestID,
+                "outcome": outcome,
+                "queue_depth": String(sendQueue.entries(for: conversationID).count),
+            ]
+        )
+    }
+
+    private func inputControl(for candidate: ConversationCandidate) -> RemoteConversationInputControl {
+        let conversationID = candidate.conversationID
+        let turnEpoch = coordinator.turnEpoch(for: conversationID)
+        let acceptsWrites = sessionWritePolicy.isEnabled(for: conversationID)
+            && activeSessionIDByConversationID[conversationID] != nil
+        let queue = sendQueue.inputControlQueue(for: conversationID)
+        return RemoteConversationInputControl(
+            turnEpoch: turnEpoch,
+            canQueue: acceptsWrites,
+            canSteer: acceptsWrites
+                && turnEpoch != nil
+                && Self.steerCapableProviders.contains(candidate.provider)
+                && coordinator.canSteer(for: conversationID),
+            canInterrupt: acceptsWrites && turnEpoch != nil,
+            queuedMessages: queue.queuedMessages,
+            isQueuePaused: queue.isPaused
+        )
+    }
+
     /// Performs a remote send synchronously on the main actor. The gate check
     /// and terminal delivery share this one call, so no epoch can change
     /// between `evaluate` and `markDelivered`.
-    func performRemoteSend(_ request: RemoteMessageSendRequest, device: RemoteDeviceRecord, deliveredText: String? = nil) -> RemoteMessageSendResult {
+    func performRemoteSend(
+        _ request: RemoteMessageSendRequest,
+        device: RemoteDeviceRecord,
+        deliveredText: String? = nil,
+        staged: RemoteMessageAttachmentStore.Staged? = nil,
+        recordedDeliveryMode: RemoteMessageDeliveryMode = .prompt
+    ) -> RemoteMessageSendResult {
         guard request.attachments.isEmpty || deliveredText != nil else {
             return .rejected(reason: .invalidAttachments)
+        }
+        switch request.deliveryMode {
+        case .prompt:
+            break
+        case .queue:
+            return enqueueRemoteSend(request, device: device, staged: staged)
+        case .steer:
+            return performRemoteSteer(request, device: device, deliveredText: deliveredText)
         }
         guard isReady else {
             return .rejected(reason: .notBound)
@@ -2630,21 +3084,7 @@ final class RemoteAccessService: ObservableObject {
         ) {
             return .rejected(reason: rejection)
         }
-        let sessionWritesEnabled = sessionWritePolicy.isEnabled(for: conversationID)
-        let isBound = activeSessionIDByConversationID[conversationID] != nil
-        let promptState = terminalRuntimeRegistry.promptState(panelID: panelID)
-        // A managed agent TUI commonly reports `.busy` even when its own
-        // provider lifecycle says the composer is open. Provider availability
-        // remains authoritative; this check only rejects a missing or exited
-        // surface.
-        let surfaceReady = promptState != .unavailable && promptState != .exited
-
-        let context = RemoteInputCoordinator.DeliveryContext(
-            deviceHasSendScope: device.scopes.contains(.send),
-            sessionWritesEnabled: sessionWritesEnabled,
-            isBoundToLiveSurface: isBound,
-            isSurfaceReadyForInput: surfaceReady
-        )
+        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
 
         switch coordinator.evaluate(request, context: context) {
         case .duplicate:
@@ -2675,7 +3115,7 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery_uncertain",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, deliveryMode: recordedDeliveryMode)
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
@@ -2686,7 +3126,7 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, deliveryMode: recordedDeliveryMode)
                 broadcastSessionList()
                 return .accepted(epoch: epoch)
             }
@@ -2748,13 +3188,14 @@ final class RemoteAccessService: ObservableObject {
             .task.cancel()
         _ = projectionStore.cancelPromptStabilization(for: conversationID)
         let previous = coordinator.availability(for: conversationID)
+        let couldSteer = coordinator.canSteer(for: conversationID)
         coordinator.noteLocalInput(for: conversationID)
         logCoordinatorAvailabilityTransition(
             for: conversationID,
             source: "local_terminal_input",
             previous: previous
         )
-        if previous.allowsRemoteSend {
+        if previous.allowsRemoteSend || couldSteer != coordinator.canSteer(for: conversationID) {
             scheduleSessionListBroadcast()
         }
     }
@@ -2770,9 +3211,16 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
-    private func recordPendingSend(_ request: RemoteMessageSendRequest, for conversationID: RemoteConversationID, deliveredText: String? = nil) {
+    private func recordPendingSend(
+        _ request: RemoteMessageSendRequest,
+        for conversationID: RemoteConversationID,
+        deliveredText: String? = nil,
+        confirmationTimeout: Duration? = nil,
+        deliveryMode: RemoteMessageDeliveryMode = .prompt
+    ) {
         precondition(request.conversationID == conversationID)
-        pendingSendCorrelator.record(request, deliveredText: deliveredText)
+        let confirmationTimeout = confirmationTimeout ?? sendConfirmationTimeout
+        pendingSendCorrelator.record(request, deliveredText: deliveredText, deliveryMode: deliveryMode)
         let clientRequestID = request.clientRequestID
         let key = PendingSendConfirmationKey(
             conversationID: conversationID,
@@ -2783,7 +3231,7 @@ final class RemoteAccessService: ObservableObject {
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await Task.sleep(for: self.sendConfirmationTimeout)
+                try await Task.sleep(for: confirmationTimeout)
             } catch {
                 return
             }
@@ -2829,8 +3277,14 @@ final class RemoteAccessService: ObservableObject {
         }
         let stamped = pendingSendCorrelator.stamp(observations, for: conversationID)
         for observation in stamped {
-            guard case .transcript(.userMessage(let payload)) = observation.payload,
-                  let clientRequestID = payload.clientRequestID else {
+            guard case .transcript(.userMessage(let payload)) = observation.payload else { continue }
+            if payload.clientRequestID == nil, observation.mayAuthorizeCurrentRuntime {
+                // The Mac user submitted what they typed: the running turn no
+                // longer holds a local draft that a steer or the next prompt
+                // must avoid.
+                coordinator.noteLocalDraftSubmitted(for: conversationID)
+            }
+            guard let clientRequestID = payload.clientRequestID else {
                 continue
             }
             confirmPendingSend(

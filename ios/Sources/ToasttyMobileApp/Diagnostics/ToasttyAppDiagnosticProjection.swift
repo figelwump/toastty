@@ -57,7 +57,7 @@ enum ToasttyAppDiagnosticProjection {
     private static func deliveryEvent(for state: SendDeliveryState) -> ToasttyConnectionDiagnosticEvent? {
         switch state {
         case .pending(.awaitingResponse): nil
-        case .pending(.accepted), .pending(.duplicate), .confirmed: .sendAccepted
+        case .pending(.accepted), .pending(.duplicate), .pending(.queued), .confirmed: .sendAccepted
         case .rejected, .operationFailed: .sendRejected
         case .uncertain, .deliveryUnconfirmed: .sendUncertain
         }

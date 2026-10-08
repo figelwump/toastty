@@ -53,15 +53,21 @@ public struct ConversationUserMessagePayload: Codable, Equatable, Sendable {
     /// confirms, when the host correlated the two. Lets the sending device
     /// distinguish its own confirmed send from another device's identical text.
     public var clientRequestID: String?
+    /// How the correlated remote send reached the agent, so a client can
+    /// mark a message that waited in the Mac-side queue or steered a running
+    /// turn. Absent for prompt sends and from older hosts.
+    public var deliveryMode: RemoteMessageDeliveryMode?
 
     public init(
         text: String,
         origin: ConversationMessageOrigin = .unknown,
-        clientRequestID: String? = nil
+        clientRequestID: String? = nil,
+        deliveryMode: RemoteMessageDeliveryMode? = nil
     ) {
         self.text = text
         self.origin = origin
         self.clientRequestID = clientRequestID
+        self.deliveryMode = deliveryMode
     }
 }
 
