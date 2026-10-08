@@ -12,7 +12,8 @@ export function signingConfiguration(source, now = Date.now()) {
   }
   if (!/^(?:[a-f0-9]{2}){16,256}$/i.test(token)) throw new Error("APNs device token must be hexadecimal bytes.");
   let key;
-  try { key = createPrivateKey(source.TOASTTY_APNS_PRIVATE_KEY); }
+  // Some vault input commands accept one line only. Allow escaped PEM newlines.
+  try { key = createPrivateKey(source.TOASTTY_APNS_PRIVATE_KEY.replaceAll("\\n", "\n")); }
   catch { throw new Error("APNs private key must contain the PEM .p8 file contents."); }
   if (key.asymmetricKeyType !== "ec" || key.asymmetricKeyDetails?.namedCurve !== "prime256v1") {
     throw new Error("APNs private key must be an ES256 P-256 key.");

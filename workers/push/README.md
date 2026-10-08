@@ -66,6 +66,21 @@ replace an APNs key. Store the key's PEM `.p8` contents in the secure vault as
 `TOASTTY_APNS_PRIVATE_KEY`, its key ID as `TOASTTY_APNS_KEY_ID`, and the Apple
 team ID as `TOASTTY_APNS_TEAM_ID`. Never paste values into chat or repository files.
 
+The installed `sv` 0.2.0 reads only one input line. Import the private key with
+escaped newlines so it stores the complete file. Replace the example filename
+with the downloaded key's filename and run this in your terminal:
+
+```sh
+python3 -I -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).read_text().replace("\n", r"\n"))' \
+  "$HOME/Downloads/AuthKey_YOUR_KEY_ID.p8" | sv set TOASTTY_APNS_PRIVATE_KEY
+```
+
+The sender accepts both normal multiline PEM and this single-line form. The
+command sends key contents directly to the vault; it does not print them.
+Running `sv set TOASTTY_APNS_PRIVATE_KEY < file.p8` with `sv` 0.2.0 stores only
+the first line and produces an invalid key. Store the two IDs with the normal
+interactive `sv set TOASTTY_APNS_KEY_ID` and `sv set TOASTTY_APNS_TEAM_ID` prompts.
+
 Connect the development iPhone. Set `TOASTTY_IOS_DEVELOPMENT_TEAM` to your Apple
 team ID; the physical-device dispatcher requires it explicitly. From the
 repository root, the following command
