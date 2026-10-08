@@ -50,6 +50,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         }
         textView.textDidChange()
         synchronize(textView)
+        #if DEBUG
+        textView.traceTyping(.created)
+        #endif
         return textView
     }
 
@@ -59,6 +62,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
     ) {
         context.coordinator.parent = self
         synchronize(textView)
+        #if DEBUG
+        textView.traceTyping(.synchronized, editRevision: context.coordinator.traceEditRevision)
+        #endif
 
         context.coordinator.receiveReplacement(replacement, in: textView)
 
@@ -103,6 +109,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         _ textView: ToasttyComposerUIKitTextView,
         coordinator: Coordinator
     ) {
+        #if DEBUG
+        textView.traceTyping(.dismantled)
+        #endif
         coordinator.isActive = false
         textView.onCompositionEnded = nil
         textView.delegate = nil
@@ -175,6 +184,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         private var pendingReplacement: ToasttyComposerReplacement?
         private var isReplacingText = false
         private var editRevision: UInt64
+        #if DEBUG
+        fileprivate var traceEditRevision: UInt64 { editRevision }
+        #endif
         private var lastNativeText: String
 
         func receiveReplacement(_ replacement: ToasttyComposerReplacement?, in textView: ToasttyComposerUIKitTextView) {
@@ -185,11 +197,24 @@ struct ToasttyComposerTextView: UIViewRepresentable {
             if replacement.revision > lastReplacementRevision {
                 lastReplacementRevision = replacement.revision
                 pendingReplacement = replacement
+                #if DEBUG
+                if textView.typingTrace != nil {
+                    textView.traceTyping(.replacementReceived, replacementLength: replacement.text.utf16.count,
+                                         editRevision: editRevision, replacementRevision: replacement.revision,
+                                         expectedEditRevision: replacement.expectedEditRevision)
+                }
+                #endif
             }
             applyPendingReplacement(to: textView)
         }
 
         func applyPendingReplacement(to textView: ToasttyComposerUIKitTextView) {
+            #if DEBUG
+            if textView.typingTrace != nil, let replacement = pendingReplacement, textView.markedTextRange != nil {
+                textView.traceTyping(.replacementDeferred, editRevision: editRevision, replacementRevision: replacement.revision,
+                                         expectedEditRevision: replacement.expectedEditRevision)
+            }
+            #endif
             guard isActive, !isReplacingText, textView.markedTextRange == nil,
                   let replacement = pendingReplacement else { return }
             // Selection callbacks can precede textViewDidChange. Account for
@@ -198,10 +223,18 @@ struct ToasttyComposerTextView: UIViewRepresentable {
             pendingReplacement = nil
             // A clear followed by restoration can coalesce into one render.
             guard !(textView.text ?? "").utf16.elementsEqual(replacement.text.utf16) else {
+                #if DEBUG
+                textView.traceTyping(.replacementUnchanged, editRevision: editRevision, replacementRevision: replacement.revision,
+                                         expectedEditRevision: replacement.expectedEditRevision)
+                #endif
                 reportCompletion(replacement, in: textView, rejected: false)
                 return
             }
             guard editRevision == replacement.expectedEditRevision else {
+                #if DEBUG
+                textView.traceTyping(.replacementRejected, editRevision: editRevision, replacementRevision: replacement.revision,
+                                         expectedEditRevision: replacement.expectedEditRevision)
+                #endif
                 reportCompletion(replacement, in: textView, rejected: true)
                 return
             }
@@ -210,6 +243,10 @@ struct ToasttyComposerTextView: UIViewRepresentable {
             lastNativeText = replacement.text
             textView.selectedRange = NSRange(location: replacement.text.utf16.count, length: 0)
             isReplacingText = false
+            #if DEBUG
+            textView.traceTyping(.replacementApplied, editRevision: editRevision, replacementRevision: replacement.revision,
+                                         expectedEditRevision: replacement.expectedEditRevision)
+            #endif
             reportCompletion(replacement, in: textView, rejected: false)
             textView.textDidChange()
             textView.requestSelectionVisibility()
@@ -244,6 +281,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            #if DEBUG
+            (textView as? ToasttyComposerUIKitTextView)?.traceTyping(.focusBegan, editRevision: editRevision)
+            #endif
             if parent.isFocused == false {
                 parent.isFocused = true
             }
@@ -251,6 +291,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            #if DEBUG
+            (textView as? ToasttyComposerUIKitTextView)?.traceTyping(.focusEnded, editRevision: editRevision)
+            #endif
             if parent.isFocused {
                 parent.isFocused = false
             }
@@ -260,6 +303,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
             guard !isReplacingText, let textView = textView as? ToasttyComposerUIKitTextView else { return }
             textView.textDidChange()
             recordNativeEdit(in: textView)
+            #if DEBUG
+            textView.traceTyping(.textChanged, editRevision: editRevision)
+            #endif
             applyPendingReplacement(to: textView)
             parent.onTextChange(textView.text ?? "", editRevision)
             guard textView.markedTextRange == nil else { return }
@@ -267,6 +313,9 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            #if DEBUG
+            (textView as? ToasttyComposerUIKitTextView)?.traceTyping(.selectionChanged, editRevision: editRevision)
+            #endif
             guard let textView = textView as? ToasttyComposerUIKitTextView,
                   textView.markedTextRange == nil else {
                 return
@@ -296,8 +345,29 @@ final class ToasttyComposerUIKitTextView: UITextView {
 
     var onCompositionEnded: (() -> Void)?
 
+    #if DEBUG
+    let typingTrace: ToasttyComposerTrace?
+    let typingTraceInstanceID: UInt64
+
+    private func configureTypingTraceScreenshotObserver() {
+        guard typingTrace != nil else { return }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(typingTraceScreenshot),
+            name: UIApplication.userDidTakeScreenshotNotification, object: nil
+        )
+    }
+
+    @objc private func typingTraceScreenshot() {
+        guard window != nil, UIApplication.shared.applicationState == .active else { return }
+        traceTyping(.screenshot)
+    }
+    #endif
+
     override func unmarkText() {
         super.unmarkText()
+        #if DEBUG
+        traceTyping(.unmarkTextCalled)
+        #endif
         onCompositionEnded?()
     }
 
@@ -308,8 +378,22 @@ final class ToasttyComposerUIKitTextView: UITextView {
         }
     }
 
+    #if DEBUG
+    init(typingTrace: ToasttyComposerTrace? = .shared) {
+        self.typingTrace = typingTrace
+        typingTraceInstanceID = typingTrace?.newComposerID() ?? 0
+        super.init(frame: .zero, textContainer: nil)
+        configurePlaceholder()
+        configureTypingTraceScreenshotObserver()
+    }
+    #else
     init() {
         super.init(frame: .zero, textContainer: nil)
+        configurePlaceholder()
+    }
+    #endif
+
+    private func configurePlaceholder() {
         placeholderLabel.font = .preferredFont(forTextStyle: .body)
         placeholderLabel.adjustsFontForContentSizeCategory = true
         placeholderLabel.textColor = UIColor(ToasttyDesignTokens.mutedText)
@@ -326,6 +410,9 @@ final class ToasttyComposerUIKitTextView: UITextView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        #if DEBUG
+        defer { traceTyping(.laidOut) }
+        #endif
         placeholderLabel.frame = bounds
 
         let didChangeSize = bounds.size != lastLayoutSize
@@ -379,6 +466,13 @@ final class ToasttyComposerUIKitTextView: UITextView {
             fittedHeight: fittedHeight,
             maximumHeight: maximumHeight
         )
+        #if DEBUG
+        if typingTrace != nil {
+            traceTyping(.measured, measurement: .init(
+                width: width, naturalHeight: naturalHeight, fittedHeight: fittedHeight, maximumHeight: maximumHeight
+            ))
+        }
+        #endif
     }
 
     func revealSelection() {
@@ -421,6 +515,9 @@ final class ToasttyComposerUIKitTextView: UITextView {
 
         let offsetY = min(max(requestedOffset, minimumOffset), maximumOffset)
         setContentOffset(CGPoint(x: contentOffset.x, y: offsetY), animated: false)
+        #if DEBUG
+        traceTyping(.selectionRevealed, requestedOffsetY: offsetY)
+        #endif
     }
 
     private func updateInternalScrolling() -> Bool {
@@ -441,6 +538,9 @@ final class ToasttyComposerUIKitTextView: UITextView {
 
         guard isScrollEnabled != shouldScroll else { return false }
         isScrollEnabled = shouldScroll
+        #if DEBUG
+        traceTyping(.scrollingChanged)
+        #endif
         return shouldScroll
     }
 
@@ -464,6 +564,9 @@ final class ToasttyComposerUIKitTextView: UITextView {
             CGPoint(x: contentOffset.x, y: minimumOffset),
             animated: false
         )
+        #if DEBUG
+        traceTyping(.offsetNormalized, requestedOffsetY: minimumOffset)
+        #endif
     }
 }
 
