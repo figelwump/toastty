@@ -64,7 +64,7 @@ terminals or worktrees. Observability and Logpush are disabled. Do not log bodie
 headers, device tokens, nonces, or session titles. Deployment history can retain
 prior encrypted secret versions.
 
-Configure the companion Mac graph before generating and building it:
+Bootstrap a fresh Mac worktree first. Then configure its graph before building:
 
 ```sh
 TUIST_TOASTTY_PUSH_RELAY_URL=https://toastty-push-dev.giantthings.workers.dev \
@@ -77,7 +77,8 @@ This mutates only the current worktree's generated macOS project. Follow the
 [dev-run guide](../../.agents/skills/toastty-dev-run/SKILL.md) to build and run an
 isolated host. Enable Remote Access on that host and pair the development phone.
 The configuration is compiled into the app; setting variables only at launch is
-not sufficient.
+not sufficient. Supply the same values to any later bootstrap or generation
+command, or run the configured generation above again before building.
 
 For the physical iPhone, set `TOASTTY_IOS_DEVELOPMENT_TEAM` as described below:
 

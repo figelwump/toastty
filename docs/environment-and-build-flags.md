@@ -38,6 +38,11 @@ Run `tuist install` after cloning the repo and whenever `Tuist/Package.swift` or
 | `GHOSTTY_SOURCE_DIRTY` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Optional override for the Ghostty source cleanliness marker written to the installed metadata sidecar. Release DMG builds require `0`. |
 | `GHOSTTY_BUILD_FLAGS` | `scripts/ghostty/install-local-xcframework.sh`, `scripts/release/release.sh` | unset | Build flags recorded for the installed Ghostty artifact. Release DMG builds require this metadata so notes can include the shipped Ghostty build configuration. |
 
+The [push relay runbook](../workers/push/README.md) lists the build-time relay
+inputs for both the Mac and iPhone graphs. These values are compiled into the
+apps; launch-time overrides do not activate notifications. Production iPhone
+inputs and provisioning requirements are in [iOS Release CI](ios-release-ci.md).
+
 ## Diagnostics Worker Operator Environment
 
 These flags are used by the diagnostics Worker deploy path and operator-side

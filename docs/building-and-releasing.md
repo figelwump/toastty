@@ -131,10 +131,11 @@ Tuist or Xcode.
 For App Store Connect signing, validation, upload, and internal TestFlight
 distribution, see [iOS Release CI](ios-release-ci.md).
 
-For the opt-in development iPhone push receiver and Cloudflare sandbox sender,
-see the [APNs delivery test](../workers/push/README.md). This test replaces the
-normal app only in the fixed development Debug build. It is not enabled in
-normal builds or Release.
+For session notifications in the normal development iPhone app, see the
+[push relay setup](../workers/push/README.md). Both the paired Mac and the fixed
+development Debug app need matching explicit relay configuration. The same
+runbook also covers the separate operator probe, which replaces the normal
+development app. Unconfigured builds keep session push disabled.
 
 ## Validate
 
