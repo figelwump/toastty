@@ -69,9 +69,7 @@ struct WorkspaceHeaderMergeControl: View {
                 .accessibilityIdentifier("topbar.workspace.merge.progress")
 
         case .awaitingMerge:
-            cleanupMenu {
-                progressLabel(showsSpinner: true)
-            }
+            progressLabel(showsSpinner: true)
             .help("Toastty closes this workspace, removes its worktree, and deletes its branches when the pull request merges")
             .accessibilityIdentifier("topbar.workspace.merge.awaiting")
 
@@ -120,9 +118,6 @@ struct WorkspaceHeaderMergeControl: View {
                 SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.5)
             }
             titleText
-            if presentation.canCancelCleanup {
-                chevron
-            }
         }
         .font(ToastyTheme.fontWorkspaceMergeProgress)
         .foregroundStyle(ToastyTheme.sidebarSummaryText)
@@ -136,12 +131,10 @@ struct WorkspaceHeaderMergeControl: View {
         .accessibilityLabel(presentation.title)
     }
 
-    /// A pending or failed cleanup opens a menu to retry or drop it.
+    /// A stopped cleanup opens a menu to retry or drop it.
     private func cleanupMenu(@ViewBuilder label: () -> some View) -> some View {
         Menu {
-            if case .cleanupFailed = presentation {
-                Button("Retry Clean Up", action: retryCleanup)
-            }
+            Button("Retry Clean Up", action: retryCleanup)
             Button("Don't Clean Up", action: cancelCleanup)
         } label: {
             label()

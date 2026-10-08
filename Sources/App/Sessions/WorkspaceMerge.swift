@@ -124,15 +124,6 @@ enum WorkspaceMergePresentation: Equatable {
         }
     }
 
-    /// Whether the user can still drop the pending cleanup.
-    var canCancelCleanup: Bool {
-        switch self {
-        case .awaitingMerge, .cleanupFailed:
-            return true
-        default:
-            return false
-        }
-    }
 }
 
 /// Runs a click on a workspace's Merge button or its Close Without Merging

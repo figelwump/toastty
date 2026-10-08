@@ -171,10 +171,8 @@ struct WorkspaceMergeTests {
         fixture.store.send(.setWorkspaceDone(workspaceID: fixture.taskWorkspaceID, doneAt: fixture.start))
         try fixture.setRequest(.awaitingMerge)
         #expect(fixture.presentation?.title == "Cleans Up When PR #59 Merges")
-        #expect(fixture.presentation?.canCancelCleanup == true)
         try fixture.setRequest(.cleaningUp)
         #expect(fixture.presentation?.title == "Cleaning Up PR #59…")
-        #expect(fixture.presentation?.canCancelCleanup == false)
         try fixture.setRequest(.failed(reason: "the worktree has uncommitted changes"))
         #expect(fixture.presentation == .cleanupFailed(
             pullRequest: "PR #59",

@@ -254,9 +254,10 @@ final class WorkspaceMergeCoordinator {
         }
     }
 
-    /// Drops a cleanup that is waiting for the merge or that failed.
+    /// Drops a cleanup that stopped. A cleanup still waiting for the merge
+    /// is dropped by clearing the workspace's done mark.
     func cancelCleanup(workspaceID: UUID) {
-        guard let request = requests[workspaceID], request.isRunning == false else { return }
+        guard let request = requests[workspaceID], case .failed = request.phase else { return }
         update(workspaceID, nil)
     }
 

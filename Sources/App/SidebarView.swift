@@ -3785,13 +3785,7 @@ struct SidebarView: View {
             Button("Don't Clean Up") {
                 sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)
             }
-        case .awaitingMerge:
-            Button(presentation.title) {}
-                .disabled(true)
-            Button("Don't Clean Up") {
-                sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)
-            }
-        case .merging, .cleaningUp, .closing, .done:
+        case .merging, .awaitingMerge, .cleaningUp, .closing, .done:
             Button(presentation.title) {}
                 .disabled(true)
         }
