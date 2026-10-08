@@ -410,7 +410,8 @@ a { color: inherit; }
    ios/Sources/ToasttyMobileApp/ToasttyDesignTokens.swift. The stage is designed at 440x900 px
    (a 390x844 screen inside its frame) and scaled to its column by website/mobile.js. */
 .mobile-sec .sec-eyebrow .beta { vertical-align: 1px; }
-.mobile-grid { display: grid; grid-template-columns: 1fr 440px; gap: 56px; margin-top: 40px; align-items: start; }
+.mobile-sec .feats { margin-top: 36px; }
+.mobile-grid { display: grid; grid-template-columns: 1fr 440px; gap: 56px; align-items: start; }
 .mobile-grid > * { min-width: 0; }
 .mstage-col { justify-self: center; width: 100%; max-width: 440px; }
 .mstage-wrap { position: relative; width: 100%; }
