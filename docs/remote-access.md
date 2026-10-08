@@ -228,9 +228,12 @@ confirmation.
 ### Queue, steer, and stop while the agent works
 
 On a host that advertises `conversation_input_control`, the composer stays
-open while the agent works. The field is a single line until it has focus or
-text; then it grows into a card with a button bar: attach, a **Queue**/**Steer**
-chip, **Stop**, and **Send**. The agent's working state is shown in the
+open while the agent works. While the field is a single line, a **Stop**
+button sits next to it. Once the field has focus or text it grows into a card
+with a button bar: attach on the left and Stop on the right. As soon as there
+is something to send, Stop gives way to **Send**, with a **Queue**/**Steer**
+chip directly left of it; Send uses the same arrow for every mode, and Stop and
+Send are never shown together. The agent's working state is shown in the
 transcript, not under the field.
 
 - **Queue** is the default. Send holds the message on the Mac, and the Mac

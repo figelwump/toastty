@@ -507,21 +507,27 @@ struct ToasttyConversationScreen: View {
         .id(conversationID)
     }
 
-    /// Attach, the queue/steer choice while working, then Stop and Send.
+    /// Attach on the left; Stop on the right until there is content, then the
+    /// queue/steer choice beside Send.
     private func composerButtonBar(
         _ presentation: ToasttyComposerPresentation,
         isWorking: Bool
     ) -> some View {
-        HStack(spacing: 8) {
+        // Stop stays until there is something to send; then Send replaces
+        // it, with the mode chip directly to its left so the chip reads as
+        // modifying the send. Both are never shown together.
+        let hasContent = !draft.isEmpty || !attachments.isEmpty
+        return HStack(spacing: 8) {
             attachmentPicker(presentation)
-            if case .working(let canSteer) = presentation.gate.sendMode {
-                deliveryModeChip(canSteer: canSteer)
-            }
             Spacer(minLength: 0)
-            if presentation.canInterrupt {
+            if presentation.canInterrupt && !hasContent && !isSubmitting {
                 stopButton
+            } else {
+                if case .working(let canSteer) = presentation.gate.sendMode {
+                    deliveryModeChip(canSteer: canSteer)
+                }
+                sendButton(presentation, isWorking: isWorking)
             }
-            sendButton(presentation, isWorking: isWorking)
         }
     }
 
@@ -625,7 +631,7 @@ struct ToasttyConversationScreen: View {
                         .tint(ToasttyDesignTokens.inkOnAmber)
                         .frame(width: size)
                 } else {
-                    Image(systemName: steers ? "arrow.triangle.merge" : (isWorking ? "text.append" : "arrow.up"))
+                    Image(systemName: "arrow.up")
                         .frame(width: size)
                 }
             }

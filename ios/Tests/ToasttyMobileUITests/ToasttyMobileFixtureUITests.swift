@@ -1492,7 +1492,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(send.exists)
         XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
 
-        // Typing expands the card: attach, the Queue chip, Stop, and Send.
+        // Typing expands the card: attach, then the Queue chip next to Send.
+        // Send replaces Stop while the field is open.
         input.tap()
         input.typeText("Also add a UI test")
         let mode = app.buttons["toastty-mobile-composer-mode"]
@@ -1500,7 +1501,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertEqual(mode.label, "Queue selected")
         XCTAssertTrue(send.waitForExistence(timeout: 5))
         XCTAssertEqual(send.label, "Queue message")
-        XCTAssertTrue(stop.exists)
+        XCTAssertFalse(stop.exists)
+        XCTAssertLessThan(mode.frame.maxX, send.frame.minX)
+        XCTAssertLessThan(send.frame.minX - mode.frame.maxX, 16)
         attachScreenshot(named: "fixture-queue-steer-expanded", of: app)
 
         send.tap()
@@ -1543,6 +1546,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         send.tap()
         let third = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-4"]
         XCTAssertTrue(third.waitForExistence(timeout: 5))
+
+        // With the field open but empty, Stop is back and Send is gone.
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        XCTAssertFalse(send.exists)
 
         // Stop holds the queue; the paused row offers to send it next.
         stop.tap()
