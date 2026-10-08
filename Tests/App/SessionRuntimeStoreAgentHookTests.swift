@@ -416,6 +416,10 @@ struct SessionRuntimeStoreAgentHookTests {
     @Test(arguments: [true, false])
     func waitingOnChildrenDefersTurnCompleteUntilProjectionClearsThenFiresOnce(configureShellHook: Bool) async throws {
         let fixture = try Self.makeFixture(configureShellHook: configureShellHook)
+        defer { fixture.sessionStore.reset() }
+        // Keep the explicit event timeline ahead of the live timer. This test
+        // advances event time itself, so real expiry must not race its assertions.
+        let baseDate = Date().addingTimeInterval(60)
         let sessionID = "sess-children"
         fixture.sessionStore.startSession(
             sessionID: sessionID,
@@ -425,7 +429,7 @@ struct SessionRuntimeStoreAgentHookTests {
             workspaceID: UUID(),
             cwd: "/repo",
             repoRoot: "/repo",
-            at: Self.baseDate
+            at: baseDate
         )
         #expect(fixture.sessionStore.updateBackgroundActivity(
             sessionID: sessionID,
@@ -433,15 +437,15 @@ struct SessionRuntimeStoreAgentHookTests {
                 id: "child-1",
                 kind: .childAgent,
                 displayName: "child agent",
-                startedAt: Self.baseDate.addingTimeInterval(1),
-                lastUpdatedAt: Self.baseDate.addingTimeInterval(1)
+                startedAt: baseDate.addingTimeInterval(1),
+                lastUpdatedAt: baseDate.addingTimeInterval(1)
             ),
-            at: Self.baseDate.addingTimeInterval(1)
+            at: baseDate.addingTimeInterval(1)
         ))
         fixture.sessionStore.updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .ready, summary: "Ready"),
-            at: Self.baseDate.addingTimeInterval(2)
+            at: baseDate.addingTimeInterval(2)
         )
         await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: configureShellHook ? 1 : 0)
         await settleNotificationTasks()
@@ -454,7 +458,7 @@ struct SessionRuntimeStoreAgentHookTests {
         #expect(fixture.sessionStore.finishBackgroundActivity(
             sessionID: sessionID,
             activityID: "child-1",
-            at: Self.baseDate.addingTimeInterval(3)
+            at: baseDate.addingTimeInterval(3)
         ))
         await settleNotificationTasks()
 
@@ -470,7 +474,7 @@ struct SessionRuntimeStoreAgentHookTests {
             files: ["README.md"],
             cwd: nil,
             repoRoot: nil,
-            at: Self.baseDate.addingTimeInterval(3 + SessionRegistry.resumeProjectionGraceInterval + 1)
+            at: baseDate.addingTimeInterval(3 + SessionRegistry.resumeProjectionGraceInterval + 1)
         )
         await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: configureShellHook ? 2 : 0)
         await settleNotificationTasks()
@@ -483,7 +487,7 @@ struct SessionRuntimeStoreAgentHookTests {
         fixture.sessionStore.updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .ready, summary: "Ready"),
-            at: Self.baseDate.addingTimeInterval(30)
+            at: baseDate.addingTimeInterval(30)
         )
         await settleNotificationTasks()
         events = try await Self.recordedEvents(fixture.runner)
