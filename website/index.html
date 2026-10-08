@@ -59,7 +59,7 @@
 
 <header class="shell nav">
   <a class="brand" href="./" aria-label="Toastty home"><svg aria-hidden="true"><use href="#icon-toast"/></svg><span>Toastty</span></a>
-  <nav class="nav-links" aria-label="Page sections"><a href="#workflows">Workflows</a><a href="#features">Features</a><a href="https://github.com/figelwump/toastty/tree/main/docs">Docs</a></nav>
+  <nav class="nav-links" aria-label="Page sections"><a href="#workflows">Workflows</a><a href="#features">Features</a><a href="#mobile">Mobile</a><a href="https://github.com/figelwump/toastty/tree/main/docs">Docs</a></nav>
   <div class="nav-cta"><a class="btn btn-ghost gh" href="https://github.com/figelwump/toastty" aria-label="Toastty on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5c-5.25 0-9.5 4.15-9.5 9.27 0 4.1 2.73 7.58 6.52 8.8.48.08.66-.2.66-.45v-1.58c-2.65.56-3.21-1.1-3.21-1.1-.44-1.08-1.07-1.37-1.07-1.37-.87-.58.07-.57.07-.57.96.07 1.47.96 1.47.96.85 1.43 2.23 1.02 2.78.78.08-.6.33-1.02.6-1.25-2.12-.23-4.35-1.03-4.35-4.58 0-1.01.37-1.84.98-2.49-.1-.24-.43-1.2.09-2.46 0 0 .8-.25 2.62.95A9.25 9.25 0 0 1 12 7.08c.8 0 1.6.1 2.35.32 1.82-1.2 2.62-.95 2.62-.95.52 1.26.19 2.22.09 2.46.61.65.98 1.48.98 2.49 0 3.56-2.23 4.35-4.36 4.58.34.29.65.86.65 1.74v2.4c0 .25.18.54.66.45 3.79-1.22 6.51-4.7 6.51-8.8 0-5.12-4.25-9.27-9.5-9.27Z"/></svg><span>GitHub</span></a><a class="btn btn-dark" href="https://github.com/figelwump/toastty/releases/latest">Download</a></div>
 </header>
 
@@ -439,6 +439,154 @@
   </div>
 </section>
 
+<section class="shell block-sec mobile-sec" id="mobile" aria-labelledby="mobile-title">
+  <div class="sec-eyebrow">Toastty Mobile <em class="beta">TestFlight beta</em></div>
+  <h2 id="mobile-title">Check on your agents from your phone.</h2>
+  <p class="lead">The same sidebar, on your iPhone. See which sessions need you, answer the questions Claude Code asks, and send the next message, all over your private tailnet.</p>
+  <div class="mobile-grid">
+    <div>
+      <ul class="feats">
+        <li><b>Every session, live</b><span>Workspaces and subspaces with live status. Rows that need you are tinted green, amber, or red, just like on the Mac.</span></li>
+        <li><b>Answer your agent's questions</b><span>When Claude Code asks you to choose, pick an option or type a custom answer. It lands in the terminal on your Mac as if you were there.</span></li>
+        <li><b>Reply from anywhere</b><span>Send the next prompt with photos and files attached, then watch the tool calls come in.</span></li>
+        <li><b>Scratchpads and files</b><span>Open the pages, documents, and previews your agents published, and tap a PR chip to read the pull request.</span></li>
+        <li><b>Private by design</b><span>Toastty listens only on your Mac, and Tailscale Serve carries the connection over your own tailnet. No Toastty account, no hosted relay.</span></li>
+      </ul>
+      <p class="agents-line">Available through TestFlight for now. <a href="https://github.com/figelwump/toastty/blob/main/docs/remote-access.md">Remote Access</a> covers pairing and the tailnet setup.</p>
+    </div>
+    <div class="mstage-col">
+      <p class="sr-only">An animated recreation of Toastty Mobile: the Home screen lists every session with live status. A session waiting on a Claude Code question is opened, the question is answered by choosing an option, and the agent gets back to work. A reply is typed and sent from the phone. Back on Home, the checkout-redesign subspace turns green with its PR #128 chip, and the pull request opens in a sheet.</p>
+      <div class="mstage-wrap" id="mwrap" aria-hidden="true">
+        <div class="mstage" id="mstage">
+          <div class="ph">
+            <div class="scr" id="scr">
+
+              <!-- Home -->
+              <div class="screen home" id="s-home">
+                <div class="mhead">
+                  <span class="mbrand">TOASTTY</span>
+                  <span class="conn"><i></i>live · mac-studio</span>
+                  <span class="plusb">+</span>
+                  <span class="gearb"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+                </div>
+                <div class="seg"><span class="on">All</span><span>Active</span></div>
+                <div class="mlist">
+                  <div class="wsh"><div><b>lumen</b><small>3 sessions</small></div><span class="chev"></span></div>
+                  <div class="mrow ready"><span class="rail"><i class="mk dot ready"></i></span><div class="rt"><b>Plan checkout redesign</b><span class="age">4m</span></div><div class="rs">Plan agreed. Ready to build.</div><span class="fork">⑂ 1</span></div>
+                  <div class="mrow approval" id="row-migrate"><span class="rail" id="migrate-ic"><i class="mk dot appr"></i></span><div class="rt"><b id="migrate-t">Migrate orders table</b><em class="sbadge appr" id="migrate-badge">approval</em><span class="age" id="migrate-age">1m</span></div><div class="rs" id="migrate-s">Needs approval: run migration</div></div>
+                  <div class="mrow"><span class="rail"></span><div class="rt"><b class="idle">Fix flaky auth test</b><span class="age">2h</span></div><div class="rs">Ready for prompt</div></div>
+                  <div class="grph"><span class="chev down"></span>SUBSPACES <span>2/2</span><span class="tally" id="tally"><i></i>1</span></div>
+                  <div class="mrow subr" id="row-checkout"><span class="rail" id="checkout-ic"><span class="spin"></span></span><div class="rt"><b id="checkout-t">checkout-redesign</b><span class="age" id="checkout-age">6m 41s</span><em class="achip pr" id="checkout-pr">PR #128 <i>↗</i></em><span class="arrow">→</span></div><div class="rs" id="checkout-s">Capturing screenshots…</div></div>
+                  <div class="mrow subr"><span class="rail"><i class="idlebox"></i></span><div class="rt"><b class="idle">search-filters</b><span class="age">1d</span><span class="arrow">→</span></div><div class="rs">Paused for review</div></div>
+                  <div class="wsh"><div><b>docs-site</b><small>1 session</small></div><span class="chev"></span></div>
+                  <div class="mrow"><span class="rail"></span><div class="rt"><b class="idle">Update API reference</b><span class="age">12m</span></div><div class="rs">Updated the preview</div></div>
+                </div>
+                <div class="dim" id="home-dim"></div>
+              </div>
+
+              <!-- Conversation -->
+              <div class="screen conv" id="s-conv">
+                <div class="cnav">
+                  <span class="backb" id="backb"></span>
+                  <div class="ctitle"><b>Migrate orders table</b><span class="cstat"><i id="cstat-ic"></i><em id="cstat-t">needs approval</em> · lumen · Claude Code</span></div>
+                  <span class="nextb"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 21h11a2 2 0 0 0 2-2V8"/></svg></span>
+                  <span class="nextn">1 ›</span>
+                </div>
+                <div class="ctx">
+                  <div class="tr ub always"><span>Add a fulfillment_status column to orders and backfill it from shipments</span></div>
+                  <div class="tr strip always"><span class="chev"></span>worked · 4 tool calls</div>
+                  <div class="tr at always">orders has 2.1M rows. A plain <code>ALTER TABLE</code> would lock it for about 40 seconds, right through the afternoon peak.</div>
+                  <div class="tr qcard always" id="qcard">
+                    <div class="qh"><span class="qk" id="qk"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.3 8.9 8.9 0 0 1-3.7-.8L3 21l2-4.5A8.1 8.1 0 0 1 3.5 11.5 8.4 8.4 0 0 1 12 3.2a8.4 8.4 0 0 1 9 8.3z"/><path d="M9.8 9.3a2.3 2.3 0 0 1 4.5.7c0 1.5-2.3 2.2-2.3 3.2"/><circle cx="12" cy="16.3" r=".5"/></svg>Question</span><em class="qstate" id="qstate">pending</em></div>
+                    <div class="qform" id="qform">
+                      <div class="qhdr">Approach</div>
+                      <div class="qq">How should I run the migration?</div>
+                      <div class="opt" id="opt1"><i class="radio"></i><div><b>Online migration</b><small>Add the column nullable, backfill in batches, then add the constraint</small></div></div>
+                      <div class="opt" id="opt2"><i class="radio"></i><div><b>Lock the table</b><small>One ALTER TABLE, about 40s of downtime</small></div></div>
+                      <div class="opt" id="opt3"><i class="radio"></i><div><b>Other</b><small>Enter a custom answer</small></div></div>
+                      <div class="qstatus" id="qstatus">Answer every question to continue</div>
+                      <div class="qsubmit" id="qsubmit">Submit answer</div>
+                      <div class="qdesk"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>You can also answer on the desktop</div>
+                    </div>
+                    <div class="qdone" id="qdone">
+                      <div class="qacc"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m8.5 12.3 2.4 2.4 4.8-5"/></svg>Claude accepted</div>
+                      <div class="qans"><span>Approach</span>Online migration</div>
+                    </div>
+                  </div>
+                  <div class="tr strip" id="strip2" data-at="7.2"><span class="spin" id="strip2-spin"></span><span class="chev" id="strip2-chev"></span><span id="strip2-t">working · 1 tool call</span></div>
+                  <div class="tr at" data-at="8.9">Added <code>fulfillment_status</code> as a nullable column. Backfilling in batches of 5,000 rows…</div>
+                  <div class="tr at" data-at="10.1">Backfill done: 2.1M rows in 3m 12s. The constraint is in place and all 214 tests pass. Want me to open a PR?</div>
+                  <div class="tr ub" data-at="13.45"><span>Open a PR once CI is green</span></div>
+                  <div class="tr strip" data-at="13.9"><span class="spin"></span>working · 1 tool call</div>
+                </div>
+                <div class="comp">
+                  <div class="cmeta">claude-opus-5-5 · high reasoning</div>
+                  <div class="crow">
+                    <div class="cfield" id="cfield"><span class="cph" id="cph">Pending request — input paused</span><span class="ctyped" id="ctyped"></span><span class="ccaret" id="ccaret"></span><span class="clip"><svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></span></div>
+                    <span class="csend" id="csend"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></span>
+                  </div>
+                  <div class="cstatus" id="cstatus"><span class="spin"></span>Agent working…</div>
+                </div>
+                <div class="kbd" id="kbd">
+                  <div class="krow"><span>q</span><span>w</span><span>e</span><span>r</span><span>t</span><span>y</span><span>u</span><span>i</span><span>o</span><span>p</span></div>
+                  <div class="krow"><span>a</span><span>s</span><span>d</span><span>f</span><span>g</span><span>h</span><span>j</span><span>k</span><span>l</span></div>
+                  <div class="krow"><span class="wide">⇧</span><span>z</span><span>x</span><span>c</span><span>v</span><span>b</span><span>n</span><span>m</span><span class="wide">⌫</span></div>
+                  <div class="krow"><span class="num">123</span><span class="space">space</span><span class="ret">return</span></div>
+                </div>
+              </div>
+
+              <!-- Subspace -->
+              <div class="screen subws" id="s-sub">
+                <div class="cnav">
+                  <span class="backb"></span>
+                  <div class="ctitle"><b>checkout-redesign</b></div>
+                </div>
+                <div class="mlist subspace">
+                  <div class="inp">in lumen</div>
+                  <div class="chips"><em class="achip pr big" id="msub-pr">PR #128 <i>↗</i></em><em class="achip br big">feat/checkout-redesign</em></div>
+                  <div class="grph">SESSIONS <span>1/1</span><span class="filt">All ⌃</span></div>
+                  <div class="mrow ready"><span class="rail"><i class="mk dot ready"></i></span><div class="rt"><b>Checkout redesign</b><span class="age">2m</span></div><div class="rs">Ready for your review.</div></div>
+                  <div class="grph">PANELS <span>2</span></div>
+                  <div class="prow"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 21h11a2 2 0 0 0 2-2V8"/></svg><div><b>Verification</b><small>Scratchpad · 2m</small></div><span class="chev"></span></div>
+                  <div class="prow"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><div><b>WORKTREE_HANDOFF.md</b><small>Document · 24m</small></div><span class="chev"></span></div>
+                </div>
+                <div class="dim" id="sub-dim"></div>
+              </div>
+
+              <!-- PR sheet -->
+              <div class="sheet" id="sheet">
+                <div class="grab"></div>
+                <div class="shead"><span class="sdone">Done</span><b>PR #128</b></div>
+                <div class="url"><i></i><i></i><span>github.com/lumen-app/lumen/pull/128</span></div>
+                <div class="prpage">
+                  <h3>Redesign checkout summary card <span>#128</span></h3>
+                  <div class="prmeta"><span class="open">Open</span><span><span class="mono">feat/checkout-redesign</span> → <span class="mono">main</span></span></div>
+                  <div class="box"><div class="h"><span class="okc">✓</span>All checks have passed</div><div class="c">4 successful checks</div></div>
+                  <div class="box"><div class="h">Summary</div><div class="c"><p>Moves the order summary above payment and pins totals on mobile.</p><p>Verification: <span class="lnk">3/3 checks with screenshots</span></p><p style="color:#59636e">3 files changed · +98 −71</p></div></div>
+                </div>
+              </div>
+
+              <div class="sbar"><span class="time">9:41</span><span class="sicons"><i class="cell"><b></b><b></b><b></b><b></b></i><svg class="wifi" viewBox="0 0 24 24"><path d="M2 8.5a16 16 0 0 1 20 0"/><path d="M5.5 12.5a11 11 0 0 1 13 0"/><path d="M9 16.5a5.5 5.5 0 0 1 6 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg><i class="batt"><b></b></i></span></div>
+              <div class="island"></div>
+              <div class="touch" id="touch"></div>
+            </div>
+            <div class="homebar"></div>
+          </div>
+          <div class="mfade" id="mfade"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="example-cap">Example: answer a question from the train, reply, and come back to a PR.</div>
+  <div class="beats mbeats" id="mbeats" aria-label="Mobile video steps">
+    <button type="button" class="pp" id="mpp" aria-label="Pause"><svg viewBox="0 0 24 24" id="mpp-ic"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
+    <button type="button" class="beat" data-t="0" data-seek="0.6" aria-label="Step 1: Every session at a glance"><span class="bar"><i></i></span><span class="n">01</span><span class="l">Every session at a glance</span></button>
+    <button type="button" class="beat" data-t="2.5" data-seek="3.3" aria-label="Step 2: Answer the question your agent asked"><span class="bar"><i></i></span><span class="n">02</span><span class="l">Answer the question your agent asked</span></button>
+    <button type="button" class="beat" data-t="10.9" data-seek="12.2" aria-label="Step 3: Reply from anywhere"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Reply from anywhere</span></button>
+    <button type="button" class="beat" data-t="14.3" data-seek="18.5" aria-label="Step 4: Open the PR when a subspace is ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">Open the PR when a subspace is ready</span></button>
+  </div>
+</section>
+
 <section class="shell block-sec" id="get-started">
   <div class="sec-eyebrow">Get started</div>
   <h2>Set up in a few minutes.</h2>
@@ -463,7 +611,7 @@ Read the guide, narrate each step, dry-run every setup installer first (pass --d
     <div><b>Terminal profiles</b><span>One-key launchers for tmux, zmx, SSH, or any startup command.</span></div>
     <div><b>Layouts that persist</b><span>Workspaces, tabs, and splits come back after a restart, and with shell integration, so does each pane's history.</span></div>
     <div><b>Local first</b><span>No usage analytics or telemetry. Beyond update checks, Toastty only connects out for features you use, such as Remote Access or a diagnostics report you choose to send.</span></div>
-    <div><b>Toastty Mobile <em class="beta">TestFlight beta</em></b><span>Check on sessions and reply from your iPhone over your private tailnet. Available through TestFlight for now; see <a href="https://github.com/figelwump/toastty/blob/main/docs/remote-access.md">Remote Access</a>.</span></div>
+    <div><b>Toastty Mobile <em class="beta">TestFlight beta</em></b><span>Check on sessions and reply from your iPhone over your private tailnet. <a href="#mobile">See it in action</a>, or read <a href="https://github.com/figelwump/toastty/blob/main/docs/remote-access.md">Remote Access</a> to set it up.</span></div>
   </div>
 </section>
 
@@ -480,6 +628,7 @@ Read the guide, narrate each step, dry-run every setup installer first (pass --d
   <span>Built on Ghostty</span>
 </footer>
 <script src="./hero.js"></script>
+<script src="./mobile.js"></script>
 <script>
   // Copy button for the setup prompt.
   (function () {
