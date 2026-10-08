@@ -328,7 +328,10 @@ enum RemoteAccessActivationState: Equatable, Sendable {
 
 @MainActor
 final class RemoteAccessService: ObservableObject {
+    typealias TailnetServeSetup = @Sendable (_ port: UInt16, _ configuredOrigin: String, _ configureIfNeeded: Bool) async throws -> String
+
     @Published private(set) var activationState: RemoteAccessActivationState = .off
+    @Published private(set) var tailnetSetupState: RemoteAccessTailnetSetupState = .unchecked
     @Published private(set) var deviceManagementError: String?
     @Published private(set) var currentPairingCode: RemotePairingCode?
     @Published private(set) var currentNativePairingOffer: RemoteNativePairingOffer?
@@ -345,6 +348,9 @@ final class RemoteAccessService: ObservableObject {
         didSet {
             RemoteAccessPreferences.persistTailnetOrigin(tailnetOrigin)
             refreshHandlerConfiguration()
+            if tailnetOrigin != oldValue, isApplyingSetupOrigin == false {
+                invalidateTailnetSetup(preservingBlockingFailure: true)
+            }
             if tailnetOrigin != oldValue, currentNativePairingOffer != nil {
                 cancelNativePairingOffer()
             }
@@ -374,6 +380,16 @@ final class RemoteAccessService: ObservableObject {
     private let handler: RemoteGatewayRequestHandler
     private let server: any RemoteAccessGatewayServing
     private let port: UInt16
+    private let tailnetServeSetup: TailnetServeSetup
+    private var tailnetSetupTask: Task<Void, Never>?
+    private var tailnetSetupTaskID: UUID?
+    private var tailnetSetupGeneration: UInt64 = 0
+    private var isApplyingSetupOrigin = false
+    private enum TailnetSetupIntent: Equatable {
+        case verify
+        case configure
+    }
+    private var pendingTailnetSetupIntent: TailnetSetupIntent?
     private var conversationTrackingCancellables: Set<AnyCancellable> = []
     private var storeActionObserverToken: UUID?
     private var conversationTrackingGeneration: UInt64 = 0
@@ -453,6 +469,10 @@ final class RemoteAccessService: ObservableObject {
         return message
     }
 
+    var canIssueNativePairingOffer: Bool {
+        isReady && tailnetSetupState.permitsPairing && publicGatewayURL != nil
+    }
+
     init(
         store: AppStore,
         annotationStyleStore: AnnotationStyleStore,
@@ -464,6 +484,13 @@ final class RemoteAccessService: ObservableObject {
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        tailnetServeSetup: @escaping TailnetServeSetup = { port, configuredOrigin, configureIfNeeded in
+            try await TailscaleServeSetup().run(
+                port: port,
+                configuredOrigin: configuredOrigin,
+                configureIfNeeded: configureIfNeeded
+            )
+        },
         gatewayServerFactory: (RemoteGatewayRequestHandler) -> any RemoteAccessGatewayServing = {
             RemoteAccessGatewayServer(handler: $0)
         }
@@ -475,6 +502,7 @@ final class RemoteAccessService: ObservableObject {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.port = port
+        self.tailnetServeSetup = tailnetServeSetup
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
@@ -577,10 +605,11 @@ final class RemoteAccessService: ObservableObject {
             }
             self.activationState = .ready(port: port)
             self.auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .remoteAccessEnabled))
+            self.startPendingTailnetSetupIfReady()
         }
-        server.onListenerFailed = { [weak self] in
+        server.onListenerFailed = { [weak self] failure in
             guard let self, self.isEnabled else { return }
-            self.failActivation()
+            self.failActivation(failure)
         }
         server.onDeviceRevoked = { [weak self] _ in
             self?.deviceManagementError = nil
@@ -608,13 +637,14 @@ final class RemoteAccessService: ObservableObject {
             do {
                 try server.start(port: port)
             } catch {
-                failActivation()
+                failActivation(RemoteAccessListenerFailure(error))
                 ToasttyLog.error(
                     "Remote access gateway failed to start",
                     category: .automation
                 )
             }
         } else {
+            invalidateTailnetSetup()
             let shouldAudit = activationState != .off
             activationState = .off
             sessionListBroadcastTask?.cancel()
@@ -631,10 +661,11 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
-    private func failActivation() {
+    private func failActivation(_ failure: RemoteAccessListenerFailure) {
         guard activationState != .off else { return }
+        invalidateTailnetSetup()
         activationState = .failed(
-            message: "Could not start the local Remote Access listener. Try again."
+            message: failure.recoveryMessage(port: port)
         )
         sessionListBroadcastTask?.cancel()
         sessionListBroadcastTask = nil
@@ -644,6 +675,106 @@ final class RemoteAccessService: ObservableObject {
         endConversationTracking()
         connectedClientCount = 0
         connectedNativeClientCount = 0
+    }
+
+    // MARK: - Private tailnet setup
+
+    /// Only a settings action requests a Serve change. Restoration and other
+    /// setEnabled callers keep their existing listener-only behavior.
+    func setEnabledFromSettings(_ enabled: Bool, persist: Bool = true) {
+        if enabled {
+            setUpTailnetAccess(persistEnabled: persist)
+        } else {
+            setEnabled(false, persist: persist)
+        }
+    }
+
+    func setUpTailnetAccess(persistEnabled: Bool = true) {
+        invalidateTailnetSetup()
+        pendingTailnetSetupIntent = .configure
+        tailnetSetupState = .waitingForListener
+        cancelNativePairingOffer()
+        // Prepare the intent before start, because a server can report ready
+        // synchronously from start(port:).
+        if isEnabled == false {
+            setEnabled(true, persist: persistEnabled)
+        }
+        startPendingTailnetSetupIfReady()
+    }
+
+    /// Settings can inspect a restored or manual configuration without making
+    /// changes. Failed attempts need an explicit retry, so appearance does not
+    /// discard an approval link or disrupt pairing through a manual setup.
+    func verifyTailnetSetupIfNeeded() {
+        guard isReady, tailnetSetupTask == nil, tailnetSetupState == .unchecked else { return }
+        pendingTailnetSetupIntent = .verify
+        cancelNativePairingOffer()
+        startPendingTailnetSetupIfReady()
+    }
+
+    private func invalidateTailnetSetup(preservingBlockingFailure: Bool = false) {
+        tailnetSetupGeneration &+= 1
+        pendingTailnetSetupIntent = nil
+        tailnetSetupTask?.cancel()
+        // Keep the task until it finishes. A retry must not overlap a process
+        // that is still completing cancellation.
+        if preservingBlockingFailure,
+           case .failed = tailnetSetupState,
+           tailnetSetupState.permitsPairing == false {
+            // An origin edit cannot remove a known Funnel or mapping conflict.
+            // Only an explicit setup attempt can verify that it was resolved.
+            return
+        }
+        tailnetSetupState = .unchecked
+    }
+
+    private func startPendingTailnetSetupIfReady() {
+        guard tailnetSetupTask == nil,
+              let intent = pendingTailnetSetupIntent,
+              let listeningPort else { return }
+        pendingTailnetSetupIntent = nil
+        let configureIfNeeded = intent == .configure
+        let originAtStart = tailnetOrigin
+        let generation = tailnetSetupGeneration
+        let taskID = UUID()
+        tailnetSetupTaskID = taskID
+        tailnetSetupState = configureIfNeeded ? .configuring : .checking
+        tailnetSetupTask = Task { [weak self, tailnetServeSetup] in
+            let result: Result<String, TailscaleServeSetupError>?
+            do {
+                let origin = try await tailnetServeSetup(listeningPort, originAtStart, configureIfNeeded)
+                result = .success(origin)
+            } catch is CancellationError {
+                result = nil
+            } catch let error as TailscaleServeSetupError {
+                result = .failure(error)
+            } catch {
+                result = .failure(.statusUnavailable)
+            }
+            guard let self else { return }
+            if Task.isCancelled == false,
+               generation == self.tailnetSetupGeneration,
+               self.listeningPort == listeningPort,
+               self.tailnetOrigin == originAtStart {
+                switch result {
+                case .success(let origin)?:
+                    if originAtStart.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.isApplyingSetupOrigin = true
+                        self.tailnetOrigin = origin
+                        self.isApplyingSetupOrigin = false
+                    }
+                    self.tailnetSetupState = .configured
+                case .failure(let error)?:
+                    self.tailnetSetupState = .failed(error)
+                case nil:
+                    self.tailnetSetupState = .unchecked
+                }
+            }
+            guard self.tailnetSetupTaskID == taskID else { return }
+            self.tailnetSetupTask = nil
+            self.tailnetSetupTaskID = nil
+            self.startPendingTailnetSetupIfReady()
+        }
     }
 
     private func beginConversationTracking() {
@@ -812,7 +943,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     func issueNativePairingOffer(at date: Date = Date()) {
-        guard isReady else { return }
+        guard isReady, tailnetSetupState.permitsPairing else { return }
         guard let gatewayURL = publicGatewayURL else {
             currentNativePairingOffer = nil
             currentNativePairingQRCode = nil
@@ -2857,6 +2988,9 @@ final class RemoteAccessService: ObservableObject {
             }
             origins.insert(normalized)
         }
+        if let canonicalOrigin = publicGatewayURL?.absoluteString {
+            origins.insert(canonicalOrigin)
+        }
         handler.updateConfiguration(RemoteGatewayConfiguration(
             allowedOrigins: origins,
             staticResources: Self.loadWebClientResources()
@@ -2880,7 +3014,7 @@ final class RemoteAccessService: ObservableObject {
               rawHost.isEmpty == false,
               components.user == nil,
               components.password == nil,
-              components.port == nil || components.port == 443,
+              components.port.map({ (1...65535).contains($0) }) ?? true,
               components.query == nil,
               components.fragment == nil,
               components.path.isEmpty || components.path == "/" else {
@@ -2890,7 +3024,7 @@ final class RemoteAccessService: ObservableObject {
         guard host != "ts.net", host.hasSuffix(".ts.net") else { return nil }
         components.scheme = "https"
         components.host = host
-        components.port = nil
+        if components.port == 443 { components.port = nil }
         components.path = ""
         return components.url
     }

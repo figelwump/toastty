@@ -164,6 +164,26 @@ final class GatewayClientTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
     }
 
+    func testNativeRESTPreservesCustomPortInRequestAndOrigin() async throws {
+        let gateway = try PairingInputParser.canonicalGatewayURL("mac.tail.ts.net:8443")
+        let transport = RecordingHTTPTransport(responses: [.json(Self.duplicateSendJSON)])
+        let client = GatewayClient(
+            baseURL: gateway,
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "bearer-secret"))
+        )
+
+        let result = try await client.send(Self.sendRequest)
+        XCTAssertEqual(result, .duplicate)
+
+        let requests = await transport.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://mac.tail.ts.net:8443/api/conversation.message.send")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Origin"), "https://mac.tail.ts.net:8443")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer bearer-secret")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+    }
+
     func testQuestionAnswerUsesNativeBearerOriginAndSemanticBody() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Data(#"{"status":"submitted"}"#.utf8)),

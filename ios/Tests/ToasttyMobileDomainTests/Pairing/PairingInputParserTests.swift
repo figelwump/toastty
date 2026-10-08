@@ -58,10 +58,37 @@ final class PairingInputParserTests: XCTestCase {
         XCTAssertEqual(candidate.proof, .manual(fallbackCode: "2345-6789-ABCD"))
     }
 
+    func testManualInputPreservesCustomPortsAndNormalizesDefaultHTTPSPort() throws {
+        for (input, expected) in [
+            (" MAC.EXAMPLE-TAILNET.TS.NET:8443/ ", "https://mac.example-tailnet.ts.net:8443"),
+            ("https://mac.tail.ts.net:1", "https://mac.tail.ts.net:1"),
+            ("https://mac.tail.ts.net:65535/", "https://mac.tail.ts.net:65535"),
+            ("HTTPS://MAC.TAIL.TS.NET:443/", "https://mac.tail.ts.net"),
+        ] {
+            let candidate = try PairingInputParser().parseManual(gateway: input, code: "2345-6789-ABCD")
+            XCTAssertEqual(candidate.gatewayURL.absoluteString, expected)
+        }
+    }
+
+    func testQRCodePreservesCustomPortAndNormalizesDefaultHTTPSPort() throws {
+        for (port, expectedPort) in [(8443, Optional(8443)), (443, nil)] {
+            let payload = RemoteNativePairingQRPayload(
+                gatewayURL: try XCTUnwrap(URL(string: "https://mac.tail.ts.net:\(port)")),
+                offerID: Self.offerID,
+                secret: Self.secret,
+                expiresAt: Self.now.addingTimeInterval(120)
+            )
+            let candidate = try PairingInputParser().parseQRCode(try payload.encodedString(), now: Self.now)
+            XCTAssertEqual(candidate.gatewayURL.port, expectedPort)
+            XCTAssertEqual(candidate.gatewayURL.host, "mac.tail.ts.net")
+        }
+    }
+
     func testHostileOrNonRootGatewaysAreRejected() {
         let values = [
             "http://mac.tail.ts.net",
-            "https://mac.tail.ts.net:443",
+            "https://mac.tail.ts.net:0",
+            "https://mac.tail.ts.net:65536",
             "https://user@mac.tail.ts.net",
             "https://mac.tail.ts.net/path",
             "https://mac.tail.ts.net?secret=x",

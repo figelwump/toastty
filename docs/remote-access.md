@@ -9,26 +9,92 @@ Serve provides the tailnet HTTPS address; Toastty itself listens only on
 1. Install Tailscale on the Mac and phone, sign both into the same tailnet, and
    confirm they can reach each other.
 2. In Toastty, open **Toastty > Remote Access…**, or use the command palette's
-   **Open Remote Access** action, and turn on **Enable Remote Access**. The
-   default local address is `http://127.0.0.1:42871`.
-3. Configure Tailscale Serve to proxy an HTTPS tailnet URL to that loopback
-   address. With current Tailscale clients, this is typically:
-
-   ```bash
-   tailscale serve --bg http://127.0.0.1:42871
-   ```
-
-   Follow the URL printed by Tailscale; your tailnet policy and HTTPS settings
-   may require an administrator. `tailscale serve status` shows the active
-   mapping.
-4. Enter the exact HTTPS origin in Toastty's **Tailnet origin** field, without
-   a trailing path—for example `https://your-mac.example-tailnet.ts.net`.
-   Native pairing accepts only a canonical HTTPS MagicDNS hostname ending in
-   `.ts.net`, with no path, query, user information, or custom port.
+   **Open Remote Access** action, and turn on **Enable Remote Access**. Toastty
+   starts its local gateway, then sets up private Tailscale Serve HTTPS access
+   to it. The default local address is `http://127.0.0.1:42871`.
+3. If Toastty shows **Open Tailscale Setup**, open that page and complete the
+   HTTPS approval steps. Your tailnet administrator may need to approve them.
+   Return to Toastty and choose **Retry Setup**. Toastty does not wait for
+   browser approval or retry a configuration change in the background.
+4. Wait for **Tailscale Serve is configured**. Toastty fills an empty **Tailnet
+   origin** field with this Mac's address. It does not replace a different
+   saved address. If that address is stale, choose **Detect** or edit it, then
+   choose **Retry Setup**. Native pairing accepts only an HTTPS MagicDNS
+   hostname ending in `.ts.net`, with an optional HTTPS port and no path,
+   query, or user information. For example,
+   `https://your-mac.example-tailnet.ts.net:8443`.
 5. Choose **Show Pairing QR**, then scan it from Toastty Mobile. If scanning is
    unavailable, enter the fallback code shown beside the QR. Both proofs belong
    to the same single-use offer, expire after two minutes, and are invalidated
    together when either succeeds or you cancel or reissue the offer.
+
+The configured status verifies the private HTTPS mapping on this Mac. The
+phone checks the real HTTPS connection during pairing. Tailnet ACLs, DNS,
+certificate setup, or the phone's Tailscale connection can still prevent
+access.
+
+Toastty reuses a correct existing mapping, including a manual mapping to
+`localhost`. It preserves unrelated paths on that mapping. It does not replace
+another service or enable Funnel. For a new setup with no saved origin, it
+uses HTTPS port 443 when free. If another service occupies 443, it tries ports
+8443 through 8447 in order. It reuses a matching private mapping before creating
+another one, including a mapping left by an interrupted setup. If all candidates
+are occupied, setup stops without replacing them.
+
+The saved origin fixes the HTTPS port for later setup, app restart, and
+turning Remote Access off and on. A custom port does not move back to 443 when
+443 becomes free. A conflicting saved 443 origin is never silently rewritten.
+For an unpaired Mac with an old detected address, clear **Tailnet origin** and
+choose **Retry Setup** to select an available port. Do not choose **Detect**
+before retrying. If a device is already paired, restore its existing mapping.
+**Detect** preserves the current port when it finds the same Mac.
+
+Custom-port pairing requires the updated Toastty Mobile TestFlight client.
+Older clients accept only the HTTPS address without an explicit port. Existing
+no-port QR codes and saved credentials keep working without re-pairing. The
+updated client preserves the selected port in pairing, requests, and reconnects.
+Your tailnet policy must also allow the selected port.
+
+Avoid editing Serve configuration from another app or terminal while Toastty
+is setting it up. Toastty checks the authenticated node before and after setup.
+The Tailscale command cannot atomically prevent concurrent profile switches or
+external configuration changes.
+
+If the local port is already in use, Toastty identifies that port and stops before
+running Serve setup. Turn off Remote Access in the other Toastty instance, or
+quit the app using the port, then enable Remote Access here. The screen reports
+missing Serve configuration, setup failure, and setup timeout separately. Use
+**Retry Setup** after resolving the reported Tailscale issue.
+
+Setup blocks pairing if Funnel exposes the selected HTTPS port or forwards
+public traffic to Toastty's local gateway. An unrelated public service occupies
+its port but does not prevent a private fallback mapping. Resolve any Funnel
+configuration that exposes Toastty before retrying.
+
+When Toastty restores enabled Remote Access at app startup, it starts only the
+local gateway. Opening settings can verify an existing mapping without changing
+it. **Enable Remote Access**, **Set Up Tailscale**, and **Retry Setup** are the
+actions that can configure Tailscale.
+
+### Manual setup and recovery
+
+If Toastty cannot find or inspect Tailscale, a working manual setup can still
+pair a phone. The status says that Tailscale Serve is not verified. Configure
+the mapping in a terminal and enter its exact HTTPS origin in Toastty:
+
+```bash
+tailscale serve status
+tailscale serve --bg --https=443 http://127.0.0.1:42871
+tailscale serve status
+```
+
+The status command reads your Mac's existing Tailscale configuration. The
+`--bg` command changes it. Inspect the current mapping first and do not replace
+another service. If Tailscale prints an HTTPS approval URL, complete its steps
+before trying again. For a custom mapping, use its port in `--https` and in the
+HTTPS origin, such as `https://your-mac.example-tailnet.ts.net:8443`. Toastty
+hides pairing while setup is running or when it
+finds a missing mapping, a different target or origin, or Funnel access.
 
 The QR is a non-HTTP payload and contains a short-lived secret, not the
 long-lived device credential. Avoid screenshots or copying the fallback code
@@ -488,12 +554,14 @@ revoke that device from the Mac. Revocation is persisted before Toastty closes
 every active stream for that device; revoke-all covers browser and native
 devices. Disabling Remote Access closes the listener and all active
 subscriptions and cancels a native offer, but retains paired-device credentials
-for the next time you enable it.
-When you no longer need the tailnet URL, remove only the default
-HTTPS mapping created above so other Serve configuration remains intact:
+for the next time you enable it. The Tailscale Serve mapping remains configured;
+it cannot reach Toastty while the local gateway is stopped.
+When you no longer need the tailnet URL, remove only its root HTTPS mapping
+on your Mac so other Serve paths remain intact. Replace `443` with the port
+in your saved Tailnet origin when it has a custom port:
 
 ```bash
-tailscale serve --https=443 off
+tailscale serve --https=443 --set-path=/ off
 ```
 
 See [Toastty Privacy and Local Data](privacy-and-local-data.md) for the local

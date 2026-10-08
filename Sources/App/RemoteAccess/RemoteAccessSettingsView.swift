@@ -17,8 +17,12 @@ struct RemoteAccessConnectionStatusPresentation: Equatable {
 
     static func make(
         activationState: RemoteAccessActivationState,
+        tailnetSetupState: RemoteAccessTailnetSetupState = .unchecked,
         connectedNativeClientCount: Int,
-        hasPairedNativeDevice: Bool
+        hasPairedNativeDevice: Bool,
+        hasUnrevokedDevice: Bool = true,
+        hasPendingPairing: Bool = false,
+        hasSavedOrigin: Bool = true
     ) -> Self {
         switch activationState {
         case .off:
@@ -36,10 +40,44 @@ struct RemoteAccessConnectionStatusPresentation: Equatable {
         case .failed(let message):
             return Self(
                 indicator: .failure,
-                title: "Remote Access could not start",
+                title: "Local Remote Access could not start",
                 detail: message
             )
         case .ready:
+            switch tailnetSetupState {
+            case .waitingForListener:
+                return Self(
+                    indicator: .progress,
+                    title: "Preparing private access…",
+                    detail: "Preparing this Mac for Tailscale setup."
+                )
+            case .checking:
+                return Self(
+                    indicator: .progress,
+                    title: "Checking Tailscale Serve…",
+                    detail: "Checking private access before pairing a phone."
+                )
+            case .configuring:
+                return Self(
+                    indicator: .progress,
+                    title: "Setting up private access…",
+                    detail: "Configuring Tailscale Serve for this Mac."
+                )
+            case .failed(let error):
+                var detail = error.recoveryMessage + (tailnetSetupState.permitsPairing
+                    ? " A working manual setup can still pair a phone below."
+                    : "")
+                if case .portInUse = error, hasSavedOrigin, !hasPairedNativeDevice, !hasUnrevokedDevice, !hasPendingPairing {
+                    detail += " No devices are paired. To choose an available Tailscale port, clear Tailnet origin, then choose Retry Setup. Do not use Detect before retrying."
+                }
+                return Self(
+                    indicator: .failure,
+                    title: error.title,
+                    detail: detail
+                )
+            case .unchecked, .configured:
+                break
+            }
             if connectedNativeClientCount > 0 {
                 let clientLabel = connectedNativeClientCount == 1
                     ? "1 Toastty Mobile client is connected."
@@ -51,16 +89,26 @@ struct RemoteAccessConnectionStatusPresentation: Equatable {
                 )
             }
             if hasPairedNativeDevice {
+                let verificationDetail = tailnetSetupState == .unchecked
+                    ? " Tailscale Serve has not been verified."
+                    : ""
                 return Self(
                     indicator: .progress,
                     title: "Waiting for Toastty Mobile to reconnect…",
-                    detail: "Remote Access is ready on this Mac. Open Toastty on your iPhone to connect; if it's already open, it will keep retrying automatically."
+                    detail: "Remote Access is ready on this Mac.\(verificationDetail) Open Toastty on your iPhone to connect; if it's already open, it will keep retrying automatically."
+                )
+            }
+            if tailnetSetupState == .unchecked {
+                return Self(
+                    indicator: .off,
+                    title: "Remote Access is running on this Mac",
+                    detail: "Tailscale Serve has not been verified. A working manual setup can still pair a phone below."
                 )
             }
             return Self(
                 indicator: .ready,
-                title: "Remote Access is ready",
-                detail: "Pair a phone below to connect Toastty Mobile."
+                title: "Tailscale Serve is configured",
+                detail: "Pair a phone below. The phone checks the HTTPS connection."
             )
         }
     }
@@ -87,7 +135,7 @@ struct RemoteAccessSettingsView: View {
     var body: some View {
         Form {
             gatewaySection
-            if service.isReady {
+            if service.isReady, service.tailnetSetupState.permitsPairing {
                 pairingSection
             }
             devicesSection
@@ -101,9 +149,21 @@ struct RemoteAccessSettingsView: View {
         .onAppear {
             service.refreshDevices()
             service.refreshNativePairingOffer()
+            service.verifyTailnetSetupIfNeeded()
         }
         .task(id: originDetectionRequestID) {
-            await detectTailnetOrigin(allowsReplacingExistingOrigin: originDetectionRequestID > 0)
+            guard originDetectionRequestID > 0 else { return }
+            await detectTailnetOrigin(allowsReplacingExistingOrigin: true)
+        }
+        .onChange(of: service.activationState) {
+            service.verifyTailnetSetupIfNeeded()
+        }
+        .onChange(of: service.tailnetSetupState.isInProgress) {
+            if service.tailnetSetupState.isInProgress {
+                // Cancel an in-flight Detect result before it can replace the
+                // origin selected by setup. Detect itself stays read-only.
+                originDetectionRequestID = 0
+            }
         }
         .onChange(of: service.tailnetOrigin) {
             if case .failed = originDetectionState {
@@ -116,13 +176,29 @@ struct RemoteAccessSettingsView: View {
         Section {
             Toggle(isOn: Binding(
                 get: { service.isEnabled },
-                set: { service.setEnabled($0) }
+                set: { service.setEnabledFromSettings($0) }
             )) {
                 Text("Enable Remote Access")
             }
             .toggleStyle(.switch)
 
             connectionStatus
+
+            if service.isEnabled, service.tailnetSetupState != .configured {
+                HStack {
+                    if let approvalURL = service.tailnetSetupState.approvalURL {
+                        Button("Open Tailscale Setup") {
+                            NSWorkspace.shared.open(approvalURL)
+                        }
+                        .accessibilityIdentifier("toastty-remote-access-open-tailscale-setup")
+                    }
+                    Button(service.tailnetSetupState.failureMessage == nil ? "Set Up Tailscale" : "Retry Setup") {
+                        service.setUpTailnetAccess()
+                    }
+                    .disabled(service.tailnetSetupState.isInProgress)
+                    .accessibilityIdentifier("toastty-remote-access-setup")
+                }
+            }
 
             LabeledContent("Tailnet origin") {
                 VStack(alignment: .leading, spacing: 4) {
@@ -143,7 +219,7 @@ struct RemoteAccessSettingsView: View {
                                 Text("Detect")
                             }
                         }
-                        .disabled(originDetectionState == .detecting)
+                        .disabled(originDetectionState == .detecting || service.tailnetSetupState.isInProgress)
                         .accessibilityLabel("Detect Tailnet origin")
                         .accessibilityIdentifier("toastty-remote-access-detect-origin")
                     }
@@ -160,6 +236,11 @@ struct RemoteAccessSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    if let customPort = service.publicGatewayURL?.port {
+                        Text("HTTPS port \(String(customPort)) requires an updated Toastty Mobile/TestFlight build and a tailnet policy that allows this port.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         } footer: {
@@ -167,7 +248,8 @@ struct RemoteAccessSettingsView: View {
                 if case .failed(let message) = originDetectionState {
                     Text(message)
                 }
-                Text("Toastty detects this Mac’s Tailnet origin when possible. Tailscale Serve must still proxy the local gateway; only that exact origin may pair or subscribe.")
+                Text("Toastty sets up private access through Tailscale when you enable it here. Only the exact Tailnet origin may pair or subscribe.")
+                Text("Turning Remote Access off stops the local gateway. The Tailscale Serve mapping stays configured.")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -177,10 +259,14 @@ struct RemoteAccessSettingsView: View {
     private var connectionStatus: some View {
         let presentation = RemoteAccessConnectionStatusPresentation.make(
             activationState: service.activationState,
+            tailnetSetupState: service.tailnetSetupState,
             connectedNativeClientCount: service.connectedNativeClientCount,
             hasPairedNativeDevice: service.devices.contains(where: {
                 $0.authKind == .native && $0.isRevoked == false
-            })
+            }),
+            hasUnrevokedDevice: service.devices.contains(where: { !$0.isRevoked }),
+            hasPendingPairing: service.currentPairingCode != nil || service.currentNativePairingOffer != nil,
+            hasSavedOrigin: !service.tailnetOrigin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
         return HStack(alignment: .top, spacing: 8) {
             connectionStatusIndicator(presentation.indicator)
@@ -223,6 +309,7 @@ struct RemoteAccessSettingsView: View {
     @MainActor
     private func detectTailnetOrigin(allowsReplacingExistingOrigin: Bool) async {
         let originAtStart = service.tailnetOrigin
+        guard service.tailnetSetupState.isInProgress == false else { return }
         guard allowsReplacingExistingOrigin
                 || originAtStart.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
@@ -233,6 +320,10 @@ struct RemoteAccessSettingsView: View {
         do {
             let detectedOrigin = try await tailnetOriginDetector.detectOrigin()
             try Task.checkCancellation()
+            guard service.tailnetSetupState.isInProgress == false else {
+                originDetectionState = .idle
+                return
+            }
             guard TailnetOriginDetectionPolicy.shouldApply(
                 originAtStart: originAtStart,
                 currentOrigin: service.tailnetOrigin,
@@ -241,7 +332,10 @@ struct RemoteAccessSettingsView: View {
                 originDetectionState = .idle
                 return
             }
-            service.tailnetOrigin = detectedOrigin
+            service.tailnetOrigin = TailnetOriginDetectionPolicy.originToApply(
+                detectedOrigin: detectedOrigin,
+                currentOrigin: service.tailnetOrigin
+            )
             originDetectionState = .idle
         } catch is CancellationError {
             originDetectionState = .idle
@@ -272,6 +366,7 @@ struct RemoteAccessSettingsView: View {
                     Button("Show Pairing QR") {
                         service.issueNativePairingOffer()
                     }
+                    .disabled(service.canIssueNativePairingOffer == false)
                 }
             }
 

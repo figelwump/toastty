@@ -94,7 +94,13 @@ It is not a screenshot, and it does not cover the iOS screens.
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.
 
-App discovery has a 60-second startup timeout; ordinary protocol requests keep their 20-second timeout. The runner supports legacy `computer-use` events and current `cua_repl` events. For the current runtime, unattended approval is limited to the Computer Use connector's empty-form app-access requests for native inspection, clicking, dragging, scrolling, keyboard, and text-entry operations for `com.GiantThings.toastty`; other requests are declined. This grants access for the isolated test request and does not save an always-allow permission. If the default model is unavailable to the signed-in account, use the existing invocation-only `CODEX_COMPUTER_USE_MODEL` override with a model available to that account.
+App discovery has a 60-second startup timeout; ordinary protocol requests keep their 20-second timeout. The runner supports legacy `computer-use` events and current `cua_repl` events.
+
+For the current runtime, unattended approval is limited to the Computer Use connector's empty-form app-access requests for native inspection, clicking, dragging, scrolling, keyboard, and text-entry operations.
+
+The requested app must exactly match the built app's `CFBundleIdentifier`, recorded as `appBundleID` in `launch.json` and passed to the client with the required `--app-bundle-id` argument. The client accepts only `com.GiantThings.toastty` or a valid dotted suffix under that ID. This supports a disposable test app with a distinct bundle ID; it does not approve all apps with that prefix. Missing or invalid target metadata stops the client before connection. Other app requests are declined. This grants access for the isolated test request and does not save an always-allow permission.
+
+If the default model is unavailable to the signed-in account, use the existing invocation-only `CODEX_COMPUTER_USE_MODEL` override with a model available to that account.
 
 Run `node --test Tests/RemoteScripts/ComputerUseProtocolTests.mjs` locally to check approval boundaries and server-name compatibility without connecting to an app or remote host. The full `scripts/automation/check.sh` gate also includes these tests.
 

@@ -178,7 +178,7 @@ public struct RemoteNativePairingQRPayload: Codable, Equatable, Sendable {
               url.password == nil,
               url.query == nil,
               url.fragment == nil,
-              url.port == nil else {
+              url.port.map({ (1...65535).contains($0) }) ?? true else {
             return false
         }
         return url.path.isEmpty || url.path == "/"

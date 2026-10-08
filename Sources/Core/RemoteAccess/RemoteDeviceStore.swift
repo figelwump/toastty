@@ -159,9 +159,6 @@ public final class RemoteDeviceStore: @unchecked Sendable {
     /// Creates a new native offer, atomically replacing any earlier native
     /// offer. Browser pairing is a separate flow and remains untouched.
     public func issueNativePairingOffer(gatewayURL: URL, at date: Date) throws -> RemoteNativePairingOffer {
-        guard Self.isValidGatewayOrigin(gatewayURL) else {
-            throw RemoteNativePairingOfferError.invalidGatewayURL
-        }
         let offerID = UUID()
         let expiresAt = date.addingTimeInterval(RemoteNativePairingOffer.timeToLive)
         let payload = RemoteNativePairingQRPayload(
@@ -170,6 +167,8 @@ public final class RemoteDeviceStore: @unchecked Sendable {
             secret: Self.generateCredentialToken(),
             expiresAt: expiresAt
         )
+        // The shared QR contract validates the complete HTTPS origin,
+        // including an optional port, before the offer becomes active.
         guard (try? payload.encodedString()) != nil else {
             throw RemoteNativePairingOfferError.invalidGatewayURL
         }
@@ -759,18 +758,5 @@ public final class RemoteDeviceStore: @unchecked Sendable {
         return Data(base64Encoded: base64)?.count == 32
     }
 
-    private static func isValidGatewayOrigin(_ url: URL) -> Bool {
-        guard url.scheme?.lowercased() == "https",
-              let host = url.host?.lowercased(),
-              host.hasSuffix(".ts.net"),
-              host.count > ".ts.net".count,
-              url.user == nil,
-              url.password == nil,
-              url.query == nil,
-              url.fragment == nil,
-              url.port == nil else {
-            return false
-        }
-        return url.path.isEmpty || url.path == "/"
-    }
+
 }

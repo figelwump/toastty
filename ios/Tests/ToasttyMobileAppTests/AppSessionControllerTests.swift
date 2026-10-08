@@ -211,6 +211,41 @@ final class AppSessionControllerTests: XCTestCase {
         XCTAssertEqual(controller.state, .paired(.unreachable))
     }
 
+    func testRestorationReusesOldAndCustomPortGatewayAndBearerWithoutPairing() async throws {
+        for gateway in ["https://test-mac.tailnet.ts.net", "https://test-mac.tailnet.ts.net:8443"] {
+            let credential = try Self.credential(deviceName: "Stored iPhone", gateway: gateway)
+            let vault = TestAppCredentialVault(initialCredential: credential)
+            let pairing = RestorationPairingClient()
+            var runtimeCredentials: [StoredMobileCredential] = []
+            var runtimeProvider: (any GatewayCredentialProvider)?
+            let controller = AppSessionController(
+                runtimeMode: .fixture,
+                credentialVault: vault,
+                pairingClient: pairing,
+                scanner: TestAppPairingScanner(),
+                deviceName: { "Test iPhone" },
+                initialSnapshot: ToasttyMobileFixture.home,
+                initialConnectionState: .offline,
+                liveSessionsFactory: { stored, provider, _, _, _ in
+                    runtimeCredentials.append(stored)
+                    runtimeProvider = provider
+                    return AppLiveSessionsSpy()
+                }
+            )
+
+            await controller.restoreIfNeeded()
+            await controller.retryRestoration()
+
+            XCTAssertEqual(controller.pairedDevice?.gatewayURL.absoluteString, gateway)
+            XCTAssertEqual(runtimeCredentials, [credential, credential])
+            let bearer = try await XCTUnwrap(runtimeProvider).credential()
+            XCTAssertEqual(bearer, .bearer(token: credential.bearerToken))
+            let exchangeCount = await pairing.exchangeCount
+            XCTAssertEqual(exchangeCount, 0)
+            XCTAssertNil(controller.pairingController)
+        }
+    }
+
     func testInitialConnectFallsThroughToHomeWhenFirstAttemptFails() async throws {
         let credential = try Self.credential(deviceName: "Failing iPhone")
         let vault = TestAppCredentialVault(initialCredential: credential)
@@ -448,10 +483,11 @@ final class AppSessionControllerTests: XCTestCase {
 
     private static func credential(
         deviceName: String,
-        id: UUID = UUID(uuidString: "D1000000-0000-0000-0000-000000000001")!
+        id: UUID = UUID(uuidString: "D1000000-0000-0000-0000-000000000001")!,
+        gateway: String = "https://test-mac.tailnet.ts.net"
     ) throws -> StoredMobileCredential {
         try StoredMobileCredential(
-            gatewayURL: URL(string: "https://test-mac.tailnet.ts.net")!,
+            gatewayURL: URL(string: gateway)!,
             device: RemoteGatewayDeviceSummary(
                 id: id,
                 name: deviceName,
@@ -492,6 +528,18 @@ private actor AttemptRecorder {
     }
 
     func attempts() -> Int { count }
+}
+
+private actor RestorationPairingClient: NativePairingClientProtocol {
+    private(set) var exchangeCount = 0
+
+    func exchangeConfirmed(
+        candidate: PairingCandidate,
+        deviceName: String
+    ) async throws -> RemoteGatewayNativePairingExchangeResponse {
+        exchangeCount += 1
+        throw GatewayFailure.invalidResponse
+    }
 }
 
 @MainActor

@@ -64,6 +64,29 @@ final class PairingControllerTests: XCTestCase {
         XCTAssertEqual(exchangeCount, 0)
     }
 
+    func testCustomPortIsShownBeforeConfirmationAndStoredAfterExchange() async throws {
+        let client = RecordingPairingClient(result: .success(Self.exchangeResponse))
+        let vault = TestAppCredentialVault()
+        var pairedCredential: StoredMobileCredential?
+        let controller = makeController(client: client, vault: vault) { pairedCredential = $0 }
+        controller.showManualEntry()
+        controller.manualGateway = "EXAMPLE-MAC.TAILNET.TS.NET:8443"
+        controller.manualCode = "2345-6789-ABCD"
+
+        controller.submitManualEntry()
+
+        XCTAssertEqual(controller.state, .confirming(PairingConfirmation(
+            hostname: "example-mac.tailnet.ts.net:8443",
+            method: .manualCode
+        )))
+        let countBeforeConfirmation = await client.exchangeCount()
+        XCTAssertEqual(countBeforeConfirmation, 0)
+        controller.confirmAndExchange()
+        await client.waitForExchange()
+        await waitUntil { pairedCredential != nil }
+        XCTAssertEqual(pairedCredential?.gatewayURL.absoluteString, "https://example-mac.tailnet.ts.net:8443")
+    }
+
     func testScannerAvailabilityKeepsSupportedButUnauthorizedHardwareDistinct() {
         XCTAssertEqual(PairingScannerAvailability(isSupported: false, isAvailable: false), .unsupported)
         XCTAssertEqual(PairingScannerAvailability(isSupported: true, isAvailable: false), .unavailable)
