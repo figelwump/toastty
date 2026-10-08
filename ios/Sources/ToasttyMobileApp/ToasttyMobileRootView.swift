@@ -593,7 +593,9 @@ struct ToasttyMobileRootView: View {
         {
             guard let controller = sessionController.liveController?.activeConversationController,
                   controller.conversationID == conversationID else {
+#if DEBUG
                 fixtureInterrupt(conversationID)
+#endif
                 return
             }
             Task { await controller.interrupt() }
@@ -609,7 +611,9 @@ struct ToasttyMobileRootView: View {
         { action in
             guard let controller = sessionController.liveController?.activeConversationController,
                   controller.conversationID == conversationID else {
+#if DEBUG
                 fixtureQueuedMessageAction(action, conversationID: conversationID)
+#endif
                 return
             }
             Task { @MainActor in
