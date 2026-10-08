@@ -68,6 +68,25 @@ enum ClaudeTranscriptFixtures {
         #"{"type":"assistant","sessionId":"cf000000-0000-4000-8000-000000000005","uuid":"a-task-final","parentUuid":"u-task-result","isSidechain":false,"timestamp":"2026-08-07T14:00:03.000Z","message":{"role":"assistant","model":"claude-opus-5","stop_reason":"end_turn","content":[{"type":"text","text":"Background task finished."}]}}"#,
     ])
 
+    /// Idle compaction appends an internal summary as a `user` record after
+    /// the final reply. It must not become a user turn or replace its turn ID.
+    static let idleCompaction = lines([
+        #"{"type":"system","subtype":"compact_boundary","sessionId":"\#(sessionID)","uuid":"compact-boundary","timestamp":"2026-08-07T09:02:00.000Z","content":"Conversation compacted"}"#,
+        #"{"type":"user","sessionId":"\#(sessionID)","uuid":"compact-summary","parentUuid":"compact-boundary","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"timestamp":"2026-08-07T09:02:00.001Z","promptId":"internal-summary","message":{"role":"user","content":"This session is being continued from a previous conversation. Internal summary."}}"#,
+        #"{"type":"system","subtype":"informational","sessionId":"\#(sessionID)","timestamp":"2026-08-07T09:02:00.002Z","content":"Compacted while idle, before the prompt cache expired"}"#,
+    ])
+
+    /// Only the Boolean compaction flag identifies a summary. Other flags
+    /// and summary-like text alone must not hide normal user messages.
+    static let compactionSummaryVariants = lines([
+        #"{"type":"user","sessionId":"\#(sessionID)","uuid":"summary-string","isCompactSummary":true,"timestamp":"2026-08-07T09:02:00.000Z","message":{"role":"user","content":"Internal summary"}}"#,
+        #"{"type":"user","sessionId":"\#(sessionID)","uuid":"summary-blocks","isCompactSummary":true,"timestamp":"2026-08-07T09:02:00.001Z","message":{"role":"user","content":[{"type":"text","text":"Internal summary in blocks"}]}}"#,
+        #"{"type":"user","sessionId":"\#(sessionID)","uuid":"literal-summary","timestamp":"2026-08-07T09:03:00.000Z","message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#,
+        #"{"type":"user","sessionId":"\#(sessionID)","uuid":"visible-only","isVisibleInTranscriptOnly":true,"timestamp":"2026-08-07T09:03:00.001Z","message":{"role":"user","content":"Transcript visibility alone is not a compaction flag"}}"#,
+        #"{"type":"user","sessionId":"\#(sessionID)","uuid":"summary-false","isCompactSummary":false,"timestamp":"2026-08-07T09:03:00.002Z","message":{"role":"user","content":[{"type":"text","text":"A normal message with a false flag"}]}}"#,
+        #"{"type":"user","sessionId":"\#(sessionID)","uuid":"summary-malformed","isCompactSummary":"true","timestamp":"2026-08-07T09:03:00.003Z","message":{"role":"user","content":"A normal message with a malformed flag"}}"#,
+    ])
+
     /// The same session resumed: a later append with the same sessionId and a
     /// repeated identical short prompt across turns.
     static let resumeContinuation = lines([
