@@ -35,6 +35,8 @@ struct ToasttyInteractionAnswerState: Equatable, Sendable {
     var status: ToasttyInteractionAnswerStatus
     var connectionIsLive: Bool
     var retryRequest: RemoteQuestionAnswerRequest?
+    /// Set when a phone submission finishes; drives the answer haptic.
+    var lastSubmission: ToasttyOutcomeFeedback?
 
     init(
         key: ToasttyInteractionAnswerKey,
@@ -161,6 +163,9 @@ struct ToasttyInteractionCard: View {
             style: .continuous
         ))
         .accessibilityElement(children: answerState == nil ? .combine : .contain)
+        .sensoryFeedback(trigger: answerState) { old, new in
+            ToasttyHapticFeedback.interactionAnswer(from: old, to: new)
+        }
     }
 
     private var header: some View {
