@@ -39,6 +39,24 @@ struct ManagedProviderConversationFeedSnapshot: Equatable, Sendable {
     let updatedAt: Date
 }
 
+/// An accepted session event for consumers that need routing identity without
+/// directory paths, status details, or conversation content.
+struct ManagedSessionActionableEvent: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case turnComplete
+        case needsApproval
+    }
+
+    let eventID: UUID
+    let kind: Kind
+    /// Emission time. A held completion uses its release time after the delay.
+    let timestamp: Date
+    let sessionID: String
+    let agent: AgentKind
+    let workspaceID: UUID
+    let panelID: UUID
+}
+
 @MainActor
 final class SessionRuntimeStore: ObservableObject {
     typealias SessionStatusNotificationHandler = @Sendable (
@@ -52,6 +70,10 @@ final class SessionRuntimeStore: ObservableObject {
 
     @Published private(set) var sessionRegistry = SessionRegistry()
     @Published private(set) var providerConversationRevision: UInt64 = 0
+
+    /// Receives accepted actionable transitions after deduplication and any
+    /// child/resume delay. Delivery is independent of shell hooks and Mac focus.
+    var onActionableEvent: (@MainActor (ManagedSessionActionableEvent) -> Void)?
 
     var claudeQuestionBroker = ClaudeQuestionBroker()
     private var claudeQuestionWatchdog: Task<Void, Never>?
@@ -132,6 +154,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// waiting on children or resuming. `previousKind` preserves the accepted
     /// kind the session transitioned from when `ready` was first requested.
     private struct PendingHookReady: Equatable {
+        let id = UUID()
         let previousKind: SessionStatusKind?
     }
 
@@ -2981,6 +3004,9 @@ final class SessionRuntimeStore: ObservableObject {
     private func reevaluatePendingHookReadyEvents(at now: Date) {
         guard pendingHookReadyBySessionID.isEmpty == false else { return }
         for (sessionID, pending) in pendingHookReadyBySessionID {
+            // A callback can publish again and release or replace another entry
+            // from this iteration's snapshot before the outer loop reaches it.
+            guard pendingHookReadyBySessionID[sessionID] == pending else { continue }
             guard let record = sessionRegistry.sessionsByID[sessionID],
                   record.isActive else {
                 pendingHookReadyBySessionID.removeValue(forKey: sessionID)
@@ -3028,8 +3054,8 @@ final class SessionRuntimeStore: ObservableObject {
         launchReason: AgentHookLaunchReason? = nil,
         at now: Date
     ) {
-        guard let agentHookDispatcher else { return }
-        agentHookDispatcher.enqueue(
+        // Queue the shell event before callbacks can cause nested transitions.
+        agentHookDispatcher?.enqueue(
             AgentHookEvent(
                 kind: kind,
                 timestamp: now,
@@ -3043,6 +3069,28 @@ final class SessionRuntimeStore: ObservableObject {
                 launchReason: launchReason
             )
         )
+        let actionableKind: ManagedSessionActionableEvent.Kind?
+        switch kind {
+        case .turnComplete:
+            actionableKind = .turnComplete
+        case .needsApproval:
+            actionableKind = .needsApproval
+        case .sessionStart, .sessionError, .sessionStop:
+            actionableKind = nil
+        }
+        if let actionableKind {
+            onActionableEvent?(
+                ManagedSessionActionableEvent(
+                    eventID: UUID(),
+                    kind: actionableKind,
+                    timestamp: now,
+                    sessionID: record.sessionID,
+                    agent: record.agent,
+                    workspaceID: record.workspaceID,
+                    panelID: record.panelID
+                )
+            )
+        }
     }
 
     private func clearHookTransitionState(sessionID: String) {
