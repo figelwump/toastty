@@ -6,17 +6,22 @@ struct ToasttySettings: Equatable {
     var hasEverLaunchedAgent = false
     /// When false, Cmd+Q quits immediately without checking terminal activity.
     var askBeforeQuitting = true
+    /// What a subspace's Merge button and shortcut do.
+    var workspaceMergeMode = WorkspaceMergeMode.mergeAndCleanUp
 }
 
 enum ToasttySettingsStore {
     private static let terminalFontSizeKey = "toastty.terminalFontSizePoints"
     private static let hasEverLaunchedAgentKey = "toastty.hasEverLaunchedAgent"
     private static let askBeforeQuittingKey = "toastty.askBeforeQuitting"
+    private static let workspaceMergeModeKey = "toastty.workspaceMergeMode"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         return ToasttySettings(
             hasEverLaunchedAgent: loadHasEverLaunchedAgent(userDefaults: userDefaults),
-            askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults)
+            askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults),
+            workspaceMergeMode: userDefaults.string(forKey: workspaceMergeModeKey)
+                .flatMap(WorkspaceMergeMode.init(rawValue:)) ?? .mergeAndCleanUp
         )
     }
 
@@ -53,6 +58,13 @@ enum ToasttySettingsStore {
         userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) {
         userDefaults.set(askBeforeQuitting, forKey: askBeforeQuittingKey)
+    }
+
+    static func persistWorkspaceMergeMode(
+        _ mode: WorkspaceMergeMode,
+        userDefaults: UserDefaults = ToasttyAppDefaults.current
+    ) {
+        userDefaults.set(mode.rawValue, forKey: workspaceMergeModeKey)
     }
 
     private static func loadTerminalFontSizePoints(userDefaults: UserDefaults) -> Double? {

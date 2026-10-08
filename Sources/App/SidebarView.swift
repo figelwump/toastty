@@ -547,6 +547,10 @@ struct SidebarView: View {
     // materialization immediately restyle every visible chip with that key.
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
+    /// Runs a subspace row's Merge menu item for that workspace.
+    let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
+    /// Runs a subspace row's Close Without Merging menu item.
+    let requestWorkspaceClose: @MainActor (UUID) -> Void
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
@@ -712,6 +716,8 @@ struct SidebarView: View {
         sessionRuntimeStore: SessionRuntimeStore,
         annotationStyleStore: AnnotationStyleStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
+        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
+        requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
         workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
         workspaceViewportHeightObserver: ((CGFloat) -> Void)? = nil
@@ -722,6 +728,8 @@ struct SidebarView: View {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.annotationStyleStore = annotationStyleStore
         self.terminalRuntimeContext = terminalRuntimeContext
+        self.requestWorkspaceMerge = requestWorkspaceMerge
+        self.requestWorkspaceClose = requestWorkspaceClose
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
         self.workspaceViewportHeightObserver = workspaceViewportHeightObserver
@@ -3680,8 +3688,15 @@ struct SidebarView: View {
         .background(subspaceFrameMeasurement(id: .row(row.id)))
         .id(row.id)
         .contextMenu {
+            let mergePresentation = subspaceMergeMenuPresentation(row)
+            if let mergePresentation {
+                subspaceMergeMenuItems(row, presentation: mergePresentation)
+            }
             Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
                 toggleSubspaceDone(row)
+            }
+            if mergePresentation != nil {
+                Divider()
             }
             Button("Move to top level") {
                 _ = store.send(
@@ -3739,6 +3754,60 @@ struct SidebarView: View {
                     }
                 }
         }
+    }
+
+    /// The row's merge menu items: both merge actions while the pull request
+    /// is open, a disabled progress item while the agent merges it, and the
+    /// retry and dismiss items for a pending or failed cleanup.
+    @ViewBuilder
+    private func subspaceMergeMenuItems(
+        _ row: SidebarSubspacePresentation.Row,
+        presentation: WorkspaceMergePresentation
+    ) -> some View {
+        switch presentation {
+        case .ready(let pullRequest, let currentMode):
+            ForEach(WorkspaceMergeMode.allCases, id: \.self) { mode in
+                let title = WorkspaceMergePresentation.actionTitle(mode: mode, pullRequest: pullRequest)
+                // The shortcut runs the mode the top bar button shows.
+                Button(mode == currentMode ? ToasttyKeyboardShortcuts.mergeWorkspacePullRequest.menuTitle(title) : title) {
+                    requestWorkspaceMerge(row.id, mode)
+                }
+            }
+            Button(WorkspaceMergePresentation.closeWithoutMergingTitle) {
+                requestWorkspaceClose(row.id)
+            }
+        case .cleanupFailed:
+            Button(presentation.title) {}
+                .disabled(true)
+            Button("Retry Clean Up") {
+                sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: row.id)
+            }
+            Button("Don't Clean Up") {
+                sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)
+            }
+        case .merging, .awaitingMerge, .cleaningUp, .closing, .done:
+            Button(presentation.title) {}
+                .disabled(true)
+        }
+    }
+
+    /// The row's merge state for its context menu; `nil` once the row is
+    /// done with nothing left to clean up.
+    private func subspaceMergeMenuPresentation(
+        _ row: SidebarSubspacePresentation.Row
+    ) -> WorkspaceMergePresentation? {
+        guard let workspace = store.state.workspacesByID[row.id],
+              let presentation = WorkspaceMergePresentation.make(
+                workspace: workspace,
+                request: sessionRuntimeStore.workspaceMergeRequests[row.id],
+                mode: store.workspaceMergeMode
+              ) else {
+            return nil
+        }
+        if case .done = presentation {
+            return nil
+        }
+        return presentation
     }
 
     private func toggleSubspaceDone(_ row: SidebarSubspacePresentation.Row) {

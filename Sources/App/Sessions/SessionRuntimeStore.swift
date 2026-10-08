@@ -52,6 +52,11 @@ final class SessionRuntimeStore: ObservableObject {
 
     @Published private(set) var sessionRegistry = SessionRegistry()
     @Published private(set) var providerConversationRevision: UInt64 = 0
+    /// What each subspace's Merge button is doing, by workspace, published
+    /// for the button. `WorkspaceMergeCoordinator` owns and updates them.
+    @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
+    /// Set once at launch; runs what the Merge button asks for.
+    var workspaceMergeCoordinator: WorkspaceMergeCoordinator?
 
     var claudeQuestionBroker = ClaudeQuestionBroker()
     private var claudeQuestionWatchdog: Task<Void, Never>?
@@ -5209,6 +5214,12 @@ final class SessionRuntimeStore: ObservableObject {
                 "trigger": trigger,
             ]
         )
+    }
+
+    func setWorkspaceMergeRequests(_ requests: [UUID: WorkspaceMergeRequest]) {
+        if workspaceMergeRequests != requests {
+            workspaceMergeRequests = requests
+        }
     }
 
     private func shouldClearLaterFlag(
