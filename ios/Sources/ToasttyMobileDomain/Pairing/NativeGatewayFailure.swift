@@ -5,6 +5,8 @@ public enum NativeGatewayOperation: String, Equatable, Sendable {
     case pairingExchange
     case currentDevice
     case revokeCurrentDevice
+    case pushConfiguration
+    case pushRegistration
 }
 
 public enum NativeTransportFailure: Equatable, Sendable {

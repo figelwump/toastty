@@ -53,6 +53,26 @@ Browser profiles paired by earlier Toastty builds may continue to connect and
 appear in the paired-device list, but the current UI does not issue new browser
 pairing codes.
 
+## iPhone notifications
+
+Notification-enabled builds offer session alerts after the first connection to a
+compatible Mac. Continue opens Apple's permission prompt. After Allow, Toastty
+returns to Home and finishes setup automatically. Not now and Don't Allow are
+remembered. You can change the choice in Settings.
+
+Alerts include the session title and Ready or Needs approval. The title passes
+through Toastty's notification service and Apple. There is no title-hiding option.
+Tapping an alert opens its conversation if it still belongs to the current Mac
+pairing. The Mac must remain running with Remote Access enabled to send new
+alerts. The phone does not need an open connection to receive Apple's alert, but
+opening the conversation still requires access to the Mac through Tailscale.
+
+Interrupted setup resumes when the app returns to the foreground. A failure shows
+a small Retry message. Off and unpairing retain pending notification revocation
+until the service accepts it. Settings shows when turning off is still pending;
+alerts already sent can still arrive. Unconfigured builds hide these controls.
+See [development setup](../workers/push/README.md) for the current opt-in relay.
+
 ## Reading and replying
 
 A newly paired device can read managed Codex, Claude Code, OpenCode, MiMo Code,

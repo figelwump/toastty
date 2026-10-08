@@ -23,10 +23,15 @@ Before the first CI run, create or confirm:
   `com.giantthings.toastty.mobile` using that certificate.
 - An internal TestFlight group scoped to the Toastty app.
 
-The TestFlight app requires iOS 18 or newer. The current Release target does not
-use a separate extension or Apple capability profile. If a future release adds
-push notifications, associated domains, an extension, or another entitlement,
-regenerate the App ID configuration and provisioning profile before upload.
+The TestFlight app requires iOS 18 or newer. Push is off in the default Release
+configuration. Enabling it requires a separate production relay and these explicit
+generation inputs: `TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL`,
+`TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID`, and
+`TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT=production`. Enable Push
+Notifications on the production App ID and regenerate its distribution profile
+before building with `aps-environment=production`. The development relay and
+sandbox profile must not be reused. The current TestFlight workflow does not
+activate these inputs. See [relay setup](../workers/push/README.md).
 
 ## GitHub configuration
 

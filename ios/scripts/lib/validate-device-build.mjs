@@ -125,6 +125,14 @@ export function validateBuildSettings(value, expected) {
   if (!expected.pushProbe && hasPushProbe) {
     throw new Error("Push probe compilation condition is present in a normal Debug build");
   }
+  if (expected.pushNotifications) {
+    if (hasPushProbe) throw new Error("Normal notifications cannot run in the operator probe");
+    requireEqual("TOASTTY_MOBILE_PUSH_RELAY_URL", settings.TOASTTY_MOBILE_PUSH_RELAY_URL, expected.pushRelayURL);
+    requireEqual("TOASTTY_MOBILE_PUSH_RELAY_ID", settings.TOASTTY_MOBILE_PUSH_RELAY_ID, "toastty-push-dev-v1");
+    requireEqual("TOASTTY_MOBILE_PUSH_ENVIRONMENT", settings.TOASTTY_MOBILE_PUSH_ENVIRONMENT, "development");
+  } else if (settings.TOASTTY_MOBILE_PUSH_RELAY_URL) {
+    throw new Error("Push relay is configured in a build expected to have notifications disabled");
+  }
 
   if (!settings.TARGET_BUILD_DIR || !settings.FULL_PRODUCT_NAME) {
     throw new Error("xcodebuild settings are missing TARGET_BUILD_DIR or FULL_PRODUCT_NAME");
@@ -140,6 +148,13 @@ export function validateAppInfo(info, expected) {
     .filter((value) => typeof value === "string");
   if (!schemes.includes(expected.urlScheme)) {
     throw new Error(`CFBundleURLSchemes does not include ${expected.urlScheme}`);
+  }
+  if (expected.pushNotifications) {
+    requireEqual("ToasttyMobilePushRelayURL", info.ToasttyMobilePushRelayURL, expected.pushRelayURL);
+    requireEqual("ToasttyMobilePushRelayID", info.ToasttyMobilePushRelayID, "toastty-push-dev-v1");
+    requireEqual("ToasttyMobilePushEnvironment", info.ToasttyMobilePushEnvironment, "development");
+  } else if (info.ToasttyMobilePushRelayURL) {
+    throw new Error("Push relay is configured in app metadata expected to have notifications disabled");
   }
 }
 
@@ -166,7 +181,7 @@ export function validateDevelopmentProfile(profile, expected) {
     expected.team,
   );
   requireEqual("provisioning get-task-allow", entitlements["get-task-allow"], true);
-  if (expected.pushProbe) {
+  if (expected.pushProbe || expected.pushNotifications) {
     requireEqual("provisioning aps-environment", entitlements["aps-environment"], "development");
   }
 
@@ -200,8 +215,10 @@ export function validateSignedEntitlements(entitlements, expected) {
     expected.team,
   );
   requireEqual("signed get-task-allow", entitlements["get-task-allow"], true);
-  if (expected.pushProbe) {
+  if (expected.pushProbe || expected.pushNotifications) {
     requireEqual("signed aps-environment", entitlements["aps-environment"], "development");
+  } else if (entitlements["aps-environment"] !== undefined) {
+    throw new Error("Unexpected signed aps-environment in a build with notifications disabled");
   }
 }
 
@@ -209,6 +226,8 @@ function main(argv) {
   const options = parseArgs(argv);
   const settingsPath = requireOption(options, "settings");
   const pushProbeFlag = options["push-probe"] ?? "0";
+  const notificationsFlag = options["push-notifications"] ?? "0";
+  if (!["0", "1"].includes(notificationsFlag)) throw new Error("--push-notifications must be 0 or 1");
   if (pushProbeFlag !== "0" && pushProbeFlag !== "1") {
     throw new Error("--push-probe must be 0 or 1");
   }
@@ -219,6 +238,8 @@ function main(argv) {
     team: requireOption(options, "team"),
     urlScheme: requireOption(options, "url-scheme"),
     pushProbe: pushProbeFlag === "1",
+    pushNotifications: notificationsFlag === "1",
+    pushRelayURL: options["push-relay-url"],
   };
 
   const appPath = validateBuildSettings(

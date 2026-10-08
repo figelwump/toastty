@@ -184,10 +184,28 @@ test("push probe requires its compiled receiver and development APNs entitlement
       assert.throws(validateProfile, /provisioning aps-environment mismatch/);
       assert.throws(validateSignature, /signed aps-environment mismatch/);
     }
-    // Existing device builds do not require or reject an unrelated push entitlement.
+    // A profile can permit APNs while an unconfigured app omits the entitlement.
     validateDevelopmentProfile(profile({ Entitlements: entitlements }), expected);
-    validateSignedEntitlements(entitlements, expected);
+    if (apsEnvironment === undefined) validateSignedEntitlements(entitlements, expected);
+    else assert.throws(() => validateSignedEntitlements(entitlements, expected), /Unexpected signed aps-environment/);
   }
+});
+
+test("normal notifications validate configured relay identity and development entitlements", () => {
+  const notificationExpected = { ...expected, pushNotifications: true, pushRelayURL: "https://push.example.com" };
+  const configuredSettings = {
+    TOASTTY_MOBILE_PUSH_RELAY_URL: notificationExpected.pushRelayURL,
+    TOASTTY_MOBILE_PUSH_RELAY_ID: "toastty-push-dev-v1",
+    TOASTTY_MOBILE_PUSH_ENVIRONMENT: "development",
+  };
+  validateBuildSettings(settings(configuredSettings), notificationExpected);
+  assert.throws(() => validateBuildSettings(settings({ ...configuredSettings,
+    TOASTTY_MOBILE_PUSH_ENVIRONMENT: "production" }), notificationExpected), /PUSH_ENVIRONMENT mismatch/);
+  assert.throws(() => validateBuildSettings(settings(configuredSettings), expected), /expected to have notifications disabled/);
+  const signed = { ...profile().Entitlements, "aps-environment": "development" };
+  validateSignedEntitlements(signed, notificationExpected);
+  validateDevelopmentProfile(profile({ Entitlements: signed }), notificationExpected);
+  assert.throws(() => validateSignedEntitlements(profile().Entitlements, notificationExpected), /aps-environment mismatch/);
 });
 
 test("validator CLI parses real plist Date and Data values without forwarding certificate data", () => {

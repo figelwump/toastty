@@ -36,6 +36,11 @@ function runDispatcher(args, environment = {}) {
     "TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM",
     "TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE",
     "TUIST_TOASTTY_MOBILE_PUSH_PROBE",
+    "TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL",
+    "TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT",
+    "TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL",
+    "TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID",
+    "TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT",
     "TUIST_TOASTTY_MOBILE_PROD_TEST",
     "TUIST_TOASTTY_MOBILE_BUNDLE_ID",
     "TOASTTY_MOBILE_BUNDLE_ID",
@@ -310,6 +315,41 @@ test("push probe rejects Release, prod-test, custom identity, and simulator comm
     TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE: "1",
   });
   assert.equal(generation.status, 0, generation.stderr);
+});
+
+test("normal notification relay requires explicit environment and fixed development identity", () => {
+  const base = { PATH: "", TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL: "https://push.example.com",
+    TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT: "development" };
+  const result = runDispatcher(["native-device", "--build-only", "--dry-run"], base);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).pushNotifications, true);
+  assert.equal(JSON.parse(result.stdout).pushProbe, false);
+  for (const [command, environment, message] of [
+    ["generate", {}, /fixed physical-device/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT: "production" }, /explicit development/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_BUNDLE_ID: "com.example.worktree" }, /fixed physical-device/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PROD_TEST: "1" }, /prod-test/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL: "https://push.example.com/path" }, /HTTPS origin/],
+  ]) {
+    const rejected = runDispatcher([command, "--dry-run"], { ...base, ...environment });
+    assert.equal(rejected.status, 1, rejected.stdout);
+    assert.match(rejected.stderr, message);
+  }
+});
+
+test("production notifications require separate explicit configuration", () => {
+  const base = { PATH: "", TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL: "https://production.example.com",
+    TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID: "toastty-push-production-v1",
+    TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT: "production" };
+  const result = runDispatcher(["generate", "--dry-run"], base);
+  assert.equal(result.status, 0, result.stderr);
+  for (const environment of [
+    { TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID: "toastty-push-dev-v1" },
+    { TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT: "development" },
+    { TUIST_TOASTTY_MOBILE_PROD_TEST: "1" },
+  ]) {
+    assert.equal(runDispatcher(["generate", "--dry-run"], { ...base, ...environment }).status, 1);
+  }
 });
 
 test("a booted iOS 17 device is rejected in favor of creating on the newest compatible runtime", () => {

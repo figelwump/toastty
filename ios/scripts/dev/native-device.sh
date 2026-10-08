@@ -28,6 +28,7 @@ PREFLIGHT_ONLY="${TOASTTY_NATIVE_DEVICE_PREFLIGHT_ONLY:-0}"
 REQUESTED_DEVICE="${TOASTTY_NATIVE_DEVICE_REQUESTED:-}"
 URL_SCHEME="${TOASTTY_NATIVE_DEVICE_URL_SCHEME:-}"
 PUSH_PROBE="${TOASTTY_NATIVE_DEVICE_PUSH_PROBE:-0}"
+PUSH_RELAY_URL="${TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL:-}"
 APP_PATH=""
 ACTIVE_CHILD_PID=""
 GENERATED_STATE_CAPTURED=0
@@ -410,6 +411,11 @@ validate_flag BUILD_ONLY
 validate_flag PREFLIGHT_ONLY
 validate_flag PUSH_PROBE
 validate_paths
+if [[ -n "$PUSH_RELAY_URL" ]]; then
+  if [[ "$BUNDLE_ID" != "com.giantthings.toastty.mobile.dev" || "$PUSH_PROBE" == "1" || "${TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT:-}" != "development" ]]; then
+    fail "normal notifications require the fixed development identity and explicit development environment"
+  fi
+fi
 if [[ "$PUSH_PROBE" == "1" ]]; then
   if [[ "$BUNDLE_ID" != "com.giantthings.toastty.mobile.dev" || "${TUIST_TOASTTY_MOBILE_PROD_TEST:-0}" != "0" ]]; then
     fail "push probe requires the fixed physical-device Debug identity without prod-test"
@@ -540,6 +546,10 @@ xcodebuild \
   -showBuildSettings \
   -json >"$BUILD_SETTINGS_PATH" 2>"$LOG_DIR/xcodebuild-settings.log"
 
+push_validation_args=(--push-notifications 0)
+if [[ -n "$PUSH_RELAY_URL" ]]; then
+  push_validation_args=(--push-notifications 1 --push-relay-url "$PUSH_RELAY_URL")
+fi
 APP_PATH="$(node "$BUILD_VALIDATOR" \
   --settings "$BUILD_SETTINGS_PATH" \
   --bundle-id "$BUNDLE_ID" \
@@ -547,6 +557,7 @@ APP_PATH="$(node "$BUILD_VALIDATOR" \
   --display-name "$DISPLAY_NAME" \
   --team "$DEVELOPMENT_TEAM" \
   --push-probe "$PUSH_PROBE" \
+  "${push_validation_args[@]}" \
   --url-scheme "$URL_SCHEME")"
 write_instance_summary build-validated
 log "validated app: $APP_PATH"

@@ -8,7 +8,7 @@ struct ToasttyMobileRootView: View {
     @State private var sessionController: AppSessionController
     @State private var navigationPath: [ToasttyMobileRoute] = []
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
-    @State private var showsSettings = false
+    @State private var presentedSheet: ToasttyMobileSheet?
     @State private var fixtureHasLoadedOlderTranscript = false
     @State private var composerDraftState = ToasttyComposerDraftState()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
@@ -29,9 +29,11 @@ struct ToasttyMobileRootView: View {
     private let fixtureSendEventOrder: ToasttyConversationFixture.SendEventOrder?
 #endif
     private let deepLinkParser: DeepLinkParser?
+    private let pushBridge: ToasttyPushNotificationBridge?
 
-    init(configuration: ToasttyMobileAppConfiguration) {
-        _sessionController = State(initialValue: configuration.makeSessionController())
+    init(configuration: ToasttyMobileAppConfiguration, pushBridge: ToasttyPushNotificationBridge? = nil) {
+        _sessionController = State(initialValue: configuration.makeSessionController(pushBridge: pushBridge))
+        self.pushBridge = pushBridge
         _fixtureSendItems = State(initialValue: Self.initialFixtureSendItems(
             for: configuration.fixtureScenario
         ))
@@ -109,6 +111,7 @@ struct ToasttyMobileRootView: View {
         .environment(\.toasttyPreviewService, sessionController.previewService)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: loadingPhase == nil)
         .task {
+            if let pushBridge { sessionController.pushController?.attachBridge(pushBridge) }
             sessionController.installDiagnosticEventHandler(recordDiagnostic)
             recordDiagnostic(.authStarted)
             observeSessionState(sessionController.state)
@@ -128,6 +131,7 @@ struct ToasttyMobileRootView: View {
                 }
             } else {
                 routePendingDeepLinkIfAvailable()
+                presentNotificationIntroIfNeeded()
             }
         }
         .onChange(of: sessionController.homeController.snapshot) { _, newSnapshot in
@@ -137,6 +141,8 @@ struct ToasttyMobileRootView: View {
         .onChange(of: sessionController.homeController.freshness) {
             routePendingDeepLinkIfAvailable()
         }
+        .onChange(of: sessionController.pushController?.canIntroduce) { presentNotificationIntroIfNeeded() }
+        .onChange(of: sessionController.pushController?.pendingConversationID) { handleNotificationTap() }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
@@ -180,8 +186,11 @@ struct ToasttyMobileRootView: View {
             ToasttyHomeView(
                 controller: sessionController.homeController,
                 refresh: sessionController.refreshLiveSessions,
-                onSettings: { showsSettings = true },
-                openWorkspace: openWorkspace
+                onSettings: { presentedSheet = .settings },
+                openWorkspace: openWorkspace,
+                notificationError: sessionController.pushController?.configuration == nil
+                    ? nil : sessionController.pushController?.errorMessage,
+                retryNotifications: { sessionController.pushController?.retry() }
             )
                 .navigationDestination(for: ToasttyMobileRoute.self) { route in
                     switch route {
@@ -207,11 +216,15 @@ struct ToasttyMobileRootView: View {
             // The stack can be (re)inserted while a selection already exists,
             // e.g. after a keychain-lock cycle; onChange alone would miss it.
             syncNavigationPath(with: sessionController.homeController.selectedConversationPresentation)
+            handleNotificationTap()
+            presentNotificationIntroIfNeeded()
         }
         .onChange(of: sessionController.homeController.selectedConversationPresentation) { _, selection in
             syncNavigationPath(with: selection)
         }
         .onChange(of: navigationPath) { _, newPath in
+            sessionController.pushController?.setOpenConversation(newPath.last?.conversationID)
+            presentNotificationIntroIfNeeded()
             // A back swipe or back button pops the conversation route without
             // going through the controller; mirror the pop into selection so
             // the live conversation runtime closes.
@@ -220,22 +233,31 @@ struct ToasttyMobileRootView: View {
                 sessionController.homeController.dismissConversation()
             }
         }
-        .sheet(isPresented: $showsSettings) {
-            if let settingsPresentation {
+        .sheet(item: $presentedSheet) { sheet in
+            switch sheet {
+            case .settings:
+              if let settingsPresentation {
                 ToasttySettingsView(
                     presentation: settingsPresentation,
                     diagnostics: $diagnostics,
-                    onUnpair: unpair
+                    onUnpair: unpair,
+                    pushController: sessionController.pushController
                 )
+              }
+            case .notifications:
+              if let push = sessionController.pushController {
+                ToasttyNotificationIntroduction(controller: push)
+              }
             }
         }
-        .onChange(of: showsSettings) { _, isPresented in
-            guard isPresented else { return }
+        .onChange(of: presentedSheet) { _, sheet in
+            guard sheet == .settings else { presentNotificationIntroIfNeeded(); return }
             Task {
                 await sessionController.refreshCurrentDevice()
             }
         }
         .overlay(alignment: .top) {
+          VStack(spacing: 8) {
             if let message = sessionController.homeController.removedSelectionMessage {
                 RemovedConversationBanner(
                     message: message,
@@ -243,6 +265,7 @@ struct ToasttyMobileRootView: View {
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
+          }
         }
         .animation(
             .easeInOut(duration: 0.25),
@@ -284,7 +307,7 @@ struct ToasttyMobileRootView: View {
                 return
             }
             pendingDeepLinkDestination = nil
-            showsSettings = false
+            presentedSheet = nil
         case .workspace(let workspaceID):
             guard sessionController.homeController.workspace(id: workspaceID) != nil else {
                 discardPendingDeepLinkAfterLiveSnapshot()
@@ -293,7 +316,7 @@ struct ToasttyMobileRootView: View {
             pendingDeepLinkDestination = nil
             sessionController.homeController.dismissConversation()
             navigationPath = [.workspace(workspaceID)]
-            showsSettings = false
+            presentedSheet = nil
         }
     }
 
@@ -301,6 +324,21 @@ struct ToasttyMobileRootView: View {
         if sessionController.homeController.freshness == .live {
             pendingDeepLinkDestination = nil
         }
+    }
+
+    private func handleNotificationTap() {
+        guard let push = sessionController.pushController, let id = push.pendingConversationID else { return }
+        pendingDeepLinkDestination = .conversation(id)
+        push.consumedConversationTap()
+        routePendingDeepLinkIfAvailable()
+    }
+
+    private func presentNotificationIntroIfNeeded() {
+        guard presentedSheet == nil, navigationPath.isEmpty,
+              pendingDeepLinkDestination == nil,
+              sessionController.state == .paired(.live),
+              sessionController.pushController?.canIntroduce == true else { return }
+        presentedSheet = .notifications
     }
 
     private func syncNavigationPath(with selection: SelectedConversationPresentation?) {
@@ -866,8 +904,7 @@ struct ToasttyMobileRootView: View {
 
     @MainActor
     private func unpair() async {
-        await sessionController.unpairCurrentDevice()
-        showsSettings = false
+        if await sessionController.unpairCurrentDevice() { presentedSheet = nil }
     }
 }
 

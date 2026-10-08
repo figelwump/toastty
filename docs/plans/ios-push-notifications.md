@@ -1,6 +1,6 @@
 # iPhone session notifications
 
-Status: implementation in progress. Development delivery through Cloudflare and APNs has been verified. Production deployment and activation are separate actions.
+Status: implemented for explicitly configured development builds. The development relay is deployed. Automated enrollment, host, and native UI checks pass; full physical-device enrollment and session delivery remain to be verified. The earlier operator probe proved background delivery through Cloudflare and APNs. Production deployment and activation are separate actions.
 
 ## User flow
 
