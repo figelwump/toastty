@@ -30,6 +30,7 @@ struct ToasttyConversationScreen: View {
     let loadOlder: () -> Void
     let submitDraft: () -> Bool
     let dismissSendReceipt: (String) -> Void
+    let sendFeedback: ToasttyOutcomeFeedback?
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
@@ -55,6 +56,7 @@ struct ToasttyConversationScreen: View {
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping () -> Bool = { false },
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        sendFeedback: ToasttyOutcomeFeedback? = nil,
         interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
         editInteractionAnswer: @escaping (
             RemotePendingInteraction.ID,
@@ -82,6 +84,7 @@ struct ToasttyConversationScreen: View {
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
         self.dismissSendReceipt = dismissSendReceipt
+        self.sendFeedback = sendFeedback
         self.interactionAnswerStates = interactionAnswerStates
         self.editInteractionAnswer = editInteractionAnswer
         self.submitInteractionAnswer = submitInteractionAnswer
@@ -128,6 +131,7 @@ struct ToasttyConversationScreen: View {
             ToasttyPreviewSheet(selection: selection, detents: previewDetents(for: selection))
         }
         .background(ToasttyDesignTokens.elevatedSurface)
+        .sensoryFeedback(trigger: sendFeedback) { _, new in new?.sensoryFeedback }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)

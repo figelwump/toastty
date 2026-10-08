@@ -115,6 +115,9 @@ struct ToasttyMobileRootView: View {
             AppIconBadgeSync(sessionController: sessionController, controller: appIconBadgeController)
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: loadingPhase == nil)
+        .sensoryFeedback(trigger: sessionController.state) { old, new in
+            ToasttyHapticFeedback.pairingCompleted(from: old, to: new)
+        }
         .task {
             sessionController.installDiagnosticEventHandler(recordDiagnostic)
             recordDiagnostic(.authStarted)
@@ -357,6 +360,7 @@ struct ToasttyMobileRootView: View {
             loadOlder: conversationLoadOlderAction(for: conversationID),
             submitDraft: conversationSubmitAction(for: conversationID),
             dismissSendReceipt: conversationReceiptDismissAction(for: conversationID),
+            sendFeedback: conversationSendFeedback(for: conversationID),
             interactionAnswerStates: conversationInteractionAnswerStates(for: conversationID),
             editInteractionAnswer: conversationInteractionEditAction(for: conversationID),
             submitInteractionAnswer: conversationInteractionSubmitAction(for: conversationID),
@@ -503,6 +507,14 @@ struct ToasttyMobileRootView: View {
             return nil
         }
         return controller.transcriptPresentation
+    }
+
+    private func conversationSendFeedback(for conversationID: UUID) -> ToasttyOutcomeFeedback? {
+        guard let controller = sessionController.liveController?.activeConversationController,
+              controller.conversationID == conversationID else {
+            return nil
+        }
+        return controller.sendFeedback
     }
 
     private func conversationLoadOlderAction(
