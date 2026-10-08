@@ -359,6 +359,13 @@ final class RemoteAccessService: ObservableObject {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let deviceStore: RemoteDeviceStore
+    private let pushConfiguration: RemotePushConfiguration?
+    private let pushRelay: any RemotePushRelaying
+    private var pushTasksByEventID: [UUID: Task<Void, Never>] = [:]
+    private var pushCleanupTask: Task<Void, Never>?
+    private var nextPushCleanupIndex = 0
+    private var pushCleanupRequestedWhileRunning = false
+    private var pushForegroundObserver: AnyCancellable?
     private let auditLog: RemoteAccessAuditLog
     private let projectionStore = RemoteConversationProjectionStore()
     private let facadeBridge = RemoteAccessFacadeBridge()
@@ -464,6 +471,8 @@ final class RemoteAccessService: ObservableObject {
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        pushConfiguration: RemotePushConfiguration? = .configured(),
+        pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
         gatewayServerFactory: (RemoteGatewayRequestHandler) -> any RemoteAccessGatewayServing = {
             RemoteAccessGatewayServer(handler: $0)
         }
@@ -477,6 +486,8 @@ final class RemoteAccessService: ObservableObject {
         self.port = port
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
+        self.pushConfiguration = pushConfiguration
+        self.pushRelay = pushRelay
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
         self.deviceStore = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
         self.auditLog = RemoteAccessAuditLog(fileURL: runtimePaths.remoteAccessAuditFileURL)
@@ -549,7 +560,13 @@ final class RemoteAccessService: ObservableObject {
             }
             self.deviceManagementError = nil
             self.refreshDevices()
+            self.retryPushCleanup()
         }
+        handler.onPushRegistrationChanged = { [weak self] in self?.retryPushCleanup() }
+        sessionRuntimeStore.onActionableEvent = { [weak self] event in self?.sendPushNotification(for: event) }
+        pushForegroundObserver = NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.retryPushCleanup() }
 
         server.onWebSocketCountsChanged = { [weak self] counts in
             guard let self else { return }
@@ -584,9 +601,11 @@ final class RemoteAccessService: ObservableObject {
         server.onDeviceRevoked = { [weak self] _ in
             self?.deviceManagementError = nil
             self?.refreshDevices()
+            self?.retryPushCleanup()
         }
 
         refreshHandlerConfiguration()
+        retryPushCleanup()
         if initiallyEnabled {
             setEnabled(true, persist: false)
         }
@@ -616,6 +635,8 @@ final class RemoteAccessService: ObservableObject {
         } else {
             let shouldAudit = activationState != .off
             activationState = .off
+            for task in pushTasksByEventID.values { task.cancel() }
+            pushTasksByEventID.removeAll()
             sessionListBroadcastTask?.cancel()
             sessionListBroadcastTask = nil
             server.stop()
@@ -635,6 +656,8 @@ final class RemoteAccessService: ObservableObject {
         activationState = .failed(
             message: "Could not start the local Remote Access listener. Try again."
         )
+        for task in pushTasksByEventID.values { task.cancel() }
+        pushTasksByEventID.removeAll()
         sessionListBroadcastTask?.cancel()
         sessionListBroadcastTask = nil
         server.stop()
@@ -891,6 +914,7 @@ final class RemoteAccessService: ObservableObject {
             auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .deviceRevoked, deviceID: deviceID))
             deviceManagementError = nil
             refreshDevices()
+            retryPushCleanup()
         } catch {
             reportDeviceManagementFailure("Could not revoke the device", error: error)
         }
@@ -907,6 +931,7 @@ final class RemoteAccessService: ObservableObject {
             nativePairingError = nil
             deviceManagementError = nil
             refreshDevices()
+            retryPushCleanup()
         } catch {
             reportDeviceManagementFailure("Could not revoke paired devices", error: error)
         }
@@ -914,6 +939,106 @@ final class RemoteAccessService: ObservableObject {
 
     func recentAuditEntries(limit: Int = 50) -> [RemoteAccessAuditEntry] {
         auditLog.recentEntries(limit: limit)
+    }
+
+    // MARK: - Native notification delivery
+
+    private func sendPushNotification(for event: ManagedSessionActionableEvent) {
+        guard isEnabled, let pushConfiguration,
+              ProviderTranscriptSupport.isManagedProvider(event.agent),
+              pushTasksByEventID[event.eventID] == nil else { return }
+        guard pushTasksByEventID.count < 8 else {
+            ToasttyLog.warning("Notification event dropped because delivery is busy", category: .automation)
+            return
+        }
+        let registrations = deviceStore.eligiblePushRegistrations(configuration: pushConfiguration)
+        guard !registrations.isEmpty,
+              sessionRuntimeStore.sessionRegistry.activeSessionIDByPanelID[event.panelID] == event.sessionID,
+              let record = sessionRuntimeStore.sessionRegistry.sessionsByID[event.sessionID], record.isActive, record.agent == event.agent,
+              let panel = store.state.workspacesByID.values.compactMap({ $0.allPanelsByID[event.panelID] }).first,
+              case .terminal(let terminal) = panel else { return }
+        if terminal.remoteConversationID == nil {
+            guard store.send(.updateTerminalPanelRemoteConversationID(panelID: event.panelID, remoteConversationID: RemoteConversationID())) else { return }
+        }
+        guard let candidate = scanConversationCandidates(mintingIDs: false).first(where: {
+                  $0.panelID == event.panelID
+                      && $0.activeSessionID == event.sessionID && $0.provider == event.agent
+              }) else { return }
+        // The event precedes the debounced projection. Capture durable routing
+        // and the current sidebar title now, while its session still matches.
+        let status: RemotePushSessionStatus
+        switch event.kind {
+        case .turnComplete: status = .ready
+        case .needsApproval: status = .needsApproval
+        }
+        let notification = RemotePushSessionNotification(
+            eventID: event.eventID,
+            conversationID: candidate.conversationID,
+            sessionTitle: candidate.title,
+            status: status
+        )
+        pushTasksByEventID[event.eventID] = Task { [weak self] in
+            guard let self else { return }
+            defer { self.pushTasksByEventID.removeValue(forKey: event.eventID) }
+            await withTaskGroup(of: Void.self) { group in
+                for (index, registration) in registrations.enumerated() {
+                    guard !Task.isCancelled else { group.cancelAll(); break }
+                    if index >= 4 { await group.next() }
+                    group.addTask {
+                        await self.deliverPushNotification(notification, to: registration, configuration: pushConfiguration)
+                    }
+                }
+            }
+        }
+    }
+
+    private func deliverPushNotification(
+        _ notification: RemotePushSessionNotification,
+        to registration: RemoteDevicePushRegistration,
+        configuration: RemotePushConfiguration
+    ) async {
+        guard !Task.isCancelled, isEnabled,
+              deviceStore.eligiblePushRegistrations(configuration: configuration).contains(registration) else { return }
+        if await pushRelay.send(notification, to: registration) == .registrationUnavailable {
+            do {
+                try deviceStore.clearPushRegistration(matching: registration)
+                retryPushCleanup()
+            } catch {
+                ToasttyLog.error("Failed to save notification grant removal", category: .automation)
+            }
+        }
+    }
+
+    private func retryPushCleanup() {
+        guard pushCleanupTask == nil else {
+            pushCleanupRequestedWhileRunning = true
+            return
+        }
+        let pending = deviceStore.pendingPushCleanup
+        guard !pending.isEmpty else { return }
+        let start = nextPushCleanupIndex % pending.count
+        let count = min(16, pending.count)
+        let registrations = (0..<count).map { pending[(start + $0) % pending.count] }
+        // Keep the unwrapped boundary so records appended during this batch
+        // are first in the next batch, rather than restarting a full prefix.
+        nextPushCleanupIndex = start + count
+        pushCleanupTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.pushCleanupTask = nil
+                if self.pushCleanupRequestedWhileRunning {
+                    self.pushCleanupRequestedWhileRunning = false
+                    self.retryPushCleanup()
+                }
+            }
+            for registration in registrations {
+                guard !Task.isCancelled else { return }
+                if await self.pushRelay.revoke(registration) {
+                    do { try self.deviceStore.completePushCleanup(registration) }
+                    catch { ToasttyLog.error("Failed to save notification cleanup", category: .automation) }
+                }
+            }
+        }
     }
 
     // MARK: - Facade surface (main-actor entry points for the bridge)
@@ -2858,7 +2983,8 @@ final class RemoteAccessService: ObservableObject {
         }
         handler.updateConfiguration(RemoteGatewayConfiguration(
             allowedOrigins: origins,
-            staticResources: Self.loadWebClientResources()
+            staticResources: Self.loadWebClientResources(),
+            pushConfiguration: pushConfiguration
         ))
     }
 

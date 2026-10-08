@@ -47,6 +47,8 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// workspace. Whether one device may do so is a per-device permission
     /// that the start options report.
     case sessionStart = "session_start"
+    /// A configured host accepts a native device's verified notification grant.
+    case pushNotifications = "push_notifications"
 }
 
 /// Public compatibility probe used before a client has credentials.

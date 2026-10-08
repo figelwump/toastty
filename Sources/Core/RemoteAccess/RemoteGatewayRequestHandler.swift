@@ -18,13 +18,16 @@ public struct RemoteGatewayConfiguration: Sendable {
     public var allowedOrigins: Set<String>
     /// Absolute path -> resource for the same-origin web client.
     public var staticResources: [String: RemoteGatewayStaticResource]
+    public var pushConfiguration: RemotePushConfiguration?
 
     public init(
         allowedOrigins: Set<String>,
-        staticResources: [String: RemoteGatewayStaticResource] = [:]
+        staticResources: [String: RemoteGatewayStaticResource] = [:],
+        pushConfiguration: RemotePushConfiguration? = nil
     ) {
         self.allowedOrigins = allowedOrigins
         self.staticResources = staticResources
+        self.pushConfiguration = pushConfiguration
     }
 }
 
@@ -205,6 +208,8 @@ public final class RemoteGatewayRequestHandler {
     /// Called only after self-revocation has durably completed. The server uses
     /// this side effect to close any stream belonging to the revoked device.
     public var onDeviceRevoked: ((UUID) -> Void)?
+    /// The grant or cleanup list has changed after a successful durable write.
+    public var onPushRegistrationChanged: (() -> Void)?
 
     public convenience init(
         deviceStore: RemoteDeviceStore,
@@ -462,6 +467,16 @@ public final class RemoteGatewayRequestHandler {
             return handleNativeDevice(authenticated)
         case .nativeDeviceRevoke:
             return handleNativeDeviceRevoke(request, device: authenticated, at: date)
+        case .nativePushConfiguration:
+            let push = configuration.pushConfiguration
+            let saved = deviceStore.pushRegistration(forDevice: authenticated.id)
+            let registrationID = saved?.relayURL == push?.relayURL && saved?.relayID == push?.relayID ? saved?.registrationID : nil
+            let response = RemoteGatewayPushConfigurationResponse(
+                relayID: push?.relayID, apnsEnvironment: push?.apnsEnvironment, registrationID: registrationID
+            )
+            return .respond(.json(body: (try? encoder.encode(response)) ?? Data()))
+        case .nativePushRegistration:
+            return handlePushRegistration(request, device: authenticated)
         case .hello, .browserPair, .nativePairingExchange:
             assertionFailure("Unauthenticated route reached authenticated dispatch")
             return .respond(errorResponse(status: 500, reason: "Internal Server Error", code: "internal_error", message: "Internal error"))
@@ -471,7 +486,9 @@ public final class RemoteGatewayRequestHandler {
     // MARK: - Pairing routes
 
     private func handleHello() -> Outcome {
-        let body = (try? encoder.encode(RemoteGatewayHelloResponse())) ?? Data()
+        var response = RemoteGatewayHelloResponse()
+        if configuration.pushConfiguration != nil { response.capabilities.append(.pushNotifications) }
+        let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))
     }
 
@@ -572,6 +589,37 @@ public final class RemoteGatewayRequestHandler {
     }
 
     // MARK: - Authenticated routes
+
+    private func handlePushRegistration(_ request: RemoteGatewayHTTPRequest, device: RemoteDeviceRecord) -> Outcome {
+        guard request.body.count <= RemotePushPolicy.maximumBodyBytes,
+              let decoded = try? JSONDecoder().decode(RemoteGatewayPushRegistrationRequest.self, from: request.body) else {
+            return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Invalid notification registration"))
+        }
+        guard decoded.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(status: 409, reason: "Conflict", code: "protocol_mismatch", message: "Unsupported protocol version"))
+        }
+        if let registration = decoded.registration {
+            guard device.scopes.contains(.read) else {
+                return .respond(errorResponse(status: 403, reason: "Forbidden", code: "read_scope_denied", message: "Read access is not granted"))
+            }
+            guard let push = configuration.pushConfiguration, registration.relayID == push.relayID else {
+                return .respond(errorResponse(status: 409, reason: "Conflict", code: "push_unavailable", message: "Notification service configuration does not match"))
+            }
+            guard RemotePushPolicy.isValidCapabilityToken(registration.sendToken) else {
+                return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Invalid notification registration"))
+            }
+        }
+        do {
+            let registrationID = try deviceStore.setPushRegistration(decoded.registration, forDevice: device.id, configuration: configuration.pushConfiguration)
+            onPushRegistrationChanged?()
+            let response = RemoteGatewayPushRegistrationResponse(registrationID: registrationID)
+            return .respond(.json(body: (try? encoder.encode(response)) ?? Data()))
+        } catch is RemoteDevicePushRegistrationError {
+            return .respond(errorResponse(status: 409, reason: "Conflict", code: "push_registration_unavailable", message: "Notification registration could not be saved"))
+        } catch {
+            return .respond(persistenceFailure("Could not save notification registration", error: error))
+        }
+    }
 
     private func handleSessionList(at date: Date) -> Outcome {
         let snapshot = facade.sessionList(at: date)

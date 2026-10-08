@@ -111,6 +111,26 @@ let diagnosticsUploadKey = resolvedOptionalManifestEnvironmentValue(
     manifestKey: "TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY",
     compatibilityKey: "TOASTTY_DIAGNOSTICS_UPLOAD_KEY"
 )
+let pushRelayURL = resolvedOptionalManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_PUSH_RELAY_URL", compatibilityKey: "TOASTTY_PUSH_RELAY_URL"
+)
+let pushRelayID = resolvedManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_PUSH_RELAY_ID", compatibilityKey: "TOASTTY_PUSH_RELAY_ID", defaultValue: "toastty-push-dev-v1"
+)
+let pushAPNsEnvironment = resolvedManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT", compatibilityKey: "TOASTTY_PUSH_APNS_ENVIRONMENT", defaultValue: "development"
+)
+if !pushRelayURL.isEmpty {
+    guard let url = URL(string: pushRelayURL), url.scheme == "https", url.host?.isEmpty == false,
+          url.user == nil, url.password == nil, url.port == nil, url.query == nil, url.fragment == nil,
+          url.path.isEmpty || url.path == "/" else {
+        fatalError("TUIST_TOASTTY_PUSH_RELAY_URL must be an HTTPS origin.")
+    }
+    guard (pushAPNsEnvironment == "development" && pushRelayID == "toastty-push-dev-v1")
+        || (pushAPNsEnvironment == "production" && pushRelayID != "toastty-push-dev-v1") else {
+        fatalError("Push relay identity and APNs environment must select the same deployment.")
+    }
+}
 let sparkleFeedURL = "https://updates.toastty.dev/appcast.xml"
 let sparklePublicEDKey = "TmgFEcjPjqplsktNMX2rJSj+2YjJyVX5UvGMvSBHjlM="
 // Repo-local toggle consumed by Project.swift, not a Tuist built-in.
@@ -448,6 +468,9 @@ let project = Project(
                 "NSCameraUsageDescription": .string("A program running within Toastty would like to use the camera."),
                 "NSHumanReadableCopyright": .string("Copyright © 2026 Vishal Kapur. All rights reserved."),
                 "NSMicrophoneUsageDescription": .string("A program running within Toastty would like to use your microphone."),
+                "ToasttyPushRelayURL": .string(pushRelayURL),
+                "ToasttyPushRelayID": .string(pushRelayID),
+                "ToasttyPushAPNsEnvironment": .string(pushAPNsEnvironment),
                 "SUFeedURL": .string(sparkleFeedURL),
                 "SUPublicEDKey": .string(sparklePublicEDKey),
             ]),

@@ -18,6 +18,7 @@ public final class RemoteDeviceStore: @unchecked Sendable {
     public static let maximumNativePairingProofByteCount = 256
     public static let maximumNativeFailureIdentityCount = 128
     public static let maximumPersistedStateByteCount = 2 * 1_024 * 1_024
+    public static let maximumPushRegistrationCount = 512
 
     public enum PairingOutcome: Equatable, Sendable {
         case paired(device: RemoteDeviceRecord, credentialToken: String)
@@ -348,6 +349,7 @@ public final class RemoteDeviceStore: @unchecked Sendable {
             var nextState = storedState
             nextState.devices[index].revokedAt = date
             nextState.credentials.removeAll { $0.deviceID == deviceID }
+            Self.queuePushCleanup(forDevice: deviceID, in: &nextState)
             try persistSynchronously(nextState)
             storedState = nextState
             lastPersistedLastSeenAtByDeviceID.removeValue(forKey: deviceID)
@@ -362,12 +364,117 @@ public final class RemoteDeviceStore: @unchecked Sendable {
                 nextState.devices[index].revokedAt = date
             }
             nextState.credentials.removeAll()
+            for registration in nextState.pushRegistrations where !nextState.pendingPushCleanup.contains(registration) {
+                nextState.pendingPushCleanup.append(registration)
+            }
+            nextState.pushRegistrations.removeAll()
             try persistSynchronously(nextState)
             storedState = nextState
             activePairingCode = nil
             activeNativeOffer = nil
             lastPersistedLastSeenAtByDeviceID.removeAll()
         }
+    }
+
+    // MARK: - Native notification grants
+
+    public func pushRegistration(forDevice deviceID: UUID) -> RemoteDevicePushRegistration? {
+        withStateLock { storedState.pushRegistrations.first { $0.deviceID == deviceID } }
+    }
+
+    public var pendingPushCleanup: [RemoteDevicePushRegistration] {
+        withStateLock { storedState.pendingPushCleanup }
+    }
+
+    public func eligiblePushRegistrations(configuration: RemotePushConfiguration) -> [RemoteDevicePushRegistration] {
+        withStateLock {
+            storedState.pushRegistrations.filter { registration in
+                registration.relayURL == configuration.relayURL && registration.relayID == configuration.relayID
+                    && storedState.devices.contains {
+                        $0.id == registration.deviceID && !$0.isRevoked && $0.authKind == .native && $0.scopes.contains(.read)
+                    }
+            }
+        }
+    }
+
+    /// Replacement and clear retain old send authority in the same durable
+    /// transaction. An unavailable relay cannot make revocation lose cleanup.
+    @discardableResult
+    public func setPushRegistration(
+        _ registration: RemoteGatewayPushRegistration?,
+        forDevice deviceID: UUID,
+        configuration: RemotePushConfiguration?
+    ) throws -> UUID? {
+        try withStateLock {
+            guard let device = storedState.devices.first(where: { $0.id == deviceID }),
+                  !device.isRevoked, device.authKind == .native else {
+                throw RemoteDevicePushRegistrationError.deviceUnavailable
+            }
+            let record: RemoteDevicePushRegistration?
+            if let registration {
+                guard device.scopes.contains(.read), let configuration,
+                      registration.relayID == configuration.relayID,
+                      RemotePushPolicy.isValidCapabilityToken(registration.sendToken) else {
+                    throw RemoteDevicePushRegistrationError.invalidRegistration
+                }
+                record = RemoteDevicePushRegistration(deviceID: deviceID, registration: registration, configuration: configuration)
+                if let existing = storedState.pushRegistrations.first(where: { $0.deviceID == deviceID }) {
+                    if existing == record { return registration.registrationID }
+                    // A relay registration has immutable capabilities. Do not
+                    // queue deletion of the same registration being installed.
+                    if existing.registrationID == registration.registrationID && existing.relayURL == configuration.relayURL {
+                        throw RemoteDevicePushRegistrationError.invalidRegistration
+                    }
+                }
+                guard !storedState.pendingPushCleanup.contains(where: {
+                    $0.relayURL == configuration.relayURL && $0.registrationID == registration.registrationID
+                }), !storedState.pushRegistrations.contains(where: {
+                    $0.deviceID != deviceID && $0.relayURL == configuration.relayURL && $0.registrationID == registration.registrationID
+                }) else { throw RemoteDevicePushRegistrationError.cleanupPending }
+                guard storedState.pushRegistrations.count + storedState.pendingPushCleanup.count < Self.maximumPushRegistrationCount else {
+                    throw RemoteDevicePushRegistrationError.registrationLimitReached
+                }
+            } else {
+                record = nil
+                if !storedState.pushRegistrations.contains(where: { $0.deviceID == deviceID }) { return nil }
+            }
+            var nextState = storedState
+            Self.queuePushCleanup(forDevice: deviceID, in: &nextState)
+            if let record { nextState.pushRegistrations.append(record) }
+            try persistSynchronously(nextState)
+            storedState = nextState
+            return record?.registrationID
+        }
+    }
+
+    /// A late failed send must not clear a newer successful handoff.
+    @discardableResult
+    public func clearPushRegistration(matching registration: RemoteDevicePushRegistration) throws -> Bool {
+        try withStateLock {
+            guard storedState.pushRegistrations.contains(registration) else { return false }
+            var nextState = storedState
+            Self.queuePushCleanup(forDevice: registration.deviceID, in: &nextState)
+            try persistSynchronously(nextState)
+            storedState = nextState
+            return true
+        }
+    }
+
+    public func completePushCleanup(_ registration: RemoteDevicePushRegistration) throws {
+        try withStateLock {
+            guard storedState.pendingPushCleanup.contains(registration) else { return }
+            var nextState = storedState
+            nextState.pendingPushCleanup.removeAll { $0 == registration }
+            try persistSynchronously(nextState)
+            storedState = nextState
+        }
+    }
+
+    private static func queuePushCleanup(forDevice deviceID: UUID, in state: inout State) {
+        for registration in state.pushRegistrations where registration.deviceID == deviceID && !state.pendingPushCleanup.contains(registration) {
+            state.pendingPushCleanup.append(registration)
+        }
+        state.pushRegistrations.removeAll { $0.deviceID == deviceID }
     }
 
     // MARK: - Internals

@@ -34,12 +34,40 @@ struct RemoteProtocolGoldenTests {
             at: Self.fixtureDirectory,
             includingPropertiesForKeys: nil
         ).map(\.lastPathComponent))
-        #expect(expectedNames == Set(fixtures.map(\.name)), "Fixture files must exactly match the registered v1 contract")
+        let pushFixtureNames: Set<String> = ["push-registration.json", "push-session.json", "push-verification.json"]
+        #expect(expectedNames == Set(fixtures.map(\.name)).union(pushFixtureNames), "Fixture files must exactly match the registered v1 contract")
 
         for fixture in fixtures {
             let expected = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent(fixture.name))
             #expect(fixture.data == expected, "Wire bytes changed for \(fixture.name); regenerate explicitly and review the diff")
         }
+    }
+
+    @Test func pushFixturesMatchSharedNativeAndAPNsContracts() throws {
+        let registrationData = try Data(contentsOf: Self.fixtureDirectory.appending(path: "push-registration.json"))
+        let registration = try JSONDecoder().decode(RemoteGatewayPushRegistrationRequest.self, from: registrationData)
+        #expect(registration.protocolVersion == RemoteGatewayProtocol.version)
+        #expect(registration.registration?.relayID == RemotePushPolicy.developmentRelayID)
+        #expect(registration.registration.map { RemotePushPolicy.isValidCapabilityToken($0.sendToken) } == true)
+        for (filename, kind) in [("push-session.json", RemotePushPayloadKind.session), ("push-verification.json", .verification)] {
+            let data = try Data(contentsOf: Self.fixtureDirectory.appending(path: filename))
+            let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let payloadData = try JSONSerialization.data(withJSONObject: #require(object["toastty"]))
+            let payload = try JSONDecoder().decode(RemotePushPayload.self, from: payloadData)
+            #expect(payload.isValid && payload.kind == kind)
+            #expect(payload.registrationID == registration.registration?.registrationID)
+            var reencoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
+            // Foundation emits uppercase UUIDs; the relay emits lowercase.
+            // UUID identity and the remaining wire fields must agree.
+            for key in ["registrationID", "pairingID", "conversationID", "eventID"] {
+                if let value = reencoded[key] as? String { reencoded[key] = value.lowercased() }
+            }
+            #expect(NSDictionary(dictionary: reencoded) == object["toastty"] as? NSDictionary)
+        }
+        let clean = RemotePushPolicy.notificationTitle(String(repeating: "👩🏽‍💻", count: 100) + "\nHidden")
+        #expect(clean.utf8.count <= 512 && !clean.contains("\n"))
+        #expect(clean.allSatisfy { $0 == "👩🏽‍💻" })
+        #expect(!RemotePushPolicy.isValidCapabilityToken(String(repeating: "_", count: 43)))
     }
 
     @Test func optionalPresentationFieldsAreAdditiveToBaselineGoldenSnapshot() throws {
