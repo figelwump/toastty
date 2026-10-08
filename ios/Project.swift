@@ -118,9 +118,12 @@ let debugBundleID = manifestValue(
     ["TUIST_TOASTTY_MOBILE_BUNDLE_ID", "TOASTTY_MOBILE_BUNDLE_ID"],
     default: defaultDebugBundleID
 )
-let debugDisplayName = bundleSuffix == ".dev.local"
-    ? "Toastty Dev"
-    : "Toastty \((bundleSuffix.split(separator: ".").last ?? "dev").prefix(12))"
+let enablesComposerTrace = manifestFlag("TUIST_TOASTTY_MOBILE_COMPOSER_TRACE")
+let debugDisplayName = enablesComposerTrace
+    ? "Toastty Trace"
+    : (bundleSuffix == ".dev.local"
+        ? "Toastty Dev"
+        : "Toastty \((bundleSuffix.split(separator: ".").last ?? "dev").prefix(12))")
 let deploymentTarget: DeploymentTargets = .iOS("18.0")
 
 var appSettings: SettingsDictionary = [
@@ -135,6 +138,8 @@ var appSettings: SettingsDictionary = [
     "TOASTTY_MOBILE_APP_DISPLAY_NAME[config=Release]": SettingValue(stringLiteral: releaseDisplayName),
     "TOASTTY_MOBILE_URL_SCHEME[config=Debug]": "toastty-mobile-dev",
     "TOASTTY_MOBILE_URL_SCHEME[config=Release]": SettingValue(stringLiteral: releaseURLScheme),
+    "TOASTTY_COMPOSER_TRACE_ENABLED[config=Debug]": enablesComposerTrace ? "YES" : "NO",
+    "TOASTTY_COMPOSER_TRACE_ENABLED[config=Release]": "NO",
 ]
 
 appSettings["CODE_SIGN_STYLE"] = "Automatic"
@@ -162,6 +167,7 @@ var appInfoPlist: [String: Plist.Value] = [
         ]),
     ]),
     "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
+    "ToasttyComposerTraceEnabled": .string("$(TOASTTY_COMPOSER_TRACE_ENABLED)"),
     "ITSAppUsesNonExemptEncryption": .boolean(false),
     "NSCameraUsageDescription": .string("Toastty uses the camera to take photos for messages and scan a pairing code shown by your Mac."),
     "NSLocalNetworkUsageDescription": .string("Toastty connects to a local development gateway when local mode is enabled."),
