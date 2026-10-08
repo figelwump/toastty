@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "types": "wrangler types --env test --strict-vars=false",
+    "types": "wrangler types --env test --strict-vars=false && wrangler types relay-configuration.d.ts --config wrangler.relay.jsonc --env test --env-interface RelayEnv --include-runtime=false --strict-vars=false",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.relay.config.ts",
     "check": "npm run types && npm run typecheck && npm test && node --test scripts/*.test.mjs",
     "probe": "node scripts/probe.mjs"
   },
