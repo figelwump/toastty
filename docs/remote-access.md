@@ -122,9 +122,11 @@ pairing codes.
 ## iPhone notifications
 
 Notification-enabled builds offer session alerts after the first connection to a
-compatible Mac. Continue opens Apple's permission prompt. After Allow, Toastty
-returns to Home and finishes setup automatically. Not now and Don't Allow are
-remembered. You can change the choice in Settings.
+compatible Mac. Continue requests alerts, sound, and app icon badges together
+through Apple's permission prompt. After Allow, Toastty returns to Home and
+finishes setup automatically. Not now defers all three permissions. Not now and
+Don't Allow are remembered. You can change the choice in Settings.
+Existing iOS permission choices stay in effect. Use iOS Settings to change them.
 
 Badge permission alone does not enable session alerts. If all alert delivery
 locations are off, Toastty links to iOS Settings. Delivery to Notification Center
@@ -229,11 +231,13 @@ badge when the Mac sends the new state. Opening the app alone does not clear it.
 Reading an error does not dismiss it; it counts until the session leaves its
 error state or is removed on the Mac.
 
-Toastty asks for badge permission when attention first appears while the app is
-active. It requests badges only. You can change this permission in iOS Settings.
+Notification-enabled builds request badge permission with alerts and sound when
+you choose Continue. They do not show a separate badge prompt. Builds without
+push configuration ask for badge permission only when attention first appears
+while the app is active. You can change this permission in iOS Settings.
 The badge keeps its last count during a connection loss or while the app is
-suspended. This version has no push delivery, so new activity cannot update the
-badge until the app reconnects. Unpairing, losing access, or a pairing that
+suspended. Session push alerts do not carry a badge count, so new activity cannot
+update the badge until the app reconnects. Unpairing, losing access, or a pairing that
 needs repair because it is corrupt or incompatible clears the badge.
 
 Remote replies are enabled by default for active sessions. For every supported

@@ -93,7 +93,7 @@ final class ToasttySystemPushNotificationClient: ToasttyPushNotificationClient {
         }
     }
     func requestPermission() async throws -> Bool {
-        _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
         return await permission() == .allowed
     }
     func register() { UIApplication.shared.registerForRemoteNotifications() }

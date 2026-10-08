@@ -36,7 +36,10 @@ struct ToasttyMobileRootView: View {
         _sessionController = State(initialValue: configuration.makeSessionController(pushBridge: pushBridge))
         self.pushBridge = pushBridge
         _appIconBadgeController = State(initialValue: configuration.enablesSystemAppIconBadge
-            ? AppIconBadgeController(client: SystemAppIconBadgeClient())
+            ? AppIconBadgeController(
+                client: SystemAppIconBadgeClient(),
+                requestsAuthorization: configuration.pushConfiguration == nil
+            )
             : nil)
         _fixtureSendItems = State(initialValue: Self.initialFixtureSendItems(
             for: configuration.fixtureScenario

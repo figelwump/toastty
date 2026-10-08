@@ -4,7 +4,7 @@ Status: implemented for explicitly configured development builds. The developmen
 
 ## User flow
 
-After pairing, or after an update, Toastty introduces notifications once at the first connection to a Mac that supports them. Continue opens the iOS permission prompt. Not now and Don't Allow are remembered.
+After pairing, or after an update, Toastty introduces notifications once at the first connection to a Mac that supports them. Continue requests alerts, sound, and app icon badges together through the iOS permission prompt. Not now defers all three permissions. Not now and Don't Allow are remembered. Builds configured for push do not request badge permission separately; builds without push configuration retain the badge-only request.
 
 After Allow, the user returns to Home. Registration runs without a blocking screen. An interrupted attempt resumes when the app returns to the foreground. A failure while the app is open shows a small error with Retry. Settings shows whether alerts are on, off, being enabled, or waiting to turn off. There is no quick-check screen or success modal.
 
