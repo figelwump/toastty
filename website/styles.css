@@ -313,8 +313,9 @@ h1 em { display: block; color: var(--amber); font-style: normal; }
 }
 
 /* ---------- Later sections ---------- */
-/* The section header sits in the left column so the demo beside it starts level with the eyebrow. */
-.split2 { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+/* The title and lead sit in the left column so the demo beside them starts level with the title. */
+.split2 { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; margin-top: 10px; align-items: start; }
+.split2 > div > h2, .mobile-grid > div > h2 { margin-top: 0; }
 .split2 .lead + .feats { margin-top: 36px; }
 .split2 > * { min-width: 0; }
 .feats { list-style: none; margin: 0; padding: 0; }
@@ -414,9 +415,10 @@ a { color: inherit; }
 .mobile-sec .sec-eyebrow .beta { vertical-align: 1px; }
 .mobile-sec .lead + .feats { margin-top: 36px; }
 /* The phone is designed at 440px and scaled down so its height roughly matches the text beside it. */
-.mobile-grid { display: grid; grid-template-columns: 1fr 360px; gap: 56px; align-items: start; }
+.mobile-grid { display: grid; grid-template-columns: 1fr 360px; gap: 56px; margin-top: 10px; align-items: start; }
 .mobile-grid > * { min-width: 0; }
-.mstage-col { justify-self: center; width: 100%; max-width: 360px; }
+/* The phone sits 16px (at design size) inside its stage; pull the column up so the phone edge, not the stage, meets the title. */
+.mstage-col { justify-self: center; width: 100%; max-width: 360px; margin-top: calc(-16px * 360 / 440); }
 .mstage-wrap { position: relative; width: 100%; }
 .mstage { position: absolute; left: 0; top: 0; width: 440px; height: 900px; transform-origin: 0 0; }
 .mfade { position: absolute; inset: 0; background: var(--paper); opacity: 0; pointer-events: none; }
@@ -617,7 +619,7 @@ a { color: inherit; }
 @media (max-width: 640px) { .mbeats .beat { min-width: 0; } }
 @media (max-width: 960px) {
   .mobile-grid { grid-template-columns: 1fr; gap: 36px; }
-  .mstage-col { max-width: 360px; }
+  .mstage-col { max-width: 360px; margin-top: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .mstage *, .mstage *::before, .mstage *::after { animation: none !important; transition: none !important; }

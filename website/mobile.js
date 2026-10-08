@@ -220,7 +220,7 @@
       startRendering: function () {
         rendering = true; setPlaying(false);
         // Render at design size: the column is widened so the stage scale is exactly 1.
-        var col = wrap.parentNode; col.style.maxWidth = 'none'; col.style.width = W + 'px';
+        var col = wrap.parentNode; col.style.maxWidth = 'none'; col.style.width = W + 'px'; col.style.marginTop = '0';
         fit();
       },
       renderFrame: function (x, settle) { t = x; render(); syncAnimations(!!settle); }
