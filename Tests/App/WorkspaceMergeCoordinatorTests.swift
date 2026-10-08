@@ -12,6 +12,9 @@ private final class FakeMergeRunner: WorkspaceMergeCommandRunning, @unchecked Se
     private var calls: [[String]] = []
     /// The script's report for each action: merge, clean-up, or close.
     var scriptResults: [String: WorkspaceMergeCommandResult] = [:]
+    /// Reports for a waiting merge's later runs, which pass `--head`, in
+    /// order; the last one repeats.
+    var waitingMergeResults: [WorkspaceMergeCommandResult] = []
     var onScript: [String: @MainActor () -> Void] = [:]
 
     /// Each `gh pr view` call takes the next state; the last one repeats.
@@ -40,11 +43,21 @@ private final class FakeMergeRunner: WorkspaceMergeCommandRunning, @unchecked Se
         if let hook = onScript[action] {
             await MainActor.run { hook() }
         }
+        if action == "merge", arguments.contains("--head") {
+            let result: WorkspaceMergeCommandResult? = lock.withLock {
+                waitingMergeResults.count > 1 ? waitingMergeResults.removeFirst() : waitingMergeResults.first
+            }
+            if let result {
+                return result
+            }
+        }
         return scriptResults[action] ?? Self.report(status: "failed", detail: "no scripted result for \(action)")
     }
 
-    static func report(status: String, detail: String) -> WorkspaceMergeCommandResult {
-        let data = try! JSONSerialization.data(withJSONObject: ["status": status, "detail": detail])
+    static func report(status: String, detail: String, head: String? = nil) -> WorkspaceMergeCommandResult {
+        var object = ["status": status, "detail": detail]
+        object["head"] = head
+        let data = try! JSONSerialization.data(withJSONObject: object)
         return WorkspaceMergeCommandResult(exitCode: 0, stdout: String(decoding: data, as: UTF8.self), stderr: "", failure: nil)
     }
 }
@@ -119,10 +132,17 @@ private final class MergeFixture {
         )
     }
 
-    /// A Merge and Clean whose merge was queued, now waiting for it.
+    static let acceptedHead = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0"
+
+    static func mergeReport(_ status: String, _ detail: String = "") -> WorkspaceMergeCommandResult {
+        FakeMergeRunner.report(status: status, detail: detail, head: acceptedHead)
+    }
+
+    /// A Merge and Clean whose merge went through, now waiting for `gh` to
+    /// report it merged.
     func mergeAndWait(pullRequestStates: [String?]) async {
         runner.setPullRequestStates(pullRequestStates)
-        runner.scriptResults["merge"] = FakeMergeRunner.report(status: "queued", detail: "turned on auto-merge for PR #59")
+        runner.scriptResults["merge"] = Self.mergeReport("merged", "merged PR #59")
         await merge(thenCleanUp: true)?.value
     }
 
@@ -164,7 +184,7 @@ struct WorkspaceMergeCoordinatorTests {
         let fixture = try MergeFixture()
         fixture.runner.setPullRequestStates(["OPEN", "OPEN", "MERGED"])
         fixture.runner.scriptResults = [
-            "merge": FakeMergeRunner.report(status: "queued", detail: "turned on auto-merge for PR #59"),
+            "merge": MergeFixture.mergeReport("merged", "merged PR #59"),
             "clean-up": FakeMergeRunner.report(
                 status: "cleaned",
                 detail: "closed fix-question-lifetime; removed worktree; deleted local branch; deleted remote branch"
@@ -199,7 +219,7 @@ struct WorkspaceMergeCoordinatorTests {
     @Test
     func mergeOnlyMarksTheWorkspaceDoneAndEnds() async throws {
         let fixture = try MergeFixture()
-        fixture.runner.scriptResults["merge"] = FakeMergeRunner.report(status: "merged", detail: "merged PR #59")
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("merged", "merged PR #59")
 
         await fixture.merge(thenCleanUp: false)?.value
 
@@ -212,9 +232,103 @@ struct WorkspaceMergeCoordinatorTests {
     }
 
     @Test
+    func mergeOnlyWaitsForChecksThenMergesTheAcceptedCommit() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [
+            MergeFixture.mergeReport("waiting", "waiting for checks: CI gate"),
+            MergeFixture.mergeReport("merged", "merged PR #59"),
+        ]
+
+        await fixture.merge(thenCleanUp: false)?.value
+
+        // The user accepted this version, so the workspace shows done while
+        // Toastty waits, and the wait survives a relaunch.
+        #expect(fixture.isDone)
+        #expect(fixture.request?.phase == .awaitingChecks(acceptedHead: MergeFixture.acceptedHead, thenCleanUp: false))
+        #expect(fixture.savedRequests != nil)
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.count == 3)
+        #expect(fixture.runner.scriptCalls.last == fixture.arguments("merge") + ["--head", MergeFixture.acceptedHead])
+        #expect(fixture.isDone)
+        #expect(fixture.notifications.map(\.title) == ["Merged PR #59"])
+        #expect(fixture.runner.checkCalls.isEmpty)
+    }
+
+    @Test
+    func mergeAndCleanWaitsForChecksThenCleansUpAfterTheMerge() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.setPullRequestStates(["MERGED"])
+        fixture.runner.scriptResults = [
+            "merge": MergeFixture.mergeReport("waiting", "waiting for checks: CI gate"),
+            "clean-up": FakeMergeRunner.report(status: "cleaned", detail: "closed fix-question-lifetime; removed worktree"),
+        ]
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("merged", "merged PR #59")]
+        fixture.runner.onScript["clean-up"] = { fixture.closeTaskWorkspace() }
+
+        await fixture.merge(thenCleanUp: true)?.value
+        #expect(fixture.request?.phase == .awaitingChecks(acceptedHead: MergeFixture.acceptedHead, thenCleanUp: true))
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.map(\.first) == ["merge", "merge", "clean-up"])
+        #expect(fixture.notifications.map(\.title) == ["Cleaned up PR #59"])
+    }
+
+    @Test
+    func aWaitingMergeThatCanNoLongerHappenClearsTheDoneMarkAndSaysWhy() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport(
+            "refused",
+            "new commits were pushed after the merge was accepted: the PR head is now 0badc0de, not a1b2c3d4"
+        )]
+
+        await fixture.merge(thenCleanUp: true)?.value
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.isDone == false)
+        #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
+        #expect(fixture.notifications.first?.body.hasPrefix("new commits were pushed") == true)
+        #expect(fixture.failureAlerts.isEmpty)
+        #expect(fixture.savedRequests == nil)
+    }
+
+    @Test
+    func aWaitingMergeGivesUpAfterRepeatedFailures() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [FakeMergeRunner.report(status: "failed", detail: "gh: could not resolve host")]
+
+        await fixture.merge(thenCleanUp: false)?.value
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.count == 1 + WorkspaceMergeCoordinator.maximumPollFailures)
+        #expect(fixture.isDone == false)
+        #expect(fixture.notifications.first?.body == "gh: could not resolve host")
+    }
+
+    @Test
+    func clearingTheDoneMarkCancelsAWaitingMerge() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")]
+        await fixture.merge(thenCleanUp: false)?.value
+        try await fixture.waitUntil { fixture.runner.scriptCalls.count >= 2 }
+
+        fixture.markDone(false)
+
+        #expect(fixture.request == nil)
+        let calls = fixture.runner.scriptCalls.count
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fixture.runner.scriptCalls.count <= calls + 1)
+        #expect(fixture.notifications.isEmpty)
+    }
+
+    @Test
     func mergeDoesNotMarkAWorkspaceThatMovedToAnotherPullRequestDone() async throws {
         let fixture = try MergeFixture()
-        fixture.runner.scriptResults["merge"] = FakeMergeRunner.report(status: "merged", detail: "merged PR #59")
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("merged", "merged PR #59")
         fixture.runner.onScript["merge"] = {
             fixture.store.send(.setWorkspaceAnnotation(
                 workspaceID: fixture.taskWorkspaceID,
@@ -233,9 +347,9 @@ struct WorkspaceMergeCoordinatorTests {
     @Test
     func refusedOrFailedMergeShowsWhyAndLeavesTheWorkspaceOpen() async throws {
         let fixture = try MergeFixture()
-        fixture.runner.scriptResults["merge"] = FakeMergeRunner.report(
-            status: "refused",
-            detail: "the worktree has uncommitted changes; the merge would not be the version in this workspace"
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport(
+            "refused",
+            "the worktree has uncommitted changes; the merge would not be the version in this workspace"
         )
         await fixture.merge(thenCleanUp: true)?.value
 
@@ -416,8 +530,8 @@ struct WorkspaceMergeCoordinatorTests {
         let noReport = WorkspaceMergeCommandResult(exitCode: 0, stdout: "", stderr: "", failure: nil)
         #expect(WorkspaceMergeCoordinator.scriptOutcome(from: noReport).status == nil)
 
-        let report = FakeMergeRunner.report(status: "queued", detail: "turned on auto-merge for PR #59")
+        let report = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
         #expect(WorkspaceMergeCoordinator.scriptOutcome(from: report)
-            == .init(status: "queued", detail: "turned on auto-merge for PR #59"))
+            == .init(status: "waiting", detail: "waiting for checks: CI gate", head: MergeFixture.acceptedHead))
     }
 }

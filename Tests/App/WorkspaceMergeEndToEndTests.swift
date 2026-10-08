@@ -157,7 +157,7 @@ struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
         case "$1 $2" in
           "repo view") echo '{"nameWithOwner":"test/repo","defaultBranchRef":{"name":"main"},"mergeCommitAllowed":true}' ;;
           "pr view") if [ -e '\(mergedPullRequestMarker)' ]; then echo '\(try json(mergedPullRequest))'; else echo '\(try json(pullRequest))'; fi ;;
-          "pr merge") [ "$3" = 7 ] && [ "$4" = --merge ] && [ "$6" = '\(head)' ] && touch '\(mergedPullRequestMarker)' ;;
+          "api --method") [ "$3 $4 $6 $8" = 'PUT repos/test/repo/pulls/7/merge sha=\(head) merge_method=merge' ] && touch '\(mergedPullRequestMarker)' ;;
           "pr close") [ "$3" = 7 ] && touch '\(closedPullRequestMarker)' ;;
           *) echo "unexpected gh call: $*" >&2; exit 1 ;;
         esac

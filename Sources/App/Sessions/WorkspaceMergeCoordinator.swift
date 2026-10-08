@@ -174,11 +174,13 @@ struct WorkspaceMergeLiveCommandRunner: WorkspaceMergeCommandRunning {
 }
 
 /// Runs what a subspace's Merge button asks for, with the bundled
-/// `workspace-pull-request.py` script. Merge has the script merge the pull
-/// request, or turn on auto-merge while checks run, and then marks the
-/// workspace done. After a Merge and Clean it checks the pull request with
-/// `gh` until it merges, then has the script close the workspace, remove the
-/// worktree, and delete the branches. Close Without Merging has the script
+/// `workspace-pull-request.py` script. Merge marks the workspace done and has
+/// the script merge the pull request at the commit the user accepted. While
+/// checks run, it runs the script again every 30 seconds; it never turns on
+/// GitHub auto-merge, which would also merge commits pushed later. After a
+/// Merge and Clean it checks with `gh` that the pull request merged, then
+/// has the script close the workspace, remove the worktree, and delete the
+/// branches. Close Without Merging has the script
 /// close the pull request and clean up. The script checks everything before
 /// its first change. Requests are shown through `SessionRuntimeStore`, and
 /// the ones waiting for a merge are saved in user defaults.
@@ -321,11 +323,17 @@ final class WorkspaceMergeCoordinator {
         }
         sessionRuntimeStore?.setWorkspaceMergeRequests(requests)
         saveRequests()
-        if request?.phase == .awaitingMerge {
+        if let phase = request?.phase, Self.isPolling(phase) {
             if pollTasks[workspaceID] == nil {
+                // The merge just found checks running, so a waiting merge
+                // starts with an interval.
+                let waitsFirst = if case .awaitingChecks = phase { true } else { false }
                 // Holds the coordinator only during each check, not while it
                 // sleeps between checks.
                 pollTasks[workspaceID] = Task { [weak self, pollInterval] in
+                    if waitsFirst {
+                        try? await Task.sleep(for: pollInterval)
+                    }
                     while Task.isCancelled == false,
                           await self?.checkPullRequest(workspaceID: workspaceID) == true {
                         try? await Task.sleep(for: pollInterval)
@@ -338,13 +346,23 @@ final class WorkspaceMergeCoordinator {
         }
     }
 
+    private static func isPolling(_ phase: WorkspaceMergeRequest.Phase) -> Bool {
+        switch phase {
+        case .awaitingChecks, .awaitingMerge:
+            return true
+        case .merging, .cleaningUp, .failed, .closing:
+            return false
+        }
+    }
+
     // MARK: - Merge
 
     private func runMerge(workspaceID: UUID, request: WorkspaceMergeRequest, thenCleanUp: Bool) async {
         let outcome = await runScript("merge", workspaceID: workspaceID, request: request)
         guard requests[workspaceID] == request else { return }
         let pullRequest = "PR #\(request.pullRequest.number)"
-        guard outcome.status == "merged" || outcome.status == "queued" else {
+        let isWaiting = outcome.status == "waiting"
+        guard outcome.status == "merged" || isWaiting, let acceptedHead = outcome.head else {
             update(workspaceID, nil)
             presentFailure("Unable to Merge \(pullRequest)", outcome.detail)
             return
@@ -358,22 +376,100 @@ final class WorkspaceMergeCoordinator {
             return
         }
         // The done mark records that the user accepted this version. New work
-        // in the workspace clears it, and with it a pending cleanup.
+        // in the workspace clears it, and with it a pending merge or cleanup.
         store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
-        if thenCleanUp {
-            var waiting = request
-            waiting.phase = .awaitingMerge
-            update(workspaceID, waiting)
+        var next = request
+        if isWaiting {
+            next.phase = .awaitingChecks(acceptedHead: acceptedHead, thenCleanUp: thenCleanUp)
+            update(workspaceID, next)
+        } else if thenCleanUp {
+            next.phase = .awaitingMerge
+            update(workspaceID, next)
         } else {
             update(workspaceID, nil)
         }
+    }
+
+    /// Runs the merge again for a request waiting on checks. Returns whether
+    /// to check again later.
+    private func retryWaitingMerge(
+        workspaceID: UUID,
+        request: WorkspaceMergeRequest,
+        acceptedHead: String,
+        thenCleanUp: Bool
+    ) async -> Bool {
+        let outcome = await runScript(
+            "merge",
+            workspaceID: workspaceID,
+            request: request,
+            extraArguments: ["--head", acceptedHead]
+        )
+        guard Task.isCancelled == false, requests[workspaceID] == request else { return false }
+        let pullRequest = "PR #\(request.pullRequest.number)"
+        switch outcome.status {
+        case "waiting":
+            pollFailureCounts[workspaceID] = nil
+            return true
+        case "merged" where thenCleanUp:
+            pollFailureCounts[workspaceID] = nil
+            var next = request
+            next.phase = .awaitingMerge
+            update(workspaceID, next)
+            // Clean up now rather than after the next interval.
+            return await checkPullRequest(workspaceID: workspaceID)
+        case "merged":
+            pollTasks[workspaceID] = nil
+            update(workspaceID, nil)
+            notify("Merged \(pullRequest)", outcome.detail)
+            return false
+        case "refused":
+            stopWaitingMerge(workspaceID, pullRequest: pullRequest, reason: outcome.detail)
+            return false
+        default:
+            // A gh or network failure may pass; give up after a few in a row.
+            let failures = (pollFailureCounts[workspaceID] ?? 0) + 1
+            pollFailureCounts[workspaceID] = failures
+            ToasttyLog.warning(
+                "Waiting workspace merge could not run",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "pull_request": String(request.pullRequest.number),
+                    "failures": String(failures),
+                    "problem": outcome.detail,
+                ]
+            )
+            if failures >= Self.maximumPollFailures {
+                stopWaitingMerge(workspaceID, pullRequest: pullRequest, reason: outcome.detail)
+                return false
+            }
+            return true
+        }
+    }
+
+    /// Ends a waiting merge that cannot happen. The done mark goes too, so
+    /// the Merge button comes back for another try.
+    private func stopWaitingMerge(_ workspaceID: UUID, pullRequest: String, reason: String) {
+        pollTasks[workspaceID] = nil
+        update(workspaceID, nil)
+        store?.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
+        notify("\(pullRequest) was not merged", reason)
     }
 
     // MARK: - Pull request checks
 
     /// Checks the pull request once. Returns whether to check again later.
     private func checkPullRequest(workspaceID: UUID) async -> Bool {
-        guard let request = requests[workspaceID], request.phase == .awaitingMerge else { return false }
+        guard let request = requests[workspaceID] else { return false }
+        if case .awaitingChecks(let acceptedHead, let thenCleanUp) = request.phase {
+            return await retryWaitingMerge(
+                workspaceID: workspaceID,
+                request: request,
+                acceptedHead: acceptedHead,
+                thenCleanUp: thenCleanUp
+            )
+        }
+        guard request.phase == .awaitingMerge else { return false }
         let number = request.pullRequest.number
         let result = await runner.run(
             arguments: ["gh", "pr", "view", request.pullRequest.url, "--json", "state"],
@@ -474,7 +570,8 @@ final class WorkspaceMergeCoordinator {
     private func runScript(
         _ action: String,
         workspaceID: UUID,
-        request: WorkspaceMergeRequest
+        request: WorkspaceMergeRequest,
+        extraArguments: [String] = []
     ) async -> ScriptOutcome {
         let outcome: ScriptOutcome
         if let scriptPath, FileManager.default.fileExists(atPath: scriptPath) {
@@ -485,7 +582,7 @@ final class WorkspaceMergeCoordinator {
                     "--pr-url", request.pullRequest.url,
                     "--workspace", workspaceID.uuidString,
                     "--repo", request.repoPath,
-                ],
+                ] + extraArguments,
                 directory: request.repoPath,
                 timeout: Self.scriptTimeout
             )
@@ -508,11 +605,13 @@ final class WorkspaceMergeCoordinator {
     }
 
     struct ScriptOutcome: Equatable {
-        /// The script's status: merged, queued, or refused for a merge;
+        /// The script's status: merged, waiting, or refused for a merge;
         /// cleaned, partial, stopped, or skipped for a cleanup or close;
         /// failed, or `nil` when the script printed no report.
         var status: String?
         var detail: String
+        /// For a merge, the commit the user accepted.
+        var head: String?
     }
 
     static func scriptOutcome(from result: WorkspaceMergeCommandResult) -> ScriptOutcome {
@@ -523,7 +622,7 @@ final class WorkspaceMergeCoordinator {
               let status = object["status"] as? String else {
             return ScriptOutcome(status: nil, detail: "The pull request script printed no report.")
         }
-        return ScriptOutcome(status: status, detail: object["detail"] as? String ?? status)
+        return ScriptOutcome(status: status, detail: object["detail"] as? String ?? status, head: object["head"] as? String)
     }
 
     private func fail(_ workspaceID: UUID, _ request: WorkspaceMergeRequest, _ reason: String) {
@@ -562,6 +661,7 @@ final class WorkspaceMergeCoordinator {
     private static func phaseName(_ phase: WorkspaceMergeRequest.Phase) -> String {
         switch phase {
         case .merging(let thenCleanUp): return thenCleanUp ? "merging_then_clean_up" : "merging"
+        case .awaitingChecks(_, let thenCleanUp): return thenCleanUp ? "awaiting_checks_then_clean_up" : "awaiting_checks"
         case .awaitingMerge: return "awaiting_merge"
         case .cleaningUp: return "cleaning_up"
         case .failed: return "failed"

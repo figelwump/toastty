@@ -12,7 +12,13 @@ struct WorkspaceMergeRequestTests {
     @Test
     func newWorkAClosedWorkspaceOrADifferentPullRequestDropsAWaitingRequest() {
         let other = WorkspacePullRequestLink(annotationURL: "https://github.com/o/r/pull/60")
-        for phase in [WorkspaceMergeRequest.Phase.awaitingMerge, .failed(reason: "skipped")] {
+        // New work clears the done mark, and that also cancels a merge still
+        // waiting for checks.
+        for phase in [
+            WorkspaceMergeRequest.Phase.awaitingMerge,
+            .awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: false),
+            .failed(reason: "skipped"),
+        ] {
             #expect(with(phase).reconciled(workspaceExists: true, isDone: true, pullRequest: link) == with(phase))
             #expect(with(phase).reconciled(workspaceExists: true, isDone: false, pullRequest: link) == nil)
             #expect(with(phase).reconciled(workspaceExists: false, isDone: true, pullRequest: link) == nil)
@@ -31,6 +37,8 @@ struct WorkspaceMergeRequestTests {
         #expect(with(.merging(thenCleanUp: true)).persisted == nil)
         #expect(with(.closing).persisted == nil)
         #expect(with(.failed(reason: "x")).persisted == with(.failed(reason: "x")))
+        let waiting = with(.awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: true))
+        #expect(waiting.persisted == waiting)
     }
 
     @Test

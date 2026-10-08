@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
 """Merge, clean up, or close one task pull request for a Toastty subspace.
 
-Usage: workspace-pull-request.py ACTION --pr NUMBER --pr-url URL --workspace ID --repo PATH
+Usage: workspace-pull-request.py ACTION --pr NUMBER --pr-url URL --workspace ID --repo PATH [--head SHA]
 
 Toastty runs this for a subspace's Merge button; it is not a user command.
 ACTION is one of:
 
-  merge     Merges the PR, or turns on auto-merge while checks are still running.
-            Refuses, changing nothing, unless the worktree is clean at exactly the
-            PR head, the PR targets the default branch, has no conflicts or failing
-            checks, and its description lists no merge prerequisites: an
-            "Activation order", "Merge order", "Rollout", or "Depends on" section,
-            or a link to a PR in another repository. A draft is marked ready first.
-            The merge method is the first one the repository allows: merge commit,
-            squash, then rebase.
+  merge     Merges the PR at exactly the accepted commit, or reports "waiting" while
+            checks are running or GitHub still blocks the merge, for example on a
+            required review. It merges through GitHub's merge API with that commit,
+            so it never turns on auto-merge or joins a merge queue, and it refuses
+            a PR that already has auto-merge on: GitHub would also merge commits
+            pushed later. Toastty runs it again with --head until it merges.
+            Without --head, the accepted commit is the clicked checkout's HEAD,
+            read first; the checkout must be the PR's worktree, clean at that
+            commit, and the PR head must be that commit. With --head, the PR head
+            must still be that commit, and the workspace must still be marked
+            done, which is how the user cancels a waiting merge. Either way it
+            refuses, changing nothing, unless the PR targets the default branch,
+            has no conflicts or failing checks, and its description lists no merge
+            prerequisites: an "Activation order", "Merge order", "Rollout", or
+            "Depends on" section, or a link to a PR in another repository. A draft
+            is marked ready first. The merge method is the first one the
+            repository allows: merge commit, squash, then rebase.
   clean-up  After the PR merged: closes the workspace, removes the worktree, and
             deletes the local and remote branch. The workspace must be marked done.
             A detached task checkout must have one exact PR URL chip and be at
@@ -39,7 +48,8 @@ the repository's main checkout, so a worktree being removed is never the current
 directory.
 
 Prints one JSON object, {"status": ..., "detail": ...}. merge reports "merged",
-"queued" (auto-merge is on), "refused" (nothing changed), or "failed". clean-up
+"waiting" (nothing changed yet; run again with --head), "refused" (nothing
+changed), or "failed", and adds "head", the accepted commit. clean-up
 and close report "cleaned", "partial" (some changes made and something kept),
 "stopped" (a step failed before any change), or "skipped" (nothing changed).
 """
@@ -58,14 +68,14 @@ from dataclasses import dataclass
 
 PR_FIELDS = (
     "number,state,isDraft,headRefName,headRefOid,baseRefName,isCrossRepository,"
-    "mergeable,mergeStateStatus,statusCheckRollup,url,body,mergeCommit"
+    "mergeable,mergeStateStatus,statusCheckRollup,url,body,mergeCommit,autoMergeRequest"
 )
 # The order to pick a merge method in, among the ones the repository allows.
-MERGE_METHODS = (("mergeCommitAllowed", "--merge"), ("squashMergeAllowed", "--squash"),
-                 ("rebaseMergeAllowed", "--rebase"))
+MERGE_METHODS = (("mergeCommitAllowed", "merge"), ("squashMergeAllowed", "squash"),
+                 ("rebaseMergeAllowed", "rebase"))
 # GitHub computes these after branch protection: CLEAN means required checks are
 # met and nothing blocks the merge; HAS_HOOKS is CLEAN with pre-receive hooks.
-MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS")
+MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
 # Closing a workspace sends SIGHUP to its terminals without waiting for them to
 # exit. When it ended live work, wait this long before rechecking the worktree so
 # a final write from a dying command shows up as uncommitted changes.
@@ -143,6 +153,8 @@ class Context:
     workspace_id: str
     # The --repo directory: the clicked workspace's checkout.
     checkout: str
+    # The checkout's HEAD, read before any network call, for a merge click.
+    clicked_head: str | None = None
 
 
 def real(path: str) -> str:
@@ -255,20 +267,37 @@ def refresh_merge_state(ctx: Context) -> None:
 
 # MARK: - Merge
 
-def merge(ctx: Context) -> tuple[str, str]:
+def merge(ctx: Context, accepted: str | None) -> tuple[str, str, str]:
+    """Returns the status, a description, and the accepted commit."""
     pr, number = ctx.pr, ctx.pr["number"]
-    if pr["state"] == "CLOSED":
-        raise Refusal(f"PR #{number} is closed")
-    if ctx.worktree is None:
-        raise Refusal(f"no worktree has the PR's branch {pr['headRefName']}")
-    if not inside(ctx.checkout, ctx.worktree.path):
-        # The annotation could name another task's PR.
-        raise Refusal(f"this workspace's checkout is not the worktree of PR #{number} ({ctx.worktree.path})")
-    problem = worktree_problem(ctx.worktree, pr["headRefOid"])
-    if problem:
-        raise Refusal(problem + "; the merge would not be the version in this workspace")
+    if accepted is None:
+        # The click: what merges is the version in the clicked workspace, as
+        # it was before this script fetched or asked GitHub anything.
+        if ctx.worktree is None:
+            raise Refusal(f"no worktree has the PR's branch {pr['headRefName']}")
+        if not inside(ctx.checkout, ctx.worktree.path):
+            # The annotation could name another task's PR.
+            raise Refusal(f"this workspace's checkout is not the worktree of PR #{number} ({ctx.worktree.path})")
+        accepted = ctx.clicked_head
+        if not accepted:
+            raise Refusal("could not read the commit in this workspace's checkout")
+        problem = worktree_problem(ctx.worktree, accepted)
+        if problem:
+            raise Refusal(problem + "; the merge would not be the version in this workspace")
+        if pr["headRefOid"] != accepted:
+            raise Refusal(f"the PR head {pr['headRefOid'][:8]} is not the commit in this workspace "
+                          f"{accepted[:8]}; the merge would not be the version in this workspace")
+
+    if pr["headRefOid"] != accepted:
+        raise Refusal(f"new commits were pushed after the merge was accepted: the PR head is now "
+                      f"{pr['headRefOid'][:8]}, not {accepted[:8]}")
     if pr["state"] == "MERGED":
-        return "merged", f"PR #{number} has already merged"
+        return "merged", f"PR #{number} has merged", accepted
+    if pr["state"] != "OPEN":
+        raise Refusal(f"PR #{number} is closed")
+    if pr.get("autoMergeRequest"):
+        raise Refusal(f"auto-merge is on for PR #{number}, so GitHub would also merge commits pushed later; "
+                      "turn it off on GitHub, then merge again")
     if pr["baseRefName"] != ctx.default_branch:
         raise Refusal(f"it targets {pr['baseRefName']}, not {ctx.default_branch}; merge that pull request "
                       "first, and GitHub then retargets this one")
@@ -293,26 +322,32 @@ def merge(ctx: Context) -> tuple[str, str]:
     if pr["isDraft"]:
         ok, output = succeeds(["gh", "pr", "ready", str(number)], cwd=ctx.repo)
         if not ok:
-            return "failed", f"could not mark draft PR #{number} ready: {output}"
-    head = pr["headRefOid"]
-    direct = ["gh", "pr", "merge", str(number), method, "--match-head-commit", head]
-    if pr.get("mergeStateStatus") in MERGEABLE_STATES and not pending:
-        ok, output = succeeds(direct, cwd=ctx.repo)
-    else:
-        ok, output = succeeds(direct[:4] + ["--auto"] + direct[4:], cwd=ctx.repo)
-        if not ok and "clean status" in output.lower():
-            # GitHub will not queue a PR that became mergeable meanwhile.
-            ok, output = succeeds(direct, cwd=ctx.repo)
+            return "failed", f"could not mark draft PR #{number} ready: {output}", accepted
+        return "waiting", f"marked draft PR #{number} ready; waiting for GitHub to allow the merge", accepted
+    if pending:
+        return "waiting", "waiting for checks: " + ", ".join(pending), accepted
+    if pr.get("mergeStateStatus") not in MERGEABLE_STATES:
+        # BLOCKED with no check running: a required review or a required check
+        # that has not reported. UNKNOWN: GitHub is still computing.
+        state = (pr.get("mergeStateStatus") or "unknown").lower()
+        return "waiting", f"waiting for GitHub to allow the merge (merge state {state})", accepted
+    if ctx.clicked_head is None:
+        # A waiting merge: the user may have cancelled it by clearing the done
+        # mark since Toastty started this run.
+        workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
+        if workspace is None or not workspace.get("done"):
+            raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
+    # GitHub's merge API merges now or fails; unlike `gh pr merge`, it never
+    # turns on auto-merge or adds the PR to a merge queue. `sha` makes GitHub
+    # refuse if the head is no longer the accepted commit.
+    ok, output = succeeds(["gh", "api", "--method", "PUT", f"repos/{ctx.repo_slug}/pulls/{number}/merge",
+                           "-f", f"sha={accepted}", "-f", f"merge_method={method}"], cwd=ctx.repo)
     if not ok:
-        return "failed", f"gh pr merge failed: {output}"
-    view = json.loads(run(["gh", "pr", "view", str(number), "--json", "state,autoMergeRequest"],
-                          cwd=ctx.repo, check=False) or "{}")
+        return "failed", f"GitHub did not merge PR #{number}: {output}", accepted
+    view = json.loads(run(["gh", "pr", "view", str(number), "--json", "state"], cwd=ctx.repo, check=False) or "{}")
     if view.get("state") == "MERGED":
-        return "merged", f"merged PR #{number}"
-    if view.get("autoMergeRequest"):
-        return "queued", (f"turned on auto-merge for PR #{number}; GitHub merges it once its "
-                          "required checks and reviews pass")
-    return "failed", f"PR #{number} did not merge and auto-merge is not on"
+        return "merged", f"merged PR #{number}", accepted
+    return "failed", f"GitHub reported the merge, but PR #{number} is {view.get('state', 'unknown').lower()}", accepted
 
 
 # MARK: - Clean up and close
@@ -549,7 +584,13 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
 def load(options: argparse.Namespace) -> Context:
     checkout = real(run(["git", "rev-parse", "--show-toplevel"], cwd=options.repo).strip())
     repo = main_checkout(checkout)
-    subprocess.run(["git", "fetch", "--quiet", "--prune", "origin"], cwd=repo, capture_output=True)
+    clicked_head = None
+    if options.action == "merge" and not options.head:
+        ok, head = succeeds(["git", "rev-parse", "HEAD"], cwd=checkout)
+        clicked_head = head if ok else ""
+    if not options.head:
+        # A merge that is waiting reads only GitHub; it runs every 30 seconds.
+        subprocess.run(["git", "fetch", "--quiet", "--prune", "origin"], cwd=repo, capture_output=True)
     repo_info = json.loads(run(["gh", "repo", "view", "--json",
                                 "nameWithOwner,defaultBranchRef,mergeCommitAllowed,squashMergeAllowed,"
                                 "rebaseMergeAllowed"], cwd=repo))
@@ -574,7 +615,7 @@ def load(options: argparse.Namespace) -> Context:
         repo=repo, repo_slug=repo_info["nameWithOwner"], default_branch=repo_info["defaultBranchRef"]["name"],
         repo_info=repo_info, pr=pr, worktree=worktree,
         other_worktrees=[w.path for w in worktrees if worktree is None or w.path != worktree.path],
-        workspace_id=options.workspace, checkout=checkout)
+        workspace_id=options.workspace, checkout=checkout, clicked_head=clicked_head)
 
 
 def main() -> None:
@@ -584,17 +625,21 @@ def main() -> None:
     parser.add_argument("--pr-url", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--repo", required=True, help="any checkout of the repository")
+    parser.add_argument("--head", help="with merge: the commit the user accepted, from an earlier waiting report")
     options = parser.parse_args()
+    if options.head and options.action != "merge":
+        parser.error("--head is only for merge")
+    report: dict = {}
     try:
         ctx = load(options)
         if options.action == "merge":
-            status, detail = merge(ctx)
+            status, detail, report["head"] = merge(ctx, options.head)
         else:
             status, detail = clean_up(ctx, close_pr=options.action == "close")
     except Refusal as refusal:
         status = "refused" if options.action == "merge" else "skipped"
         detail = str(refusal)
-    print(json.dumps({"status": status, "detail": detail}))
+    print(json.dumps({"status": status, "detail": detail, **report}))
 
 
 if __name__ == "__main__":

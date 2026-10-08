@@ -38,18 +38,24 @@ public struct WorkspacePullRequestLink: Codable, Equatable, Sendable {
 }
 
 /// What a subspace's Merge button is doing for its pull request, from the
-/// click until nothing is left to do. Toastty merges the pull request itself;
-/// after a Merge and Clean it waits for the merge, then closes the workspace,
-/// removes its worktree, and deletes its branches. Close Without Merging goes
-/// through it too. Saved across launches while it waits for the merge,
-/// because auto-merge can wait on checks for longer than Toastty runs.
+/// click until nothing is left to do. Toastty merges the pull request itself,
+/// waiting for checks when it has to, and only at the commit the user
+/// accepted. After a Merge and Clean it then closes the workspace, removes
+/// its worktree, and deletes its branches. Close Without Merging goes through
+/// it too. Saved across launches while it waits, because checks can run for
+/// longer than Toastty does.
 public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     public enum Phase: Codable, Equatable, Sendable {
-        /// The pull request script is merging the pull request or turning on
-        /// auto-merge. With `thenCleanUp`, the request then waits for the
-        /// merge; otherwise it ends.
+        /// The pull request script is checking the pull request and merging it
+        /// if it can. With `thenCleanUp`, a cleanup follows the merge.
         case merging(thenCleanUp: Bool)
-        /// The workspace is done; the pull request has not merged yet.
+        /// The workspace is done, and Toastty is waiting for checks or a
+        /// required review before it merges `acceptedHead`, the pull request
+        /// head when the user clicked. New commits on the pull request end
+        /// the wait without merging.
+        case awaitingChecks(acceptedHead: String, thenCleanUp: Bool)
+        /// The workspace is done; the pull request has merged or is about to,
+        /// and the cleanup waits for it.
         case awaitingMerge
         case cleaningUp
         /// Cleanup did not finish. The workspace stays, and the user can retry
@@ -93,7 +99,7 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         switch phase {
         case .merging, .cleaningUp, .closing:
             return true
-        case .awaitingMerge, .failed:
+        case .awaitingChecks, .awaitingMerge, .failed:
             return false
         }
     }
@@ -110,7 +116,7 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
             return next
         case .merging, .closing:
             return nil
-        case .awaitingMerge, .failed:
+        case .awaitingChecks, .awaitingMerge, .failed:
             return self
         }
     }

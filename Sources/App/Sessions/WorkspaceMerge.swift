@@ -58,9 +58,12 @@ enum WorkspaceMergePresentation: Equatable {
             return .cleaningUp(pullRequest: pullRequest)
         case .failed(let reason):
             return .cleanupFailed(pullRequest: pullRequest, reason: reason)
-        case .awaitingMerge where workspace.doneAt != nil:
+        case .awaitingMerge where workspace.doneAt != nil,
+             .awaitingChecks(_, thenCleanUp: true) where workspace.doneAt != nil:
             return .awaitingMerge(pullRequest: pullRequest)
-        case .awaitingMerge, nil:
+        case .awaitingMerge, .awaitingChecks, nil:
+            // A Merge Only that waits for checks shows as done: the user has
+            // accepted the version, and Toastty merges it when it can.
             break
         }
         if workspace.doneAt != nil {

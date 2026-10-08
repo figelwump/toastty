@@ -55,18 +55,17 @@ elif args[:2] == ["pr", "ready"]:
     log()
     next(p for p in state["prs"] if p["number"] == int(args[2]))["isDraft"] = False
     save()
-elif args[:2] == ["pr", "merge"]:
+elif args[:3] == ["api", "--method", "PUT"]:
+    # The merge API: repos/<slug>/pulls/<number>/merge -f sha=... -f merge_method=...
     log()
-    pr = next(p for p in state["prs"] if p["number"] == int(args[2]))
-    if args[args.index("--match-head-commit") + 1] != pr["headRefOid"]:
-        sys.exit("Head branch was modified")
-    if "--auto" in args:
-        if state.pop("clean_status_on_auto", False):
-            save()
-            sys.exit("GraphQL: Pull request Pull request is in clean status (enablePullRequestAutoMerge)")
-        pr["autoMergeRequest"] = {"enabledAt": "now"}
-    else:
-        pr["state"] = "MERGED"
+    pr = next(p for p in state["prs"] if args[3] == f"repos/test/repo/pulls/{p['number']}/merge")
+    fields = dict(a.split("=", 1) for a in args[4:] if "=" in a)
+    if state.get("merge_queue_required"):
+        sys.exit("gh: Changes must be made through the merge queue (HTTP 405)")
+    if fields["sha"] != pr["headRefOid"]:
+        sys.exit("gh: Head branch was modified. Review and try the merge again. (HTTP 409)")
+    pr["state"] = "MERGED"
+    print(json.dumps({"merged": True, "sha": "merge-commit"}))
     save()
 else:
     sys.exit(f"unexpected gh call: {args}")
@@ -155,7 +154,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
             "headRefOid": head, "baseRefName": "main", "isCrossRepository": False,
             "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "url": f"https://github.com/test/repo/pull/{number}",
             "statusCheckRollup": [{"name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-            "body": "", "autoMergeRequest": None,
+            "body": "",
         })
         self.workspaces.append({
             "workspaceID": workspace_id(number), "title": branch,
@@ -177,21 +176,27 @@ class WorkspacePullRequestTests(unittest.TestCase):
             "key": "github-pr", "text": f"PR #{number}", "url": self.prs[-1]["url"]}]
         return branch, path
 
-    def run_script(self, action, number, url=None, workspace=None, repo=None, env=None):
+    def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None):
         """Runs the script as Toastty does, from the workspace's checkout: the
-        task's worktree unless `repo` says otherwise."""
+        task's worktree unless `repo` says otherwise. `head` is a waiting
+        merge's accepted commit."""
         self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces,
                                                **self.extra_state}))
         result = subprocess.run(
             [sys.executable, str(SCRIPT), action, "--pr", str(number),
              "--pr-url", url or f"https://github.com/test/repo/pull/{number}",
-             "--workspace", workspace or workspace_id(number), "--repo", str(repo or self.root / f"task-{number}")],
+             "--workspace", workspace or workspace_id(number), "--repo", str(repo or self.root / f"task-{number}"),
+             *(["--head", head] if head else [])],
             env=env or self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
     def gh_state(self, number):
         return next(p for p in json.loads(self.state_file.read_text())["prs"] if p["number"] == number)
+
+    @staticmethod
+    def merge_call(number, sha, method="merge"):
+        return f"gh api --method PUT repos/test/repo/pulls/{number}/merge -f sha={sha} -f merge_method={method}"
 
     def actions(self):
         """Every change the script made, in order: gh writes and workspace closes."""
@@ -211,37 +216,94 @@ class WorkspacePullRequestTests(unittest.TestCase):
         result = self.run_script("merge", 1)
         self.assertEqual(result["status"], "merged", result)
         head = self.prs[0]["headRefOid"]
-        self.assertEqual(self.actions(), [f"gh pr merge 1 --merge --match-head-commit {head}"])
+        self.assertEqual(result["head"], head)
+        self.assertEqual(self.actions(), [self.merge_call(1, head)])
         self.assertTrue(path.exists())
 
-    def test_merge_turns_on_auto_merge_while_checks_run(self):
-        self.task(1, state="OPEN")
+    def test_merge_waits_while_checks_run_then_merges_the_accepted_commit(self):
+        _, path = self.task(1, state="OPEN")
+        head = self.prs[0]["headRefOid"]
         self.prs[0]["statusCheckRollup"].append({"name": "slow", "status": "IN_PROGRESS", "conclusion": None})
         self.prs[0]["mergeStateStatus"] = "BLOCKED"
         result = self.run_script("merge", 1)
-        self.assertEqual(result["status"], "queued", result)
-        self.assertIn("--auto", self.actions()[0])
-        self.assertEqual(self.gh_state(1)["state"], "OPEN")
+        self.assertEqual(result["status"], "waiting", result)
+        self.assertEqual(result["head"], head)
+        self.assertIn("slow", result["detail"])
+        self.assertEqual(self.actions(), [])
 
-    def test_merge_merges_directly_when_github_will_not_queue_a_clean_pr(self):
-        self.task(1, state="OPEN")
-        self.prs[0]["mergeStateStatus"] = "BLOCKED"
-        self.extra_state["clean_status_on_auto"] = True
-        result = self.run_script("merge", 1)
+        # Later checks need no worktree: the commit was accepted at the click.
+        (path / "notes.txt").write_text("edited after the click\n")
+        self.prs[0]["statusCheckRollup"][-1] = {"name": "slow", "status": "COMPLETED", "conclusion": "SUCCESS"}
+        self.prs[0]["mergeStateStatus"] = "CLEAN"
+        result = self.run_script("merge", 1, head=head)
         self.assertEqual(result["status"], "merged", result)
-        self.assertEqual(len(self.actions()), 2)
-        self.assertNotIn("--auto", self.actions()[1])
+        self.assertEqual(self.actions(), [self.merge_call(1, head)])
+
+    def test_waiting_merge_refuses_commits_pushed_after_the_click(self):
+        _, path = self.task(1, state="OPEN")
+        accepted = self.prs[0]["headRefOid"]
+        self.prs[0]["mergeStateStatus"] = "BLOCKED"
+        self.assertEqual(self.run_script("merge", 1)["status"], "waiting")
+
+        self.prs[0]["headRefOid"] = self.commit(path, "pushed later")
+        self.prs[0]["mergeStateStatus"] = "CLEAN"
+        result = self.run_script("merge", 1, head=accepted)
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("new commits were pushed", result["detail"])
+        # A PR merged by someone else at another commit is not this merge.
+        self.prs[0]["state"] = "MERGED"
+        self.assertEqual(self.run_script("merge", 1, head=accepted)["status"], "refused")
+        self.assertEqual(self.actions(), [])
+
+    def test_waiting_merge_stops_when_a_check_fails(self):
+        self.task(1, state="OPEN")
+        head = self.prs[0]["headRefOid"]
+        self.prs[0]["statusCheckRollup"][-1] = {"name": "CI gate", "status": "COMPLETED", "conclusion": "FAILURE"}
+        result = self.run_script("merge", 1, head=head)
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("failing checks: CI gate", result["detail"])
+        self.assertEqual(self.actions(), [])
+
+    def test_merge_refuses_a_pr_that_already_has_auto_merge_on(self):
+        self.task(1, state="OPEN")
+        self.prs[0]["autoMergeRequest"] = {"enabledAt": "2026-10-07T00:00:00Z"}
+        result = self.run_script("merge", 1)
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("auto-merge is on", result["detail"])
+        self.assertEqual(self.actions(), [])
+
+    def test_waiting_merge_is_cancelled_by_clearing_the_done_mark(self):
+        self.task(1, state="OPEN", done=False)
+        head = self.prs[0]["headRefOid"]
+        result = self.run_script("merge", 1, head=head)
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn("no longer marked done", result["detail"])
+        self.assertEqual(self.actions(), [])
+
+    def test_merge_never_queues_the_pr(self):
+        self.task(1, state="OPEN")
+        head = self.prs[0]["headRefOid"]
+        self.extra_state["merge_queue_required"] = True
+        result = self.run_script("merge", 1)
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("merge queue", result["detail"])
+        self.assertEqual(self.actions(), [self.merge_call(1, head)])
+        self.assertEqual(self.gh_state(1)["state"], "OPEN")
 
     def test_merge_marks_a_draft_ready_and_uses_an_allowed_method(self):
         self.task(1, state="OPEN")
+        head = self.prs[0]["headRefOid"]
         self.prs[0]["isDraft"] = True
         self.prs[0]["mergeStateStatus"] = "DRAFT"
         self.extra_state["merge_commit_allowed"] = False
         result = self.run_script("merge", 1)
-        self.assertEqual(result["status"], "queued", result)
-        actions = self.actions()
-        self.assertEqual(actions[0], "gh pr ready 1")
-        self.assertIn("--squash", actions[1])
+        self.assertEqual(result["status"], "waiting", result)
+        self.assertEqual(self.actions(), ["gh pr ready 1"])
+
+        self.prs[0]["isDraft"] = False
+        self.prs[0]["mergeStateStatus"] = "CLEAN"
+        self.assertEqual(self.run_script("merge", 1, head=head)["status"], "merged")
+        self.assertEqual(self.actions()[1], self.merge_call(1, head, "squash"))
 
     def test_merge_refuses_without_changes_when_the_pr_is_not_the_accepted_version(self):
         _, dirty = self.task(1, state="OPEN")
@@ -254,7 +316,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.prs[-1]["mergeable"] = "CONFLICTING"
         self.task(5, state="OPEN")
         self.prs[-1]["baseRefName"] = "task-1"
-        expected = {1: "uncommitted changes", 2: "1 commits ahead", 3: "failing checks: lint",
+        expected = {1: "uncommitted changes", 2: "is not the commit in this workspace", 3: "failing checks: lint",
                     4: "merge conflicts", 5: "targets task-1, not main"}
         for number, reason in expected.items():
             result = self.run_script("merge", number)
@@ -282,7 +344,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.commit(ahead, "new work")
         result = self.run_script("merge", 2)
         self.assertEqual(result["status"], "refused", result)
-        self.assertIn("ahead", result["detail"])
+        self.assertIn("is not the commit in this workspace", result["detail"])
         self.assertEqual(self.actions(), [])
 
     def test_merge_refuses_from_another_tasks_checkout(self):

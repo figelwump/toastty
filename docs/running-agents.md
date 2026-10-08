@@ -576,22 +576,36 @@ anything:
   description lists merge prerequisites: an "Activation order", "Merge order",
   "Rollout", or "Depends on" section, or a link to a pull request in another
   repository. Merge that pull request yourself once its prerequisites are done.
-- A draft is marked ready first. If required checks are still running, or
-  GitHub is waiting on a required review, Toastty turns on auto-merge, so
-  GitHub merges once they pass. Checks that are not required do not hold the
-  merge back. The merge method is the first one the repository allows: a merge
-  commit, then squash, then rebase.
+- Toastty also refuses a pull request that already has auto-merge on, because
+  GitHub would merge commits pushed later too. Turn auto-merge off on GitHub
+  first. Branches that require a merge queue are not supported.
+- A draft is marked ready first. The merge method is the first one the
+  repository allows: a merge commit, then squash, then rebase.
 
-While Toastty merges, the button reads **Merging PR #N…**. When the pull request
-has merged or auto-merge is on, Toastty marks the workspace done, and a Merge
-Only ends there with **Done · PR #N**. If a check fails, an alert gives the
-reason and nothing changes. Top-level workspaces do not show the button,
-because only a subspace holds a done mark.
+While Toastty checks, the button reads **Merging PR #N…**. If any check is
+still running, or GitHub is waiting on a required review, Toastty waits and
+tries again every 30 seconds. It never turns on GitHub auto-merge, because
+GitHub would then also merge commits pushed after your click. Toastty merges
+only the commit you accepted, and GitHub refuses that merge if the branch has
+moved. Toastty marks the workspace done when you click, so a Merge Only shows
+**Done · PR #N** while it waits.
 
-After a Merge and Clean that turned on auto-merge, the button reads **Cleans Up
-When PR #N Merges**. Toastty checks the pull request with `gh pr view` every 30
-seconds. When it has merged, Toastty closes the workspace, removes the worktree,
-and deletes the local and remote branch, and a notification reports the result.
+- A waiting merge needs Toastty to be running. It is kept across launches and
+  resumes after a relaunch.
+- To cancel a waiting merge, clear the workspace's done mark in the sidebar.
+  New agent work in the workspace clears it too.
+- If the merge can no longer happen, for example because new commits were
+  pushed, a check failed, or `gh` failed three times in a row, Toastty stops
+  waiting, clears the done mark so the Merge button comes back, and a
+  notification gives the reason. A refusal at the click shows an alert and
+  changes nothing.
+- Top-level workspaces do not show the button, because only a subspace holds a
+  done mark.
+
+After a Merge and Clean, the button reads **Cleans Up When PR #N Merges** until
+the merge is done. Toastty confirms with `gh pr view` that the pull request
+merged, then closes the workspace, removes the worktree, and deletes the local
+and remote branch, and a notification reports the result.
 
 - Toastty checks again before it cleans up. It skips the cleanup when the
   worktree has uncommitted changes or is not at the PR head, when the
