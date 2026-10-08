@@ -15,6 +15,7 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let inputFile = directory.appendingPathComponent("input")
+        let requestsFile = directory.appendingPathComponent("requests")
         let script = directory.appendingPathComponent("fixture.py")
         let preparedLaunch = try AgentLaunchInstrumentation.prepare(
             agent: .codex,
@@ -32,8 +33,9 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
         // Match the keyboard and mouse protocols used by fullscreen TUIs. Retain
         // every received byte so duplicate dispatch and accidental Ctrl+C are visible.
         try """
-        import os, pathlib, select, sys, termios, tty
+        import os, pathlib, select, sys, termios, time, tty
         output = pathlib.Path(__file__).with_name('input')
+        requests = pathlib.Path(__file__).with_name('requests')
         original = termios.tcgetattr(0)
         try:
             tty.setraw(0)
@@ -42,7 +44,13 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
             if os.environ.get('CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT') != '1':
                 os.write(1, b'\u{1b}[>5u')
             os.write(1, b'\u{1b}[?1000h\u{1b}[?1006h')
-            while select.select([0], [], [], 60)[0]:
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                if requests.exists():
+                    packet = requests.read_bytes()
+                    requests.unlink()
+                    os.write(1, packet)
+                if not select.select([0], [], [], 0.02)[0]: continue
                 data = os.read(0, 4096)
                 if not data: break
                 with output.open('ab') as file: file.write(data)
@@ -55,6 +63,22 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
         window.forcedIsKeyWindow = true
         XCTAssertTrue(window.makeFirstResponder(host))
         let manager = GhosttyRuntimeManager.shared
+        // Pin policy so the real protocol tests do not depend on a user's config.
+        let configFile = directory.appendingPathComponent("ghostty-config")
+        try """
+        clipboard-read = ask
+        clipboard-write = ask
+        clipboard-paste-protection = true
+        clipboard-paste-bracketed-safe = false
+        """.write(to: configFile, atomically: true, encoding: .utf8)
+        let savedConfigPath = ProcessInfo.processInfo.environment["TOASTTY_GHOSTTY_CONFIG_PATH"]
+        setenv("TOASTTY_GHOSTTY_CONFIG_PATH", configFile.path, 1)
+        XCTAssertTrue(manager.reloadConfiguration())
+        defer {
+            if let savedConfigPath { setenv("TOASTTY_GHOSTTY_CONFIG_PATH", savedConfigPath, 1) }
+            else { unsetenv("TOASTTY_GHOSTTY_CONFIG_PATH") }
+            _ = manager.reloadConfiguration()
+        }
         let quotedScript = "'" + script.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
         let created = try XCTUnwrap(manager.makeSurface(
             hostView: host, workingDirectory: directory.path, fontPoints: 12,
@@ -142,6 +166,51 @@ final class GhosttyCopyRoutingTests: TerminalHostViewTestCase {
             (expectedInput + Data("\u{1b}[99;5u\u{1b}[27uz".utf8))
                 .map { String(format: "%02x", $0) }.joined()
         )
+
+        // Menu Paste exercises the real length-delimited read callback and PTY.
+        // The pasteboard is already saved above and restored when this test exits.
+        let inputBeforePaste = try Data(contentsOf: inputFile)
+        let pastedText = "clipboard café"
+        pasteboard.clearContents()
+        pasteboard.setString(pastedText, forType: .string)
+        host.paste(nil)
+        let inputAfterPaste = inputBeforePaste + Data(pastedText.utf8)
+        XCTAssertTrue(waitUntil { (try? Data(contentsOf: inputFile)) == inputAfterPaste },
+                      "Menu Paste must complete Ghostty's requested text representation")
+
+        pasteboard.clearContents()
+        pasteboard.writeObjects([NSURL(fileURLWithPath: "/tmp/a'b c")])
+        host.paste(nil)
+        let escapedPath = "'/tmp/a'\\''b c'"
+        XCTAssertTrue(waitUntil { (try? Data(contentsOf: inputFile)) == inputAfterPaste + Data(escapedPath.utf8) },
+                      "File paste must keep Toastty's existing shell escaping")
+
+        // Unsafe multiline paste enters the nested legacy confirmation callback.
+        let beforeMultiline = try Data(contentsOf: inputFile)
+        pasteboard.clearContents()
+        pasteboard.setString("first\nsecond", forType: .string)
+        host.paste(nil)
+        XCTAssertTrue(waitUntil { (try? Data(contentsOf: inputFile)) == beforeMultiline + Data("first\rsecond".utf8) })
+
+        func emit(_ packet: String, expecting response: String) throws {
+            let before = try Data(contentsOf: inputFile)
+            try Data(packet.utf8).write(to: requestsFile, options: .atomic)
+            XCTAssertTrue(waitUntil { (try? Data(contentsOf: inputFile)) == before + Data(response.utf8) },
+                          "Clipboard protocol must return exactly its expected response")
+        }
+        pasteboard.clearContents()
+        pasteboard.setString("legacy", forType: .string)
+        // OSC 52 read remains auto-confirmed under ask, including nested completion.
+        try emit("\u{1b}]52;c;?\u{7}", expecting: "\u{1b}]52;c;bGVnYWN5\u{1b}\\")
+        // The new Kitty request kinds require real approval UI; ask must deny them.
+        try emit("\u{1b}]5522;type=read:id=read;dGV4dC9wbGFpbg==\u{7}",
+                 expecting: "\u{1b}]5522;type=read:status=EPERM:id=read\u{7}")
+        let kittyWrite = "\u{1b}]5522;type=write:id=write\u{7}"
+            + "\u{1b}]5522;type=wdata:mime=dGV4dC9wbGFpbg==;bmV3\u{7}"
+            + "\u{1b}]5522;type=wdata\u{7}"
+        try emit(kittyWrite, expecting: "\u{1b}]5522;type=write:status=EPERM:id=write\u{7}")
+        XCTAssertEqual(pasteboard.string(forType: .string), "legacy",
+                       "Denied Kitty write must preserve the clipboard")
     }
 
     private func waitUntil(_ condition: () -> Bool) -> Bool {

@@ -38,12 +38,20 @@ record the exact Ghostty commit because the branch name is not a stable pin.
 
 ## Recommended Ghostty build
 
+This checkout requires the clipboard API from Ghostty fork commit
+[`fe3daac297433c238b27e14f1ddb8daaa52a5834`](https://github.com/figelwump/ghostty/commit/fe3daac297433c238b27e14f1ddb8daaa52a5834),
+which merges upstream `c770410dbb57909ff4f6921a6497688a957f85db` and preserves
+the downstream changes above. Use Zig **0.16.0** for this revision. The embedded
+clipboard API now passes MIME requests and explicit byte lengths. Rebuild older
+local artifacts before compiling this Toastty checkout.
+
 Clone the maintained branch as a sibling of the Toastty checkout:
 
 ```bash
 git clone --branch toastty-downstream \
   https://github.com/figelwump/ghostty.git \
   ../ghostty
+git -C ../ghostty checkout fe3daac297433c238b27e14f1ddb8daaa52a5834
 ```
 
 Then, from that Ghostty checkout:
@@ -56,7 +64,10 @@ zig build \
   -Dsentry=false
 ```
 
-For local Toastty development, `-Dxcframework-target=native` is also acceptable if you only need the macOS slice. `universal` additionally builds the iOS slices.
+For local Toastty development, `-Dxcframework-target=native` builds the current
+Mac architecture. `universal` builds both macOS arm64 and x86_64. This Ghostty
+revision does not include iOS slices in `GhosttyKit`; Toastty's native iOS client
+does not embed this framework.
 
 Why `-Dsentry=false`:
 
@@ -186,6 +197,12 @@ platform defaults, Toastty routes the Ghostty selection clipboard through a
 Toastty-private pasteboard instead of the shared system clipboard. That preserves
 Ghostty's selection-paste behavior without overwriting the normal macOS clipboard;
 explicit copy actions still target the system clipboard.
+
+Toastty preserves its existing text paste and OSC 52 confirmation behavior.
+It does not have clipboard permission UI. With `clipboard-read=ask` or
+`clipboard-write=ask`, new Kitty clipboard requests that need approval are
+denied instead of being approved automatically. Ghostty still honors `allow`
+and `deny` settings; metadata-only type listings follow its normal policy.
 
 With a terminal focused, `Cmd+C` goes through Ghostty's configured key binding.
 The default binding copies a terminal selection; without one, Ghostty forwards
