@@ -15,13 +15,10 @@ struct ToasttyNotificationIntroduction: View {
             VStack(alignment: .leading, spacing: 16) {
                 introduction
                 ToasttyNotificationPreview()
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Alerts include the session title. Titles pass through Toastty’s notification service and Apple.")
-                    Text("Toastty checks delivery while the app is open. A test alert may appear if you leave during setup.")
-                }
-                .font(.system(size: disclosureSize))
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .fixedSize(horizontal: false, vertical: true)
+                Text("Alerts include the session title. Titles pass through Toastty’s notification service and Apple.")
+                    .font(.system(size: disclosureSize))
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
                 actions
             }
             .frame(maxWidth: .infinity, alignment: .leading)
