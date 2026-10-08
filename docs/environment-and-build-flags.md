@@ -84,6 +84,12 @@ The `ToasttyMobileApp` scheme starts the real pairing flow with an empty home sn
 | `TOASTTY_LAYOUT_PROFILE` | unset (canonical `default`) | Uses an explicit isolated workspace layout profile instead of the canonical `default` profile. Explicit profiles do not fall back to the canonical user layout. Useful for deterministic dev/test state or intentionally separate environments. |
 | `TOASTTY_TERMINAL_PROFILES_PATH` | unset | Overrides the terminal profile catalog path. Supports absolute paths and `~/`-prefixed paths. When set, Toastty reads profiles from that file instead of `<runtime-home>/terminal-profiles.toml` or `~/.toastty/terminal-profiles.toml`. For the generated local Release scheme, store the path under the manifest-facing `TUIST_TOASTTY_TERMINAL_PROFILES_PATH` key in `sv`; bootstrap maps it to this runtime variable while preserving worktree isolation for all other state. |
 
+### Remote Access validation
+
+| Flag | Default | Effect |
+|---|---|---|
+| `TOASTTY_TAILSCALE_CLI_PATH` | unset | Debug-only absolute path to a disposable Tailscale executable for isolated setup validation. Replaces all normal executable candidates. Release builds ignore this flag. Never point a fixture run at the shared host configuration. |
+
 ### Logging
 
 | Flag | Default | Effect |

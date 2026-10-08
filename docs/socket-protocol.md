@@ -687,14 +687,17 @@ Supported action IDs:
   - foreground navigation action: can change selected workspace, tab, focused
     panel, and active window
   - `args.windowID` is required when multiple windows exist
-  - first targets unread panels using the normal unread traversal order
-  - unread traversal still wraps within the current workspace before moving on
+  - first targets unread panels; within each priority group, navigation follows sidebar order downward from the current session row
+  - workspace order places each parent before its subspaces and follows the displayed subspace order, including pinned or frozen rows; session order uses the sidebar's stable creation order and any custom row order, including sessions in other tabs or collapsed subspaces
+  - when a sidebar has not rendered, subspaces use stored workspace order; hidden or newly added subspaces remain reachable after the recorded rows
+  - traversal visits rows below the current focus, then other windows in stored window order starting after the current window, then wraps to rows above the focus in the current window
+  - panels without session rows remain reachable in tab and layout order after the workspace's session rows; a focused plain terminal anchors at the workspace header when session rows exist, or at its layout position otherwise
   - a `ready` session only participates while unread; once visited it collapses back to `idle`
   - if no unread panel exists, it next falls back to managed-session panels whose live status is `needsApproval` or `error`
   - if no attention-required panel exists, it builds an active-session cycle anchored to the current focus
   - that active cycle first includes working panels ahead of the current focus, then later-flagged active panels that have not already appeared, then wrapped working panels, and finally the starting focused active panel when it still belongs to the cycle
   - repeated invocations continue through that same active cycle without repeating a target until the cycle wraps or the active set changes
-  - manual focus changes, window/workspace/layout changes, panel removals, active status-kind changes, later-flag changes, or unread/attention preemption reset the active cycle and rebuild it from the new focus
+  - manual focus changes, changes to sidebar order, window/workspace/layout changes, panel removals, active status-kind changes, later-flag changes, or unread/attention preemption reset the active cycle and rebuild it from the new focus
   - if no target exists, the selected sidebar row flashes instead of changing focus
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
@@ -1417,6 +1420,23 @@ Result:
 - `eventType`
 - `status: "accepted" | "noop"`
 - `stateVersion`
+
+### `session.claude_subagent_event`
+
+Internal event emitted by the managed Claude hook ingestor. Requires an active
+Claude `sessionID`; an optional `panelID` must match that session.
+
+- `phase`: `spawned`, `started`, `finished`, `tool_use`, `tool_completed`, or `permission`
+- `agentID`: non-empty stable Claude agent ID
+- Optional: `toolUseID`, `displayName`, `command`, `summary`, `detail`, `modelIdentifier`, `reasoningEffort`
+
+`spawned` registers a teammate from an explicit `teammate_spawned` response.
+`started` reopens only registered teammates; ordinary subagents keep their
+existing activity path. `finished` removes the specified child activity.
+Tool events keep known teammate activity separate from the main session's
+status. A child approval can temporarily replace that status; completion
+restores it only if no later main status event has superseded the approval.
+The result contains `eventType`, `status: "accepted" | "noop"`, and `stateVersion`.
 
 ### `session.cursor_hook_event`
 

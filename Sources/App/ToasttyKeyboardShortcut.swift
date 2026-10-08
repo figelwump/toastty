@@ -224,6 +224,13 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    /// Runs the focused subspace's Merge button in its current mode. Cmd+Shift+M
+    /// is Watch Running Command and Cmd+Option+M is the system's Minimize All.
+    static let mergeWorkspacePullRequest = ToasttyKeyboardShortcut(
+        "m",
+        modifiers: [.option, .shift]
+    )
+
     static let splitHorizontal = ToasttyKeyboardShortcut(
         "d",
         modifiers: [.command]

@@ -102,6 +102,51 @@ struct RemoteProtocolGoldenTests {
         #expect(conversations[1]["statusDetail"] as? String == "Approve the proposed command")
         #expect(conversations.dropFirst(2).allSatisfy { $0["statusDetail"] == nil })
     }
+
+    @Test func nativePairingQRPreservesHTTPSPortsWithinScannerSizeLimit() throws {
+        for port in [1, 443, 8443, 65535] {
+            let gatewayURL = try #require(URL(
+                string: "https://vishals-macbook-pro-2026.tail123456789abcdef.ts.net:\(port)"
+            ))
+            let payload = RemoteNativePairingQRPayload(
+                gatewayURL: gatewayURL,
+                offerID: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+                secret: String(repeating: "A", count: 43),
+                expiresAt: Self.timestamp.addingTimeInterval(120)
+            )
+
+            let encoded = try payload.encodedString()
+
+            #expect(encoded.utf8.count <= RemoteNativePairingQRPayload.maximumEncodedByteCount)
+            #expect(try RemoteNativePairingQRPayload(encodedString: encoded) == payload)
+        }
+    }
+
+    @Test func nativePairingQRRejectsOutOfRangeHTTPSPortsOnEncodeAndDecode() throws {
+        for port in [0, 65536] {
+            let payload = RemoteNativePairingQRPayload(
+                gatewayURL: try #require(URL(string: "https://mac.tail.ts.net:\(port)")),
+                offerID: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+                secret: String(repeating: "A", count: 43),
+                expiresAt: Self.timestamp.addingTimeInterval(120)
+            )
+            #expect(throws: RemoteNativePairingQRPayloadError.invalidPayload) {
+                try payload.encodedString()
+            }
+            let fields = [
+                "1", payload.gatewayURL.absoluteString, payload.offerID.uuidString.lowercased(),
+                payload.secret, String(payload.expiresAt.timeIntervalSince1970), "1.0",
+            ]
+            let encoded = RemoteNativePairingQRPayload.encodedPrefix
+                + (try JSONEncoder().encode(fields)).base64EncodedString()
+                    .replacingOccurrences(of: "+", with: "-")
+                    .replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: "=", with: "")
+            #expect(throws: RemoteNativePairingQRPayloadError.invalidPayload) {
+                try RemoteNativePairingQRPayload(encodedString: encoded)
+            }
+        }
+    }
 }
 
 private extension RemoteProtocolGoldenTests {

@@ -93,6 +93,7 @@ enum SidebarSessionPresentation {
         let count: Int
         let unreadCount: Int
         let hasWorking: Bool
+        var subspaceCount: Int = 0
     }
 
     struct HiddenSessionPillState: Equatable {
@@ -111,6 +112,8 @@ enum SidebarSessionPresentation {
         measuredSessionRowFramesByID: [SidebarSessionRowID: CGRect],
         unreadSessionRowIDs: Set<SidebarSessionRowID>,
         workingSessionRowIDs: Set<SidebarSessionRowID> = [],
+        subspaceRows: [SidebarSubspacePresentation.Row] = [],
+        measuredSubspaceRowFramesByID: [UUID: CGRect] = [:],
         viewportHeight: CGFloat,
         visibleTop: CGFloat = ToastyTheme.sidebarTopPadding,
         minimumVisibleFraction: CGFloat = 0.5,
@@ -130,18 +133,14 @@ enum SidebarSessionPresentation {
         let bottomThreshold = viewportHeight - epsilon
         guard bottomThreshold > topThreshold else { return .empty }
 
-        var hiddenAbove: [SidebarSessionRowID] = []
-        var hiddenBelow: [SidebarSessionRowID] = []
-
-        for rowID in orderedSessionRowIDs {
-            guard let frame = measuredSessionRowFramesByID[rowID],
+        func hiddenDirection(for frame: CGRect?) -> HiddenSessionDirection? {
+            guard let frame,
                   frame.minY.isFinite,
                   frame.maxY.isFinite,
                   frame.height.isFinite,
                   frame.height > 0 else {
-                continue
+                return nil
             }
-
             let visibleHeight = max(0, min(frame.maxY, bottomThreshold) - max(frame.minY, topThreshold))
             let viewportVisibleHeight = bottomThreshold - topThreshold
             let minimumVisibleHeight = min(frame.height * minimumVisibleFraction, viewportVisibleHeight)
@@ -150,29 +149,35 @@ enum SidebarSessionPresentation {
             // a row counted hidden until enough of that row is visible to identify it.
             if frame.maxY <= topThreshold
                 || (frame.minY < topThreshold && visibleHeight < minimumVisibleHeight) {
-                hiddenAbove.append(rowID)
+                return .above
             } else if frame.minY >= bottomThreshold
                 || (frame.maxY > bottomThreshold && visibleHeight < minimumVisibleHeight) {
-                hiddenBelow.append(rowID)
+                return .below
             }
+            return nil
         }
 
-        let abovePill = hiddenAbove.isEmpty
-            ? nil
-            : HiddenSessionPill(
-                direction: .above,
-                count: hiddenAbove.count,
-                unreadCount: hiddenAbove.filter { unreadSessionRowIDs.contains($0) }.count,
-                hasWorking: hiddenAbove.contains { workingSessionRowIDs.contains($0) }
+        func pill(for direction: HiddenSessionDirection) -> HiddenSessionPill? {
+            let sessions = orderedSessionRowIDs.filter {
+                hiddenDirection(for: measuredSessionRowFramesByID[$0]) == direction
+            }
+            let subspaces = subspaceRows.filter {
+                hiddenDirection(for: measuredSubspaceRowFramesByID[$0.id]) == direction
+            }
+            guard sessions.isEmpty == false || subspaces.isEmpty == false else { return nil }
+            return HiddenSessionPill(
+                direction: direction,
+                count: sessions.count + subspaces.count,
+                unreadCount: sessions.filter { unreadSessionRowIDs.contains($0) }.count
+                    + subspaces.filter { $0.status == .ready }.count,
+                hasWorking: sessions.contains { workingSessionRowIDs.contains($0) }
+                    || subspaces.contains { $0.status == .working },
+                subspaceCount: subspaces.count
             )
-        let belowPill = hiddenBelow.isEmpty
-            ? nil
-            : HiddenSessionPill(
-                direction: .below,
-                count: hiddenBelow.count,
-                unreadCount: hiddenBelow.filter { unreadSessionRowIDs.contains($0) }.count,
-                hasWorking: hiddenBelow.contains { workingSessionRowIDs.contains($0) }
-            )
+        }
+
+        let abovePill = pill(for: .above)
+        let belowPill = pill(for: .below)
 
         return HiddenSessionPillState(above: abovePill, below: belowPill)
     }
@@ -588,8 +593,15 @@ enum SidebarSessionPresentation {
     }
 
     static func hiddenSessionPillAccessibilityLabel(_ pill: HiddenSessionPill) -> String {
-        let sessionLabel = pill.count == 1 ? "session" : "sessions"
-        var label = "\(pill.count) \(sessionLabel) hidden \(pill.direction.accessibilityDirection)"
+        let sessionCount = pill.count - pill.subspaceCount
+        var rowLabels: [String] = []
+        if sessionCount > 0 {
+            rowLabels.append("\(sessionCount) \(sessionCount == 1 ? "session" : "sessions")")
+        }
+        if pill.subspaceCount > 0 {
+            rowLabels.append("\(pill.subspaceCount) \(pill.subspaceCount == 1 ? "subspace" : "subspaces")")
+        }
+        var label = "\(rowLabels.joined(separator: ", ")) hidden \(pill.direction.accessibilityDirection)"
         if pill.unreadCount > 0 {
             label += ", \(pill.unreadCount) unread"
         }

@@ -6,6 +6,55 @@ import Foundation
 import XCTest
 
 final class AutomationSocketServerUnreadNavigationTests: AutomationSocketServerWindowTargetingTestCase {
+    func testFocusNextActiveSocketActionFollowsReorderedUnreadSessionRows() async throws {
+        let fixture = makeSingleWindowUnreadFixture()
+        var initialState = fixture.state
+        let workspace = try XCTUnwrap(initialState.workspacesByID[fixture.workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+        let targetTab = try XCTUnwrap(workspace.tabsByID[fixture.targetTabID])
+        let otherPanelID = try XCTUnwrap(targetTab.layoutTree.allSlotInfos.first?.panelID)
+        initialState.workspacesByID[fixture.workspaceID]?.sidebarSessionPanelOrder = [
+            sourcePanelID, fixture.targetPanelID, otherPanelID,
+        ]
+        initialState.workspacesByID[fixture.workspaceID]?.tabsByID[fixture.targetTabID]?.unreadPanelIDs.insert(otherPanelID)
+
+        try await withAutomationHarness(state: initialState) { harness in
+            await MainActor.run {
+                for (index, panelID) in [sourcePanelID, otherPanelID, fixture.targetPanelID].enumerated() {
+                    let startedAt = Date(timeIntervalSince1970: 1_700_000_200 + Double(index))
+                    harness.sessionRuntimeStore.startSession(
+                        sessionID: panelID.uuidString,
+                        agent: .codex,
+                        panelID: panelID,
+                        windowID: fixture.windowID,
+                        workspaceID: fixture.workspaceID,
+                        cwd: "/repo",
+                        repoRoot: "/repo",
+                        at: startedAt
+                    )
+                    harness.sessionRuntimeStore.updateStatus(
+                        sessionID: panelID.uuidString,
+                        status: SessionStatus(kind: .working, summary: "Working", detail: "Socket navigation"),
+                        at: startedAt.addingTimeInterval(0.5)
+                    )
+                }
+            }
+
+            for panelID in [fixture.targetPanelID, otherPanelID] {
+                let response = try sendRequest(
+                    command: "automation.perform_action",
+                    payload: ["action": "workspace.focus-next-unread-or-active", "args": [:]],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                let state = await MainActor.run { harness.store.state }
+                let selectedWorkspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+                XCTAssertEqual(selectedWorkspace.focusedPanelID, panelID)
+                XCTAssertFalse(selectedWorkspace.unreadPanelIDs.contains(panelID))
+            }
+        }
+    }
+
     func testFocusNextUnreadActionUsesSoleWindowFallbackWhenSingleWindowExists() async throws {
         let fixture = makeSingleWindowUnreadFixture()
 

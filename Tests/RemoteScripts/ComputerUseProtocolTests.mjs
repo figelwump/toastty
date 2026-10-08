@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   isComputerUseServer,
+  isToasttyAppBundleID,
   shouldAutoAcceptMcpElicitation,
 } from "../../scripts/remote/computer-use-protocol.mjs";
 
@@ -22,17 +25,61 @@ function toasttyAccessRequest() {
   };
 }
 
+test("approves only the explicitly selected app identity", () => {
+  const expectedApp = "com.GiantThings.toastty.fixture.selected";
+  const request = toasttyAccessRequest();
+  assert.equal(shouldAutoAcceptMcpElicitation(request, expectedApp), false);
+  request._meta.tool_params.app = expectedApp;
+  assert.equal(shouldAutoAcceptMcpElicitation(request, expectedApp), true);
+  for (const otherApp of ["com.GiantThings.toastty.fixture.other", "com.apple.Terminal",
+    "com.GiantThings.toastty.fixture", `${expectedApp}.extra`, expectedApp.toLowerCase()]) {
+    request._meta.tool_params.app = otherApp;
+    assert.equal(shouldAutoAcceptMcpElicitation(request, expectedApp), false);
+  }
+  request._meta.tool_params.app = expectedApp;
+  for (const missingTarget of [undefined, null, "", 123]) {
+    assert.equal(shouldAutoAcceptMcpElicitation(request, missingTarget), false);
+  }
+  delete request._meta.tool_params.app;
+  assert.equal(shouldAutoAcceptMcpElicitation(request, expectedApp), false);
+});
+
+test("only Toastty bundle identities can be selected for unattended access", () => {
+  for (const app of ["com.GiantThings.toastty", "com.GiantThings.toastty.fixture.run-123"]) {
+    assert.equal(isToasttyAppBundleID(app), true);
+  }
+  for (const app of [null, undefined, "", "null", true, "com.apple.Terminal",
+    "com.GiantThings.toastty.", "com.GiantThings.toastty.*", " com.GiantThings.toastty"]) {
+    assert.equal(isToasttyAppBundleID(app), false);
+    const request = toasttyAccessRequest();
+    request._meta.tool_params.app = app;
+    assert.equal(shouldAutoAcceptMcpElicitation(request, app), false);
+  }
+});
+
+test("client rejects missing or invalid targets before connecting", () => {
+  const client = fileURLToPath(new URL("../../scripts/remote/codex-app-server-client.mjs", import.meta.url));
+  const args = [client, "--ws-url", "ws://127.0.0.1:1", "--cwd", "/unused",
+    "--prompt-file", "/unused/prompt", "--transcript-path", "/unused/transcript",
+    "--summary-path", "/unused/summary"];
+  for (const app of [undefined, "null", "com.apple.Terminal", "com.GiantThings.toastty.*"]) {
+    const result = spawnSync(process.execPath, [...args, ...(app ? ["--app-bundle-id", app] : [])], { encoding: "utf8" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--app-bundle-id.*(?:required|Toastty bundle identifier)/);
+  }
+});
+
 test("recognizes the current Toastty app-access request without changing it", () => {
   const request = toasttyAccessRequest();
   const before = structuredClone(request);
-  assert.equal(shouldAutoAcceptMcpElicitation(request), true);
+  assert.equal(shouldAutoAcceptMcpElicitation(request, "com.GiantThings.toastty"), true);
   assert.deepEqual(request, before);
   request.message = "Localized app access prompt";
-  assert.equal(shouldAutoAcceptMcpElicitation(request), true);
+  assert.equal(shouldAutoAcceptMcpElicitation(request, "com.GiantThings.toastty"), true);
   for (const tool of ["get_app_state", "get_app_screenshot", "get_app_state_and_screenshot", "click", "drag", "press_key",
     "scroll", "paste", "type_text", "select_text", "set_value", "perform_secondary_action"]) {
     request._meta.tool_name = tool;
-    assert.equal(shouldAutoAcceptMcpElicitation(request), true, tool);
+    assert.equal(shouldAutoAcceptMcpElicitation(request, "com.GiantThings.toastty"), true, tool);
   }
 });
 
@@ -61,7 +108,7 @@ test("declines foreign, incomplete, or broader current-runtime requests", () => 
   for (const mutate of mutations) {
     const request = toasttyAccessRequest();
     mutate(request);
-    assert.equal(shouldAutoAcceptMcpElicitation(request), false, JSON.stringify(request));
+    assert.equal(shouldAutoAcceptMcpElicitation(request, "com.GiantThings.toastty"), false, JSON.stringify(request));
   }
   assert.equal(shouldAutoAcceptMcpElicitation(null), false);
 });
@@ -71,7 +118,7 @@ test("retains recognized legacy Computer Use approval requests", () => {
     serverName: "computer-use", mode: "form",
     message: 'Allow Codex to use "Toastty"?',
     requestedSchema: { type: "object", properties: {} },
-  }), true);
+  }, "com.GiantThings.toastty.fixture.selected"), true);
   assert.equal(shouldAutoAcceptMcpElicitation({
     serverName: "computer-use", mode: "form",
     _meta: { codex_approval_kind: "mcp_tool_call" },

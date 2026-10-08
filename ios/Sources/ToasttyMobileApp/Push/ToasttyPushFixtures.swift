@@ -15,7 +15,8 @@ enum ToasttyPushFixtures {
         let config = ToasttyPushConfiguration(relayURL: URL(string: "https://fixture-push.example.com")!,
             relayID: "toastty-push-dev-v1", apnsEnvironment: .development)
         var state = MobilePushState()
-        state.desired = mode != .intro && mode != .turningOff
+        // Disabled alert settings can precede push opt-in on a badge-only install.
+        state.desired = mode != .intro && mode != .turningOff && mode != .denied
         state.introHandled = mode != .intro
         let registration = MobilePushRegistration(pairingID: credential.device.id, gatewayURL: credential.gatewayURL,
             relayURL: config.relayURL, relayID: config.relayID, deviceToken: String(repeating: "ab", count: 32),

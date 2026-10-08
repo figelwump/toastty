@@ -41,7 +41,7 @@ final class ToasttyMobileNotificationsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["toastty-mobile-notifications-retry"].waitForExistence(timeout: 5))
     }
 
-    func testDeniedPermissionShowsAnOffBlockedToggleAndLinksToIOSSettings() {
+    func testDisabledAlertsBeforeOptInShowAnOffBlockedToggleAndLinkToIOSSettings() {
         let app = launch(mode: "denied")
         XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].waitForExistence(timeout: 8))
         app.buttons["toastty-mobile-settings-button"].tap()

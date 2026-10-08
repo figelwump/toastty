@@ -78,6 +78,7 @@ enum CLICommand: Equatable {
         pendingBackgroundTaskCount: Int,
         preserveUnlistedActivities: Bool
     )
+    case sessionClaudeSubagentEvent(sessionID: String, panelID: UUID?, event: ClaudeSubagentEvent)
     case sessionCodexHookEvent(sessionID: String, panelID: UUID?, event: CodexHookEvent)
     case sessionCodexNotifyCompletion(sessionID: String, panelID: UUID?, completion: CodexNotifyCompletion)
     case sessionCursorHookEvent(sessionID: String, panelID: UUID?, event: CursorHookEvent)
@@ -116,7 +117,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionCursorHookEvent, .sessionGrokHookEvent, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderSessionName, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionClaudeSubagentEvent, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionCursorHookEvent, .sessionGrokHookEvent, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionProviderSessionName, .sessionProviderConversationReset, .sessionProviderConversationObservation, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -311,6 +312,22 @@ enum CLICommand: Equatable {
                     "pendingCount": .int(max(0, pendingBackgroundTaskCount)),
                     "preserveUnlistedActivities": .bool(preserveUnlistedActivities),
                 ]
+            )
+
+        case .sessionClaudeSubagentEvent(let sessionID, let panelID, let event):
+            var payload: [String: AutomationJSONValue] = [
+                "phase": .string(event.phase.rawValue),
+                "agentID": .string(event.agentID),
+            ]
+            if let toolUseID = event.toolUseID { payload["toolUseID"] = .string(toolUseID) }
+            if let displayName = event.displayName { payload["displayName"] = .string(displayName) }
+            if let command = event.command { payload["command"] = .string(command) }
+            if let summary = event.summary { payload["summary"] = .string(summary) }
+            if let detail = event.detail { payload["detail"] = .string(detail) }
+            appendExecutionProfile(event.executionProfile, to: &payload)
+            return AutomationEventEnvelope(
+                eventType: "session.claude_subagent_event", sessionID: sessionID,
+                panelID: panelID?.uuidString, requestID: requestID, payload: payload
             )
 
         case .sessionCodexHookEvent(let sessionID, let panelID, let event):
@@ -613,6 +630,8 @@ enum CLICommand: Equatable {
             return "\(phase.rawValue)ed background activity \(activityID) for \(sessionID)"
         case .sessionBackgroundActivitySync(let sessionID, _, _, let entries, let pendingBackgroundTaskCount, _):
             return "synced \(entries.count) background activities and \(pendingBackgroundTaskCount) pending tasks for \(sessionID)"
+        case .sessionClaudeSubagentEvent(let sessionID, _, let event):
+            return "processed Claude child \(event.phase.rawValue) for \(sessionID)"
         case .sessionCodexHookEvent(let sessionID, _, let event):
             return "processed Codex hook \(event.hookEventName) for \(sessionID)"
         case .sessionCodexNotifyCompletion(let sessionID, _, _):

@@ -6,6 +6,7 @@ struct ToasttyMobileRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sessionController: AppSessionController
+    @State private var appIconBadgeController: AppIconBadgeController?
     @State private var navigationPath: [ToasttyMobileRoute] = []
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
     @State private var presentedSheet: ToasttyMobileSheet?
@@ -34,6 +35,9 @@ struct ToasttyMobileRootView: View {
     init(configuration: ToasttyMobileAppConfiguration, pushBridge: ToasttyPushNotificationBridge? = nil) {
         _sessionController = State(initialValue: configuration.makeSessionController(pushBridge: pushBridge))
         self.pushBridge = pushBridge
+        _appIconBadgeController = State(initialValue: configuration.enablesSystemAppIconBadge
+            ? AppIconBadgeController(client: SystemAppIconBadgeClient())
+            : nil)
         _fixtureSendItems = State(initialValue: Self.initialFixtureSendItems(
             for: configuration.fixtureScenario
         ))
@@ -109,6 +113,9 @@ struct ToasttyMobileRootView: View {
             }
         }
         .environment(\.toasttyPreviewService, sessionController.previewService)
+        .background {
+            AppIconBadgeSync(sessionController: sessionController, controller: appIconBadgeController)
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: loadingPhase == nil)
         .task {
             if let pushBridge { sessionController.pushController?.attachBridge(pushBridge) }

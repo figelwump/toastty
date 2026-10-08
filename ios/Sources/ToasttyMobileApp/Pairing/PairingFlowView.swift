@@ -184,12 +184,12 @@ private struct PairingManualEntryView: View {
         PairingScrollContainer {
             PairingBrandHeader(
                 title: "Enter pairing details",
-                subtitle: "Use the complete Tailscale Serve hostname and fallback code shown by Toastty on your Mac."
+                subtitle: "Use the complete Tailscale Serve address and fallback code shown by Toastty on your Mac. Include the port if one is shown."
             )
 
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("TAILSCALE HOSTNAME")
+                    Text("TAILSCALE ADDRESS")
                         .font(.caption2.monospaced())
                         .tracking(1.4)
                         .foregroundStyle(ToasttyDesignTokens.mutedText)
@@ -199,7 +199,7 @@ private struct PairingManualEntryView: View {
                         .keyboardType(.URL)
                         .textContentType(.URL)
                         .toasttyPairingField()
-                        .accessibilityLabel("Tailscale hostname")
+                        .accessibilityLabel("Tailscale gateway address")
                         .accessibilityIdentifier("toastty-mobile-pairing-hostname")
                 }
 
@@ -249,11 +249,11 @@ private struct PairingConfirmationView: View {
         PairingScrollContainer {
             PairingBrandHeader(
                 title: "Confirm your Mac",
-                subtitle: "Compare this complete hostname with the one shown in Toastty before connecting."
+                subtitle: "Compare this complete gateway address, including any port, with the one shown in Toastty before connecting."
             )
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("AUTHORITATIVE HOSTNAME")
+                Text("GATEWAY ADDRESS")
                     .font(.caption2.monospaced())
                     .tracking(1.4)
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
@@ -262,7 +262,7 @@ private struct PairingConfirmationView: View {
                     .foregroundStyle(ToasttyDesignTokens.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
-                    .accessibilityLabel("Authoritative hostname, \(confirmation.hostname)")
+                    .accessibilityLabel("Gateway address, \(confirmation.hostname)")
                     .accessibilityIdentifier("toastty-mobile-pairing-confirm-hostname")
             }
             .frame(maxWidth: .infinity, alignment: .leading)

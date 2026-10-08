@@ -1,11 +1,44 @@
 import Foundation
 import RemoteProtocol
+import UserNotifications
 import XCTest
 @testable import ToasttyMobileApp
 @testable import ToasttyMobileDomain
 
 @MainActor
 final class ToasttyPushControllerTests: XCTestCase {
+    // Badge-only authorization must not count as visible push delivery. Quiet
+    // delivery remains usable when Notification Center or Lock Screen is on.
+    func testNotificationPermissionRequiresAnEnabledDeliverySurface() {
+        for status: UNAuthorizationStatus in [.authorized, .provisional, .ephemeral] {
+            XCTAssertEqual(ToasttySystemPushNotificationClient.permission(
+                authorizationStatus: status, alert: .disabled, lockScreen: .disabled,
+                notificationCenter: .disabled
+            ), .denied)
+            XCTAssertEqual(ToasttySystemPushNotificationClient.permission(
+                authorizationStatus: status, alert: .notSupported, lockScreen: .notSupported,
+                notificationCenter: .notSupported
+            ), .denied)
+            for settings: [UNNotificationSetting] in [
+                [.enabled, .disabled, .disabled], [.disabled, .enabled, .disabled],
+                [.disabled, .disabled, .enabled],
+            ] {
+                XCTAssertEqual(ToasttySystemPushNotificationClient.permission(
+                    authorizationStatus: status, alert: settings[0], lockScreen: settings[1],
+                    notificationCenter: settings[2]
+                ), .allowed)
+            }
+        }
+        for (status, expected): (UNAuthorizationStatus, ToasttyNotificationPermission) in [
+            (.notDetermined, .undetermined), (.denied, .denied),
+        ] {
+            XCTAssertEqual(ToasttySystemPushNotificationClient.permission(
+                authorizationStatus: status, alert: .enabled, lockScreen: .enabled,
+                notificationCenter: .enabled
+            ), expected)
+        }
+    }
+
     func testAllowPersistsIntentAndStartsProofWithoutBlockingHomeWithASuccessScreen() async throws {
         let h = try await Harness.make()
         await h.controller.reconcile()

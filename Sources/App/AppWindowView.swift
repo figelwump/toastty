@@ -35,6 +35,18 @@ struct AppWindowView: View {
         store.window(id: windowID)?.sidebarVisible ?? true
     }
 
+    private func requestWorkspaceMerge(workspaceID: UUID, mode: WorkspaceMergeMode) {
+        workspaceMergeController.requestMerge(workspaceID: workspaceID, mode: mode)
+    }
+
+    private func requestWorkspaceClose(workspaceID: UUID) {
+        workspaceMergeController.requestClose(workspaceID: workspaceID)
+    }
+
+    private var workspaceMergeController: WorkspaceMergeController {
+        WorkspaceMergeController.live(store: store, sessionRuntimeStore: sessionRuntimeStore)
+    }
+
     private var sidebarToggleHasUnreadBadge: Bool {
         Self.sidebarToggleShowsUnreadBadge(
             sidebarVisible: sidebarVisible,
@@ -52,7 +64,9 @@ struct AppWindowView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         sessionRuntimeStore: sessionRuntimeStore,
                         annotationStyleStore: annotationStyleStore,
-                        terminalRuntimeContext: terminalRuntimeContext
+                        terminalRuntimeContext: terminalRuntimeContext,
+                        requestWorkspaceMerge: requestWorkspaceMerge,
+                        requestWorkspaceClose: requestWorkspaceClose
                     )
                     .frame(width: effectiveSidebarWidth)
 
@@ -80,7 +94,9 @@ struct AppWindowView: View {
                     toggleCommandPalette: toggleCommandPalette,
                     presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
-                    sidebarVisible: sidebarVisible
+                    sidebarVisible: sidebarVisible,
+                    requestWorkspaceMerge: requestWorkspaceMerge,
+                    requestWorkspaceClose: requestWorkspaceClose
                 )
             }
             .animation(.easeInOut(duration: 0.15), value: sidebarVisible)

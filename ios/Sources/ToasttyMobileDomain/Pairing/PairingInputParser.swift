@@ -35,7 +35,7 @@ public enum PairingInputError: Error, Equatable, Sendable {
 
 /// Parses pairing material without performing network activity. The returned
 /// candidate is intentionally a separate value so UI can confirm the canonical
-/// hostname before handing it to `NativePairingClient`.
+/// gateway address before handing it to `NativePairingClient`.
 public struct PairingInputParser: Sendable {
     public init() {}
 
@@ -98,7 +98,7 @@ public struct PairingInputParser: Sendable {
               let rawHost = components.host,
               components.user == nil,
               components.password == nil,
-              components.port == nil,
+              components.port.map({ (1...65535).contains($0) }) ?? true,
               components.query == nil,
               components.fragment == nil,
               components.path.isEmpty || components.path == "/" else {
@@ -106,8 +106,14 @@ public struct PairingInputParser: Sendable {
         }
 
         let host = rawHost.lowercased()
-        guard Self.isCanonicalTailscaleHostname(host),
-              let url = URL(string: "https://\(host)") else {
+        guard Self.isCanonicalTailscaleHostname(host) else {
+            throw PairingInputError.invalidGateway
+        }
+        var canonicalComponents = URLComponents()
+        canonicalComponents.scheme = "https"
+        canonicalComponents.host = host
+        canonicalComponents.port = components.port == 443 ? nil : components.port
+        guard let url = canonicalComponents.url else {
             throw PairingInputError.invalidGateway
         }
         return url

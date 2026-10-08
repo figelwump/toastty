@@ -76,15 +76,25 @@ final class ToasttyPushNotificationBridge {
 @MainActor
 final class ToasttySystemPushNotificationClient: ToasttyPushNotificationClient {
     func permission() async -> ToasttyNotificationPermission {
-        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
-        case .authorized, .provisional, .ephemeral: .allowed
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        return Self.permission(authorizationStatus: settings.authorizationStatus,
+                              alert: settings.alertSetting, lockScreen: settings.lockScreenSetting,
+                              notificationCenter: settings.notificationCenterSetting)
+    }
+    static func permission(authorizationStatus: UNAuthorizationStatus, alert: UNNotificationSetting,
+                           lockScreen: UNNotificationSetting, notificationCenter: UNNotificationSetting)
+        -> ToasttyNotificationPermission {
+        switch authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            [alert, lockScreen, notificationCenter].contains(.enabled) ? .allowed : .denied
         case .notDetermined: .undetermined
         case .denied: .denied
         @unknown default: .denied
         }
     }
     func requestPermission() async throws -> Bool {
-        try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        return await permission() == .allowed
     }
     func register() { UIApplication.shared.registerForRemoteNotifications() }
     func deliveredPayloads() async -> [RemotePushPayload] {

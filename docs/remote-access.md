@@ -9,26 +9,92 @@ Serve provides the tailnet HTTPS address; Toastty itself listens only on
 1. Install Tailscale on the Mac and phone, sign both into the same tailnet, and
    confirm they can reach each other.
 2. In Toastty, open **Toastty > Remote Access…**, or use the command palette's
-   **Open Remote Access** action, and turn on **Enable Remote Access**. The
-   default local address is `http://127.0.0.1:42871`.
-3. Configure Tailscale Serve to proxy an HTTPS tailnet URL to that loopback
-   address. With current Tailscale clients, this is typically:
-
-   ```bash
-   tailscale serve --bg http://127.0.0.1:42871
-   ```
-
-   Follow the URL printed by Tailscale; your tailnet policy and HTTPS settings
-   may require an administrator. `tailscale serve status` shows the active
-   mapping.
-4. Enter the exact HTTPS origin in Toastty's **Tailnet origin** field, without
-   a trailing path—for example `https://your-mac.example-tailnet.ts.net`.
-   Native pairing accepts only a canonical HTTPS MagicDNS hostname ending in
-   `.ts.net`, with no path, query, user information, or custom port.
+   **Open Remote Access** action, and turn on **Enable Remote Access**. Toastty
+   starts its local gateway, then sets up private Tailscale Serve HTTPS access
+   to it. The default local address is `http://127.0.0.1:42871`.
+3. If Toastty shows **Open Tailscale Setup**, open that page and complete the
+   HTTPS approval steps. Your tailnet administrator may need to approve them.
+   Return to Toastty and choose **Retry Setup**. Toastty does not wait for
+   browser approval or retry a configuration change in the background.
+4. Wait for **Tailscale Serve is configured**. Toastty fills an empty **Tailnet
+   origin** field with this Mac's address. It does not replace a different
+   saved address. If that address is stale, choose **Detect** or edit it, then
+   choose **Retry Setup**. Native pairing accepts only an HTTPS MagicDNS
+   hostname ending in `.ts.net`, with an optional HTTPS port and no path,
+   query, or user information. For example,
+   `https://your-mac.example-tailnet.ts.net:8443`.
 5. Choose **Show Pairing QR**, then scan it from Toastty Mobile. If scanning is
    unavailable, enter the fallback code shown beside the QR. Both proofs belong
    to the same single-use offer, expire after two minutes, and are invalidated
    together when either succeeds or you cancel or reissue the offer.
+
+The configured status verifies the private HTTPS mapping on this Mac. The
+phone checks the real HTTPS connection during pairing. Tailnet ACLs, DNS,
+certificate setup, or the phone's Tailscale connection can still prevent
+access.
+
+Toastty reuses a correct existing mapping, including a manual mapping to
+`localhost`. It preserves unrelated paths on that mapping. It does not replace
+another service or enable Funnel. For a new setup with no saved origin, it
+uses HTTPS port 443 when free. If another service occupies 443, it tries ports
+8443 through 8447 in order. It reuses a matching private mapping before creating
+another one, including a mapping left by an interrupted setup. If all candidates
+are occupied, setup stops without replacing them.
+
+The saved origin fixes the HTTPS port for later setup, app restart, and
+turning Remote Access off and on. A custom port does not move back to 443 when
+443 becomes free. A conflicting saved 443 origin is never silently rewritten.
+For an unpaired Mac with an old detected address, clear **Tailnet origin** and
+choose **Retry Setup** to select an available port. Do not choose **Detect**
+before retrying. If a device is already paired, restore its existing mapping.
+**Detect** preserves the current port when it finds the same Mac.
+
+Custom-port pairing requires the updated Toastty Mobile TestFlight client.
+Older clients accept only the HTTPS address without an explicit port. Existing
+no-port QR codes and saved credentials keep working without re-pairing. The
+updated client preserves the selected port in pairing, requests, and reconnects.
+Your tailnet policy must also allow the selected port.
+
+Avoid editing Serve configuration from another app or terminal while Toastty
+is setting it up. Toastty checks the authenticated node before and after setup.
+The Tailscale command cannot atomically prevent concurrent profile switches or
+external configuration changes.
+
+If the local port is already in use, Toastty identifies that port and stops before
+running Serve setup. Turn off Remote Access in the other Toastty instance, or
+quit the app using the port, then enable Remote Access here. The screen reports
+missing Serve configuration, setup failure, and setup timeout separately. Use
+**Retry Setup** after resolving the reported Tailscale issue.
+
+Setup blocks pairing if Funnel exposes the selected HTTPS port or forwards
+public traffic to Toastty's local gateway. An unrelated public service occupies
+its port but does not prevent a private fallback mapping. Resolve any Funnel
+configuration that exposes Toastty before retrying.
+
+When Toastty restores enabled Remote Access at app startup, it starts only the
+local gateway. Opening settings can verify an existing mapping without changing
+it. **Enable Remote Access**, **Set Up Tailscale**, and **Retry Setup** are the
+actions that can configure Tailscale.
+
+### Manual setup and recovery
+
+If Toastty cannot find or inspect Tailscale, a working manual setup can still
+pair a phone. The status says that Tailscale Serve is not verified. Configure
+the mapping in a terminal and enter its exact HTTPS origin in Toastty:
+
+```bash
+tailscale serve status
+tailscale serve --bg --https=443 http://127.0.0.1:42871
+tailscale serve status
+```
+
+The status command reads your Mac's existing Tailscale configuration. The
+`--bg` command changes it. Inspect the current mapping first and do not replace
+another service. If Tailscale prints an HTTPS approval URL, complete its steps
+before trying again. For a custom mapping, use its port in `--https` and in the
+HTTPS origin, such as `https://your-mac.example-tailnet.ts.net:8443`. Toastty
+hides pairing while setup is running or when it
+finds a missing mapping, a different target or origin, or Funnel access.
 
 The QR is a non-HTTP payload and contains a short-lived secret, not the
 long-lived device credential. Avoid screenshots or copying the fallback code
@@ -59,6 +125,10 @@ Notification-enabled builds offer session alerts after the first connection to a
 compatible Mac. Continue opens Apple's permission prompt. After Allow, Toastty
 returns to Home and finishes setup automatically. Not now and Don't Allow are
 remembered. You can change the choice in Settings.
+
+Badge permission alone does not enable session alerts. If all alert delivery
+locations are off, Toastty links to iOS Settings. Delivery to Notification Center
+or the Lock Screen remains supported when banners or sound are off.
 
 Alerts include the session title and Ready or Needs approval. The title passes
 through Toastty's notification service and Apple. There is no title-hiding option.
@@ -150,6 +220,21 @@ edge, it acknowledges that boundary to the Mac. The Mac clears the panel's
 unread state and the remote presentation returns to **Idle**, including for a
 completed session that has already stopped. Reading the same completion on the
 Mac has the same effect on the phone.
+
+The iOS app icon badge counts sessions with an unread completion, a pending
+approval, or an error. Each session counts once. Quiet unread sessions in a
+subspace marked done do not count, matching the conversation screen's **Next**
+action. Reading a completion or resolving an approval or error updates the
+badge when the Mac sends the new state. Opening the app alone does not clear it.
+Reading an error does not dismiss it; it counts until the session leaves its
+error state or is removed on the Mac.
+
+Toastty asks for badge permission when attention first appears while the app is
+active. It requests badges only. You can change this permission in iOS Settings.
+The badge keeps its last count during a connection loss or while the app is
+suspended. This version has no push delivery, so new activity cannot update the
+badge until the app reconnects. Unpairing, losing access, or a pairing that
+needs repair because it is corrupt or incompatible clears the badge.
 
 Remote replies are enabled by default for active sessions. For every supported
 provider, Toastty requires an exact match between the active managed session,
@@ -282,7 +367,20 @@ checkbox. An older phone ignores them and keeps its flat list.
 
 Tap **+** on the Home screen or on a workspace screen to start a new agent
 session. Choose the workspace, the agent, optionally a model and an effort
-level, and write the first message. A first message is required.
+level, and write the first message or attach photos or files. Use **Attach** in
+the first-message field to choose **Photo Library**, **Take Photo**, or
+**Choose File**. Review or remove the selected files, then tap **Start**.
+Message text is optional when files are attached. The same file types and
+limits described in [Photos and files from iOS](#photos-and-files-from-ios) apply.
+Selection alone does not upload anything.
+
+The Mac saves private copies and includes their local paths in the agent's
+first message. Files stay in the form after a refused or unanswered start,
+including when you change workspaces. **Cancel** discards this unsent draft.
+The draft is held in memory and is lost if the sheet closes or the app exits.
+The first message, including the Mac's saved file paths, must fit within 64 KiB.
+If a long message is refused, shorten it and try again. Accepted or uncertain
+starts keep the same seven-day file retention and storage quota as replies.
 
 The Mac opens a new tab in that workspace with a plain terminal, starts the
 agent there with your message, and leaves the tab you are looking at and your
@@ -318,12 +416,17 @@ notice, and you open the session from the list when it arrives.
 - **Retries.** If the phone does not get an answer, **Start** sends the same
   request again, and the Mac returns the session it already started instead of
   starting another. The Mac remembers a started request for 10 minutes and
-  until Toastty quits. Changing the workspace, message, agent, model, or
+  until Toastty quits. Changing the workspace, message, attachments, agent, model, or
   effort makes a new request. You cannot cancel the sheet while the Mac is
   starting a session.
 
 Starting needs updates on both sides. The Mac advertises the `session_start`
 capability for `POST /api/session.start.options` and `POST /api/session.start`.
+Start options also report `supportsAttachments`. When it is true, the phone
+uses the native-only `POST /api/session.start-with-attachments` route. Older
+Macs still accept text-only starts and show an update hint for attachments.
+The upload requires send access, the **Start sessions** permission, and a
+`Content-Length` header. The encoded request is limited to 12 MiB.
 An older Mac does not, so the phone hides **+**. If you turn **Start sessions**
 off and then run an older Toastty build on the Mac, that build does not know
 the switch: it rewrites the device record without it, and the switch is on
@@ -455,7 +558,8 @@ support conversations; update Toastty on the Mac to enable previews.
   recorded in the audit log with the device that made it.
 - Starting a session needs a native paired device with send access and the
   **Start sessions** switch on. The device chooses only an existing workspace,
-  a configured agent profile, a model, an effort level, and the first message.
+  a configured agent profile, a model, an effort level, and the first message
+  or attached files. The Mac chooses the saved file paths.
   The Mac checks the permission again immediately before it sends the command
   to the terminal. Accepted and refused starts are recorded in the audit log
   with the device, without the message text.
@@ -474,12 +578,14 @@ revoke that device from the Mac. Revocation is persisted before Toastty closes
 every active stream for that device; revoke-all covers browser and native
 devices. Disabling Remote Access closes the listener and all active
 subscriptions and cancels a native offer, but retains paired-device credentials
-for the next time you enable it.
-When you no longer need the tailnet URL, remove only the default
-HTTPS mapping created above so other Serve configuration remains intact:
+for the next time you enable it. The Tailscale Serve mapping remains configured;
+it cannot reach Toastty while the local gateway is stopped.
+When you no longer need the tailnet URL, remove only its root HTTPS mapping
+on your Mac so other Serve paths remain intact. Replace `443` with the port
+in your saved Tailnet origin when it has a custom port:
 
 ```bash
-tailscale serve --https=443 off
+tailscale serve --https=443 --set-path=/ off
 ```
 
 See [Toastty Privacy and Local Data](privacy-and-local-data.md) for the local

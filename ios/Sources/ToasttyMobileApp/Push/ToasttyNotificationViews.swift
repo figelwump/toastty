@@ -71,7 +71,7 @@ struct ToasttyNotificationSettingsSection: View {
                 .font(.footnote)
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
                 .accessibilityIdentifier("toastty-mobile-notifications-status")
-            if controller.presentation == .permissionDenied {
+            if controller.permission == .denied {
                 Button("Open iOS Settings") {
                     if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
                 }
@@ -89,7 +89,8 @@ struct ToasttyNotificationSettingsSection: View {
     }
 
     private var status: String {
-        switch controller.presentation {
+        if controller.permission == .denied { return "Alerts are off in iOS Settings." }
+        return switch controller.presentation {
         case .unavailable: "Notifications are unavailable in this app build."
         case .off: "Off"
         case .turningOff: "Off on this iPhone. Waiting to stop alerts at the notification service."

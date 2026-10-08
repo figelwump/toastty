@@ -3,7 +3,7 @@ import SwiftUI
 import ToasttyMobileDomain
 
 /// The "New session" form: the workspace, an agent, an optional model and
-/// effort, and the first message. The model owns every decision; this view
+/// effort, and the first message with any attachments. The model owns every decision; this view
 /// only draws it and forwards edits.
 struct ToasttyNewSessionSheet: View {
     let model: ToasttyNewSessionModel
@@ -27,7 +27,10 @@ struct ToasttyNewSessionSheet: View {
                         // Closing while the Mac is starting the session
                         // would lose the answer, and a later attempt could
                         // start a second one.
-                        Button("Cancel") { dismiss() }
+                        Button("Cancel") {
+                            model.discardDraft()
+                            dismiss()
+                        }
                             .disabled(model.phase == .starting)
                             .accessibilityIdentifier("toastty-mobile-new-session-cancel")
                     }
@@ -44,9 +47,9 @@ struct ToasttyNewSessionSheet: View {
         }
         .tint(ToasttyDesignTokens.amber)
         .presentationDragIndicator(.visible)
-        // A swipe would discard the typed message as Cancel does, so only
+        // A swipe would discard the draft as Cancel does, so only
         // the buttons close the sheet once there is something to lose.
-        .interactiveDismissDisabled(model.message.isEmpty == false || model.phase == .starting)
+        .interactiveDismissDisabled(model.preventsInteractiveDismissal)
         .accessibilityIdentifier("toastty-mobile-new-session-sheet")
         .task { await model.loadOptions() }
         .onChange(of: model.phase) { _, phase in
@@ -103,6 +106,8 @@ struct ToasttyNewSessionSheet: View {
                     note(error, tone: .error, identifier: "toastty-mobile-new-session-error")
                 }
                 workspaceField
+                    .disabled(model.isLoadingAttachments)
+                    .opacity(model.isLoadingAttachments ? 0.45 : 1)
                 Group {
                     agentPicker
                     ForEach(model.unavailableAgentNotes, id: \.self) { reason in
@@ -118,6 +123,14 @@ struct ToasttyNewSessionSheet: View {
                 // These still show the last workspace's options.
                 .disabled(model.isLoadingWorkspace)
                 .opacity(model.isLoadingWorkspace ? 0.45 : 1)
+                if ToasttyAttachmentTray.isVisible(
+                    attachments: model.attachments,
+                    supportsAttachments: model.supportsAttachments,
+                    allowsInput: model.allowsAttachmentInput,
+                    isLoading: model.isLoadingAttachments
+                ) {
+                    attachmentTray(allowsInput: model.allowsAttachmentInput)
+                }
                 messageEditor
             }
             .padding(16)
@@ -263,23 +276,33 @@ struct ToasttyNewSessionSheet: View {
     }
 
     private var messageEditor: some View {
-        ZStack(alignment: .topLeading) {
-            if model.message.isEmpty {
-                Text(model.messagePlaceholder)
+        HStack(alignment: .bottom, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                if model.message.isEmpty {
+                    Text(model.messagePlaceholder)
+                        .font(.body)
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 8)
+                        .accessibilityHidden(true)
+                }
+                TextEditor(text: messageBinding)
                     .font(.body)
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 8)
-                    .accessibilityHidden(true)
+                    .foregroundStyle(ToasttyDesignTokens.primaryText)
+                    .scrollContentBackground(.hidden)
+                    .focused($messageIsFocused)
+                    .frame(minHeight: 140)
+                    .accessibilityLabel("First message")
+                    .accessibilityHint(model.messagePlaceholder)
+                    .accessibilityIdentifier("toastty-mobile-new-session-message")
             }
-            TextEditor(text: messageBinding)
-                .font(.body)
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
-                .scrollContentBackground(.hidden)
-                .focused($messageIsFocused)
-                .frame(minHeight: 140)
-                .accessibilityLabel("First message")
-                .accessibilityIdentifier("toastty-mobile-new-session-message")
+            ToasttyAttachmentPicker(
+                attachments: model.attachments,
+                supportsAttachments: model.supportsAttachments,
+                allowsInput: model.allowsAttachmentInput,
+                isLoading: attachmentLoadingBinding,
+                addAttachments: model.addAttachments
+            )
         }
         .padding(8)
         .background(ToasttyDesignTokens.raisedSurface)
@@ -288,6 +311,16 @@ struct ToasttyNewSessionSheet: View {
             RoundedRectangle(cornerRadius: ToasttyDesignTokens.controlCornerRadius, style: .continuous)
                 .stroke(messageIsFocused ? ToasttyDesignTokens.amber.opacity(0.6) : ToasttyDesignTokens.border, lineWidth: 1)
         }
+    }
+
+    private func attachmentTray(allowsInput: Bool) -> some View {
+        ToasttyAttachmentTray(
+            attachments: model.attachments,
+            supportsAttachments: model.supportsAttachments,
+            allowsInput: allowsInput,
+            isLoading: model.isLoadingAttachments,
+            removeAttachment: model.removeAttachment
+        )
     }
 
     // MARK: - Starting
@@ -314,17 +347,22 @@ struct ToasttyNewSessionSheet: View {
                             .background(ToasttyDesignTokens.chipSurface, in: Capsule())
                     }
                 }
-                Text(model.message.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .font(.body)
-                    .foregroundStyle(ToasttyDesignTokens.userBubbleText)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(ToasttyDesignTokens.userBubbleSurface, in: ToasttyDesignTokens.userBubbleShape)
-                    .overlay {
-                        ToasttyDesignTokens.userBubbleShape.stroke(ToasttyDesignTokens.userBubbleBorder, lineWidth: 1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.leading, 40)
+                if model.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                    Text(model.message.trimmingCharacters(in: .whitespacesAndNewlines))
+                        .font(.body)
+                        .foregroundStyle(ToasttyDesignTokens.userBubbleText)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(ToasttyDesignTokens.userBubbleSurface, in: ToasttyDesignTokens.userBubbleShape)
+                        .overlay {
+                            ToasttyDesignTokens.userBubbleShape.stroke(ToasttyDesignTokens.userBubbleBorder, lineWidth: 1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.leading, 40)
+                }
+                if model.attachments.isEmpty == false {
+                    attachmentTray(allowsInput: false)
+                }
                 HStack(spacing: 8) {
                     ToasttyPulsingDot()
                     Text("Waiting for \(model.startingAgentName ?? "the agent") to start")
@@ -423,6 +461,10 @@ struct ToasttyNewSessionSheet: View {
 
     private var messageBinding: Binding<String> {
         Binding(get: { model.message }, set: { model.updateMessage($0) })
+    }
+
+    private var attachmentLoadingBinding: Binding<Bool> {
+        Binding(get: { model.isLoadingAttachments }, set: { model.setIsLoadingAttachments($0) })
     }
 }
 

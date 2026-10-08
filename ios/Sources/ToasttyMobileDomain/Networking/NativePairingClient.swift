@@ -3,8 +3,8 @@ import RemoteProtocol
 
 public protocol NativePairingClientProtocol: Sendable {
     /// Called only after the UI has shown and the user has confirmed the
-    /// candidate hostname. Admission and exchange are one ordered operation so
-    /// no proof is sent to an incompatible gateway.
+    /// candidate gateway address. Admission and exchange are one ordered
+    /// operation so no proof is sent to an incompatible gateway.
     func exchangeConfirmed(
         candidate: PairingCandidate,
         deviceName: String

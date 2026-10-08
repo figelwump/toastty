@@ -59,6 +59,33 @@ final class NativePairingClientTests: XCTestCase {
         XCTAssertEqual(body.fallbackCode, "2345-6789-ABCD")
     }
 
+    func testCustomPortAdmissionAndExchangeUseTheConfirmedGateway() async throws {
+        let transport = NativeRecordingHTTPTransport(responses: [
+            .nativeJSON(Self.helloJSON), .nativeJSON(Self.exchangeJSON),
+        ])
+        let candidate = try PairingInputParser().parseManual(
+            gateway: "mac.example-tailnet.ts.net:8443",
+            code: "23456789abcd"
+        )
+
+        _ = try await NativePairingClient(transport: transport).exchangeConfirmed(
+            candidate: candidate,
+            deviceName: "Native phone"
+        )
+
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
+            "https://mac.example-tailnet.ts.net:8443/api/hello",
+            "https://mac.example-tailnet.ts.net:8443/v1/native-pairing/exchange",
+        ])
+        XCTAssertNil(requests[0].httpBody)
+        for request in requests {
+            XCTAssertNil(request.value(forHTTPHeaderField: "Origin"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        }
+    }
+
     func testMissingNativeCapabilityNeverSendsPairingProof() async throws {
         let transport = NativeRecordingHTTPTransport(responses: [
             .nativeJSON(Data(#"{"capabilities":["browser_cookie_pairing"],"minimumSupportedProtocolVersion":"1.0","protocolVersion":"1.0"}"#.utf8)),

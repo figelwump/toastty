@@ -57,10 +57,29 @@ struct RemoteAccessPairingPresentationTests {
         #expect(RemoteAccessService.publicGatewayURL(from: "https://evil.example") == nil)
         #expect(RemoteAccessService.publicGatewayURL(from: "https://foo.ts.net.evil") == nil)
         #expect(RemoteAccessService.publicGatewayURL(from: "https://ts.net") == nil)
-        #expect(RemoteAccessService.publicGatewayURL(from: "https://mac.tailnet.ts.net:8443") == nil)
+        #expect(RemoteAccessService.publicGatewayURL(from: "HTTPS://MAC.TAILNET.TS.NET:8443/")?.absoluteString == "https://mac.tailnet.ts.net:8443")
+        #expect(RemoteAccessService.publicGatewayURL(from: "https://mac.tailnet.ts.net:1")?.port == 1)
+        #expect(RemoteAccessService.publicGatewayURL(from: "https://mac.tailnet.ts.net:65535")?.port == 65535)
+        #expect(RemoteAccessService.publicGatewayURL(from: "https://mac.tailnet.ts.net:0") == nil)
+        #expect(RemoteAccessService.publicGatewayURL(from: "https://mac.tailnet.ts.net:-1") == nil)
+        #expect(RemoteAccessService.publicGatewayURL(from: "https://mac.tailnet.ts.net:65536") == nil)
         #expect(RemoteAccessService.publicGatewayURL(from: "https://user@mac.tailnet.ts.net") == nil)
         #expect(RemoteAccessService.publicGatewayURL(from: "https://mac.tailnet.ts.net/pair?secret=value") == nil)
         #expect(RemoteAccessService.publicGatewayURL(from: "https://mac.tailnet.ts.net/#fragment") == nil)
+    }
+
+    @Test func customPortPairingPayloadCanBeRenderedAndDecoded() throws {
+        let origin = try #require(RemoteAccessService.publicGatewayURL(from: "HTTPS://MAC.TAILNET.TS.NET:8443/"))
+        let payload = RemoteNativePairingQRPayload(
+            gatewayURL: origin,
+            offerID: UUID(),
+            secret: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            expiresAt: Date(timeIntervalSince1970: 1_786_300_120)
+        )
+        let encoded = try payload.encodedString()
+        let decoded = try RemoteNativePairingQRPayload(encodedString: encoded)
+        #expect(RemoteAccessPairingQRCode.image(payload: encoded) != nil)
+        #expect(decoded.gatewayURL.absoluteString == "https://mac.tailnet.ts.net:8443")
     }
 
     @Test func nativePairingExpiryLabelUsesClockStyleFormatting() {

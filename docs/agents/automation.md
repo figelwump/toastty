@@ -94,7 +94,13 @@ It is not a screenshot, and it does not cover the iOS screens.
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.
 
-App discovery has a 60-second startup timeout; ordinary protocol requests keep their 20-second timeout. The runner supports legacy `computer-use` events and current `cua_repl` events. For the current runtime, unattended approval is limited to the Computer Use connector's empty-form app-access requests for native inspection, clicking, dragging, scrolling, keyboard, and text-entry operations for `com.GiantThings.toastty`; other requests are declined. This grants access for the isolated test request and does not save an always-allow permission. If the default model is unavailable to the signed-in account, use the existing invocation-only `CODEX_COMPUTER_USE_MODEL` override with a model available to that account.
+App discovery has a 60-second startup timeout; ordinary protocol requests keep their 20-second timeout. The runner supports legacy `computer-use` events and current `cua_repl` events.
+
+For the current runtime, unattended approval is limited to the Computer Use connector's empty-form app-access requests for native inspection, clicking, dragging, scrolling, keyboard, and text-entry operations.
+
+The requested app must exactly match the built app's `CFBundleIdentifier`, recorded as `appBundleID` in `launch.json` and passed to the client with the required `--app-bundle-id` argument. The client accepts only `com.GiantThings.toastty` or a valid dotted suffix under that ID. This supports a disposable test app with a distinct bundle ID; it does not approve all apps with that prefix. Missing or invalid target metadata stops the client before connection. Other app requests are declined. This grants access for the isolated test request and does not save an always-allow permission.
+
+If the default model is unavailable to the signed-in account, use the existing invocation-only `CODEX_COMPUTER_USE_MODEL` override with a model available to that account.
 
 Run `node --test Tests/RemoteScripts/ComputerUseProtocolTests.mjs` locally to check approval boundaries and server-name compatibility without connecting to an app or remote host. The full `scripts/automation/check.sh` gate also includes these tests.
 
@@ -201,6 +207,51 @@ a live iOS owner, or a state change during the recheck is retained for manual
 review.
 
 For changes under `Sources/RemoteProtocol/` or `Tests/RemoteProtocol/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
+
+### Temporary Composer Typing Trace
+
+The fast-typing underline investigation has an opt-in trace in Debug builds.
+Normal Debug builds leave it off. Release excludes the trace and the export UI.
+This is diagnostic instrumentation, not an underline fix. Remove it after a
+captured reproduction establishes the cause and the fix is verified.
+
+Generate a separate worktree app with the flag below. This mutates only its
+generated iOS graph; it does not install an app or contact a production host:
+
+```bash
+TUIST_TOASTTY_MOBILE_COMPOSER_TRACE=1 sv exec -- node ios/scripts/toastty-ios.mjs generate
+```
+
+The app is named **Toastty Trace** and retains the worktree's unique Debug bundle
+ID. For a timing-sensitive physical reproduction, build this Debug app with
+`SWIFT_OPTIMIZATION_LEVEL=-O`. Keep the optimization override on the build
+invocation; do not change the normal scheme. Do not use `native-device` for this
+separate app, because that command selects the fixed development bundle ID.
+The flag is baked into the app and works on home-screen launches. UI tests can
+enable it with `TOASTTY_MOBILE_COMPOSER_TRACE=1` in `launchEnvironment`; `0`
+overrides a baked flag. Generate with `TUIST_TOASTTY_MOBILE_COMPOSER_TRACE=0` to
+restore the normal graph.
+
+Start a fresh app run and use filler text to reproduce the issue with fast onscreen key taps. When it
+appears, take a screenshot before leaving the composer. Then open
+**Settings → Diagnostics → Save typing trace** and save the JSON in Files.
+The screenshot notification records an event after the screenshot is taken;
+the app never captures the image. Review the screenshot before sharing it.
+Record the keyboard language and correction/prediction settings in the repro
+notes. A separate app starts with separate state; note whether the repro used
+the fixture or a newly paired host.
+
+The trace retains the latest 32,768 events in memory until the app exits.
+It records millisecond timing, per-launch composer IDs, text lengths,
+selection/marked ranges, TextKit mode, replacement revisions, and existing
+layout measurements. At creation, screenshot, and teardown, it also records
+bounded underline ranges/styles and keyboard traits. It excludes draft text,
+text hashes, attribute dictionaries, images, titles, paths, and credentials.
+Export copies the buffer on demand. No system logging or automatic upload is
+added. Typing cadence and text lengths are still diagnostic data, so use filler
+text and save soon after the reproduction.
+Empty storage underline runs do not establish that system correction or
+prediction decorations are absent. The screenshot provides the visual evidence.
 
 ## Local Helpers
 

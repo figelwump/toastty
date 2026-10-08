@@ -699,6 +699,21 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.buttons["toastty-mobile-new-session-effort"].exists)
         XCTAssertFalse(start.isEnabled)
 
+        // New sessions use the same source chooser as conversation messages.
+        let attach = app.buttons["toastty-mobile-attachment-add"]
+        XCTAssertTrue(attach.waitForExistence(timeout: 5))
+        XCTAssertTrue(attach.isEnabled)
+        attach.tap()
+        XCTAssertTrue(app.buttons["Photo Library"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Take Photo"].exists)
+        XCTAssertTrue(app.buttons["Choose File"].exists)
+        // The sheet also has a Cancel button. Tap its inert title so the
+        // chooser closes without discarding the new-session draft.
+        app.navigationBars["New session"].tap()
+        XCTAssertTrue(app.buttons["Photo Library"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(start.isEnabled)
+        XCTAssertFalse(app.buttons["toastty-mobile-attachment-remove"].exists)
+
         let message = app.textViews["toastty-mobile-new-session-message"]
         XCTAssertTrue(message.waitForExistence(timeout: 5))
         message.tap()
@@ -720,6 +735,58 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "New Claude session"))
                 .firstMatch.waitForExistence(timeout: 5)
         )
+    }
+
+    func testNewSessionAttachmentPreviewRemovalAndAttachmentOnlyStart() {
+        let app = launchFixtureApp(environment: [
+            "TOASTTY_MOBILE_FIXTURE_NEW_SESSION_ATTACHMENT_DRAFT": "2",
+        ])
+        openWorkspace(toasttyWorkspaceID, in: app)
+        let newSession = app.buttons["toastty-mobile-workspace-new-session"]
+        XCTAssertTrue(newSession.waitForExistence(timeout: 5))
+        newSession.tap()
+        let start = app.buttons["toastty-mobile-new-session-start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        let claude = app.buttons["toastty-mobile-new-session-agent-claude"]
+        XCTAssertTrue(claude.waitForExistence(timeout: 5))
+        claude.tap()
+        XCTAssertTrue(app.staticTexts["fixture-notes.txt"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["fixture-notes-2.txt"].exists)
+        XCTAssertTrue(start.isEnabled, "Files alone can start a session")
+        attachScreenshot(named: "fixture-new-session-attachments", of: app)
+
+        // A swipe must keep the files until the person chooses Cancel or Start.
+        app.navigationBars["New session"].swipeDown()
+        XCTAssertTrue(start.exists)
+        let removals = app.buttons.matching(identifier: "toastty-mobile-attachment-remove")
+        XCTAssertEqual(removals.count, 2)
+        removals.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["fixture-notes.txt"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["fixture-notes-2.txt"].exists)
+        XCTAssertTrue(start.isEnabled)
+        removals.firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["fixture-notes-2.txt"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(start.isEnabled, "Removing the last file leaves an empty draft")
+
+        app.buttons["toastty-mobile-new-session-cancel"].tap()
+        XCTAssertTrue(start.waitForNonExistence(timeout: 5))
+        newSession.tap()
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        claude.tap()
+        XCTAssertTrue(app.staticTexts["fixture-notes.txt"].waitForExistence(timeout: 5))
+        app.buttons.matching(identifier: "toastty-mobile-attachment-remove").element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["fixture-notes.txt"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(start.isEnabled)
+        start.tap()
+
+        let title = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 15))
+        XCTAssertEqual(title.label, "New Claude session")
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        let session = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "New Claude session")).firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
+        XCTAssertTrue(session.label.contains("fixture-notes-2.txt"), "The remaining file reached the start request")
+        attachScreenshot(named: "fixture-new-session-attachment-only-started", of: app)
     }
 
     func testNewCursorSessionStartsWithTheSelectedModelAndOpensTheConversation() {

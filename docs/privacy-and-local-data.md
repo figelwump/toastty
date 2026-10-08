@@ -305,9 +305,20 @@ running on your Mac.
 
 When enabled, Toastty listens for Remote Access only on IPv4 loopback. The
 intended remote path is a private Tailscale Serve HTTPS origin that proxies to
-that local listener; Toastty does not configure Tailscale, publish a LAN
-listener, or enable Tailscale Funnel. The configured Tailnet origin is an exact
-allowlist, and a presented non-matching Origin is rejected on every route.
+that local listener. Enabling Remote Access in settings or choosing its setup
+or retry action can configure that private HTTPS mapping. Toastty reuses a
+correct mapping and refuses to replace another service. New setup prefers
+HTTPS port 443 and uses an available port from 8443 through 8447 if 443 is
+occupied. The saved origin retains its port on later setup; Toastty does not
+move existing pairings. The native client stores that complete URL with its
+existing credential. Toastty does not publish a LAN listener or enable Tailscale
+Funnel. Restoring enabled
+access at startup does not change Tailscale; settings can check its existing
+mapping without a change. Turning Remote Access off stops the local gateway
+but leaves the Serve mapping configured. A successful mapping check does not
+prove that a phone can connect through its tailnet. The configured Tailnet
+origin is an exact allowlist, and a presented non-matching Origin is rejected
+on every route.
 
 A paired Toastty Mobile client, or a browser profile paired by an earlier
 Toastty build, can receive normalized agent conversation content, status, a

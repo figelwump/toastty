@@ -19,7 +19,17 @@ args = sys.argv[1:]
 if args[:2] == ["repo", "view"]:
     print(json.dumps({"nameWithOwner": "test/repo", "defaultBranchRef": {"name": "main"}}))
 elif args[:2] == ["pr", "list"]:
-    print(json.dumps(state["prs"]))
+    if "--head" in args:
+        if state.get("fail_branch_pr_query"):
+            sys.exit("open PR lookup unavailable")
+        if state.get("malformed_branch_pr_query"):
+            print("not json")
+        else:
+            branch = args[args.index("--head") + 1]
+            print(json.dumps([p for p in state.get("branch_query_prs", state["prs"])
+                              if p["headRefName"] == branch and p["state"] == "OPEN"]))
+    else:
+        print(json.dumps(state["prs"]))
 elif args[:2] == ["pr", "view"]:
     pr = next(p for p in state["prs"] if p["number"] == int(args[2]))
     print(json.dumps({"mergeable": pr["mergeable"], "mergeStateStatus": pr["mergeStateStatus"]}))
@@ -28,7 +38,7 @@ else:
 '''
 
 FAKE_TOASTTY = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, subprocess
 state = json.load(open(os.environ["FAKE_STATE"]))
 args = sys.argv[1:]
 with open(os.environ["FAKE_TOASTTY_LOG"], "a+") as log:
@@ -39,7 +49,14 @@ if "workspace.list" in args:
     # "later_workspaces" replaces the list after the first read, as if the user
     # changed a workspace while the script was running.
     workspaces = state.get("later_workspaces") if earlier_lists else None
-    print(json.dumps({"ok": True, "result": {"workspaces": workspaces or state["workspaces"],
+    if earlier_lists:
+        for path, target in state.get("move_on_reread", {}).items():
+            subprocess.run(["git", "checkout", "-q", "--detach", target], cwd=path, check=True)
+        for path, branch in state.get("attach_on_reread", {}).items():
+            subprocess.run(["git", "checkout", "-q", branch], cwd=path, check=True)
+        for path in state.get("dirty_on_reread", []):
+            open(os.path.join(path, "reread-write.txt"), "w").write("changed\n")
+    print(json.dumps({"ok": True, "result": {"workspaces": workspaces if workspaces is not None else state["workspaces"],
                                              "callerIsScoped": state.get("scoped", False)}}))
 elif "terminal.state" in args:
     print(json.dumps({"ok": True, "result": {"workspaceID": state["own"]}}))
@@ -48,6 +65,8 @@ elif "workspace.close" in args:
     target = state.get("dirty_on_close", {}).get(args[args.index("--workspace") + 1])
     if target:
         open(os.path.join(target, "last-write.txt"), "w").write("written while closing\n")
+    for path, target in state.get("move_on_close", {}).items():
+        subprocess.run(["git", "checkout", "-q", "--detach", target], cwd=path, check=True)
     print(json.dumps({"ok": True, "result": {}}))
 else:
     sys.exit(f"unexpected toastty call: {args}")
@@ -118,7 +137,8 @@ class CleanupTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(SCRIPT), "--json", "--repo", str(self.repo), *args],
                                 env=env or self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        return {row["pr"]: row for row in json.loads(result.stdout)["prs"]}
+        self.report = json.loads(result.stdout)
+        return {row["pr"]: row for row in self.report["prs"]}
 
     def closed(self):
         return [line for line in self.log.read_text().splitlines() if "workspace.close" in line] \
@@ -126,6 +146,318 @@ class CleanupTests(unittest.TestCase):
 
     def remote_has(self, branch):
         return bool(self.git("ls-remote", "--heads", "origin", branch))
+
+    def detached_task(self, number, merge=False):
+        branch, path = self.task(number)
+        head = self.prs[-1]["headRefOid"]
+        if merge:
+            self.git("merge", "-q", "--no-ff", "-m", f"Merge PR {number}", branch)
+            head = self.git("rev-parse", "HEAD")
+            self.prs[-1]["mergeCommit"] = {"oid": head}
+        self.git("checkout", "-q", "--detach", head, cwd=path)
+        self.workspaces[-1]["annotations"] = [
+            {"key": "github-pr", "text": f"PR #{number}", "url": self.prs[-1]["url"]}]
+        return branch, path
+
+    def test_cleans_detached_worktree_at_pr_head(self):
+        branch, path = self.detached_task(1)
+        row = self.status("--cleanup-merged")[1]
+        self.assertEqual(row["cleanup_head"], row["head"])
+        self.assertIn("removed worktree", row["cleanup"])
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("branch", "--list", branch), "")
+        self.assertFalse(self.remote_has(branch))
+
+    def test_cleans_detached_merge_commit_using_pr_head_for_branch_deletion(self):
+        branch, path = self.detached_task(1, merge=True)
+        row = self.status("--cleanup-merged")[1]
+        self.assertNotEqual(row["cleanup_head"], row["head"])
+        self.assertIn("removed worktree", row["cleanup"])
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("branch", "--list", branch), "")
+        self.assertFalse(self.remote_has(branch))
+
+    def test_detached_cleanup_succeeds_when_both_branches_are_already_absent(self):
+        for number, merge in enumerate((False, True), 1):
+            branch, path = self.detached_task(number, merge=merge)
+            self.git("branch", "-D", branch)
+            self.git("push", "-q", "origin", f":refs/heads/{branch}")
+            self.log.unlink(missing_ok=True)
+            row = self.status("--cleanup-merged")[number]
+            self.assertIn("removed worktree", row["cleanup"])
+            self.assertIn("local branch already absent", row["cleanup"])
+            self.assertNotIn("deleted local branch", row["cleanup"])
+            self.assertNotIn("partial:", row["cleanup"])
+            self.assertFalse(path.exists())
+
+    def test_branch_worktree_at_merge_commit_stays_blocked(self):
+        branch, path = self.detached_task(1, merge=True)
+        self.git("branch", "-f", branch, self.prs[-1]["mergeCommit"]["oid"])
+        self.git("checkout", "-q", branch, cwd=path)
+        row = self.status("--cleanup-merged")[1]
+        self.assertEqual(row["verdict"], "blocked")
+        self.assertIn("ahead", row["reason"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_primary_checkout_is_never_cleaned(self):
+        _, path = self.task(1)
+        self.git("checkout", "-q", "--detach", self.prs[-1]["headRefOid"])
+        self.workspaces[-1]["terminalCwds"] = [str(self.repo)]
+        self.workspaces[-1]["annotations"] = [
+            {"key": "github-pr", "url": self.prs[-1]["url"]}]
+        self.status("--cleanup-merged")
+        primary = next(row for row in self.report["worktreesWithoutPR"]
+                       if row["worktree"] == str(self.repo))
+        self.assertIn("primary checkout", primary["reason"])
+        self.assertTrue(self.repo.exists() and path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_wrong_head_and_dirty_worktrees_stay_blocked(self):
+        _, wrong = self.detached_task(1)
+        self.git("checkout", "-q", "--detach", "main", cwd=wrong)
+        _, dirty = self.detached_task(2)
+        (dirty / "notes.txt").write_text("unsaved\n")
+        rows = self.status("--cleanup-merged")
+        self.assertEqual(rows[1]["verdict"], "blocked")
+        self.assertIn("PR head", rows[1]["reason"])
+        self.assertIn("uncommitted", rows[2]["reason"])
+        self.assertTrue(wrong.exists() and dirty.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_requires_one_exact_same_repo_chip_for_known_merged_pr(self):
+        paths = []
+        invalid = [[],
+                   [{"key": "github-pr", "text": "PR #2"}],
+                   [{"key": "github-pr", "url": "https://github.com/other/repo/pull/3"}],
+                   [{"key": "github-pr", "url": "https://github.com/test/repo/pull/4/files"}],
+                   [{"key": "github-pr", "url": "https://github.com/test/repo/pull/999"}],
+                   [{"key": "github-pr", "url": "https://github.com/test/repo/pull/6"},
+                    {"key": "github-pr", "url": "https://github.com/test/repo/pull/7"}],
+                   [{"key": "github-pr", "url": "https://github.com/test/repo/pull/7"},
+                    {"key": "github-pr", "url": "https://github.com/other/repo/pull/7"}]]
+        for number, chips in enumerate(invalid, 1):
+            _, path = self.detached_task(number)
+            paths.append(path)
+            self.workspaces[-1]["annotations"] = chips
+        self.status("--cleanup-merged")
+        self.assertEqual(len(self.report["worktreesWithoutPR"]), len(paths))
+        self.assertTrue(all(row["reason"] for row in self.report["worktreesWithoutPR"]))
+        self.assertTrue(all(path.exists() for path in paths))
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_open_and_closed_prs_are_never_cleaned(self):
+        paths = []
+        for number, state in enumerate(("OPEN", "CLOSED"), 1):
+            _, path = self.detached_task(number)
+            self.prs[-1]["state"] = state
+            paths.append(path)
+        self.status("--cleanup-merged")
+        self.assertEqual(len(self.report["worktreesWithoutPR"]), 2)
+        self.assertTrue(all(path.exists() for path in paths))
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_ambiguous_workspace_is_not_associated(self):
+        _, path = self.detached_task(1)
+        self.workspaces.append(dict(self.workspaces[-1], workspaceID="other"))
+        self.status("--cleanup-merged")
+        self.assertIn("several workspaces", self.report["worktreesWithoutPR"][0]["reason"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_duplicate_pr_chip_in_another_workspace_blocks_association(self):
+        _, path = self.detached_task(1)
+        self.workspaces.append(dict(self.workspaces[-1], workspaceID="other", terminalCwds=[]))
+        self.status("--cleanup-merged")
+        self.assertIn("several workspaces", self.report["worktreesWithoutPR"][0]["reason"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_duplicate_pr_chip_on_reread_keeps_worktree(self):
+        _, path = self.detached_task(1)
+        self.extra_state["later_workspaces"] = self.workspaces + [
+            dict(self.workspaces[-1], workspaceID="other", terminalCwds=[])]
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("workspace or PR chip changed", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_branch_worktree_still_accepts_a_text_only_pr_chip(self):
+        _, path = self.task(1)
+        self.workspaces[-1]["annotations"] = [{"key": "github-pr", "text": "PR #1"}]
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("removed worktree", row["cleanup"])
+        self.assertFalse(path.exists())
+
+    def test_detached_missing_changed_or_ambiguous_chip_on_reread_keeps_worktree(self):
+        # Each scenario gets its own worktree. No scenario closes a workspace.
+        for number, annotations in enumerate(([],
+                [{"key": "github-pr", "url": "https://github.com/test/repo/pull/999"}],
+                [{"key": "github-pr", "url": "https://github.com/test/repo/pull/3"},
+                 {"key": "github-pr", "url": "https://github.com/other/repo/pull/3"}]), 1):
+            with self.subTest(number=number):
+                _, path = self.detached_task(number)
+                self.extra_state["later_workspaces"] = [
+                    dict(w, annotations=annotations) if w == self.workspaces[-1] else dict(w, annotations=[])
+                    for w in self.workspaces]
+                # Reset fake Toastty read count for the next complete invocation.
+                self.log.unlink(missing_ok=True)
+                row = self.status("--cleanup-merged")[number]
+                self.assertIn("workspace or PR chip changed", row["cleanup"])
+                self.assertTrue(path.exists())
+                self.assertEqual(self.closed(), [])
+
+    def test_detached_missing_workspace_on_reread_keeps_worktree(self):
+        _, path = self.detached_task(1)
+        self.extra_state["later_workspaces"] = []
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("workspace or PR chip changed", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_head_moved_before_close_keeps_workspace(self):
+        _, path = self.detached_task(1)
+        self.extra_state["move_on_reread"] = {str(path): "main"}
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("HEAD moved", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_state_changed_before_close_keeps_workspace(self):
+        branch, path = self.detached_task(1)
+        self.extra_state["attach_on_reread"] = {str(path): branch}
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("detached state changed", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_dirty_before_close_keeps_workspace(self):
+        _, path = self.detached_task(1)
+        self.extra_state["dirty_on_reread"] = [str(path)]
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("uncommitted changes", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_detached_head_moved_after_close_keeps_worktree_and_branches(self):
+        branch, path = self.detached_task(1)
+        self.extra_state["move_on_close"] = {str(path): "main"}
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("partial:", row["cleanup"])
+        self.assertIn("HEAD moved", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertNotEqual(self.git("branch", "--list", branch), "")
+        self.assertTrue(self.remote_has(branch))
+
+    def test_detached_cleanup_preserves_branches_checked_out_elsewhere(self):
+        branch, path = self.detached_task(1, merge=True)
+        other = self.root / "other"
+        self.git("worktree", "add", "-q", str(other), branch)
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("branches kept: branch is checked out", row["cleanup"])
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("rev-parse", f"refs/heads/{branch}"), self.prs[0]["headRefOid"])
+        self.assertTrue(self.remote_has(branch))
+        self.assertTrue(other.exists())
+
+    def test_detached_default_pr_head_branch_is_kept(self):
+        _, path = self.detached_task(1)
+        self.prs[-1]["headRefName"] = "main"
+        self.git("checkout", "-q", "--detach")
+        self.git("branch", "-f", "main", self.prs[-1]["headRefOid"])
+        self.git("push", "-q", "origin", "main")
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("PR head branch is the default branch", row["cleanup"])
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.prs[0]["headRefOid"])
+        self.assertTrue(self.remote_has("main"))
+
+    def test_detached_shared_head_branch_is_kept_after_fresh_open_pr_query(self):
+        branch, path = self.detached_task(1)
+        # This open PR is absent from the initial list and appears only on the
+        # final branch query, as if it was opened while cleanup ran.
+        other = dict(self.prs[-1], number=2, state="OPEN")
+        self.extra_state["branch_query_prs"] = [other]
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("another open PR uses the head branch", row["cleanup"])
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("rev-parse", f"refs/heads/{branch}"), self.prs[0]["headRefOid"])
+        self.assertTrue(self.remote_has(branch))
+
+    def test_detached_open_pr_lookup_failure_keeps_branches(self):
+        for number, failure in enumerate(("fail_branch_pr_query", "malformed_branch_pr_query"), 1):
+            branch, path = self.detached_task(number)
+            self.extra_state.pop("fail_branch_pr_query", None)
+            self.extra_state[failure] = True
+            self.log.unlink(missing_ok=True)
+            row = self.status("--cleanup-merged")[number]
+            self.assertIn("could not check open PRs", row["cleanup"])
+            self.assertFalse(path.exists())
+            self.assertNotEqual(self.git("branch", "--list", branch), "")
+            self.assertTrue(self.remote_has(branch))
+
+    def test_primary_feature_branch_still_reports_its_pr(self):
+        branch, path = self.task(1, state="OPEN")
+        self.git("checkout", "-q", "--detach", cwd=path)
+        self.git("checkout", "-q", branch)
+        self.workspaces[-1]["terminalCwds"] = [str(self.repo)]
+        row = self.status()[1]
+        self.assertEqual(row["worktree"], str(self.repo))
+        self.assertEqual(row["verdict"], "ready")
+        self.assertEqual(self.closed(), [])
+
+    def test_branch_with_same_named_tag_still_cleans(self):
+        branch, path = self.task(1)
+        self.git("tag", branch)
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("removed worktree", row["cleanup"])
+        self.assertFalse(path.exists())
+
+    def test_branch_changed_to_detached_before_close_is_kept(self):
+        branch, path = self.task(1)
+        self.extra_state["move_on_reread"] = {str(path): f"refs/heads/{branch}"}
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("detached state changed", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_other_pr_chips_block_cleanup_with_noncanonical_url_forms(self):
+        forms = ("http://github.com/test/repo/pull/9",
+                 "https://www.github.com/test/repo/pull/9",
+                 "github.com/test/repo/pull/9",
+                 "http://github.com/other/repo/pull/1")
+        paths = []
+        for number, url in enumerate(forms, 1):
+            _, path = self.task(number)
+            self.workspaces[-1]["annotations"] = [{"key": "github-pr", "url": url}]
+            paths.append(path)
+        rows = self.status("--cleanup-merged")
+        self.assertTrue(all("different PR" in row["cleanup"] for row in rows.values()))
+        self.assertTrue(all(path.exists() for path in paths))
+        self.assertEqual(self.closed(), [])
+
+    def test_local_branch_read_failure_keeps_both_branches(self):
+        branch, path = self.detached_task(1)
+        real_git = subprocess.run(["which", "git"], check=True, capture_output=True, text=True).stdout.strip()
+        fake_git = self.root / "bin" / "git"
+        fake_git.write_text("#!/usr/bin/env python3\nimport os, sys\n"
+                            "if sys.argv[1:2] == ['for-each-ref']: sys.exit('ref read failed')\n"
+                            f"os.execv({real_git!r}, [{real_git!r}] + sys.argv[1:])\n")
+        fake_git.chmod(0o755)
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("could not read the local branch", row["cleanup"])
+        self.assertFalse(path.exists())
+        self.assertNotEqual(self.git("branch", "--list", branch), "")
+        self.assertTrue(self.remote_has(branch))
+
+    def test_cross_repo_chip_prevents_branch_worktree_cleanup(self):
+        _, path = self.task(1)
+        self.workspaces[-1]["annotations"] = [
+            {"key": "github-pr", "url": "https://github.com/other/repo/pull/1"}]
+        row = self.status("--cleanup-merged")[1]
+        self.assertIn("different PR", row["cleanup"])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
 
     def test_cleans_merged_worktree_at_pr_head(self):
         branch, path = self.task(1)

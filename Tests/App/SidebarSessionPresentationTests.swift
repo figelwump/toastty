@@ -1214,6 +1214,70 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertEqual(state.below?.hasWorking, false)
     }
 
+    func testHiddenSessionPillsIncludeSubspaceStatusAndGeometryOncePerRow() {
+        let statuses: [SidebarSubspacePresentation.RowStatus] = [.working, .ready, .working, .ready, .done]
+        let subspaces = statuses.enumerated().map { index, status in
+            SidebarSubspacePresentation.Row(
+                id: UUID(), title: "Task", status: status, annotations: [:], summary: nil,
+                spawningSessionID: nil, spawnerName: nil, sessions: [], creationIndex: index
+            )
+        }
+        let state = SidebarSessionPresentation.hiddenSessionPillState(
+            orderedSessionRowIDs: [], measuredSessionRowFramesByID: [:], unreadSessionRowIDs: [],
+            subspaceRows: subspaces,
+            measuredSubspaceRowFramesByID: [
+                subspaces[0].id: CGRect(x: 0, y: -40, width: 240, height: 32),
+                subspaces[1].id: CGRect(x: 0, y: 205, width: 240, height: 32),
+                subspaces[2].id: CGRect(x: 0, y: 80, width: 240, height: 32),
+                subspaces[3].id: CGRect(x: 0, y: 120, width: 240, height: 32),
+                subspaces[4].id: CGRect(x: 0, y: 245, width: 240, height: 32),
+            ], viewportHeight: 200, visibleTop: 32
+        )
+
+        XCTAssertEqual(state.above?.count, 1)
+        XCTAssertEqual(state.above?.subspaceCount, 1)
+        XCTAssertEqual(state.above?.unreadCount, 0)
+        XCTAssertEqual(state.above?.hasWorking, true)
+        XCTAssertEqual(state.below?.count, 2)
+        XCTAssertEqual(state.below?.subspaceCount, 2)
+        XCTAssertEqual(state.below?.unreadCount, 1)
+        XCTAssertEqual(state.below?.hasWorking, false)
+        XCTAssertEqual(state.above.map(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel),
+                       "1 subspace hidden above, working")
+        XCTAssertEqual(state.below.map(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel),
+                       "2 subspaces hidden below, 1 unread")
+    }
+
+    func testHiddenSessionPillsCombineSessionsAndBarelyVisibleSubspaces() {
+        let sessions = makeSidebarSessionRowIDs(count: 1)
+        let subspace = SidebarSubspacePresentation.Row(
+            id: UUID(), title: "Task", status: .ready, annotations: [:], summary: nil,
+            spawningSessionID: nil, spawnerName: nil, sessions: [], creationIndex: 0
+        )
+        let state = SidebarSessionPresentation.hiddenSessionPillState(
+            orderedSessionRowIDs: sessions,
+            measuredSessionRowFramesByID: [sessions[0]: CGRect(x: 0, y: 240, width: 240, height: 32)],
+            unreadSessionRowIDs: Set(sessions), workingSessionRowIDs: Set(sessions),
+            subspaceRows: [subspace],
+            measuredSubspaceRowFramesByID: [subspace.id: CGRect(x: 0, y: 195, width: 240, height: 32)],
+            viewportHeight: 200, visibleTop: 32
+        )
+
+        XCTAssertNil(state.above)
+        XCTAssertEqual(state.below?.count, 2)
+        XCTAssertEqual(state.below?.subspaceCount, 1)
+        XCTAssertEqual(state.below?.unreadCount, 2)
+        XCTAssertEqual(state.below?.hasWorking, true)
+        XCTAssertEqual(state.below.map(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel),
+                       "1 session, 1 subspace hidden below, 2 unread, working")
+
+        let unmeasured = SidebarSessionPresentation.hiddenSessionPillState(
+            orderedSessionRowIDs: [], measuredSessionRowFramesByID: [:], unreadSessionRowIDs: [],
+            subspaceRows: [subspace], viewportHeight: 200
+        )
+        XCTAssertEqual(unmeasured, .empty)
+    }
+
     func testHiddenSessionPillAccessibilityLabelIncludesSignalStates() {
         XCTAssertEqual(
             SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel(

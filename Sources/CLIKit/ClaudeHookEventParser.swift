@@ -36,15 +36,24 @@ enum ClaudeHookEventParser {
             return commands
 
         case "PermissionRequest":
-            var commands: [CLICommand] = [
-                .sessionStatus(
-                    sessionID: sessionID,
-                    panelID: panelID,
-                    kind: .needsApproval,
-                    summary: "Needs approval",
-                    detail: approvalDetail(from: object) ?? "Claude Code is waiting for approval"
-                ),
-            ]
+            let detail = approvalDetail(from: object) ?? "Claude Code is waiting for approval"
+            let statusCommand: CLICommand
+            if let agentID = normalizedString(object["agent_id"]) {
+                statusCommand = .sessionClaudeSubagentEvent(
+                    sessionID: sessionID, panelID: panelID,
+                    event: ClaudeSubagentEvent(
+                        phase: .permission, agentID: agentID,
+                        toolUseID: normalizedString(object["tool_use_id"]),
+                        detail: detail
+                    )
+                )
+            } else {
+                statusCommand = .sessionStatus(
+                    sessionID: sessionID, panelID: panelID,
+                    kind: .needsApproval, summary: "Needs approval", detail: detail
+                )
+            }
+            var commands = [statusCommand]
             let callID = normalizedString(object["tool_use_id"])
             if let command = lifecycleObservationCommand(
                 sessionID: sessionID,
@@ -56,7 +65,7 @@ enum ClaudeHookEventParser {
                         kind: .permission,
                         providerCallID: callID,
                         providerApprovalID: nil,
-                        prompt: approvalDetail(from: object) ?? "Claude Code is waiting for approval"
+                        prompt: detail
                     )
                 )
             ) {
@@ -65,6 +74,16 @@ enum ClaudeHookEventParser {
             return commands
 
         case "PreToolUse":
+            if let agentID = normalizedString(object["agent_id"]) {
+                return [.sessionClaudeSubagentEvent(
+                    sessionID: sessionID, panelID: panelID,
+                    event: ClaudeSubagentEvent(
+                        phase: .toolUse, agentID: agentID,
+                        toolUseID: normalizedString(object["tool_use_id"]),
+                        detail: toolProgressDetail(from: object) ?? "Working inside Claude Code"
+                    )
+                )]
+            }
             return [
                 .sessionStatus(
                     sessionID: sessionID,
@@ -76,10 +95,27 @@ enum ClaudeHookEventParser {
             ]
 
         case "PostToolUse":
-            return postToolUseCommands(sessionID: sessionID, panelID: panelID, from: object)
+            var commands: [CLICommand] = []
+            if let agentID = normalizedString(object["agent_id"]) {
+                commands.append(.sessionClaudeSubagentEvent(
+                    sessionID: sessionID, panelID: panelID,
+                    event: ClaudeSubagentEvent(
+                        phase: .toolCompleted, agentID: agentID,
+                        toolUseID: normalizedString(object["tool_use_id"])
+                    )
+                ))
+            }
+            return commands + postToolUseCommands(sessionID: sessionID, panelID: panelID, from: object)
 
         case "PostToolUseFailure":
-            return []
+            guard let agentID = normalizedString(object["agent_id"]) else { return [] }
+            return [.sessionClaudeSubagentEvent(
+                sessionID: sessionID, panelID: panelID,
+                event: ClaudeSubagentEvent(
+                    phase: .toolCompleted, agentID: agentID,
+                    toolUseID: normalizedString(object["tool_use_id"])
+                )
+            )]
 
         case "Stop":
             var commands: [CLICommand] = []
@@ -117,9 +153,14 @@ enum ClaudeHookEventParser {
             return commands
 
         case "SubagentStart":
-            guard let agentID = normalizedString(object["agent_id"]),
-                  normalizedString(object["agent_type"])?.lowercased() == "workflow-subagent" else {
-                return []
+            guard let agentID = normalizedString(object["agent_id"]) else { return [] }
+            // Workflow children retain their existing one-shot lifecycle. Only
+            // a registered teammate can reopen on a later SubagentStart.
+            guard normalizedString(object["agent_type"])?.lowercased() == "workflow-subagent" else {
+                return [.sessionClaudeSubagentEvent(
+                    sessionID: sessionID, panelID: panelID,
+                    event: ClaudeSubagentEvent(phase: .started, agentID: agentID)
+                )]
             }
             return [
                 .sessionBackgroundActivity(
@@ -136,24 +177,12 @@ enum ClaudeHookEventParser {
                 ),
             ]
 
-        case "SubagentStop":
-            guard let agentID = normalizedString(object["agent_id"]) else {
-                return []
-            }
-            return [
-                .sessionBackgroundActivity(
-                    sessionID: sessionID,
-                    panelID: panelID,
-                    phase: .finish,
-                    activityID: agentID,
-                    kind: .subagent,
-                    displayName: nil,
-                    command: nil,
-                    processID: nil,
-                    preserveWhenUnlisted: false,
-                    executionProfile: nil
-                ),
-            ]
+        case "SubagentStop", "TeammateIdle":
+            guard let agentID = normalizedString(object["agent_id"]) else { return [] }
+            return [.sessionClaudeSubagentEvent(
+                sessionID: sessionID, panelID: panelID,
+                event: ClaudeSubagentEvent(phase: .finished, agentID: agentID)
+            )]
 
         case "Notification":
             return notificationCommands(sessionID: sessionID, panelID: panelID, from: object)
@@ -237,11 +266,25 @@ enum ClaudeHookEventParser {
         guard let toolName = normalizedString(object["tool_name"]),
               ["agent", "task"].contains(toolName.lowercased()),
               let toolResponse = object["tool_response"] as? [String: Any],
-              normalizedString(toolResponse["status"]) == "async_launched",
-              let agentID = normalizedString(toolResponse["agentId"]) else {
+              let agentID = normalizedString(toolResponse["agentId"]) ?? normalizedString(toolResponse["agent_id"]) else {
             return []
         }
         let toolInput = object["tool_input"] as? [String: Any] ?? [:]
+        if normalizedString(toolResponse["status"]) == "teammate_spawned" {
+            return [.sessionClaudeSubagentEvent(
+                sessionID: sessionID, panelID: panelID,
+                event: ClaudeSubagentEvent(
+                    phase: .spawned, agentID: agentID,
+                    displayName: normalizedString(toolResponse["name"]) ?? normalizedString(toolInput["name"]),
+                    command: normalizedString(toolInput["description"]),
+                    executionProfile: SessionAgentExecutionProfile(
+                        modelIdentifier: normalizedString(toolResponse["resolvedModel"])
+                            ?? normalizedString(toolResponse["resolved_model"])
+                    )
+                )
+            )]
+        }
+        guard normalizedString(toolResponse["status"]) == "async_launched" else { return [] }
         let displayName = normalizedString(toolInput["subagent_type"]) ?? "Sub-agent"
         let command = normalizedString(toolResponse["description"])
             ?? normalizedString(toolInput["description"])
@@ -284,6 +327,14 @@ enum ClaudeHookEventParser {
                 // monitor after the root session has returned to its prompt.
                 continue
             }
+            if taskType == "teammate" {
+                // This is a lifetime record, including idle teammates. Active
+                // work is tracked by agent ID through the child hooks instead.
+                if normalizedString(task["status"]) == "running" {
+                    preserveUnlistedActivities = true
+                }
+                continue
+            }
             if taskType == "subagent" {
                 guard let id = normalizedString(task["id"]) else { continue }
                 entries.append(
@@ -318,6 +369,25 @@ enum ClaudeHookEventParser {
         panelID: UUID?,
         from object: [String: Any]
     ) -> [CLICommand] {
+        if let agentID = normalizedString(object["agent_id"]) {
+            let notificationType = normalizedString(object["notification_type"])
+            guard notificationType == "permission_prompt" || notificationType == "elicitation_dialog" else {
+                // A child's idle reminder must not replace the main turn's
+                // status. Its lifecycle hooks own its activity instead.
+                return []
+            }
+            let needsInput = notificationType == "elicitation_dialog"
+            return [.sessionClaudeSubagentEvent(
+                sessionID: sessionID, panelID: panelID,
+                event: ClaudeSubagentEvent(
+                    phase: .permission, agentID: agentID,
+                    toolUseID: normalizedString(object["tool_use_id"]),
+                    summary: needsInput ? "Needs input" : "Needs approval",
+                    detail: normalizedSummaryText(object["message"])
+                        ?? (needsInput ? "Claude Code is waiting for input" : "Claude Code is waiting for approval")
+                )
+            )]
+        }
         switch normalizedString(object["notification_type"]) {
         case "idle_prompt":
             return [

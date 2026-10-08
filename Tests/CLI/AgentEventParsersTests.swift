@@ -501,17 +501,9 @@ struct AgentEventParsersTests {
         )
 
         #expect(commands == [
-            .sessionBackgroundActivity(
-                sessionID: "sess-123",
-                panelID: nil,
-                phase: .finish,
-                activityID: "a79d12ebe682a90d6",
-                kind: .subagent,
-                displayName: nil,
-                command: nil,
-                processID: nil,
-                preserveWhenUnlisted: false,
-                executionProfile: nil
+            .sessionClaudeSubagentEvent(
+                sessionID: "sess-123", panelID: nil,
+                event: ClaudeSubagentEvent(phase: .finished, agentID: "a79d12ebe682a90d6")
             ),
         ])
     }
@@ -535,18 +527,160 @@ struct AgentEventParsersTests {
         #expect(stopCommands.isEmpty)
     }
 
-    @Test
-    func claudeSubagentStartIgnoresNonWorkflowSubagents() throws {
+    @Test(arguments: ["general-purpose", "idle-probe"])
+    func claudeSubagentStartReopensActivityByStableID(agentType: String) throws {
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "SubagentStart", "agent_id": "agent-1", "agent_type": agentType,
+        ])
         let commands = try AgentEventIngestor.commands(
-            for: .claudeHooks,
-            sessionID: "sess-123",
-            panelID: nil,
-            payload: Data(
-                #"{"hook_event_name":"SubagentStart","agent_id":"regular-agent-1","agent_type":"general-purpose"}"#.utf8
-            )
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil, payload: payload
         )
+        #expect(commands == [
+            .sessionClaudeSubagentEvent(
+                sessionID: "sess-123", panelID: nil,
+                event: ClaudeSubagentEvent(phase: .started, agentID: "agent-1")
+            ),
+        ])
+    }
 
+    @Test
+    func claudeTeammateSpawnRegistersIdentityAndMetadata() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"name":"idle-probe","description":"Check tests"},"tool_response":{"status":"teammate_spawned","agentId":"agent-1","name":"idle-probe","resolvedModel":"claude-sonnet-5-5"}}"#.utf8)
+        )
+        #expect(commands == [
+            .sessionClaudeSubagentEvent(
+                sessionID: "sess-123", panelID: nil,
+                event: ClaudeSubagentEvent(
+                    phase: .spawned, agentID: "agent-1", displayName: "idle-probe", command: "Check tests",
+                    executionProfile: SessionAgentExecutionProfile(modelIdentifier: "claude-sonnet-5-5")
+                )
+            ),
+        ])
+        let envelope = try #require(commands.first).makeEventEnvelope(requestID: "fixture")
+        #expect(envelope.eventType == "session.claude_subagent_event")
+        #expect(envelope.payload.string("phase") == "spawned")
+        #expect(envelope.payload.string("agentID") == "agent-1")
+        #expect(envelope.payload.string("modelIdentifier") == "claude-sonnet-5-5")
+    }
+
+    @Test(arguments: ["PostToolUse", "PostToolUseFailure"])
+    func claudeChildToolCompletionResolvesChildApproval(eventName: String) throws {
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": eventName, "agent_id": "agent-1", "tool_name": "Bash", "tool_use_id": "call-1",
+        ])
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil, payload: payload
+        )
+        #expect(commands == [
+            .sessionClaudeSubagentEvent(
+                sessionID: "sess-123", panelID: nil,
+                event: ClaudeSubagentEvent(phase: .toolCompleted, agentID: "agent-1", toolUseID: "call-1")
+            ),
+        ])
+    }
+
+    @Test
+    func claudeTeammateIdleFinishesOnlyItsActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"TeammateIdle","agent_id":"agent-1","teammate_name":"idle-probe"}"#.utf8)
+        )
+        #expect(commands == [
+            .sessionClaudeSubagentEvent(
+                sessionID: "sess-123", panelID: nil,
+                event: ClaudeSubagentEvent(phase: .finished, agentID: "agent-1")
+            ),
+        ])
+        let unnamed = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"TeammateIdle","teammate_name":"idle-probe"}"#.utf8)
+        )
+        #expect(unnamed.isEmpty)
+    }
+
+    @Test
+    func claudeChildToolDoesNotOverwriteRootStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"PreToolUse","agent_id":"agent-1","tool_name":"Bash","tool_input":{"command":"sleep 5"}}"#.utf8)
+        )
+        #expect(commands == [
+            .sessionClaudeSubagentEvent(
+                sessionID: "sess-123", panelID: nil,
+                event: ClaudeSubagentEvent(phase: .toolUse, agentID: "agent-1", detail: "Running sleep 5")
+            ),
+        ])
+    }
+
+    @Test
+    func claudeChildPermissionRetainsToolIdentityAndInputSummary() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"PermissionRequest","agent_id":"agent-1","tool_use_id":"call-1","message":"Approve the test"}"#.utf8)
+        )
+        #expect(commands == [
+            .sessionClaudeSubagentEvent(
+                sessionID: "sess-123", panelID: nil,
+                event: ClaudeSubagentEvent(
+                    phase: .permission, agentID: "agent-1", toolUseID: "call-1", detail: "Approve the test"
+                )
+            ),
+        ])
+        let notification = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"Notification","agent_id":"agent-1","notification_type":"elicitation_dialog"}"#.utf8)
+        )
+        #expect(notification == [
+            .sessionClaudeSubagentEvent(
+                sessionID: "sess-123", panelID: nil,
+                event: ClaudeSubagentEvent(
+                    phase: .permission, agentID: "agent-1", summary: "Needs input",
+                    detail: "Claude Code is waiting for input"
+                )
+            ),
+        ])
+    }
+
+    @Test
+    func claudeChildIdleNotificationDoesNotChangeRootStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"Notification","agent_id":"agent-1","notification_type":"idle_prompt"}"#.utf8)
+        )
         #expect(commands.isEmpty)
+    }
+
+    @Test
+    func claudeCompletedTeammateSnapshotDoesNotPreserveActivities() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil,
+            payload: Data(#"{"hook_event_name":"Stop","background_tasks":[{"id":"task-1","type":"teammate","status":"completed"}]}"#.utf8)
+        )
+        #expect(commands.first == .sessionBackgroundActivitySync(
+            sessionID: "sess-123", panelID: nil, kind: .subagent, entries: [],
+            pendingBackgroundTaskCount: 0, preserveUnlistedActivities: false
+        ))
+    }
+
+    @Test(arguments: [false, true])
+    func claudeTeammateLifetimeDoesNotCountAsPendingWork(withShell: Bool) throws {
+        var tasks: [[String: String]] = [
+            ["id": "task-unrelated-to-agent-id", "type": "teammate", "status": "running"],
+            ["id": "monitor-1", "type": "monitor", "status": "running"],
+        ]
+        if withShell { tasks.append(["id": "shell-1", "type": "shell", "status": "running"]) }
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "Stop", "background_tasks": tasks,
+        ])
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks, sessionID: "sess-123", panelID: nil, payload: payload
+        )
+        #expect(commands.first == .sessionBackgroundActivitySync(
+            sessionID: "sess-123", panelID: nil, kind: .subagent, entries: [],
+            pendingBackgroundTaskCount: withShell ? 1 : 0, preserveUnlistedActivities: true
+        ))
     }
 
     @Test

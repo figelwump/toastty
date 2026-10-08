@@ -12,7 +12,8 @@ struct RemoteSessionStartGatewayTests {
     private static func startRequest(
         text: String = "Fix the flaky test",
         model: String? = "claude-opus-5-5",
-        clientRequestID: String = "request-1"
+        clientRequestID: String = "request-1",
+        attachments: [RemoteMessageAttachment] = []
     ) -> RemoteSessionStartRequest {
         RemoteSessionStartRequest(
             clientRequestID: clientRequestID,
@@ -20,7 +21,8 @@ struct RemoteSessionStartGatewayTests {
             profileID: "claude",
             model: model,
             reasoningEffort: "high",
-            text: text
+            text: text,
+            attachments: attachments
         )
     }
 
@@ -65,6 +67,112 @@ struct RemoteSessionStartGatewayTests {
 
     private static func encode<Value: Encodable>(_ value: Value) throws -> Data {
         try ConversationEventCoding.makeEncoder().encode(value)
+    }
+
+    @Test func legacyStartCodecAndOptionsStayCompatibleWithoutAttachmentSupport() throws {
+        let original = Self.startRequest()
+        let encoded = try original.encodedForTransport()
+        #expect(!String(decoding: encoded, as: UTF8.self).contains("attachments"))
+        #expect(try ConversationEventCoding.makeDecoder().decode(RemoteSessionStartRequest.self, from: encoded) == original)
+
+        let legacyOptions = Data(#"{"protocolVersion":"1.0","permission":"allowed","workspace":"available"}"#.utf8)
+        let options = try ConversationEventCoding.makeDecoder().decode(RemoteSessionStartOptionsResponse.self, from: legacyOptions)
+        #expect(!options.supportsAttachments)
+
+        let attachment = RemoteMessageAttachment(filename: "note.txt", data: Data("Read me".utf8))
+        let enriched = Self.startRequest(attachments: [attachment])
+        #expect(try ConversationEventCoding.makeDecoder().decode(
+            RemoteSessionStartRequest.self, from: enriched.encodedForTransport()
+        ) == enriched)
+    }
+
+    @Test func attachmentStartAuthorizesHeadersBeforeAcceptingBodyAndRefusesTheOrdinaryEndpoint() throws {
+        let client = try Self.makeClient()
+        let path = RemoteSessionStartPolicy.startWithAttachmentsPath
+        let request = Self.startRequest(attachments: [.init(filename: "note.txt", data: Data("Read me".utf8))])
+        let body = try request.encodedForTransport()
+        let headers = Support.request("POST", path, headerFields: client.headers, body: Data())
+        guard case .attachmentUploadAuthorized(let deviceID) = client.handler.authorizeAttachmentUpload(headers, at: Support.now) else {
+            Issue.record("Expected native session-start upload admission")
+            return
+        }
+        #expect(deviceID == client.deviceID)
+        guard case .deferredSessionStartAttachments(let finalDeviceID, let deferredBody) = client.handle(path, body: body) else {
+            Issue.record("Expected a deferred attachment start")
+            return
+        }
+        #expect(finalDeviceID == client.deviceID)
+        #expect(deferredBody == body)
+        #expect(try Self.result(client.response(RemoteSessionStartPolicy.startPath, body: body)) == .rejected(reason: .invalidAttachments))
+        #expect(try client.response(path, body: Data(), headers: [client.headers[0]]).status == 401)
+        #expect(try client.response(path, body: Data(), headers: client.headers + [("origin", "https://hostile.example")]).status == 403)
+        #expect(try client.response(
+            path, body: Data(),
+            headers: [("cookie", Support.pairedDeviceCookie(client.store)), ("origin", Support.origin)]
+        ).status == 401)
+
+        func deniedAdmission() throws -> RemoteSessionStartResult {
+            guard case .respond(let response) = client.handler.authorizeAttachmentUpload(headers, at: Support.now) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            #expect(response.status == 200)
+            return try Self.result(response)
+        }
+        #expect(try client.store.setSessionStartDisabled(true, forDevice: client.deviceID))
+        #expect(try deniedAdmission() == .rejected(reason: .permissionDenied))
+        #expect(try client.store.setSessionStartDisabled(false, forDevice: client.deviceID))
+        #expect(try client.store.setScopes([.read], forDevice: client.deviceID))
+        #expect(try deniedAdmission() == .rejected(reason: .permissionDenied))
+    }
+
+    @MainActor
+    @Test func attachmentStartValidatesDecodedFilesAndFieldsThenChecksLiveAuthorization() async throws {
+        let client = try Self.makeClient()
+        let attachment = RemoteMessageAttachment(filename: "note.txt", data: Data("Read me".utf8))
+        let request = Self.startRequest(text: "", attachments: [attachment])
+        let body = try request.encodedForTransport()
+        let conversationID = RemoteConversationID()
+        var received: [RemoteSessionStartRequest] = []
+        client.handler.sessionStartHandler = { request, _ in
+            received.append(request)
+            return .started(conversationID: conversationID)
+        }
+        let started = await client.handler.resolveSessionStartAttachments(deviceID: client.deviceID, body: body)
+        #expect(try Self.result(started) == .started(conversationID: conversationID))
+        #expect(received == [request])
+
+        let invalidFiles = [
+            Self.startRequest(attachments: [.init(filename: "fake.jpg", data: attachment.data)]),
+            Self.startRequest(attachments: [.init(filename: "note.txt", data: Data([0]))]),
+            Self.startRequest(attachments: [attachment, attachment]),
+            Self.startRequest()
+        ]
+        for invalid in invalidFiles {
+            let response = await client.handler.resolveSessionStartAttachments(
+                deviceID: client.deviceID, body: try invalid.encodedForTransport()
+            )
+            #expect(try Self.result(response) == .rejected(reason: .invalidAttachments))
+        }
+        for invalid in [
+            Self.startRequest(text: "nul\u{0}", attachments: [attachment]),
+            Self.startRequest(text: String(repeating: "a", count: 64 * 1024 + 1), attachments: [attachment]),
+            Self.startRequest(model: "--help", attachments: [attachment]),
+            Self.startRequest(clientRequestID: "", attachments: [attachment])
+        ] {
+            let response = await client.handler.resolveSessionStartAttachments(
+                deviceID: client.deviceID, body: try invalid.encodedForTransport()
+            )
+            #expect(try Self.result(response) == .rejected(reason: .invalidRequest))
+        }
+        #expect(try client.store.setSessionStartDisabled(true, forDevice: client.deviceID))
+        let disabled = await client.handler.resolveSessionStartAttachments(deviceID: client.deviceID, body: body)
+        #expect(try Self.result(disabled) == .rejected(reason: .permissionDenied))
+        #expect(try client.store.setSessionStartDisabled(false, forDevice: client.deviceID))
+        #expect(try client.store.revokeDevice(client.deviceID, at: Support.now))
+        let revoked = await client.handler.resolveSessionStartAttachments(deviceID: client.deviceID, body: body)
+        #expect(try Self.result(revoked) == .rejected(reason: .permissionDenied))
+        #expect(received.count == 1)
+        #expect(client.audit.entries.last?.detail == "permission_denied")
     }
 
     @Test func optionsReportThisDevicesPermissionAndNeedOnlyReadAccess() throws {

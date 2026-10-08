@@ -8,6 +8,8 @@ After pairing, or after an update, Toastty introduces notifications once at the 
 
 After Allow, the user returns to Home. Registration runs without a blocking screen. An interrupted attempt resumes when the app returns to the foreground. A failure while the app is open shows a small error with Retry. Settings shows whether alerts are on, off, being enabled, or waiting to turn off. There is no quick-check screen or success modal.
 
+Permission requires an enabled alert, Lock Screen, or Notification Center delivery location. Badge-only authorization is not sufficient. Settings offers the iOS Settings link even before push opt-in when every delivery location is off. Sound is optional.
+
 Session alerts contain the session title and one fixed status: Ready or Needs approval. The introduction discloses that the title passes through Toastty's notification service and Apple. Hiding session titles is deferred. No preference, API field, or dormant implementation for it is included.
 
 The service verifies that the registering app receives notifications before authorizing session alerts. The app handles this automatically while open. A verification alert already in flight can appear if the app moves to the background. Its fixed copy remains valid after interruption. This feature does not depend on silent push or guaranteed background execution.

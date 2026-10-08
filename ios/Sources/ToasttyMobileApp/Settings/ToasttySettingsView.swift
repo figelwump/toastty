@@ -102,6 +102,11 @@ struct ToasttySettingsView: View {
 
     private var diagnosticsSection: some View {
         Section("Diagnostics") {
+            #if DEBUG
+            if let trace = ToasttyComposerTrace.shared {
+                ToasttyComposerTraceExport(trace: trace)
+            }
+            #endif
             settingsRow(
                 "Projection run",
                 value: presentation.projectionRunID ?? "Waiting for snapshot",

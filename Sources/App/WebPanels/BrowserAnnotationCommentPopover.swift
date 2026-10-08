@@ -227,7 +227,7 @@ private struct BrowserAnnotationCommentTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = InitialFocusTextView()
+        let textView = BrowserAnnotationCommentInputView()
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.allowsUndo = true
@@ -294,7 +294,8 @@ private struct BrowserAnnotationCommentTextView: NSViewRepresentable {
     }
 }
 
-private final class InitialFocusTextView: NSTextView {
+/// Automatic terminal focus restoration must preserve this editor's responder.
+final class BrowserAnnotationCommentInputView: NSTextView {
     private var hasRequestedInitialFocus = false
 
     override func viewDidMoveToWindow() {

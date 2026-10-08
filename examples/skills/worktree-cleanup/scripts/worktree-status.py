@@ -12,7 +12,8 @@ Verdicts:
   ready     open, not draft, GitHub reports it mergeable with required checks met,
             no check failing or still running, the worktree is clean at exactly
             the PR head commit, and the description lists no merge prerequisites
-  cleanup   merged, and the worktree is clean at exactly the merged PR head
+  cleanup   merged, and clean at the PR head, or a verified detached worktree
+            at the PR head or merge commit
   blocked   anything else; the reason says what is missing. A description with an
             "Activation order", "Merge order", "Rollout", or "Depends on" section,
             or a link to a PR in another repository, blocks until the user
@@ -46,7 +47,7 @@ from pathlib import Path
 
 PR_FIELDS = (
     "number,title,state,isDraft,headRefName,headRefOid,baseRefName,isCrossRepository,"
-    "mergeable,mergeStateStatus,statusCheckRollup,url,body"
+    "mergeable,mergeStateStatus,statusCheckRollup,url,body,mergeCommit"
 )
 # GitHub computes these after branch protection: CLEAN means required checks are
 # met and nothing blocks the merge; HAS_HOOKS is CLEAN with pre-receive hooks.
@@ -118,6 +119,7 @@ class Row:
     pr: int | None = None
     pr_state: str | None = None
     head: str | None = None
+    cleanup_head: str | None = None
     title: str | None = None
     passed_checks: int = 0
     skipped_checks: list[str] = field(default_factory=list)
@@ -265,6 +267,48 @@ def match_workspaces(workspaces: list[dict] | None, path: str | None, pr: int | 
     return []
 
 
+def chip_pr_number(chip: dict, repo_slug: str) -> int | None:
+    """Only a complete canonical URL identifies a PR for detached cleanup."""
+    match = re.fullmatch(rf"https://github\.com/{re.escape(repo_slug)}/pull/(\d+)/?",
+                         chip.get("url") or "", re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def detached_workspace_matches(workspaces: list[dict] | None, path: str, pr: int,
+                               repo_slug: str) -> list[Workspace]:
+    """Both terminal paths and exact URL chips participate in ambiguity checks."""
+    by_path = match_workspaces(workspaces, path, None, repo_slug)
+    exact_chips = [w for w in workspaces or [] if any(
+        a.get("key") == "github-pr" and chip_pr_number(a, repo_slug) == pr
+        for a in w.get("annotations", []))]
+    by_chip = match_workspaces(exact_chips, None, pr, repo_slug)
+    return list({w.workspace_id: w for w in by_path + by_chip}.values())
+
+
+def detached_pr(worktree: Worktree, workspaces: list[dict] | None, prs: list[dict],
+                repo_slug: str) -> tuple[dict | None, str | None]:
+    """A detached checkout has no branch identity. Its workspace must provide one
+    unambiguous URL chip for a known merged PR in this repository."""
+    matches = match_workspaces(workspaces, worktree.path, None, repo_slug)
+    if len(matches) != 1:
+        return None, ("several workspaces match detached worktree" if matches else
+                      "detached worktree has no workspace with a matching terminal path")
+    chips = matches[0].chips
+    if len(chips) != 1:
+        return None, "detached worktree needs exactly one PR URL chip"
+    number = chip_pr_number(chips[0], repo_slug)
+    if number is None:
+        return None, "detached worktree needs an exact PR URL chip for this repository"
+    if len(detached_workspace_matches(workspaces, worktree.path, number, repo_slug)) != 1:
+        return None, "several workspaces match detached worktree or its PR chip"
+    pr = next((pr for pr in prs if pr["number"] == number), None)
+    if pr is None or pr["state"] != "MERGED":
+        return None, "detached worktree chip must identify a known merged PR"
+    if pr["isCrossRepository"]:
+        return None, "detached worktree chip identifies a fork PR"
+    return pr, None
+
+
 def refresh_merge_state(pr: dict, repo: str) -> None:
     """`gh pr list` reports UNKNOWN until GitHub computes mergeability, which
     a single-PR request triggers; ask once more if it is still computing."""
@@ -303,7 +347,11 @@ def verdict(row: Row, pr: dict, worktree: Worktree | None, dirty: bool, ambiguou
     reasons = []
     if ambiguous:
         reasons.append("several PRs use this branch name")
-    mismatch = head_mismatch(worktree, pr["headRefOid"]) if worktree else None
+    merge_head = (pr.get("mergeCommit") or {}).get("oid")
+    detached_match = (worktree is not None and worktree.branch is None and
+                      pr["state"] == "MERGED" and
+                      worktree.head in (pr["headRefOid"], merge_head))
+    mismatch = head_mismatch(worktree, pr["headRefOid"]) if worktree and not detached_match else None
     if mismatch:
         reasons.append(mismatch)
     if dirty:
@@ -344,24 +392,33 @@ def recheck(worktree: Worktree, merged_head: str) -> str | None:
     head = run(["git", "rev-parse", "HEAD"], cwd=worktree.path, check=False).strip()
     if head != merged_head:
         return f"worktree HEAD moved to {head[:8]}"
+    branch_ref = run(["git", "symbolic-ref", "-q", "HEAD"],
+                     cwd=worktree.path, check=False).strip() or None
+    expected_ref = f"refs/heads/{worktree.branch}" if worktree.branch else None
+    if branch_ref != expected_ref:
+        return "worktree branch or detached state changed"
     if run(["git", "status", "--porcelain"], cwd=worktree.path, check=False).strip():
         return "worktree has uncommitted changes"
     return None
 
 
 def other_pr_chip(workspace: Workspace, pr: int, repo_slug: str) -> bool:
-    pattern = re.compile(rf"github\.com/{re.escape(repo_slug)}/pull/(\d+)/?$", re.IGNORECASE)
     for chip in workspace.chips:
-        found = pattern.search(chip.get("url") or "")
-        if found and int(found.group(1)) != pr:
+        found = PR_URL.search(chip.get("url") or "")
+        if found and (found.group(1).lower() != repo_slug.lower() or int(found.group(2)) != pr):
             return True
     return False
 
 
 def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_workspace: str | None,
-             workspaces: list[Workspace], other_worktrees: list[str]) -> str:
+             workspaces: list[Workspace], other_worktrees: list[str], default_branch: str) -> str:
     """Closes the workspace, removes the worktree, and deletes both branches. Every
     guard runs before the first change; a failure after one reports what was done."""
+    if worktree.branch is None:
+        if (len(workspaces) != 1 or [w.workspace_id for w in workspaces] != row.workspace_ids or
+                len(workspaces[0].chips) != 1 or
+                chip_pr_number(workspaces[0].chips[0], repo_slug) != row.pr):
+            return "skipped: detached worktree workspace or PR chip changed"
     if len(workspaces) > 1:
         return "skipped: several workspaces match (" + ", ".join(w.label for w in workspaces) + ")"
     workspace = workspaces[0] if workspaces else None
@@ -376,7 +433,7 @@ def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_worksp
             return f"skipped: {workspace.label} carries a chip for a different PR"
     if worktree.locked:
         return "skipped: the worktree is locked"
-    problem = recheck(worktree, row.head)
+    problem = recheck(worktree, row.cleanup_head)
     if problem:
         return f"skipped: {problem}"
 
@@ -398,7 +455,7 @@ def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_worksp
         done.append(f"closed {workspace.label}" + (f", ending {ended}" if ended else ""))
         if ended:
             time.sleep(CLOSE_GRACE_SECONDS)
-    problem = recheck(worktree, row.head)
+    problem = recheck(worktree, row.cleanup_head)
     if problem:
         return stop(f"{problem}; worktree kept")
     ok, output = succeeds(["git", "worktree", "remove", worktree.path], cwd=repo)
@@ -407,8 +464,42 @@ def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_worksp
     done.append("removed worktree")
     # Compare-and-delete: the ref goes only if it still points at the merged head.
     # Squash merges leave it unmerged by ancestry, so `git branch -d` would refuse.
-    ok, output = succeeds(["git", "update-ref", "-d", f"refs/heads/{row.branch}", row.head], cwd=repo)
-    done.append("deleted local branch" if ok else f"local branch kept: {output}")
+    if any(w.branch == row.branch for w in list_worktrees(repo)):
+        done.append("branches kept: branch is checked out in another worktree")
+        return "; ".join(done)
+    if worktree.branch is None:
+        if row.branch == default_branch:
+            done.append("branches kept: PR head branch is the default branch")
+            return "; ".join(done)
+        ok, output = succeeds(["gh", "pr", "list", "--head", row.branch, "--state", "open",
+                               "--json", "number,isCrossRepository,headRefName"], cwd=repo)
+        try:
+            open_prs = json.loads(output) if ok else None
+            valid = isinstance(open_prs, list) and all(
+                isinstance(pr, dict) and isinstance(pr.get("number"), int) and
+                isinstance(pr.get("isCrossRepository"), bool) and
+                isinstance(pr.get("headRefName"), str) for pr in open_prs)
+        except json.JSONDecodeError:
+            valid = False
+        if not valid:
+            done.append("branches kept: could not check open PRs for the head branch")
+            return "; ".join(done)
+        if any(pr["number"] != row.pr and not pr["isCrossRepository"] and
+               pr["headRefName"] == row.branch for pr in open_prs):
+            done.append("branches kept: another open PR uses the head branch")
+            return "; ".join(done)
+    ok, output = succeeds(["git", "for-each-ref", "--format=%(refname) %(objectname)",
+                           f"refs/heads/{row.branch}"], cwd=repo)
+    if not ok:
+        done.append("branches kept: could not read the local branch")
+        return "; ".join(done)
+    local_branch = next((line.split(" ", 1)[1] for line in output.splitlines()
+                         if line.startswith(f"refs/heads/{row.branch} ")), None)
+    if local_branch:
+        ok, output = succeeds(["git", "update-ref", "-d", f"refs/heads/{row.branch}", row.head], cwd=repo)
+        done.append("deleted local branch" if ok else f"local branch kept: {output}")
+    else:
+        done.append("local branch already absent")
     remote = run(["git", "ls-remote", "--heads", "origin", row.branch], cwd=repo, check=False).split()
     if remote and remote[0] == row.head:
         ok, output = succeeds(["git", "push", f"--force-with-lease=refs/heads/{row.branch}:{row.head}",
@@ -469,7 +560,8 @@ def main() -> None:
         if pr["state"] == "OPEN":
             refresh_merge_state(pr, repo)
         row = Row(worktree=worktree.path if worktree else None, branch=pr["headRefName"], local=local,
-                  pr=pr["number"], pr_state=pr["state"], head=pr["headRefOid"], title=pr["title"])
+                  pr=pr["number"], pr_state=pr["state"], head=pr["headRefOid"],
+                  cleanup_head=worktree.head if worktree else None, title=pr["title"])
         summarize_checks(row, pr)
         matches = match_workspaces(workspace_list, row.worktree, row.pr, repo_slug)
         if matches:
@@ -481,12 +573,21 @@ def main() -> None:
     for worktree in worktrees:
         if worktree.branch == default_branch:
             continue
-        pr, ambiguous = branch_pr(worktree.branch)
+        association_reason = None
+        if worktree.branch is None and worktree.path == worktrees[0].path:
+            pr, ambiguous = None, False
+            association_reason = "primary checkout is not a task worktree"
+        elif worktree.branch is None:
+            pr, association_reason = detached_pr(worktree, workspace_list, prs, repo_slug)
+            ambiguous = False
+        else:
+            pr, ambiguous = branch_pr(worktree.branch)
         if pr is None:
             local, _ = local_state(worktree)
             matches = match_workspaces(workspace_list, worktree.path, None, repo_slug)
             without_pr.append(Row(worktree=worktree.path, branch=worktree.branch, local=local,
-                                  workspace=" | ".join(w.label for w in matches) or None))
+                                  workspace=" | ".join(w.label for w in matches) or None,
+                                  reason=association_reason or "no PR for this branch"))
             continue
         seen_prs.add(pr["number"])
         rows.append(pr_row(pr, worktree, ambiguous))
@@ -506,7 +607,10 @@ def main() -> None:
                     continue
                 others = [w.path for w in worktrees if w.path != row.worktree]
                 row.cleanup = clean_up(row, worktree_by_path[row.worktree], repo, repo_slug, own_workspace,
-                                       match_workspaces(current, row.worktree, row.pr, repo_slug), others)
+                                       (detached_workspace_matches(current, row.worktree, row.pr, repo_slug)
+                                        if worktree_by_path[row.worktree].branch is None else
+                                        match_workspaces(current, row.worktree, row.pr, repo_slug)),
+                                       others, default_branch)
 
     order = {"ready": 0, "cleanup": 1, "blocked": 2}
     rows.sort(key=lambda row: (order[row.verdict], row.pr or 0))
@@ -542,6 +646,8 @@ def main() -> None:
         for row in without_pr:
             workspace = f"  workspace {row.workspace}" if row.workspace else ""
             print(f"  {row.worktree.replace(home, '~')}  [{row.branch}]  {row.local}{workspace}")
+            if row.reason:
+                print(f"    {row.reason}")
 
 
 if __name__ == "__main__":

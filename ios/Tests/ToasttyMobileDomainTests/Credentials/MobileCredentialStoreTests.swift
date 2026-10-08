@@ -56,6 +56,31 @@ final class MobileCredentialStoreTests: XCTestCase {
         XCTAssertEqual(security.updatedItems.count, 1)
     }
 
+    func testExistingSchemaOneRecordLoadsWithoutMigration() throws {
+        let security = RecordingSecurityClient()
+        security.copyResult = .data(Data(#"{"schemaVersion":1,"gatewayURL":"https://mac.example-tailnet.ts.net","device":{"id":"66666666-6666-6666-6666-666666666666","name":"Native phone","scopes":["read","send"]},"credentialCreatedAt":"2026-08-08T14:40:00.000Z","bearerToken":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#.utf8))
+        let store = KeychainMobileCredentialStore(securityClient: security)
+
+        XCTAssertEqual(store.load(), .available(try Self.makeCredential()))
+        XCTAssertTrue(security.addedItems.isEmpty)
+        XCTAssertTrue(security.updatedItems.isEmpty)
+    }
+
+    func testSchemaOneCustomPortCredentialRoundTripPreservesGatewayAndBearer() throws {
+        let security = RecordingSecurityClient()
+        let store = KeychainMobileCredentialStore(securityClient: security)
+        let credential = try Self.makeCredential(host: "mac.example-tailnet.ts.net:8443")
+
+        try store.save(credential)
+        let added = try XCTUnwrap(security.addedItems.last)
+        security.copyResult = .data(added.data)
+
+        XCTAssertEqual(store.load(), .available(credential))
+        XCTAssertEqual(credential.schemaVersion, 1)
+        XCTAssertEqual(credential.gatewayURL.absoluteString, "https://mac.example-tailnet.ts.net:8443")
+        XCTAssertEqual(added.locator.synchronizable, .nonSynchronizable)
+    }
+
     func testDeleteUsesSynchronizableAnyAndToleratesMissing() throws {
         let security = RecordingSecurityClient()
         security.deleteStatus = errSecItemNotFound

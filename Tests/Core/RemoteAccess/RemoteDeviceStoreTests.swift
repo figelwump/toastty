@@ -231,9 +231,11 @@ struct RemoteDeviceStoreTests {
         }
     }
 
-    @Test func nativeOfferContainsBoundedIndependentProofsAndReplacesOrCancelsAtomically() throws {
+    @Test(arguments: ["https://toastty.example-tailnet.ts.net", "https://toastty.example-tailnet.ts.net:8443", "https://toastty.example-tailnet.ts.net:65535"])
+    func nativeOfferContainsBoundedIndependentProofsAndReplacesOrCancelsAtomically(gateway: String) throws {
+        let gatewayURL = try #require(URL(string: gateway))
         let store = RemoteDeviceStore(fileURL: nil)
-        let first = try store.issueNativePairingOffer(gatewayURL: Self.gatewayURL, at: Self.now)
+        let first = try store.issueNativePairingOffer(gatewayURL: gatewayURL, at: Self.now)
         #expect(first.expiresAt == Self.now.addingTimeInterval(120))
         #expect(first.qrPayload.secret.count == 43)
         #expect(Data(base64URLTestString: first.qrPayload.secret)?.count == 32)
@@ -246,7 +248,7 @@ struct RemoteDeviceStoreTests {
         #expect(try RemoteNativePairingQRPayload(encodedString: encoded) == first.qrPayload)
 
         let replacement = try store.issueNativePairingOffer(
-            gatewayURL: Self.gatewayURL,
+            gatewayURL: gatewayURL,
             at: Self.now.addingTimeInterval(1)
         )
         #expect(replacement.id != first.id)
@@ -268,7 +270,8 @@ struct RemoteDeviceStoreTests {
             "https://user@toastty.example-tailnet.ts.net",
             "https://toastty.example-tailnet.ts.net/path",
             "https://toastty.example-tailnet.ts.net?secret=value",
-            "https://toastty.example-tailnet.ts.net:8443",
+            "https://toastty.example-tailnet.ts.net:0",
+            "https://toastty.example-tailnet.ts.net:65536",
         ] {
             #expect(throws: RemoteNativePairingOfferError.self) {
                 try store.issueNativePairingOffer(gatewayURL: URL(string: value)!, at: Self.now)

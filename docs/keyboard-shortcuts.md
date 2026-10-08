@@ -16,6 +16,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+W` | Close focused panel |
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
+| `Option+Shift+M` | Run the selected subspace's Merge button, in the mode it shows: Merge and Clean or Merge Only |
 
 `Cmd+W` and `File > Close` both use Toastty's panel-close behavior. Dirty local-document drafts ask before discard, panels with a local-document save in progress refuse destructive close, and the native red close button still asks for confirmation before closing the full window.
 
@@ -37,7 +38,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Opt+Up Arrow` | Focus pane above |
 | `Cmd+Opt+Down Arrow` | Focus pane below |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels. Each group follows sidebar order downward before wrapping. |
 | `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Ctrl+Left Arrow` | Resize split left |
 | `Cmd+Ctrl+Right Arrow` | Resize split right |

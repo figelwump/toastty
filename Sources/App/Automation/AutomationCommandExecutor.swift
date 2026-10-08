@@ -1199,6 +1199,36 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.claude_subagent_event":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(sessionID: sessionID, rawPanelID: event.panelID)
+            guard let phaseRaw = event.payload.string("phase"),
+                  let phase = ClaudeSubagentEvent.Phase(rawValue: phaseRaw),
+                  let agentID = normalizedOptionalText(event.payload.string("agentID")) else {
+                throw AutomationSocketError.invalidPayload("a valid phase and agentID are required")
+            }
+            let didMutate = sessionRuntimeStore.handleClaudeSubagentEvent(
+                sessionID: sessionID,
+                event: ClaudeSubagentEvent(
+                    phase: phase, agentID: agentID,
+                    toolUseID: normalizedOptionalText(event.payload.string("toolUseID")),
+                    displayName: normalizedOptionalText(event.payload.string("displayName")),
+                    command: normalizedOptionalText(event.payload.string("command")),
+                    summary: normalizedOptionalText(event.payload.string("summary")),
+                    detail: normalizedOptionalText(event.payload.string("detail")),
+                    executionProfile: executionProfile(from: event.payload)
+                ),
+                at: now
+            )
+            if didMutate { stateVersion += 1 }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(didMutate ? "accepted" : "noop"),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.codex_hook_event":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
