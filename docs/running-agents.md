@@ -1091,16 +1091,37 @@ launch option disables hooks. A later accepted managed status takes priority
 again. A quiet agent does not cause a switch. Hook settings outside the supplied
 launch settings are not inspected. A manual process watch also keeps priority.
 
+The sidebar expands to its session width when the first program row appears
+in a window. Wider widths and later manual resizing are preserved. Explicit
+progress percentages use blue text.
+
 A shell prompt or terminal process exit clears working, blocked, and idle
-records. Done and error results remain until terminal input acknowledges them;
-a terminal reset or close removes all records. Background jobs and multiplexed
-panes share the enclosing terminal's row and prompt lifecycle. This status is
-local to the macOS sidebar. It does not create managed sessions, mobile session
-state, agent hooks, or desktop notifications.
+records. Programs should send `state=done` or `state=error` before exiting.
+Toastty shows these as Ready or Error and keeps the result until you view that
+terminal in the active app or send terminal input. Viewing a blocked or running
+row does not acknowledge completion records hidden behind that row. A terminal
+reset or close removes all records. Toastty does not infer success when a
+program exits without a completion report.
+
+A new completion result marks an unfocused terminal unread and uses the same
+desktop notification route as a watched command. A focused terminal also
+notifies while Toastty is inactive. Repeated reports do not repeat the
+notification. Notifications are limited to one per terminal every five seconds;
+a first error can notify immediately after success, with subsequent errors
+subject to the same interval. The row and unread state still update when a
+notification is limited. macOS notification permissions and Focus settings apply.
+
+Background jobs and multiplexed panes share the enclosing terminal's row and
+prompt lifecycle. This status does not create managed sessions, mobile session
+state, or agent hooks.
 
 To check the protocol and sidebar in an isolated dev terminal, run
 `python3 scripts/automation/program-status-fixture.py --scenario permission`.
 The fixture sends terminal output only and holds its status for 120 seconds.
+Working and blocked scenarios then report simulated completion. Use
+`--hold-seconds 5` and switch to another terminal to test the Ready result and
+notification. View the original terminal to dismiss the result. Ctrl+C clears
+the simulated status without reporting success.
 Other scenarios include `working`, `question`, `auth`, `done`, `error`, `agent`,
 `lifecycle`, and `flood`. See [Ghostty Integration](ghostty-integration.md) for
 the required matching header and library.

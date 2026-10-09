@@ -6,6 +6,225 @@ import Testing
 
 @MainActor
 struct TerminalProgramStatusRuntimeTests {
+    @Test(arguments: [TerminalProgramStatusReport.State.done, .error])
+    func completedProgramSurvivesPromptUntilItsPanelIsViewed(_ state: TerminalProgramStatusReport.State) throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in },
+                                        isApplicationActive: { true })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let workspace = try #require(appStore.selectedWorkspace)
+        let focusedPanelID = try #require(workspace.focusedPanelID)
+        let panelID = try #require(workspace.layoutTree.allSlotInfos.first { $0.panelID != focusedPanelID }?.panelID)
+
+        store.handleProgramStatusEvent(.report(.init(state: state, title: "Build", message: "Result")), panelID: panelID)
+        store.handleProgramStatusEvent(.prompt, panelID: panelID)
+        #expect(store.programStatusRows(in: workspace).first?.status.kind == (state == .done ? .ready : .error))
+        #expect(appStore.selectedWorkspace?.unreadPanelIDs.contains(panelID) == true)
+        _ = appStore.send(.focusPanel(workspaceID: workspace.id, panelID: focusedPanelID))
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] != nil)
+        _ = appStore.send(.focusPanel(workspaceID: workspace.id, panelID: panelID))
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
+        #expect(appStore.selectedWorkspace?.unreadPanelIDs.contains(panelID) == false)
+        #expect(store.sessionRegistry.sessionsByID.isEmpty)
+    }
+
+    @Test(arguments: [true, false])
+    func programCompletionUsesNotificationFocusRules(_ applicationActive: Bool) async throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        var isActive = applicationActive
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+            await recorder.record(title: title, body: body, workspaceID: workspaceID, panelID: panelID, context: context)
+        }, isApplicationActive: { isActive })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let workspace = try #require(appStore.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        store.handleProgramStatusEvent(.report(.init(state: .done, title: "Build", message: "All tests passed")), panelID: panelID)
+        if applicationActive {
+            await settleNotificationTasks()
+        } else {
+            await waitUntilNotificationCount(recorder, expectedCount: 1)
+        }
+        let notifications = await recorder.notifications()
+        #expect(notifications.count == (applicationActive ? 0 : 1))
+        if !applicationActive {
+            let notification = try #require(notifications.first)
+            #expect(notification.title == "Command finished")
+            #expect(notification.body == "Build: All tests passed")
+            #expect(notification.workspaceID == workspace.id)
+            #expect(notification.panelID == panelID)
+            #expect(notification.context.workspaceTitle == workspace.title)
+        }
+        // A result received while already focused remains until the next read/input action.
+        #expect(store.programStatusRuntime.recordsByPanel[panelID]?.presentation?.record.state == .done)
+        isActive = true
+        // WorkspaceView dispatches this when the app becomes active again.
+        _ = appStore.send(.markPanelNotificationsRead(workspaceID: workspace.id, panelID: panelID))
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
+    }
+
+    @Test
+    func repeatedProgramCompletionAndRapidStateChangesDoNotSpamNotifications() async throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+            await recorder.record(title: title, body: body, workspaceID: workspaceID, panelID: panelID, context: context)
+        }, isApplicationActive: { false })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let panelID = try #require(appStore.selectedWorkspace?.focusedPanelID)
+        let now = Date()
+        store.handleProgramStatusEvent(.report(.init(state: .done)), panelID: panelID, at: now)
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+        for _ in 0..<20 {
+            store.handleProgramStatusEvent(.report(.init(state: .done)), panelID: panelID, at: now)
+            store.handleProgramStatusEvent(.reset, panelID: panelID, at: now)
+            store.handleProgramStatusEvent(.report(.init(state: .error)), panelID: panelID, at: now)
+        }
+        await waitUntilNotificationCount(recorder, expectedCount: 2)
+        #expect(await recorder.count() == 2) // The first error may immediately follow success.
+        #expect(store.programStatusRuntime.recordsByPanel[panelID]?.presentation?.record.state == .error)
+        store.handleProgramStatusEvent(.report(.init(state: .working)), panelID: panelID, at: now.addingTimeInterval(6))
+        store.handleProgramStatusEvent(.report(.init(state: .done)), panelID: panelID, at: now.addingTimeInterval(6))
+        await waitUntilNotificationCount(recorder, expectedCount: 3)
+        #expect(await recorder.count() == 3)
+    }
+
+    @Test
+    func childCompletionWaitsForRemainingWorkAndReadKeepsActiveRecords() async throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+            await recorder.record(title: title, body: body, workspaceID: workspaceID, panelID: panelID, context: context)
+        }, isApplicationActive: { false })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let workspace = try #require(appStore.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        store.handleProgramStatusEvent(.report(.init(state: .working, title: "Build")), panelID: panelID)
+        store.handleProgramStatusEvent(.report(.init(state: .blocked, id: "approval", kind: .permission)), panelID: panelID)
+        store.handleProgramStatusEvent(.report(.init(state: .done, id: "tests")), panelID: panelID)
+        await settleNotificationTasks()
+        #expect(await recorder.count() == 0)
+        _ = appStore.send(.focusPanel(workspaceID: workspace.id, panelID: panelID))
+        store.noteLocalInputForActiveSession(panelID: panelID)
+        #expect(store.programStatusRuntime.recordsByPanel[panelID]?.records.count == 3)
+        #expect(store.programStatusRuntime.recordsByPanel[panelID]?.presentation?.record.state == .blocked)
+        store.handleProgramStatusEvent(.report(.init(state: .done, id: "tests")), panelID: panelID)
+        store.handleProgramStatusEvent(.prompt, panelID: panelID)
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+        #expect(await recorder.count() == 1)
+        #expect(store.programStatusRuntime.recordsByPanel[panelID]?.presentation?.record.state == .done)
+    }
+
+    @Test
+    func completionSummaryRefreshBeforeDeliveryUsesLatestMessage() async throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+            await recorder.record(title: title, body: body, workspaceID: workspaceID, panelID: panelID, context: context)
+        }, isApplicationActive: { false })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let panelID = try #require(appStore.selectedWorkspace?.focusedPanelID)
+        store.handleProgramStatusEvent(.report(.init(state: .done, title: "Build", message: "Complete")), panelID: panelID)
+        store.handleProgramStatusEvent(.report(.init(state: .done, title: "Build", message: "100 tests passed")), panelID: panelID)
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+        let notifications = await recorder.notifications()
+        #expect(notifications.count == 1)
+        #expect(notifications.first?.body == "Build: 100 tests passed")
+    }
+
+    @Test
+    func viewingResultBeforeNotificationTaskRunsCancelsNotification() async throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+            await recorder.record(title: title, body: body, workspaceID: workspaceID, panelID: panelID, context: context)
+        }, isApplicationActive: { true })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let workspace = try #require(appStore.selectedWorkspace)
+        let panelID = try #require(workspace.layoutTree.allSlotInfos.first { $0.panelID != workspace.focusedPanelID }?.panelID)
+        store.handleProgramStatusEvent(.report(.init(state: .done)), panelID: panelID)
+        _ = appStore.send(.focusPanel(workspaceID: workspace.id, panelID: panelID))
+        await settleNotificationTasks()
+        #expect(await recorder.count() == 0)
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
+    }
+
+    @Test(arguments: [TerminalProgramStatusEvent.prompt, .exit])
+    func exitWithoutCompletionDoesNotInventSuccess(_ event: TerminalProgramStatusEvent) async throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+            await recorder.record(title: title, body: body, workspaceID: workspaceID, panelID: panelID, context: context)
+        }, isApplicationActive: { false })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let panelID = try #require(appStore.selectedWorkspace?.focusedPanelID)
+        store.handleProgramStatusEvent(.report(.init(state: .working)), panelID: panelID)
+        store.handleProgramStatusEvent(event, panelID: panelID)
+        await settleNotificationTasks()
+        #expect(await recorder.count() == 0)
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
+        #expect(appStore.selectedWorkspace?.unreadPanelIDs.isEmpty == true)
+    }
+
+    @Test
+    func notificationFocusWhileInactiveDefersAcknowledgementUntilActivation() throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        var isActive = false
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in },
+                                        isApplicationActive: { isActive })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let workspace = try #require(appStore.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        store.handleProgramStatusEvent(.report(.init(state: .done)), panelID: panelID)
+        _ = appStore.send(.focusPanel(workspaceID: workspace.id, panelID: panelID))
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] != nil)
+        #expect(appStore.selectedWorkspace?.unreadPanelIDs.isEmpty == true)
+        isActive = true
+        store.acknowledgeViewedProgramStatusResults()
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
+    }
+
+    @Test
+    func returningToWorkspaceAcknowledgesCompletion() throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in },
+                                        isApplicationActive: { true })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let panelID = try #require(selection.workspace.focusedPanelID)
+        _ = appStore.send(.createWorkspace(windowID: selection.windowID, title: "Other", activate: true))
+        store.handleProgramStatusEvent(.report(.init(state: .done)), panelID: panelID)
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] != nil)
+        _ = appStore.send(.selectWorkspace(windowID: selection.windowID, workspaceID: selection.workspaceID))
+        #expect(store.programStatusRuntime.recordsByPanel[panelID] == nil)
+    }
+
+    @Test
+    func newCompletionWithoutWorkingStillMarksUnread() throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in },
+                                        isApplicationActive: { true })
+        store.bind(store: appStore)
+        defer { store.reset() }
+        let workspace = try #require(appStore.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        let otherPanelID = try #require(workspace.layoutTree.allSlotInfos.first { $0.panelID != panelID }?.panelID)
+        store.handleProgramStatusEvent(.report(.init(state: .done, message: "First result")), panelID: panelID)
+        store.handleProgramStatusEvent(.prompt, panelID: panelID)
+        _ = appStore.send(.focusPanel(workspaceID: workspace.id, panelID: otherPanelID))
+        store.handleProgramStatusEvent(.report(.init(state: .done, message: "Second result")), panelID: panelID)
+        #expect(appStore.selectedWorkspace?.unreadPanelIDs.contains(panelID) == true)
+    }
+
     @Test(arguments: [AgentKind.claude, .codex])
     func localInterruptKeepsExplicitProgramStatusFallback(_ agent: AgentKind) {
         let store = SessionRuntimeStore()

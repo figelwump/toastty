@@ -8,6 +8,10 @@ struct TerminalProgramStatusRuntime {
     var fallbackSessionIDs: Set<String> = []
     var panelsWithPrompt: Set<UUID> = []
     var panelsAwaitingPrompt: Set<UUID> = []
+    // Keep the send limits across protocol clears/resets so a noisy program
+    // cannot bypass them. An error may notify immediately after a success.
+    var lastNotificationAtByPanel: [UUID: Date] = [:]
+    var lastErrorNotificationAtByPanel: [UUID: Date] = [:]
 
     mutating func apply(_ event: TerminalProgramStatusEvent, panelID: UUID, owner: SessionRecord?) {
         switch event {
@@ -53,6 +57,8 @@ struct TerminalProgramStatusRuntime {
         fallbackSessionIDs.formIntersection(activeSessionIDs)
         panelsWithPrompt.formIntersection(livePanelIDs)
         panelsAwaitingPrompt.formIntersection(livePanelIDs)
+        lastNotificationAtByPanel = lastNotificationAtByPanel.filter { livePanelIDs.contains($0.key) }
+        lastErrorNotificationAtByPanel = lastErrorNotificationAtByPanel.filter { livePanelIDs.contains($0.key) }
     }
 }
 
@@ -132,8 +138,30 @@ struct SidebarProgramStatusRow: Identifiable, Equatable {
 
 extension SessionRuntimeStore {
     func handleProgramStatusEvent(_ event: TerminalProgramStatusEvent, panelID: UUID) {
+        handleProgramStatusEvent(event, panelID: panelID, at: Date())
+    }
+
+    func handleProgramStatusEvent(_ event: TerminalProgramStatusEvent, panelID: UUID, at now: Date) {
         let previousRecords = programStatusRuntime.recordsByPanel
         programStatusRuntime.apply(event, panelID: panelID, owner: sessionRegistry.activeSession(for: panelID))
+        guard programStatusRuntime.recordsByPanel != previousRecords else { return }
+        // Observe each accepted event before the UI publication debounce. A
+        // quick working -> done cycle must not disappear in that debounce.
+        handleProgramStatusCompletion(
+            panelID: panelID,
+            previousRecord: previousRecords[panelID]?.presentation?.record,
+            at: now
+        )
+        scheduleProgramStatusPublication(ifRecordsChangedFrom: previousRecords)
+    }
+
+    func acknowledgePresentedProgramStatusResults(panelID: UUID) {
+        guard var records = programStatusRuntime.recordsByPanel[panelID],
+              let state = records.presentation?.record.state,
+              state == .done || state == .error else { return }
+        let previousRecords = programStatusRuntime.recordsByPanel
+        records.acknowledgeResults()
+        programStatusRuntime.recordsByPanel[panelID] = records.records.isEmpty ? nil : records
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousRecords)
     }
 

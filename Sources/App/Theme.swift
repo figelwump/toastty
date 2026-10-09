@@ -82,6 +82,7 @@ enum ToastyTheme {
     static let focusModeAccent = Color(hex: 0x7EBFB2)
     static let focusModeAccentText = Color(hex: 0x0C1A17)
     static let sessionIndicatorSpinnerColor = Color(hex: 0xF5A623)
+    static let sessionProgressText = Color(hex: 0x83BBFF)
     static let sessionIdleText = Color(hex: 0xC1AA8A)
     static let sessionIdleBackground = Color(hex: 0xC1AA8A, alpha: 0.1)
     static let sessionWaitingText = Color(hex: 0xE6CFA9)

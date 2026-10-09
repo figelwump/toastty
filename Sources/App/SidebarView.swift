@@ -2122,7 +2122,7 @@ struct SidebarView: View {
             if let progress = model.progress {
                 Text("\(progress)%")
                     .font(ToastyTheme.fontWorkspaceSessionElapsed)
-                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                    .foregroundStyle(ToastyTheme.sessionProgressText)
                     .monospacedDigit()
                     .fixedSize()
             }

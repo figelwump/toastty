@@ -281,6 +281,7 @@ final class SessionRuntimeStore: ObservableObject {
 
         guard storeActionObserverToken == nil else { return }
         storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
+            self?.acknowledgeProgramStatusAfterRead(action: action, previousState: previousState, state: nextState)
             self?.collapseReadyStatusAfterReadIfNeeded(
                 action: action,
                 previousState: previousState,
@@ -449,14 +450,74 @@ final class SessionRuntimeStore: ObservableObject {
     /// projection sync cannot accidentally move the input before its safety
     /// baseline.
     func noteLocalInputForActiveSession(panelID: UUID) {
-        let previousRecords = programStatusRuntime.recordsByPanel
-        if var records = programStatusRuntime.recordsByPanel[panelID] {
-            records.acknowledgeResults()
-            programStatusRuntime.recordsByPanel[panelID] = records.records.isEmpty ? nil : records
-            scheduleProgramStatusPublication(ifRecordsChangedFrom: previousRecords)
-        }
+        acknowledgePresentedProgramStatusResults(panelID: panelID)
         guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
         nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
+    }
+
+    private func acknowledgeProgramStatusAfterRead(action: AppAction, previousState: AppState, state: AppState) {
+        let panelID: UUID
+        switch action {
+        case .focusPanel(_, let panel), .markPanelNotificationsRead(_, let panel):
+            panelID = panel
+        default:
+            guard let focusedPanel = state.selectedWorkspaceSelection()?.workspace.focusedPanelID,
+                  previousState.selectedWorkspaceSelection()?.workspace.focusedPanelID != focusedPanel else { return }
+            panelID = focusedPanel
+        }
+        guard isApplicationActive(), isPanelCurrentlyFocused(panelID, state: state) else { return }
+        acknowledgePresentedProgramStatusResults(panelID: panelID)
+    }
+
+    /// Activation can follow a notification click that already cleared unread
+    /// while the app was inactive. Acknowledge the visible result in that case too.
+    func acknowledgeViewedProgramStatusResults() {
+        guard let store, isApplicationActive(),
+              let panelID = store.state.selectedWorkspaceSelection()?.workspace.focusedPanelID else { return }
+        acknowledgePresentedProgramStatusResults(panelID: panelID)
+    }
+
+    func handleProgramStatusCompletion(
+        panelID: UUID,
+        previousRecord: TerminalProgramStatusReport?,
+        at now: Date
+    ) {
+        guard let store,
+              let selection = store.state.workspaceSelection(containingPanelID: panelID),
+              let row = programStatusRows(in: selection.workspace).first(where: { $0.panelID == panelID }),
+              row.presentation.record.state == .done || row.presentation.record.state == .error,
+              previousRecord != row.presentation.record,
+              !(isApplicationActive() && isPanelCurrentlyFocused(panelID, state: store.state)) else { return }
+
+        _ = store.send(.recordDesktopNotification(workspaceID: selection.workspaceID, panelID: panelID))
+        let isError = row.presentation.record.state == .error
+
+        Task { @MainActor [weak self] in
+            guard let self, let store = self.store,
+                  let currentSelection = store.state.workspaceSelection(containingPanelID: panelID),
+                  let currentRow = self.programStatusRows(in: currentSelection.workspace).first(where: { $0.panelID == panelID }),
+                  currentRow.presentation.record.state == row.presentation.record.state,
+                  !(self.isApplicationActive() && self.isPanelCurrentlyFocused(panelID, state: store.state)) else { return }
+            // Check and consume the limit only when the result is still
+            // eligible to send. A cancelled queued send must not hide a later run.
+            let lastSent = isError
+                ? self.programStatusRuntime.lastErrorNotificationAtByPanel[panelID]
+                : self.programStatusRuntime.lastNotificationAtByPanel[panelID]
+            guard lastSent.map({ now.timeIntervalSince($0) >= 5 }) ?? true else { return }
+            self.programStatusRuntime.lastNotificationAtByPanel[panelID] = now
+            if isError { self.programStatusRuntime.lastErrorNotificationAtByPanel[panelID] = now }
+            let body = currentRow.summary.map { currentRow.title + ": " + $0 } ?? currentRow.title
+            await self.sendSessionStatusNotification(
+                isError ? "Command failed" : "Command finished",
+                body,
+                currentSelection.workspaceID,
+                panelID,
+                DesktopNotificationContext(
+                    workspaceTitle: currentSelection.workspace.title,
+                    panelLabel: currentSelection.workspace.panelState(for: panelID)?.notificationLabel
+                )
+            )
+        }
     }
 
     func isNativeSessionBindingInputClean(

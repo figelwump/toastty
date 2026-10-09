@@ -66,7 +66,20 @@ def main():
         elif args.scenario in ("done", "error"):
             report(args.scenario, app="deploy", title="Deploy v2.4.1", msg="Deployed v2.4.1 to 3 regions" if args.scenario == "done" else "EU West: deployment failed")
     print(f"Scenario: {args.scenario}. Status remains for {args.hold_seconds:g} seconds.", flush=True)
-    time.sleep(args.hold_seconds)
+    try:
+        time.sleep(args.hold_seconds)
+    except KeyboardInterrupt:
+        report("clear")
+        print("\nScenario cancelled; status cleared.", flush=True)
+        return
+    if args.scenario in ("working", "permission", "question", "auth", "agent"):
+        # Complete child tasks before the root result, or a blocked child would
+        # continue to take priority over the root's completion.
+        if args.scenario == "permission":
+            report("clear", id="west")
+        report("done", app="claude-code" if args.scenario == "agent" else "deploy",
+               title="Deploy v2.4.1", msg="Simulated deployment complete")
+        print("Scenario complete. View this terminal to acknowledge the Ready result.", flush=True)
 
 
 if __name__ == "__main__":
