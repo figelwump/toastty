@@ -551,15 +551,16 @@ A subspace with a `github-pr` annotation shows a **Merge PR #N** button under
 its title in the top bar. The arrow beside it picks what the button does. The
 button label does not change; the menu marks the selected mode.
 
-- **Merge and Clean**, the default: after the pull request merges, Toastty
+- **Merge and Clean Workspace**, the default: after the pull request merges, Toastty
   closes the workspace, removes its worktree, and deletes its branches.
 - **Merge Only** merges the pull request and leaves the workspace in place.
 
 The choice applies to every workspace and is kept across launches.
-`Option+Shift+M` runs the selected subspace's button in the mode it shows. In a
+`Option+Shift+M` runs the selected subspace's button in the mode its menu
+marks. In a
 workspace without a Merge button, the key goes to the terminal as usual. The
 subspace's sidebar context menu offers both actions, as **Merge PR #N and Clean
-Up** and **Merge PR #N Only**.
+Workspace** and **Merge PR #N Only**.
 
 Toastty merges the pull request itself, with no agent and no skills
 installed. It needs `gh`, `git`, and `python3` on your login shell's `PATH`, and

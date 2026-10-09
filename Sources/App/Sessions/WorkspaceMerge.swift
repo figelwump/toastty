@@ -13,7 +13,7 @@ enum WorkspaceMergeMode: String, CaseIterable, Sendable {
     var menuTitle: String {
         switch self {
         case .mergeAndCleanUp:
-            return "Merge and Clean"
+            return "Merge and Clean Workspace"
         case .mergeOnly:
             return "Merge Only"
         }
@@ -103,7 +103,7 @@ enum WorkspaceMergePresentation: Equatable {
     static func actionTitle(mode: WorkspaceMergeMode, pullRequest: String) -> String {
         switch mode {
         case .mergeAndCleanUp:
-            return "Merge \(pullRequest) and Clean Up"
+            return "Merge \(pullRequest) and Clean Workspace"
         case .mergeOnly:
             return "Merge \(pullRequest) Only"
         }
