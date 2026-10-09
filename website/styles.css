@@ -327,7 +327,6 @@ h1 em { display: block; color: var(--amber); font-style: normal; }
 kbd { font: 600 12px var(--mono); background: #fffaf1; border: 1px solid #d9cbb2; border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; color: var(--ink); }
 .agents-line { margin-top: 18px; font-size: 14px; line-height: 1.65; color: var(--ink-3); }
 .sidebar-figure { width: 100%; max-width: 300px; margin: 0; justify-self: center; }
-.demo-caption { margin-top: 16px; color: var(--ink-3); font-size: 11.5px; line-height: 1.5; }
 .sbdemo { width: 100%; max-width: 300px; justify-self: center; background: #1b1b1d; border-radius: 13px; padding: 16px 10px 12px; color: #E4DDD5; font: 13px/1.4 var(--sans); box-shadow: 0 30px 70px -30px rgba(60, 35, 5, 0.5); position: relative; overflow: hidden; }
 .sbdemo .card.sel::before { left: -10px; }
 .program-progress { position: absolute; right: 8px; top: 6px; color: #79b7f5; font: 11px/1.5 var(--mono); }
