@@ -90,6 +90,12 @@ public protocol GatewayClientProtocol: Sendable {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse
     func sessionStartOptions(
         _ request: RemoteSessionStartOptionsRequest
     ) async throws -> RemoteSessionStartOptionsResponse
@@ -131,6 +137,18 @@ public extension GatewayClientProtocol {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse {
         throw GatewayFailure.invalidResponse
     }
 
@@ -347,6 +365,61 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
                 throw GatewayCompatibilityError.unsupportedProtocolVersion(
                     decoded.protocolVersion
                 )
+            }
+            return decoded
+        }
+    }
+
+    public func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse {
+        let response = try await perform(
+            method: "POST",
+            path: "/api/conversation.queue.update",
+            body: try encode(request)
+        )
+        return try mapCompatibility {
+            let decoded = try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationQueueUpdateResponse.self,
+                from: response.body
+            )
+            guard decoded.protocolVersion == RemoteGatewayProtocol.version else {
+                throw GatewayCompatibilityError.unsupportedProtocolVersion(decoded.protocolVersion)
+            }
+            return decoded
+        }
+    }
+
+    public func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse {
+        let urlRequest = try await makeNativeBearerRequest(
+            method: "POST",
+            path: "/api/conversation.interrupt",
+            body: try encode(request),
+            sendsOrigin: true
+        )
+        let response = try await sendTransportRequest(urlRequest)
+        // A send-scope refusal carries a result envelope the client can show
+        // instead of a bare 403.
+        if response.statusCode == 403,
+           let decoded = try? ConversationEventCoding.makeDecoder().decode(
+               RemoteConversationInterruptResponse.self,
+               from: response.body
+           ),
+           decoded.result == .rejected(reason: .sendScopeDenied) {
+            return decoded
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            throw try classifyHTTPError(response)
+        }
+        return try mapCompatibility {
+            let decoded = try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationInterruptResponse.self,
+                from: response.body
+            )
+            guard decoded.protocolVersion == RemoteGatewayProtocol.version else {
+                throw GatewayCompatibilityError.unsupportedProtocolVersion(decoded.protocolVersion)
             }
             return decoded
         }

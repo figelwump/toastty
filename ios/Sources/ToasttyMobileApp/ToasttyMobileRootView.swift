@@ -14,6 +14,10 @@ struct ToasttyMobileRootView: View {
     @State private var composerDraftState = ToasttyComposerDraftState()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
     @State private var fixtureComposerIsReserved = false
+    @State private var fixtureQueuedMessages: [RemoteQueuedMessage] = []
+    @State private var fixtureQueueSubmissionCount = 0
+    @State private var fixtureQueuePaused = false
+    @State private var fixtureTurnStopped = false
 #if DEBUG
     @State private var controlledFixtureSubmission: ControlledFixtureSubmission?
     @State private var fixtureSentText: String?
@@ -400,7 +404,9 @@ struct ToasttyMobileRootView: View {
             attachmentRecoveryMessage: composerDraftState.attachmentRecoveryMessages[conversationID],
             loadOlder: conversationLoadOlderAction(for: conversationID),
             submitDraft: conversationSubmitAction(for: conversationID),
+            interrupt: conversationInterruptAction(for: conversationID),
             dismissSendReceipt: conversationReceiptDismissAction(for: conversationID),
+            queuedMessageAction: conversationQueuedMessageAction(for: conversationID),
             sendFeedback: conversationSendFeedback(for: conversationID),
             interactionAnswerStates: conversationInteractionAnswerStates(for: conversationID),
             editInteractionAnswer: conversationInteractionEditAction(for: conversationID),
@@ -516,6 +522,16 @@ struct ToasttyMobileRootView: View {
             return ToasttyConversationFixture.tablePresentation(for: conversationID)
         case .toolActivity:
             return ToasttyConversationFixture.toolActivityPresentation(for: conversationID)
+        case .queueSteer:
+            return ToasttyConversationFixture.gatedSendPresentation(
+                for: conversationID,
+                sendItems: conversationID == Self.fixtureWorkingConversationID
+                    ? ToasttySendPresentationAdapter.makeItems(
+                        from: SendReconciliationState(),
+                        inputControl: fixtureInputControl
+                    ) + fixtureSendItems
+                    : []
+            )
         case .gatedSend, .gatedSendReceipt:
             if let order = fixtureSendEventOrder,
                conversationID == Self.fixtureOpenPromptConversationID {
@@ -602,8 +618,8 @@ struct ToasttyMobileRootView: View {
         }
     }
 
-    private func conversationSubmitAction(for conversationID: UUID) -> () -> Bool {
-        {
+    private func conversationSubmitAction(for conversationID: UUID) -> (RemoteMessageDeliveryMode?) -> Bool {
+        { deliveryMode in
             guard let submission = composerDraftState.beginSubmission(
                 for: conversationID
             ) else {
@@ -612,13 +628,64 @@ struct ToasttyMobileRootView: View {
             recordDiagnostic(.sendStarted)
             guard let controller = sessionController.liveController?.activeConversationController,
                   controller.conversationID == conversationID else {
-                return fixtureSubmit(submission)
+                return fixtureSubmit(submission, deliveryMode: deliveryMode)
             }
             Task { @MainActor in
-                let outcome = await controller.send(submission.text, attachments: submission.attachments)
+                let outcome = await controller.send(
+                    submission.text,
+                    attachments: submission.attachments,
+                    deliveryMode: deliveryMode
+                )
                 finishSubmission(submission, outcome: outcome)
             }
             return true
+        }
+    }
+
+    private func conversationInterruptAction(for conversationID: UUID) -> () -> Void {
+        {
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+#if DEBUG
+                fixtureInterrupt(conversationID)
+#endif
+                return
+            }
+            Task { await controller.interrupt() }
+        }
+    }
+
+    /// Edit and Steer now first take the message out of the Mac's queue, and
+    /// act on its text only when the Mac confirms it was still waiting. A
+    /// message the Mac already typed is left alone.
+    private func conversationQueuedMessageAction(
+        for conversationID: UUID
+    ) -> (ToasttyQueuedMessageAction) -> Void {
+        { action in
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+#if DEBUG
+                fixtureQueuedMessageAction(action, conversationID: conversationID)
+#endif
+                return
+            }
+            Task { @MainActor in
+                switch action {
+                case .remove(let clientRequestID):
+                    _ = await controller.removeQueuedMessage(clientRequestID)
+                case .edit(let clientRequestID, let text):
+                    guard await controller.removeQueuedMessage(clientRequestID) else { return }
+                    composerDraftState.restoreDraft(text, for: conversationID)
+                case .steer(let clientRequestID, let text):
+                    guard await controller.removeQueuedMessage(clientRequestID) else { return }
+                    let outcome = await controller.send(text, deliveryMode: .steer)
+                    if case .notEnqueued = outcome {
+                        composerDraftState.restoreDraft(text, for: conversationID)
+                    }
+                case .resume:
+                    await controller.resumeQueue()
+                }
+            }
         }
     }
 
@@ -711,8 +778,87 @@ struct ToasttyMobileRootView: View {
         }
     }
 
+#if DEBUG
+    private static let fixtureTurnEpoch = RemoteInputEpoch(
+        bindingID: UUID(uuidString: "F1000000-0000-0000-0000-000000000002")!,
+        counter: 9
+    )
+
+    private var fixtureInputControl: RemoteConversationInputControl {
+        RemoteConversationInputControl(
+            turnEpoch: fixtureTurnStopped ? nil : Self.fixtureTurnEpoch,
+            canQueue: true,
+            canSteer: !fixtureTurnStopped,
+            canInterrupt: !fixtureTurnStopped,
+            queuedMessages: fixtureQueuedMessages,
+            isQueuePaused: fixtureQueuePaused
+        )
+    }
+
+    private func fixtureQueueSteerComposer() -> ToasttyComposerPresentation {
+        let control = fixtureInputControl
+        let authority: ConversationComposerAuthority
+        if let turnEpoch = control.turnEpoch {
+            authority = ConversationComposerAuthority(
+                stamp: ConversationComposerStamp(
+                    connectionGeneration: 1,
+                    streamSnapshotOrdinal: 1,
+                    projectionRunID: RemoteProjectionRunID(
+                        rawValue: UUID(uuidString: "F2000000-0000-0000-0000-000000000002")!
+                    ),
+                    projectionGeneration: 1,
+                    latestSequence: 13,
+                    inputEpoch: turnEpoch,
+                    deliveryMode: .queue
+                ),
+                inputAvailability: .unavailable(reason: .known(.working)),
+                inputControl: control
+            )
+        } else {
+            // After a stop the fixture host reports an interrupted turn with
+            // no prompt yet, as a real host does until stabilization opens it.
+            authority = ConversationComposerAuthority(
+                inputAvailability: .unavailable(reason: .known(.interrupted)),
+                gateFailure: .inputUnavailable,
+                inputControl: control
+            )
+        }
+        return ToasttyComposerPresentation.make(agentDisplayName: "Codex", authority: authority)
+    }
+
+    private func fixtureInterrupt(_ conversationID: UUID) {
+        guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
+        fixtureTurnStopped = true
+        fixtureQueuePaused = !fixtureQueuedMessages.isEmpty
+    }
+
+    private func fixtureQueuedMessageAction(_ action: ToasttyQueuedMessageAction, conversationID: UUID) {
+        guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
+        switch action {
+        case .remove(let clientRequestID):
+            fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
+        case .edit(let clientRequestID, let text):
+            fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
+            composerDraftState.restoreDraft(text, for: conversationID)
+        case .steer(let clientRequestID, let text):
+            fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
+            fixtureSendItems.append(ToasttySendPresentationItem(
+                clientRequestID: "fixture-steered-\(fixtureSendItems.count + 1)",
+                text: text,
+                content: .optimistic(response: .accepted)
+            ))
+        case .resume:
+            fixtureQueuePaused = false
+        }
+        if fixtureQueuedMessages.isEmpty { fixtureQueuePaused = false }
+    }
+#endif
+
     private func fixtureComposer(for conversationID: UUID) -> ToasttyComposerPresentation? {
 #if DEBUG
+        if fixtureScenario == .queueSteer {
+            return conversationID == Self.fixtureWorkingConversationID ? fixtureQueueSteerComposer() : nil
+        }
         guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
               conversationID == Self.fixtureOpenPromptConversationID else { return nil }
         let epoch = RemoteInputEpoch(
@@ -749,8 +895,36 @@ struct ToasttyMobileRootView: View {
 #endif
     }
 
-    private func fixtureSubmit(_ submission: ToasttyComposerSubmission) -> Bool {
+    private func fixtureSubmit(
+        _ submission: ToasttyComposerSubmission,
+        deliveryMode: RemoteMessageDeliveryMode?
+    ) -> Bool {
 #if DEBUG
+        if fixtureScenario == .queueSteer {
+            guard submission.conversationID == Self.fixtureWorkingConversationID,
+                  fixtureTurnStopped == false else {
+                finishSubmission(submission, outcome: .notEnqueued(.inputUnavailable))
+                return false
+            }
+            fixtureQueueSubmissionCount += 1
+            let clientRequestID = "fixture-queued-\(fixtureQueueSubmissionCount)"
+            if deliveryMode == .steer {
+                fixtureSendItems.append(ToasttySendPresentationItem(
+                    clientRequestID: clientRequestID,
+                    text: submission.text,
+                    content: .optimistic(response: .accepted)
+                ))
+            } else {
+                fixtureQueuedMessages.append(RemoteQueuedMessage(
+                    clientRequestID: clientRequestID,
+                    text: submission.text,
+                    attachmentCount: submission.attachments.count,
+                    enqueuedAt: Date()
+                ))
+            }
+            finishSubmission(submission, outcome: .enqueued(clientRequestID: clientRequestID))
+            return true
+        }
         guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
               submission.conversationID == Self.fixtureOpenPromptConversationID else {
             finishSubmission(
@@ -873,6 +1047,11 @@ struct ToasttyMobileRootView: View {
         uuidString: "B1000000-0000-0000-0000-000000000007"
     )!
 
+    /// The fixture home's working Codex session ("Sparkle updater fix").
+    private static let fixtureWorkingConversationID = UUID(
+        uuidString: "B1000000-0000-0000-0000-000000000002"
+    )!
+
     private func resetComposerPresentation() {
         composerDraftState.reset()
 #if DEBUG
@@ -880,6 +1059,9 @@ struct ToasttyMobileRootView: View {
 #endif
         fixtureSendItems.removeAll(keepingCapacity: false)
         fixtureComposerIsReserved = false
+        fixtureQueuedMessages.removeAll(keepingCapacity: false)
+        fixtureQueuePaused = false
+        fixtureTurnStopped = false
     }
 
     private func observeSessionState(_ state: AppSessionState) {

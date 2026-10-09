@@ -361,3 +361,49 @@ final class SendReconciliationTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Queued sends
+
+extension SendReconciliationTests {
+    func testQueuedResponseStaysPendingUntilTheTranscriptEchoesIt() async throws {
+        let reconciliation = SendReconciliation()
+        _ = await reconciliation.enqueue(clientRequestID: "queued", text: "later")
+        await reconciliation.apply(.queued(position: 2), clientRequestID: "queued")
+        let queuedState = await reconciliation.currentState()["queued"]?.deliveryState
+        XCTAssertEqual(queuedState, .pending(.queued(position: 2)))
+        XCTAssertFalse(try XCTUnwrap(queuedState).isTerminal)
+
+        // The Mac dropped it without typing it.
+        await reconciliation.observe([.known(makeEvent(
+            sequence: 9,
+            payload: .sendDeliveryUnconfirmed(.init(clientRequestID: "queued"))
+        ))])
+        let droppedState = await reconciliation.currentState()["queued"]?.deliveryState
+        XCTAssertEqual(droppedState, .deliveryUnconfirmed)
+    }
+
+    func testRemovingAQueuedMessageForgetsItsRecordInEitherOrder() async throws {
+        let reconciliation = SendReconciliation()
+        _ = await reconciliation.enqueue(clientRequestID: "first", text: "a")
+        await reconciliation.apply(.queued(position: 1), clientRequestID: "first")
+        _ = await reconciliation.enqueue(clientRequestID: "second", text: "b")
+        await reconciliation.apply(.queued(position: 2), clientRequestID: "second")
+        _ = await reconciliation.enqueue(clientRequestID: "typed", text: "c")
+        await reconciliation.apply(.accepted(epoch: RemoteInputEpoch(bindingID: UUID(), counter: 1)), clientRequestID: "typed")
+
+        // Removal confirmed before the host's drop receipt.
+        let firstDiscarded = await reconciliation.discardQueued(clientRequestID: "first")
+        XCTAssertTrue(firstDiscarded)
+        // The receipt arrived first.
+        await reconciliation.observe([.known(makeEvent(
+            sequence: 3, payload: .sendDeliveryUnconfirmed(.init(clientRequestID: "second"))
+        ))])
+        let secondDiscarded = await reconciliation.discardQueued(clientRequestID: "second")
+        XCTAssertTrue(secondDiscarded)
+        // A send already typed at a prompt is never forgotten this way.
+        let typedDiscarded = await reconciliation.discardQueued(clientRequestID: "typed")
+        XCTAssertFalse(typedDiscarded)
+        let remaining = await reconciliation.currentState().records.map(\.clientRequestID)
+        XCTAssertEqual(remaining, ["typed"])
+    }
+}

@@ -356,6 +356,12 @@ public actor ConnectionCoordinator {
         guard RemoteAttachmentPolicy.validationError(for: attachments) == nil else {
             return .notEnqueued(.invalidAttachments)
         }
+        // Queue and steer exist only on a host that advertises them; an older
+        // host would treat the request as a prompt send against a turn epoch.
+        guard composerStamp.deliveryMode == .prompt
+                || activeCapabilities.contains(.conversationInputControl) else {
+            return .notEnqueued(.inputUnavailable)
+        }
         guard Task.isCancelled == false else { return .notEnqueued(.cancelled) }
 
         let validatedGate = await validateSendGate(
@@ -466,7 +472,7 @@ public actor ConnectionCoordinator {
         } else if let operation = sendOperations[clientRequestID],
                   operation.runtime === runtime,
                   operation.authorityInvalidatedBeforeDispatch == false,
-                  reservations[operation.reservationKey] == clientRequestID {
+                  holdsReservation(operation, clientRequestID: clientRequestID) {
             postPublicationFailure = currentCoordinatorGateFailure(
                 conversationID: conversationID,
                 composerStamp: composerStamp,
@@ -487,7 +493,7 @@ public actor ConnectionCoordinator {
 
         guard var operation = sendOperations[clientRequestID],
               operation.runtime === runtime,
-              reservations[operation.reservationKey] == clientRequestID else {
+              holdsReservation(operation, clientRequestID: clientRequestID) else {
             rollbackAdmittedClaim(clientRequestID: clientRequestID)
             _ = await runtime.sendReconciliation.discardBeforeDispatch(
                 clientRequestID: clientRequestID
@@ -637,6 +643,46 @@ public actor ConnectionCoordinator {
             return nil
         }
         return try await gateway.setConversationFlag(request)
+    }
+
+    /// Removes a queued message or resumes a paused queue on the Mac. `nil`
+    /// means the host does not offer queue controls or the connection is not
+    /// live, not a transport failure. A confirmed removal also forgets this
+    /// device's own pending record for the message.
+    public func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.conversationInputControl),
+              deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return nil
+        }
+        let response = try await gateway.updateQueue(request)
+        if request.action == .remove, response.result == .updated, let clientRequestID = request.clientRequestID,
+           let runtime = conversationRuntimes[request.conversationID]
+               ?? retainedConversationRuntimes[request.conversationID] {
+            if await runtime.sendReconciliation.discardQueued(clientRequestID: clientRequestID) {
+                retireRequestID(clientRequestID)
+            }
+        }
+        return response
+    }
+
+    /// Stops the running turn the request names.
+    public func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.conversationInputControl),
+              deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return nil
+        }
+        let response = try await gateway.interrupt(request)
+        if response.result == .rejected(reason: .sendScopeDenied) {
+            sendScopeDeniedByHost = true
+            await publishComposerAuthorities()
+        }
+        return response
     }
 
     /// Asks what this device can start in a workspace, only while live
@@ -1473,10 +1519,14 @@ public actor ConnectionCoordinator {
         }) else {
             return .conversationMissing
         }
-        guard invalidatedComposerOrdinals[conversationID] != streamSnapshotOrdinal else {
+        // A dispatched prompt send retires its snapshot ordinal so the same
+        // open prompt cannot take a second send. A running turn takes more
+        // than one queued or steered message, so it keeps no such mark.
+        guard composerStamp.deliveryMode != .prompt
+                || invalidatedComposerOrdinals[conversationID] != streamSnapshotOrdinal else {
             return .staleComposerAuthority
         }
-        guard case .openPrompt(let epoch) = summary.inputAvailability else {
+        guard let epoch = Self.currentInputEpoch(for: composerStamp.deliveryMode, in: summary) else {
             return .inputUnavailable
         }
         let currentStamp = ConversationComposerStamp(
@@ -1485,9 +1535,57 @@ public actor ConnectionCoordinator {
             projectionRunID: snapshot.projectionRunID,
             projectionGeneration: summary.projectionGeneration,
             latestSequence: summary.latestSequence,
-            inputEpoch: epoch
+            inputEpoch: epoch,
+            deliveryMode: composerStamp.deliveryMode
         )
-        return composerStamp == currentStamp ? nil : .staleComposerAuthority
+        switch composerStamp.deliveryMode {
+        case .prompt:
+            return composerStamp == currentStamp ? nil : .staleComposerAuthority
+        case .queue, .steer:
+            // Snapshots that leave the turn running (the host's own queue
+            // acknowledgement, status detail, timers) must not stale a
+            // working-turn stamp: the turn epoch is its identity.
+            let sameTurn = composerStamp.connectionGeneration == currentStamp.connectionGeneration
+                && composerStamp.projectionRunID == currentStamp.projectionRunID
+                && composerStamp.projectionGeneration == currentStamp.projectionGeneration
+                && composerStamp.inputEpoch == currentStamp.inputEpoch
+            return sameTurn ? nil : .staleComposerAuthority
+        }
+    }
+
+    /// The epoch a send in `mode` must present right now: the open prompt
+    /// for a prompt send, the running turn (while the host accepts queued
+    /// input, and steer for a steer) otherwise. Nil means no such send is
+    /// possible against this summary.
+    private static func currentInputEpoch(
+        for mode: RemoteMessageDeliveryMode,
+        in summary: CompatibleConversationSummary
+    ) -> RemoteInputEpoch? {
+        switch mode {
+        case .prompt:
+            guard case .openPrompt(let epoch) = summary.inputAvailability else { return nil }
+            return epoch
+        case .queue:
+            guard let control = summary.inputControl, control.canQueue else { return nil }
+            return control.turnEpoch
+        case .steer:
+            guard let control = summary.inputControl, control.canQueue, control.canSteer else { return nil }
+            return control.turnEpoch
+        }
+    }
+
+    /// Whether a committed working-turn send still targets the running turn
+    /// after a new session snapshot. Prompt sends are re-validated against
+    /// their exact snapshot ordinal instead.
+    private static func turnIsStillRunning(
+        for request: RemoteMessageSendRequest,
+        in snapshot: CompatibleSessionListSnapshot
+    ) -> Bool {
+        guard request.deliveryMode != .prompt,
+              let summary = snapshot.conversations.first(where: { $0.conversationID == request.conversationID }) else {
+            return false
+        }
+        return currentInputEpoch(for: request.deliveryMode, in: summary) == request.expectedInputEpoch
     }
 
     private func claimSend(
@@ -1509,8 +1607,13 @@ public actor ConnectionCoordinator {
             projectionRunID: composerStamp.projectionRunID,
             inputEpoch: composerStamp.inputEpoch
         )
-        guard reservations[reservationKey] == nil else {
-            return .denied(.sendAlreadyReserved)
+        // An open prompt takes exactly one send. A running turn takes any
+        // number of queued or steered messages, so those never reserve.
+        let reservesPrompt = composerStamp.deliveryMode == .prompt
+        if reservesPrompt {
+            guard reservations[reservationKey] == nil else {
+                return .denied(.sendAlreadyReserved)
+            }
         }
         guard let clientRequestID = mintRequestID() else {
             return .denied(.tooManyUnresolvedSends)
@@ -1520,9 +1623,12 @@ public actor ConnectionCoordinator {
             clientRequestID: clientRequestID,
             expectedInputEpoch: composerStamp.inputEpoch,
             text: text,
-            attachments: attachments
+            attachments: attachments,
+            deliveryMode: composerStamp.deliveryMode
         )
-        reservations[reservationKey] = clientRequestID
+        if reservesPrompt {
+            reservations[reservationKey] = clientRequestID
+        }
         sendOperations[clientRequestID] = SendOperation(
             request: request,
             reservationKey: reservationKey,
@@ -1588,7 +1694,7 @@ public actor ConnectionCoordinator {
             gateFailure = .cancelled
         } else if operation.authorityInvalidatedBeforeDispatch {
             gateFailure = .staleComposerAuthority
-        } else if reservations[operation.reservationKey] != clientRequestID {
+        } else if holdsReservation(operation, clientRequestID: clientRequestID) == false {
             gateFailure = .staleComposerAuthority
         } else {
             gateFailure = currentCoordinatorGateFailure(
@@ -1668,7 +1774,7 @@ public actor ConnectionCoordinator {
                 .uncertain,
                 clientRequestID: clientRequestID
             )
-        case .accepted, .duplicate, .uncertain:
+        case .accepted, .duplicate, .uncertain, .queued:
             await operation.runtime.sendReconciliation.apply(
                 result,
                 clientRequestID: clientRequestID
@@ -1758,6 +1864,13 @@ public actor ConnectionCoordinator {
         )
     }
 
+    /// Only a prompt send holds a reservation; a queue or steer send into a
+    /// running turn never did, so its claim is never "lost".
+    private func holdsReservation(_ operation: SendOperation, clientRequestID: String) -> Bool {
+        operation.request.deliveryMode != .prompt
+            || reservations[operation.reservationKey] == clientRequestID
+    }
+
     private func releaseReservation(
         _ key: ConversationSendReservationKey,
         clientRequestID: String
@@ -1767,6 +1880,8 @@ public actor ConnectionCoordinator {
     }
 
     private func invalidateComposerAuthority(for operation: SendOperation) {
+        // Only a prompt send consumes its snapshot's composer authority.
+        guard operation.request.deliveryMode == .prompt else { return }
         let stamp = operation.composerStamp
         guard stamp.connectionGeneration == state.connectionGeneration,
               stamp.streamSnapshotOrdinal == streamSnapshotOrdinal else {
@@ -1796,6 +1911,9 @@ public actor ConnectionCoordinator {
         }
         for requestID in preDispatchRequestIDs {
             guard let operation = sendOperations[requestID] else { continue }
+            // A queued or steered send survives snapshots that leave its turn
+            // running; the host's own queue acknowledgement is one of them.
+            if Self.turnIsStillRunning(for: operation.request, in: snapshot) { continue }
             if operation.callerObservedEnqueue {
                 await settleCommittedBeforeDispatch(
                     clientRequestID: requestID,
@@ -1884,7 +2002,8 @@ public actor ConnectionCoordinator {
                     inputAvailability: summary.inputAvailability,
                     hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
                     coordinatorIsLive: true,
-                    gateFailure: .sendAlreadyReserved
+                    gateFailure: .sendAlreadyReserved,
+                    inputControl: summary.inputControl
                 ))
                 return
             }
@@ -1895,7 +2014,8 @@ public actor ConnectionCoordinator {
                 inputAvailability: summary.inputAvailability,
                 hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
                 coordinatorIsLive: true,
-                gateFailure: .staleComposerAuthority
+                gateFailure: .staleComposerAuthority,
+                inputControl: summary.inputControl
             ))
             return
         }
@@ -1910,6 +2030,19 @@ public actor ConnectionCoordinator {
                 latestSequence: summary.latestSequence,
                 inputEpoch: epoch
             )
+        } else if activeCapabilities.contains(.conversationInputControl),
+                  let turnEpoch = Self.currentInputEpoch(for: .queue, in: summary) {
+            // The agent is working and the Mac will hold messages for its
+            // next prompt. Steer is a per-send choice on the same stamp.
+            stamp = ConversationComposerStamp(
+                connectionGeneration: state.connectionGeneration,
+                streamSnapshotOrdinal: streamSnapshotOrdinal,
+                projectionRunID: snapshot.projectionRunID,
+                projectionGeneration: summary.projectionGeneration,
+                latestSequence: summary.latestSequence,
+                inputEpoch: turnEpoch,
+                deliveryMode: .queue
+            )
         } else {
             stamp = nil
         }
@@ -1918,7 +2051,8 @@ public actor ConnectionCoordinator {
             inputAvailability: summary.inputAvailability,
             hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
             coordinatorIsLive: true,
-            gateFailure: nil
+            gateFailure: nil,
+            inputControl: activeCapabilities.contains(.conversationInputControl) ? summary.inputControl : nil
         ))
     }
 

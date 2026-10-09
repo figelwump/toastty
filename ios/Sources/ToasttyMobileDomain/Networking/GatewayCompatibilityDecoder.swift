@@ -84,7 +84,7 @@ public struct GatewayCompatibilityDecoder: Sendable {
     public func decodeSendResult(_ data: Data) throws -> RemoteMessageSendResult {
         let object = try JSONObject(data)
         switch try object.requiredString("status") {
-        case "accepted", "uncertain", "duplicate":
+        case "accepted", "uncertain", "duplicate", "queued":
             return try decode(RemoteMessageSendResult.self, from: object)
         case "rejected":
             let reason = try object.requiredString("reason")
@@ -187,6 +187,11 @@ public struct GatewayCompatibilityDecoder: Sendable {
             isFlaggedForLater: (try? object.optionalBool("isFlaggedForLater")) == true,
             turnStartedAt: try? object.requiredDate("turnStartedAt"),
             lastTurnDuration: object.lossyDouble("lastTurnDuration"),
+            // Additive: an older host omits it, and a malformed value reads
+            // as "no controls" rather than failing the whole snapshot.
+            inputControl: object.lossyObject("inputControl").flatMap {
+                try? decode(RemoteConversationInputControl.self, from: $0)
+            },
             projectionGeneration: try object.requiredUInt64("projectionGeneration"),
             latestSequence: try object.requiredUInt64("latestSequence"),
             updatedAt: try object.requiredDate("updatedAt")

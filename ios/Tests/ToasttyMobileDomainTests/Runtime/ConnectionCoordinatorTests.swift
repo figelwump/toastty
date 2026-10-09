@@ -408,6 +408,200 @@ final class ConnectionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testQueueUpdateAndInterruptAreSentOnlyToAHostThatAdvertisesInputControl() async throws {
+        let run = runID(4)
+        let turnEpoch = RemoteInputEpoch(bindingID: UUID(), counter: 3)
+        let update = RemoteConversationQueueUpdateRequest(
+            conversationID: conversationID, action: .remove, clientRequestID: "queued-1"
+        )
+        let interrupt = RemoteConversationInterruptRequest(conversationID: conversationID, expectedTurnEpoch: turnEpoch)
+        for (capabilities, expectsRequests) in [
+            ([RemoteGatewayCapability](), false),
+            ([.conversationInputControl], true),
+        ] {
+            let operations = OperationLog()
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse(capabilities: capabilities))],
+                sessions: [.success(snapshot(runID: run, title: "Seed"))],
+                events: []
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(
+                    operations: operations,
+                    connections: [.success(subscription)]
+                ),
+                deviceScopes: [.read, .send]
+            )
+            let earlyUpdate = try await coordinator.updateQueue(update)
+            let earlyInterrupt = try await coordinator.interrupt(interrupt)
+            XCTAssertNil(earlyUpdate)
+            XCTAssertNil(earlyInterrupt)
+
+            await coordinator.connectIfNeeded()
+            await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh")))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            let updateResponse = try await coordinator.updateQueue(update)
+            let interruptResponse = try await coordinator.interrupt(interrupt)
+
+            XCTAssertEqual(updateResponse?.result, expectsRequests ? .updated : nil)
+            XCTAssertEqual(interruptResponse?.result, expectsRequests ? .accepted : nil)
+            let sentUpdates = await gateway.recordedQueueUpdateRequests()
+            let sentInterrupts = await gateway.recordedInterruptRequests()
+            XCTAssertEqual(sentUpdates, expectsRequests ? [update] : [])
+            XCTAssertEqual(sentInterrupts, expectsRequests ? [interrupt] : [])
+            await coordinator.suspend()
+        }
+    }
+
+    func testWorkingTurnQueuesSendsWithoutReservingAndSurvivesQueueSnapshots() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let turnEpoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
+            counter: 4
+        )
+        let control = RemoteConversationInputControl(
+            turnEpoch: turnEpoch, canQueue: true, canSteer: true, canInterrupt: true
+        )
+        let sendGate = CancellationAwareGate()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: [.conversationInputControl]))],
+            sessions: [.success(snapshot(runID: run, title: "REST seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))],
+            sends: [
+                ScriptedCall(result: .success(.queued(position: 1)), gate: sendGate),
+                ScriptedCall(result: .success(.accepted(epoch: turnEpoch))),
+            ]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(
+                operations: operations,
+                connections: [.success(subscription)]
+            ),
+            deviceScopes: [.read, .send],
+            requestIDFactory: SequencedRequestIDFactory(values: ["request-one", "request-two"])
+        )
+        let dispatchWaiter = ControlledSendDispatchWaiter()
+        await coordinator.setSendDispatchWaiter(dispatchWaiter)
+        let runtime = await coordinator.openConversation(conversationID)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run, title: "Working", latestSequence: 1, inputControl: control
+        )))
+        let runtimeState = try await conversationState(
+            matching: { $0.composerAuthority.canSend },
+            runtime
+        )
+        let stamp = try XCTUnwrap(runtimeState.composerAuthority.stamp)
+        XCTAssertEqual(stamp.deliveryMode, .queue)
+        XCTAssertEqual(stamp.inputEpoch, turnEpoch)
+        XCTAssertTrue(runtimeState.composerAuthority.canSteer)
+        XCTAssertTrue(runtimeState.composerAuthority.canInterrupt)
+
+        let first = await coordinator.sendMessage(
+            conversationID: conversationID, text: "queue me", composerStamp: stamp
+        )
+        XCTAssertEqual(first, .enqueued(clientRequestID: "request-one"))
+        // A running turn takes more than one message: no prompt reservation.
+        var composerState = await runtime.currentState()
+        XCTAssertNil(composerState.composerAuthority.gateFailure)
+        XCTAssertEqual(composerState.composerAuthority.stamp?.deliveryMode, .queue)
+
+        // The host's own queue acknowledgement broadcast must not cancel the
+        // committed send while its turn is still running.
+        await subscription.send(.sessionList(snapshot(
+            runID: run, title: "Queued", latestSequence: 1,
+            inputControl: RemoteConversationInputControl(
+                turnEpoch: turnEpoch, canQueue: true, canSteer: true, canInterrupt: true,
+                queuedMessages: [RemoteQueuedMessage(clientRequestID: "request-one", text: "queue me", enqueuedAt: Date())]
+            )
+        )))
+        _ = try await conversationState(matching: { $0.composerAuthority.stamp?.streamSnapshotOrdinal == 2 }, runtime)
+        await dispatchWaiter.open()
+        try await withTimeout { try await gateway.waitForSendCallCount(1) }
+        await sendGate.open()
+        _ = try await reconciliationState(
+            matching: { $0["request-one"]?.deliveryState == .pending(.queued(position: 1)) },
+            runtime.sendReconciliation
+        )
+        let requests = await gateway.recordedSendRequests()
+        XCTAssertEqual(requests.first?.deliveryMode, .queue)
+        XCTAssertEqual(requests.first?.expectedInputEpoch, turnEpoch)
+
+        // Steer reuses the turn stamp with a different mode.
+        composerState = await runtime.currentState()
+        let steerStamp = try XCTUnwrap(composerState.composerAuthority.stamp).withDeliveryMode(.steer)
+        let second = await coordinator.sendMessage(
+            conversationID: conversationID, text: "steer me", composerStamp: steerStamp
+        )
+        XCTAssertEqual(second, .enqueued(clientRequestID: "request-two"))
+        await dispatchWaiter.open()
+        try await withTimeout { try await gateway.waitForSendCallCount(2) }
+        let steerRequests = await gateway.recordedSendRequests()
+        XCTAssertEqual(steerRequests.last?.deliveryMode, .steer)
+
+        // The turn ends: the queued record is still pending until the
+        // transcript echoes it, and the composer turns into a prompt stamp.
+        let promptEpoch = turnEpoch.next()
+        await subscription.send(.sessionList(snapshot(
+            runID: run, title: "Prompt", inputAvailability: .openPrompt(epoch: promptEpoch), latestSequence: 1,
+            inputControl: RemoteConversationInputControl(canQueue: true)
+        )))
+        composerState = try await conversationState(matching: {
+            $0.composerAuthority.stamp?.deliveryMode == .prompt
+        }, runtime)
+        XCTAssertEqual(composerState.composerAuthority.stamp?.inputEpoch, promptEpoch)
+        XCTAssertFalse(composerState.composerAuthority.canInterrupt)
+        await coordinator.suspend()
+    }
+
+    func testSteerIsRefusedLocallyWhenTheHostSaysTheMacUserIsTyping() async throws {
+        let operations = OperationLog()
+        let run = runID(1)
+        let turnEpoch = RemoteInputEpoch(bindingID: UUID(), counter: 4)
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse(capabilities: [.conversationInputControl]))],
+            sessions: [.success(snapshot(runID: run, title: "REST seed"))],
+            events: [ScriptedCall(result: .success(.page(
+                page(runID: run, events: [event(1)], latestSequence: 1)
+            )))]
+        )
+        let subscription = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: gateway,
+            eventStream: ScriptedEventStream(operations: operations, connections: [.success(subscription)]),
+            deviceScopes: [.read, .send]
+        )
+        let runtime = await coordinator.openConversation(conversationID)
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(snapshot(
+            runID: run, title: "Working", latestSequence: 1,
+            inputControl: RemoteConversationInputControl(turnEpoch: turnEpoch, canQueue: true, canSteer: false, canInterrupt: true)
+        )))
+        let runtimeState = try await conversationState(matching: { $0.composerAuthority.canSend }, runtime)
+        let stamp = try XCTUnwrap(runtimeState.composerAuthority.stamp)
+        XCTAssertFalse(runtimeState.composerAuthority.canSteer)
+        let outcome = await coordinator.sendMessage(
+            conversationID: conversationID, text: "steer", composerStamp: stamp.withDeliveryMode(.steer)
+        )
+        XCTAssertEqual(outcome, .notEnqueued(.inputUnavailable))
+        let sent = await gateway.recordedSendRequests()
+        XCTAssertEqual(sent, [])
+        await coordinator.suspend()
+    }
+
     func testSessionStartIsSentOnlyWhileLiveToAHostThatAdvertisesIt() async throws {
         let run = runID(4)
         let workspaceID = UUID()
@@ -2005,7 +2199,8 @@ final class ConnectionCoordinatorTests: XCTestCase {
         runID: RemoteProjectionRunID,
         title: String,
         inputAvailability: CompatibleInputAvailability = .unavailable(reason: .known(.working)),
-        latestSequence: UInt64 = 2
+        latestSequence: UInt64 = 2,
+        inputControl: RemoteConversationInputControl? = nil
     ) -> CompatibleSessionListSnapshot {
         CompatibleSessionListSnapshot(
             projectionRunID: runID,
@@ -2018,6 +2213,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
                     cwd: nil,
                     state: .ready,
                     inputAvailability: inputAvailability,
+                    inputControl: inputControl,
                     projectionGeneration: 4,
                     latestSequence: latestSequence,
                     updatedAt: Date(timeIntervalSince1970: 100)
@@ -2133,6 +2329,8 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var readAcknowledgements: [RemoteConversationReadAcknowledgementRequest] = []
     private var workspaceDoneRequests: [RemoteWorkspaceDoneRequest] = []
     private var conversationFlagRequests: [RemoteConversationFlagRequest] = []
+    private var queueUpdateRequests: [RemoteConversationQueueUpdateRequest] = []
+    private var interruptRequests: [RemoteConversationInterruptRequest] = []
     private var sessionStartRequests: [RemoteSessionStartRequest] = []
 
     init(
@@ -2224,6 +2422,20 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return RemoteConversationFlagResponse(result: .updated)
     }
 
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse {
+        queueUpdateRequests.append(request)
+        return RemoteConversationQueueUpdateResponse(result: .updated)
+    }
+
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse {
+        interruptRequests.append(request)
+        return RemoteConversationInterruptResponse(result: .accepted)
+    }
+
     func sessionStartOptions(
         _ request: RemoteSessionStartOptionsRequest
     ) async throws -> RemoteSessionStartOptionsResponse {
@@ -2238,6 +2450,8 @@ private actor ScriptedGateway: GatewayClientProtocol {
     }
 
     func recordedConversationFlagRequests() -> [RemoteConversationFlagRequest] { conversationFlagRequests }
+    func recordedQueueUpdateRequests() -> [RemoteConversationQueueUpdateRequest] { queueUpdateRequests }
+    func recordedInterruptRequests() -> [RemoteConversationInterruptRequest] { interruptRequests }
     func recordedSessionStartRequests() -> [RemoteSessionStartRequest] { sessionStartRequests }
     func recordedWorkspaceDoneRequests() -> [RemoteWorkspaceDoneRequest] { workspaceDoneRequests }
     func helloCallCount() -> Int { helloCalls }

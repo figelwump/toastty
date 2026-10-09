@@ -21,7 +21,7 @@ final class ToasttyConversationPresentationTests: XCTestCase {
         XCTAssertEqual(state.rows.map(\.id.conversationID), Array(repeating: conversationID.rawValue, count: 8))
         XCTAssertFalse(state.rows.contains { [10, 11].contains($0.id.sequence) })
 
-        guard case .userMessage(let text, let origin) = state.rows[0].content else {
+        guard case .userMessage(let text, let origin, _) = state.rows[0].content else {
             return XCTFail("Expected user message row")
         }
         XCTAssertEqual(text, "user")

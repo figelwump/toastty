@@ -114,6 +114,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var searchDispatchTokenByPanelID: [UUID: UUID] = [:]
     private var restoredManagedLaunchSubmitterForTesting: ((String, Bool, UUID) -> Bool)?
     private var automationSendTextHandlerForTesting: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?
+    private var automationSendInterruptHandlerForTesting: ((UUID) -> Bool)?
     private var automationPromptStateHandlerForTesting: ((UUID) -> TerminalPromptState)?
     private var automationReadVisibleTextHandlerForTesting: ((UUID, Bool) -> String?)?
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -225,6 +226,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func setAutomationSendTextHandlerForTesting(_ handler: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?) {
         automationSendTextHandlerForTesting = handler
+    }
+
+    func setAutomationSendInterruptHandlerForTesting(_ handler: ((UUID) -> Bool)?) {
+        automationSendInterruptHandlerForTesting = handler
     }
 
     func setAutomationPromptStateHandlerForTesting(
@@ -546,6 +551,23 @@ final class TerminalRuntimeRegistry: ObservableObject {
             submit: submit,
             focusPolicy: focusPolicy
         )
+    }
+
+    /// Sends the agent's interrupt key (Escape) to a panel on behalf of a
+    /// remote client. Like `sendRemoteText`, this bypasses local-draft
+    /// tracking: the caller already proved the turn it stops is the current
+    /// one, and a stop is lifecycle control rather than a draft.
+    func sendRemoteInterrupt(
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult {
+        if let automationSendInterruptHandlerForTesting {
+            return automationSendInterruptHandlerForTesting(panelID) ? .delivered : .unavailable
+        }
+        guard let controller = runtimeStore.existingController(for: panelID) else {
+            return .unavailable
+        }
+        return controller.automationSendInterruptResult(focusPolicy: focusPolicy)
     }
 
     func readVisibleText(panelID: UUID) -> String? {

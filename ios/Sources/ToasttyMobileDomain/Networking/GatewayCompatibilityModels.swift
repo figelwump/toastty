@@ -72,6 +72,8 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
     public var isFlaggedForLater: Bool
     public var turnStartedAt: Date?
     public var lastTurnDuration: TimeInterval?
+    /// Queue, steer, and stop controls from a host that advertises them.
+    public var inputControl: RemoteConversationInputControl?
     public var projectionGeneration: UInt64
     public var latestSequence: UInt64
     public var updatedAt: Date
@@ -91,6 +93,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        inputControl: RemoteConversationInputControl? = nil,
         projectionGeneration: UInt64,
         latestSequence: UInt64,
         updatedAt: Date
@@ -99,6 +102,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration
+        self.inputControl = inputControl
         self.provider = provider
         self.title = title
         self.placement = placement
@@ -211,7 +215,8 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                         )
                     }
                     : nil,
-                lastTurnDuration: summary.lastTurnDuration
+                lastTurnDuration: summary.lastTurnDuration,
+                inputControl: summary.inputControl
             )
         }
         stateTransitions.retain(mobileConversations.map(\.id))

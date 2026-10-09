@@ -11,6 +11,7 @@ struct ToasttyTranscriptView: View {
     let isSubmitting: Bool
     let loadOlder: () -> Void
     let dismissSendReceipt: (String) -> Void
+    let queuedMessageAction: (ToasttyQueuedMessageAction) -> Void
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
@@ -39,6 +40,7 @@ struct ToasttyTranscriptView: View {
         isSubmitting: Bool,
         loadOlder: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        queuedMessageAction: @escaping (ToasttyQueuedMessageAction) -> Void = { _ in },
         interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
         editInteractionAnswer: @escaping (
             RemotePendingInteraction.ID,
@@ -53,6 +55,7 @@ struct ToasttyTranscriptView: View {
         self.isSubmitting = isSubmitting
         self.loadOlder = loadOlder
         self.dismissSendReceipt = dismissSendReceipt
+        self.queuedMessageAction = queuedMessageAction
         self.interactionAnswerStates = interactionAnswerStates
         self.editInteractionAnswer = editInteractionAnswer
         self.submitInteractionAnswer = submitInteractionAnswer
@@ -372,7 +375,8 @@ struct ToasttyTranscriptView: View {
         ForEach(state.sendItems) { item in
             ToasttySendTailItemView(
                 item: item,
-                dismiss: { dismissSendReceipt(item.clientRequestID) }
+                dismiss: { dismissSendReceipt(item.clientRequestID) },
+                queuedMessageAction: queuedMessageAction
             )
             .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
         }
@@ -1137,6 +1141,7 @@ private struct ToasttySendScrollItem: Equatable {
     enum ContentKind: Equatable {
         case optimistic
         case receipt
+        case queued
     }
 
     let clientRequestID: String
@@ -1147,6 +1152,7 @@ private struct ToasttySendScrollItem: Equatable {
         contentKind = switch item.content {
         case .optimistic: .optimistic
         case .receipt: .receipt
+        case .queued: .queued
         }
     }
 }
@@ -1154,6 +1160,7 @@ private struct ToasttySendScrollItem: Equatable {
 private struct ToasttySendTailItemView: View {
     let item: ToasttySendPresentationItem
     let dismiss: () -> Void
+    var queuedMessageAction: (ToasttyQueuedMessageAction) -> Void = { _ in }
 
     @ViewBuilder
     var body: some View {
@@ -1162,7 +1169,68 @@ private struct ToasttySendTailItemView: View {
             optimisticBubble
         case .receipt(let receipt):
             receiptCard(receipt)
+        case .queued(let queued):
+            queuedBubble(queued)
         }
+    }
+
+    /// A message waiting on the Mac. Dashed, because nothing has reached the
+    /// agent yet; the actions change the queue, not the transcript.
+    private func queuedBubble(_ queued: ToasttyQueuedSendPresentation) -> some View {
+        VStack(alignment: .trailing, spacing: 7) {
+            Text(queued.isPaused
+                ? "Paused · queued \(queued.position)"
+                : "Queued \(queued.position) · sends after this turn")
+                .font(.caption2.monospaced().weight(.semibold))
+                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .textCase(.uppercase)
+            Text(item.text)
+                .font(.body)
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if queued.attachmentCount > 0 {
+                Text(queued.attachmentCount == 1 ? "+1 file" : "+\(queued.attachmentCount) files")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+            }
+            HStack(spacing: 16) {
+                if queued.isPaused {
+                    queuedAction("Send next", "resume") { queuedMessageAction(.resume) }
+                }
+                queuedAction("Edit", "edit") {
+                    queuedMessageAction(.edit(clientRequestID: item.clientRequestID, text: item.text))
+                }
+                if queued.canSteer {
+                    queuedAction("Steer now", "steer") {
+                        queuedMessageAction(.steer(clientRequestID: item.clientRequestID, text: item.text))
+                    }
+                }
+                queuedAction("Remove", "remove") {
+                    queuedMessageAction(.remove(clientRequestID: item.clientRequestID))
+                }
+            }
+            .padding(.top, 2)
+        }
+        .padding(12)
+        .overlay {
+            ToasttyDesignTokens.userBubbleShape
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                .foregroundStyle(ToasttyDesignTokens.userBubbleBorder)
+        }
+        .clipShape(ToasttyDesignTokens.userBubbleShape)
+        .padding(.leading, 48)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(item.text), \(queued.isPaused ? "Paused in queue" : "Queued, sends after this turn")")
+        .accessibilityIdentifier("toastty-mobile-send-queued-\(item.clientRequestID)")
+    }
+
+    private func queuedAction(_ title: String, _ key: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(ToasttyDesignTokens.mutedText)
+            .frame(minHeight: 32)
+            .accessibilityIdentifier("toastty-mobile-queued-\(key)-\(item.clientRequestID)")
     }
 
     private var optimisticBubble: some View {
@@ -1303,11 +1371,11 @@ private struct ToasttyTranscriptRowView: View {
     @ViewBuilder
     private var rowContent: some View {
         switch row.content {
-        case .userMessage(let text, let origin):
+        case .userMessage(let text, let origin, let deliveryMode):
             message(
                 text: text,
                 isUser: true,
-                metadata: origin == .remote ? "sent remotely" : nil
+                metadata: Self.userMessageMetadata(origin: origin, deliveryMode: deliveryMode)
             )
         case .assistantMessage(let text, let phase):
             // A chunked message renders this row's slice; the metadata caption
@@ -1333,6 +1401,19 @@ private struct ToasttyTranscriptRowView: View {
             marker(icon: "link", text: bindingLabel(reason))
         case .toolStarted, .toolFinished:
             EmptyView()
+        }
+    }
+
+    /// A remote message says how it reached the agent: typed at the prompt,
+    /// held in the Mac's queue first, or steered into a running turn.
+    static func userMessageMetadata(
+        origin: ConversationMessageOrigin,
+        deliveryMode: RemoteMessageDeliveryMode?
+    ) -> String? {
+        switch deliveryMode {
+        case .queue: "from queue"
+        case .steer: "steered"
+        case .prompt, nil: origin == .remote ? "sent remotely" : nil
         }
     }
 

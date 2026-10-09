@@ -47,6 +47,10 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// workspace. Whether one device may do so is a per-device permission
     /// that the start options report.
     case sessionStart = "session_start"
+    /// While the agent works, a client may queue a message on the Mac for
+    /// the next prompt, steer the running turn, stop it, and manage the
+    /// queue. Each summary then carries `inputControl`.
+    case conversationInputControl = "conversation_input_control"
     /// A configured host accepts a native device's verified notification grant.
     case pushNotifications = "push_notifications"
 }
@@ -73,6 +77,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .workspaceDone,
             .conversationFlag,
             .sessionStart,
+            .conversationInputControl,
         ]
     ) {
         self.protocolVersion = protocolVersion

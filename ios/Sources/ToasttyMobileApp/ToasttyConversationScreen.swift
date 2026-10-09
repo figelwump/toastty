@@ -10,6 +10,8 @@ struct ToasttyConversationScreen: View {
     @State private var isComposerFocused = false
     @State private var composerFocusLifecycle = ToasttyComposerFocusLifecyclePolicy()
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
+    /// Steer is a per-send choice that falls back to queue after each send.
+    @State private var steerSelected = false
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -28,8 +30,11 @@ struct ToasttyConversationScreen: View {
     let removeAttachment: (UUID) -> Void
     let attachmentRecoveryMessage: String?
     let loadOlder: () -> Void
-    let submitDraft: () -> Bool
+    /// The mode matters only while the agent works; nil at an open prompt.
+    let submitDraft: (RemoteMessageDeliveryMode?) -> Bool
+    let interrupt: () -> Void
     let dismissSendReceipt: (String) -> Void
+    let queuedMessageAction: (ToasttyQueuedMessageAction) -> Void
     let sendFeedback: ToasttyOutcomeFeedback?
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
@@ -54,8 +59,10 @@ struct ToasttyConversationScreen: View {
         removeAttachment: @escaping (UUID) -> Void = { _ in },
         attachmentRecoveryMessage: String? = nil,
         loadOlder: @escaping () -> Void = {},
-        submitDraft: @escaping () -> Bool = { false },
+        submitDraft: @escaping (RemoteMessageDeliveryMode?) -> Bool = { _ in false },
+        interrupt: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        queuedMessageAction: @escaping (ToasttyQueuedMessageAction) -> Void = { _ in },
         sendFeedback: ToasttyOutcomeFeedback? = nil,
         interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
         editInteractionAnswer: @escaping (
@@ -83,7 +90,9 @@ struct ToasttyConversationScreen: View {
         self.attachmentRecoveryMessage = attachmentRecoveryMessage
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
+        self.interrupt = interrupt
         self.dismissSendReceipt = dismissSendReceipt
+        self.queuedMessageAction = queuedMessageAction
         self.sendFeedback = sendFeedback
         self.interactionAnswerStates = interactionAnswerStates
         self.editInteractionAnswer = editInteractionAnswer
@@ -99,6 +108,7 @@ struct ToasttyConversationScreen: View {
                     isSubmitting: isSubmitting,
                     loadOlder: loadOlder,
                     dismissSendReceipt: dismissSendReceipt,
+                    queuedMessageAction: queuedMessageAction,
                     interactionAnswerStates: interactionAnswerStates,
                     editInteractionAnswer: editInteractionAnswer,
                     submitInteractionAnswer: submitInteractionAnswer,
@@ -298,9 +308,19 @@ struct ToasttyConversationScreen: View {
             .joined(separator: " · ")
     }
 
+    /// The composer is a one-line field until it has focus or content; then it
+    /// grows into a card with a button bar underneath the text. The agent's
+    /// working state lives in the transcript, not under the field.
+    private func isExpandedComposer(_ presentation: ToasttyComposerPresentation) -> Bool {
+        presentation.gate.allowsInput
+            && (isComposerFocused || !draft.isEmpty || !attachments.isEmpty)
+    }
+
     private func composerBar(_ conversation: MobileConversation) -> some View {
         let presentation = composer ?? lockedComposerFallback(conversation)
         let allowsAttachmentInput = presentation.gate.allowsInput && !isSubmitting
+        let isExpanded = isExpandedComposer(presentation)
+        let isWorking = presentation.gate.isWorking
         return VStack(alignment: .leading, spacing: 8) {
             ToasttyComposerMetadataView(
                 profile: conversation.executionProfile,
@@ -326,13 +346,46 @@ struct ToasttyConversationScreen: View {
                     .font(.caption)
                     .foregroundStyle(ToasttyDesignTokens.amberText)
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                composerField(presentation)
-                    .frame(maxWidth: .infinity)
-                sendButton(presentation)
-                    .fixedSize(horizontal: true, vertical: true)
+            VStack(spacing: 8) {
+                HStack(alignment: .bottom, spacing: 8) {
+                    composerField(presentation, showsAttachmentPicker: !isExpanded)
+                        .frame(maxWidth: .infinity)
+                    if !isExpanded {
+                        if presentation.canInterrupt {
+                            stopButton
+                        }
+                        // While working, Send lives in the bar once the field
+                        // opens; the collapsed row shows only Stop.
+                        if !isWorking || !presentation.canInterrupt {
+                            sendButton(presentation, isWorking: isWorking)
+                                .fixedSize(horizontal: true, vertical: true)
+                        }
+                    }
+                }
+                if isExpanded {
+                    composerButtonBar(presentation, isWorking: isWorking)
+                }
+            }
+            .padding(isExpanded ? 8 : 0)
+            .background {
+                if isExpanded {
+                    RoundedRectangle(cornerRadius: ToasttyDesignTokens.cardCornerRadius, style: .continuous)
+                        .fill(ToasttyDesignTokens.raisedSurface)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: ToasttyDesignTokens.cardCornerRadius, style: .continuous)
+                                .strokeBorder(
+                                    isComposerFocused
+                                        ? ToasttyDesignTokens.amber.opacity(0.55)
+                                        : ToasttyDesignTokens.border,
+                                    lineWidth: 1
+                                )
+                        }
+                }
             }
             .layoutPriority(usesCompactAttachmentComposer ? 1 : 0)
+            .onChange(of: isWorking) { _, nowWorking in
+                if !nowWorking { steerSelected = false }
+            }
 
             if case .disabled(let reason) = presentation.gate {
                 composerDisabledStatus(reason)
@@ -388,7 +441,8 @@ struct ToasttyConversationScreen: View {
     }
 
     private func composerField(
-        _ presentation: ToasttyComposerPresentation
+        _ presentation: ToasttyComposerPresentation,
+        showsAttachmentPicker: Bool
     ) -> some View {
         ToasttyComposerTextView(
             text: draft,
@@ -412,41 +466,149 @@ struct ToasttyConversationScreen: View {
             .fixedSize(horizontal: false, vertical: usesCompactAttachmentComposer)
             .padding(.leading, 12)
             // Reserve the trailing inset for the attach button pinned inside
-            // the field, so text never runs underneath the paperclip.
-            .padding(.trailing, ToasttyAttachmentPicker.buttonSize)
+            // the collapsed field, so text never runs underneath the paperclip.
+            .padding(.trailing, showsAttachmentPicker ? ToasttyAttachmentPicker.buttonSize : 12)
             .padding(.vertical, 10)
             .frame(minHeight: 44)
             .background(
-                ToasttyDesignTokens.raisedSurface,
+                showsAttachmentPicker ? ToasttyDesignTokens.raisedSurface : .clear,
                 in: RoundedRectangle(
                     cornerRadius: ToasttyDesignTokens.controlCornerRadius,
                     style: .continuous
                 )
             )
             .overlay(alignment: .bottomTrailing) {
-                ToasttyAttachmentPicker(
-                    attachments: attachments,
-                    supportsAttachments: supportsAttachments,
-                    allowsInput: presentation.gate.allowsInput && !isSubmitting,
-                    isLoading: $isLoadingAttachments,
-                    addAttachments: addAttachments
-                )
-                .id(conversationID)
+                if showsAttachmentPicker {
+                    attachmentPicker(presentation)
+                }
             }
             .overlay {
-                RoundedRectangle(
-                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
-                    style: .continuous
-                )
-                .strokeBorder(
-                    isComposerFocused
-                        ? ToasttyDesignTokens.amber.opacity(0.55)
-                        : ToasttyDesignTokens.border,
-                    lineWidth: 1
-                )
+                if showsAttachmentPicker {
+                    RoundedRectangle(
+                        cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                        style: .continuous
+                    )
+                    .strokeBorder(
+                        isComposerFocused
+                            ? ToasttyDesignTokens.amber.opacity(0.55)
+                            : ToasttyDesignTokens.border,
+                        lineWidth: 1
+                    )
+                }
             }
             .animation(.easeOut(duration: 0.18), value: isComposerFocused)
             .disabled(presentation.gate.allowsInput == false)
+    }
+
+    private func attachmentPicker(_ presentation: ToasttyComposerPresentation) -> some View {
+        ToasttyAttachmentPicker(
+            attachments: attachments,
+            supportsAttachments: supportsAttachments,
+            allowsInput: presentation.gate.allowsInput && !isSubmitting,
+            isLoading: $isLoadingAttachments,
+            addAttachments: addAttachments
+        )
+        .id(conversationID)
+    }
+
+    /// Attach on the left; Stop on the right until there is content, then the
+    /// queue/steer choice beside Send.
+    private func composerButtonBar(
+        _ presentation: ToasttyComposerPresentation,
+        isWorking: Bool
+    ) -> some View {
+        // Stop stays until there is something to send; then Send replaces
+        // it, with the mode chip directly to its left so the chip reads as
+        // modifying the send. Both are never shown together.
+        let hasContent = !draft.isEmpty || !attachments.isEmpty
+        return HStack(spacing: 8) {
+            attachmentPicker(presentation)
+            Spacer(minLength: 0)
+            if presentation.canInterrupt && !hasContent && !isSubmitting {
+                stopButton
+            } else {
+                if case .working(let canSteer) = presentation.gate.sendMode {
+                    deliveryModeChip(canSteer: canSteer)
+                }
+                sendButton(presentation, isWorking: isWorking)
+            }
+        }
+    }
+
+    /// The mode Send will use: Steer only while selected and still allowed.
+    /// If Mac typing closes steer mid-draft, the chip, the label, and the
+    /// send itself all fall back to Queue together.
+    private func effectiveDeliveryMode(_ presentation: ToasttyComposerPresentation) -> RemoteMessageDeliveryMode {
+        steerSelected && presentation.gate.sendMode == .working(canSteer: true) ? .steer : .queue
+    }
+
+    /// Queue is the default; the chip takes the accent only in Steer, so
+    /// color always marks the non-default choice.
+    private func deliveryModeChip(canSteer: Bool) -> some View {
+        let isSteer = steerSelected && canSteer
+        return Menu {
+            Button {
+                steerSelected = false
+            } label: {
+                Label("Queue", systemImage: "text.append")
+                Text("Sends after this turn")
+            }
+            .accessibilityIdentifier("toastty-mobile-composer-mode-queue")
+            Button {
+                steerSelected = true
+            } label: {
+                Label("Steer", systemImage: "arrow.triangle.merge")
+                Text("Adds to the running turn")
+            }
+            .disabled(!canSteer)
+            .accessibilityIdentifier("toastty-mobile-composer-mode-steer")
+        } label: {
+            HStack(spacing: 4) {
+                if isSteer {
+                    Image(systemName: "arrow.triangle.merge")
+                        .imageScale(.small)
+                }
+                Text(isSteer ? "Steer" : "Queue")
+                Image(systemName: "chevron.down")
+                    .imageScale(.small)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(isSteer ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.secondaryText)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                isSteer ? ToasttyDesignTokens.amber.opacity(0.14) : ToasttyDesignTokens.chipSurface,
+                in: Capsule()
+            )
+        }
+        .accessibilityLabel(isSteer ? "Steer selected" : "Queue selected")
+        .accessibilityHint("Choose whether Send queues the message or steers the running turn")
+        .accessibilityIdentifier("toastty-mobile-composer-mode")
+    }
+
+    /// Neutral on purpose: Send is the only accent control in the composer.
+    private var stopButton: some View {
+        Button {
+            interrupt()
+        } label: {
+            Image(systemName: "stop.fill")
+                .font(.caption.weight(.bold))
+                .frame(width: 38, height: 38)
+                .background(ToasttyDesignTokens.raisedSurface, in: RoundedRectangle(
+                    cornerRadius: ToasttyDesignTokens.controlCornerRadius,
+                    style: .continuous
+                ))
+                .overlay {
+                    RoundedRectangle(cornerRadius: ToasttyDesignTokens.controlCornerRadius, style: .continuous)
+                        .strokeBorder(ToasttyDesignTokens.border, lineWidth: 1)
+                }
+                .foregroundStyle(ToasttyDesignTokens.primaryText)
+        }
+        .buttonStyle(.plain)
+        .sensoryFeedback(.impact(weight: .medium), trigger: false)
+        .accessibilityLabel("Stop the agent")
+        .accessibilityHint("Interrupts the running turn")
+        .accessibilityIdentifier("toastty-mobile-composer-stop")
     }
 
     private var usesCompactAttachmentComposer: Bool {
@@ -457,21 +619,28 @@ struct ToasttyConversationScreen: View {
         isComposerFocused && dynamicTypeSize.isAccessibilitySize ? 32 : 0
     }
 
-    private func sendButton(_ presentation: ToasttyComposerPresentation) -> some View {
-        Button(action: sendDraft) {
+    private func sendButton(
+        _ presentation: ToasttyComposerPresentation,
+        isWorking: Bool
+    ) -> some View {
+        let size: CGFloat = isExpandedComposer(presentation) ? 38 : 44
+        let steers = isWorking && effectiveDeliveryMode(presentation) == .steer
+        return Button {
+            sendDraft(presentation, isWorking: isWorking)
+        } label: {
             Group {
                 if isSubmitting {
                     ProgressView()
                         .controlSize(.small)
                         .tint(ToasttyDesignTokens.inkOnAmber)
-                        .frame(width: 44)
+                        .frame(width: size)
                 } else {
                     Image(systemName: "arrow.up")
-                        .frame(width: 44)
+                        .frame(width: size)
                 }
             }
             .font(.subheadline.weight(.bold))
-            .frame(height: 44)
+            .frame(height: size)
             .background(ToasttyDesignTokens.amber, in: RoundedRectangle(
                 cornerRadius: ToasttyDesignTokens.controlCornerRadius,
                 style: .continuous
@@ -484,13 +653,17 @@ struct ToasttyConversationScreen: View {
         .sensoryFeedback(.impact(weight: .light), trigger: isSubmitting) { old, new in
             old == false && new
         }
-        .accessibilityLabel(isSubmitting ? "Sending message" : "Send message")
+        .accessibilityLabel(
+            isSubmitting ? "Sending message" : (steers ? "Steer message" : (isWorking ? "Queue message" : "Send message"))
+        )
         .accessibilityValue(isSubmitting ? "In progress" : "")
         .accessibilityIdentifier("toastty-mobile-composer-send")
     }
 
-    private func sendDraft() {
-        if submitDraft() {
+    private func sendDraft(_ presentation: ToasttyComposerPresentation, isWorking: Bool) {
+        let mode: RemoteMessageDeliveryMode? = isWorking ? effectiveDeliveryMode(presentation) : nil
+        if submitDraft(mode) {
+            steerSelected = false
             jumpToLiveEdgeRequest &+= 1
         }
     }

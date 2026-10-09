@@ -60,8 +60,20 @@ public struct RemoteInputCoordinator: Sendable {
         /// attempt. A provider republish at this epoch is stale and must not
         /// resurrect a consumed prompt.
         var invalidatedOpenEpoch: RemoteInputEpoch?
+        /// Identity of the running turn, from the projector.
+        var turnEpoch: RemoteInputEpoch?
+        /// The turn whose running composer local keyboard input touched. A
+        /// steer into that turn could land inside the Mac user's draft, so it
+        /// stays refused until a different turn runs.
+        var localInputTurnEpoch: RemoteInputEpoch?
         var processedRequestIDs: [String] = []
         var processedRequestSet: Set<String> = []
+    }
+
+    /// Outcome of an interrupt gate check.
+    public enum InterruptDecision: Equatable, Sendable {
+        case accept(turnEpoch: RemoteInputEpoch)
+        case reject(RemoteConversationInterruptRejectionReason)
     }
 
     private var statesByConversation: [RemoteConversationID: ConversationState] = [:]
@@ -95,7 +107,31 @@ public struct RemoteInputCoordinator: Sendable {
             }
             state.invalidatedOpenEpoch = nil
         }
+        if case .openPrompt(let candidateEpoch) = availability,
+           state.localInputTurnEpoch != nil {
+            // Local keyboard input during the turn that just ended, with no
+            // provider evidence it was submitted, means the Mac composer may
+            // still hold a draft. Open as a local draft instead, so neither a
+            // live send nor a queued delivery types into it; the next
+            // provider prompt generation reopens remote input as usual.
+            state.localInputTurnEpoch = nil
+            state.invalidatedOpenEpoch = candidateEpoch
+            state.availability = .localDraft(epoch: candidateEpoch.next())
+            statesByConversation[conversationID] = state
+            return
+        }
         state.availability = availability
+        statesByConversation[conversationID] = state
+    }
+
+    /// Records that the provider logged a user message that was not a remote
+    /// delivery: the Mac user submitted what they typed. The running turn is
+    /// no longer treated as holding a local draft, so a steer may follow and
+    /// the next prompt opens normally.
+    public mutating func noteLocalDraftSubmitted(for conversationID: RemoteConversationID) {
+        guard var state = statesByConversation[conversationID],
+              state.localInputTurnEpoch != nil else { return }
+        state.localInputTurnEpoch = nil
         statesByConversation[conversationID] = state
     }
 
@@ -109,16 +145,49 @@ public struct RemoteInputCoordinator: Sendable {
         return candidate.counter > existing.counter
     }
 
+    /// Records the projector's current turn identity. Steer and interrupt
+    /// requests must present exactly this epoch.
+    public mutating func setTurnEpoch(
+        _ turnEpoch: RemoteInputEpoch?,
+        for conversationID: RemoteConversationID
+    ) {
+        guard var state = statesByConversation[conversationID] else { return }
+        guard state.turnEpoch != turnEpoch else { return }
+        state.turnEpoch = turnEpoch
+        statesByConversation[conversationID] = state
+    }
+
     /// Records that local keyboard/paste/menu input touched the prompt. O(1)
     /// and allocation-free on the hot path: if the prompt was open, it becomes
-    /// a local draft under a bumped epoch; otherwise nothing changes.
+    /// a local draft under a bumped epoch; while a turn runs, that turn is
+    /// marked so remote steers stay out of the Mac user's draft.
     public mutating func noteLocalInput(for conversationID: RemoteConversationID) {
         guard var state = statesByConversation[conversationID] else { return }
         if case .openPrompt(let epoch) = state.availability {
             state.invalidatedOpenEpoch = epoch
             state.availability = .localDraft(epoch: epoch.next())
-            statesByConversation[conversationID] = state
         }
+        if let turnEpoch = state.turnEpoch {
+            state.localInputTurnEpoch = turnEpoch
+        } else if case .unavailable(reason: .working) = state.availability,
+                  let consumedEpoch = state.invalidatedOpenEpoch {
+            // A remote delivery consumed the prompt but the provider has not
+            // reported the turn yet; its identity will be the consumed epoch.
+            state.localInputTurnEpoch = consumedEpoch
+        }
+        statesByConversation[conversationID] = state
+    }
+
+    public func turnEpoch(for conversationID: RemoteConversationID) -> RemoteInputEpoch? {
+        statesByConversation[conversationID]?.turnEpoch
+    }
+
+    /// Whether a steer presenting the current turn epoch would pass the
+    /// turn-level checks: a turn is running and local input has not touched it.
+    public func canSteer(for conversationID: RemoteConversationID) -> Bool {
+        guard let state = statesByConversation[conversationID],
+              let turnEpoch = state.turnEpoch else { return false }
+        return state.localInputTurnEpoch != turnEpoch
     }
 
     public func availability(for conversationID: RemoteConversationID) -> RemoteInputAvailability {
@@ -144,16 +213,9 @@ public struct RemoteInputCoordinator: Sendable {
         if state.processedRequestSet.contains(request.clientRequestID) {
             return .duplicate
         }
-        guard context.deviceHasSendScope else { return .reject(.sendScopeDenied) }
-        guard context.sessionWritesEnabled else { return .reject(.sessionWritesDisabled) }
-        guard RemoteAttachmentPolicy.validationError(for: request.attachments, validateContents: false) == nil else {
-            return .reject(.invalidAttachments)
+        if let rejection = Self.commonRejection(for: request, context: context) {
+            return .reject(rejection)
         }
-        guard !request.attachments.isEmpty || request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-            return .reject(.emptyText)
-        }
-        guard context.isBoundToLiveSurface else { return .reject(.notBound) }
-        guard context.isSurfaceReadyForInput else { return .reject(.surfaceUnavailable) }
 
         switch state.availability {
         case .openPrompt(let epoch):
@@ -170,11 +232,97 @@ public struct RemoteInputCoordinator: Sendable {
         }
     }
 
+    /// Decides whether a steer may be typed into the running turn right now.
+    /// Shares every device, session, surface, and text check with `evaluate`;
+    /// the turn checks replace the open-prompt checks.
+    public func evaluateSteer(
+        _ request: RemoteMessageSendRequest,
+        context: DeliveryContext
+    ) -> Decision {
+        guard let state = statesByConversation[request.conversationID] else {
+            return .reject(.notBound)
+        }
+        if state.processedRequestSet.contains(request.clientRequestID) {
+            return .duplicate
+        }
+        if let rejection = Self.commonRejection(for: request, context: context) {
+            return .reject(rejection)
+        }
+        guard let turnEpoch = state.turnEpoch else {
+            return .reject(.notWorking)
+        }
+        guard request.expectedInputEpoch == turnEpoch else {
+            return .reject(.turnMismatch)
+        }
+        guard state.localInputTurnEpoch != turnEpoch else {
+            return .reject(.steerUnavailable)
+        }
+        return .accept(epoch: turnEpoch)
+    }
+
+    /// Decides whether the interrupt key may be sent for the turn the client
+    /// names. Text checks do not apply; the turn checks match `evaluateSteer`
+    /// except that local input does not block a stop.
+    public func evaluateInterrupt(
+        for conversationID: RemoteConversationID,
+        expectedTurnEpoch: RemoteInputEpoch,
+        context: DeliveryContext
+    ) -> InterruptDecision {
+        guard let state = statesByConversation[conversationID] else {
+            return .reject(.notBound)
+        }
+        guard context.deviceHasSendScope else { return .reject(.sendScopeDenied) }
+        guard context.sessionWritesEnabled else { return .reject(.sessionWritesDisabled) }
+        guard context.isBoundToLiveSurface else { return .reject(.notBound) }
+        guard context.isSurfaceReadyForInput else { return .reject(.surfaceUnavailable) }
+        guard let turnEpoch = state.turnEpoch else { return .reject(.notWorking) }
+        guard expectedTurnEpoch == turnEpoch else { return .reject(.turnMismatch) }
+        return .accept(turnEpoch: turnEpoch)
+    }
+
+    /// The device, session, surface, and text checks every delivery mode
+    /// shares, so a queue enqueue refuses the same requests a live send would.
+    public static func commonRejection(
+        for request: RemoteMessageSendRequest,
+        context: DeliveryContext
+    ) -> RemoteMessageRejectionReason? {
+        guard context.deviceHasSendScope else { return .sendScopeDenied }
+        guard context.sessionWritesEnabled else { return .sessionWritesDisabled }
+        guard RemoteAttachmentPolicy.validationError(for: request.attachments, validateContents: false) == nil else {
+            return .invalidAttachments
+        }
+        guard !request.attachments.isEmpty || request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return .emptyText
+        }
+        guard context.isBoundToLiveSurface else { return .notBound }
+        guard context.isSurfaceReadyForInput else { return .surfaceUnavailable }
+        return nil
+    }
+
     /// Records a delivered request as processed (bounded LRU) and marks the
     /// prompt consumed. Call exactly once, immediately after a successful
     /// delivery for a request that `evaluate` accepted.
     public mutating func markDelivered(_ request: RemoteMessageSendRequest) {
         markProcessed(request)
+    }
+
+    /// Records a steer as processed without touching prompt availability:
+    /// the turn keeps running and the prompt stays closed as before.
+    public mutating func markSteerDelivered(_ request: RemoteMessageSendRequest) {
+        guard var state = statesByConversation[request.conversationID] else { return }
+        Self.insertProcessed(request.clientRequestID, into: &state)
+        statesByConversation[request.conversationID] = state
+    }
+
+    /// A steer whose text reached the terminal but whose submit did not: the
+    /// composer may hold that text. Treat it exactly like local typing in the
+    /// turn, so no further steer appends to it and the next prompt opens as a
+    /// local draft until the provider shows a newer prompt generation.
+    public mutating func markSteerUncertain(_ request: RemoteMessageSendRequest) {
+        guard var state = statesByConversation[request.conversationID] else { return }
+        Self.insertProcessed(request.clientRequestID, into: &state)
+        state.localInputTurnEpoch = state.turnEpoch ?? request.expectedInputEpoch
+        statesByConversation[request.conversationID] = state
     }
 
     /// Closes the prompt and idempotency window after terminal delivery became
@@ -185,15 +333,19 @@ public struct RemoteInputCoordinator: Sendable {
         markProcessed(request)
     }
 
-    private mutating func markProcessed(_ request: RemoteMessageSendRequest) {
-        guard var state = statesByConversation[request.conversationID] else { return }
-        if state.processedRequestSet.insert(request.clientRequestID).inserted {
-            state.processedRequestIDs.append(request.clientRequestID)
+    private static func insertProcessed(_ clientRequestID: String, into state: inout ConversationState) {
+        if state.processedRequestSet.insert(clientRequestID).inserted {
+            state.processedRequestIDs.append(clientRequestID)
             if state.processedRequestIDs.count > Self.idempotencyCapacityPerConversation {
                 let evicted = state.processedRequestIDs.removeFirst()
                 state.processedRequestSet.remove(evicted)
             }
         }
+    }
+
+    private mutating func markProcessed(_ request: RemoteMessageSendRequest) {
+        guard var state = statesByConversation[request.conversationID] else { return }
+        Self.insertProcessed(request.clientRequestID, into: &state)
         // Delivery consumed the prompt; it is no longer open for another send.
         state.invalidatedOpenEpoch = request.expectedInputEpoch
         state.availability = .unavailable(reason: .working)

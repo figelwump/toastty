@@ -181,6 +181,9 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     public var turnStartedAt: Date?
     /// Length of the last finished turn, in seconds.
     public var lastTurnDuration: TimeInterval?
+    /// Turn identity, steer/stop readiness, and the Mac-side queue. Sent by
+    /// hosts that advertise `conversation_input_control`; absent otherwise.
+    public var inputControl: RemoteConversationInputControl?
     /// Generation of this conversation's sequence space within the current
     /// projection run. Bumped when this one conversation is rebuilt mid-run
     /// (for example after an unreconcilable provider file rewrite) so its
@@ -206,6 +209,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        inputControl: RemoteConversationInputControl? = nil,
         projectionGeneration: UInt64 = 0,
         latestSequence: UInt64,
         updatedAt: Date
@@ -224,6 +228,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        self.inputControl = inputControl
         self.projectionGeneration = projectionGeneration
         self.latestSequence = latestSequence
         self.updatedAt = updatedAt
@@ -252,6 +257,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
             isFlaggedForLater: try container.decodeIfPresent(Bool.self, forKey: .isFlaggedForLater) ?? false,
             turnStartedAt: try container.decodeIfPresent(Date.self, forKey: .turnStartedAt),
             lastTurnDuration: try container.decodeIfPresent(TimeInterval.self, forKey: .lastTurnDuration),
+            inputControl: try container.decodeIfPresent(RemoteConversationInputControl.self, forKey: .inputControl),
             projectionGeneration: try container.decode(UInt64.self, forKey: .projectionGeneration),
             latestSequence: try container.decode(UInt64.self, forKey: .latestSequence),
             updatedAt: try container.decode(Date.self, forKey: .updatedAt)
@@ -274,6 +280,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         if isFlaggedForLater { try container.encode(true, forKey: .isFlaggedForLater) }
         try container.encodeIfPresent(turnStartedAt, forKey: .turnStartedAt)
         try container.encodeIfPresent(lastTurnDuration, forKey: .lastTurnDuration)
+        try container.encodeIfPresent(inputControl, forKey: .inputControl)
         try container.encode(projectionGeneration, forKey: .projectionGeneration)
         try container.encode(latestSequence, forKey: .latestSequence)
         try container.encode(updatedAt, forKey: .updatedAt)
@@ -306,6 +313,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         case isFlaggedForLater
         case turnStartedAt
         case lastTurnDuration
+        case inputControl
         case projectionGeneration
         case latestSequence
         case updatedAt

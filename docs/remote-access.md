@@ -253,6 +253,59 @@ terminal rejects the send. An accepted send means Toastty handed it to the
 terminal; the transcript event carrying the same request ID is the later
 confirmation.
 
+### Queue, steer, and stop while the agent works
+
+On a host that advertises `conversation_input_control`, the composer stays
+open while the agent works. While the field is a single line, a **Stop**
+button sits next to it. Once the field has focus or text it grows into a card
+with a button bar: attach on the left and Stop on the right. As soon as there
+is something to send, Stop gives way to **Send**, with a **Queue**/**Steer**
+chip directly left of it; Send uses the same arrow for every mode, and Stop and
+Send are never shown together. The agent's working state is shown in the
+transcript, not under the field.
+
+- **Queue** is the default. Send holds the message on the Mac, and the Mac
+  types it as the next prompt once the turn ends and the prompt opens, through
+  the same open-prompt gate as a live send. One queued message is delivered per
+  open prompt, in order; messages are never merged. The queue holds at most 5
+  messages per conversation and belongs to the current runtime binding: a
+  resumed or relaunched agent drops it, and the phone shows those messages as
+  not delivered. Queued messages appear at the end of the transcript as dashed
+  bubbles with **Edit**, **Steer now**, and **Remove**. Edit and Steer now first
+  remove the message on the Mac and act only when the Mac confirms it was still
+  waiting. A queued message with attachments keeps them on the Mac; editing it
+  restores only the text.
+- **Steer** types the message into the running turn. It is offered only for
+  Codex, which injects input into the current turn, and only while nobody has
+  typed in that turn's terminal on the Mac. Claude Code holds such input in its
+  own queue until the turn ends, which Toastty's queue already covers, so the
+  chip stays on Queue for Claude. The chip returns to Queue after each send.
+- **Stop** sends the agent's interrupt key (Escape) for the turn the phone saw.
+  A stop names that turn, so a late tap cannot stop a later one. After a stop
+  the queue pauses until the user taps **Send next** on a queued message,
+  removes the last queued message, or queues a new one. The prompt reopens a
+  short moment after the provider reports the aborted turn, unless local input
+  or another provider transition happens first.
+
+Typing on the Mac still wins. Local keyboard input during a turn blocks steer
+for that turn and, unless the provider logs the Mac user's own message, opens
+the next prompt as a local draft so neither a live send nor a queued delivery
+types into it. The transcript marks a confirmed remote message as **from queue**
+or **steered** when it did not arrive at an open prompt.
+
+Protocol: `RemoteMessageSendRequest.deliveryMode` is `prompt` (absent on the
+wire), `queue`, or `steer`; for `queue` and `steer`, `expectedInputEpoch`
+carries the turn epoch from the summary's `inputControl`. The send result adds
+`queued` with a 1-based `position`, and the rejection reasons `queue_full`,
+`not_working`, `turn_mismatch`, and `steer_unavailable`. Each conversation
+summary carries an optional `inputControl` object with `turnEpoch`, `canQueue`,
+`canSteer`, `canInterrupt`, `queuedMessages`, and `isQueuePaused`.
+`POST /api/conversation.queue.update` removes a queued message or resumes the
+queue, and `POST /api/conversation.interrupt` stops a turn; both need native
+Bearer authentication and send scope. Older hosts omit the capability, and the
+phone keeps today's locked composer while the agent works. Older clients ignore
+the new fields.
+
 ### Photos and files from iOS
 
 Use the **Attach** paperclip inside the message field to choose **Photo Library**,

@@ -14,6 +14,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case conversationReadAcknowledge
     case workspaceDone
     case conversationFlag
+    case conversationQueueUpdate
+    case conversationInterrupt
     case sessionStartOptions
     case sessionStart
     case sessionStartWithAttachments
@@ -38,6 +40,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .conversationReadAcknowledge: "/api/conversation.read.acknowledge"
         case .workspaceDone: "/api/workspace.done.set"
         case .conversationFlag: "/api/conversation.flag.set"
+        case .conversationQueueUpdate: "/api/conversation.queue.update"
+        case .conversationInterrupt: "/api/conversation.interrupt"
         case .sessionStartOptions: RemoteSessionStartPolicy.optionsPath
         case .sessionStart: RemoteSessionStartPolicy.startPath
         case .sessionStartWithAttachments: RemoteSessionStartPolicy.startWithAttachmentsPath
@@ -98,6 +102,10 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // even though it sends no text to an agent.
         .workspaceDone: .init(route: .workspaceDone, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .conversationFlag: .init(route: .conversationFlag, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // Editing the Mac-side queue and stopping a turn change what the
+        // agent receives, so both need send scope like a message send.
+        .conversationQueueUpdate: .init(route: .conversationQueueUpdate, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .conversationInterrupt: .init(route: .conversationInterrupt, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         // The options answer says whether this device may start, so reading
         // it needs only read. Starting sends a first message, so it needs
         // send; the handler checks the separate start permission itself.
