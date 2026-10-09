@@ -73,6 +73,7 @@ function parseArguments(argv) {
     device: undefined,
     uiTests: undefined,
     skipPerformanceBudgets: false,
+    retryTestsOnFailure: false,
   };
 
   const argumentsForCommand = argv.slice(1);
@@ -93,6 +94,10 @@ function parseArguments(argv) {
     }
     if (command === "test" && argument === "--skip-performance-budgets" && !options.skipPerformanceBudgets) {
       options.skipPerformanceBudgets = true;
+      continue;
+    }
+    if (command === "test" && argument === "--retry-tests-on-failure" && !options.retryTestsOnFailure) {
+      options.retryTestsOnFailure = true;
       continue;
     }
     if (command === "native-device") {
@@ -336,7 +341,7 @@ function selectedScheme(command) {
     : scheme;
 }
 
-function xcodebuildArguments(command, context, destination, uiTests, skipPerformanceBudgets) {
+function xcodebuildArguments(command, context, destination, uiTests, skipPerformanceBudgets, retryTestsOnFailure) {
   const configuration = process.env.TOASTTY_IOS_CONFIGURATION?.trim() || "Debug";
   if (configuration !== "Debug" && configuration !== "Release") {
     fail("TOASTTY_IOS_CONFIGURATION must be Debug or Release");
@@ -380,12 +385,19 @@ function xcodebuildArguments(command, context, destination, uiTests, skipPerform
     if (skipPerformanceBudgets) {
       args.push("-skip-testing:ToasttyMobileDomainTests/ConversationRuntimePerformanceTests/testFiveThousandEventDecodeAndReduceStaysWithinProvisionalBudgets");
     }
+    if (retryTestsOnFailure) {
+      // Hosted runners occasionally time out the first UI test launch or
+      // lose a background assertion under load; the same tests pass moments
+      // later. Give each failed test one more attempt so a cold launch does
+      // not fail the job. The xcresult keeps every attempt.
+      args.push("-retry-tests-on-failure", "-test-iterations", "2");
+    }
   }
   args.push(command);
   return args;
 }
 
-function dryRunPlan(command, context, uiTests, skipPerformanceBudgets) {
+function dryRunPlan(command, context, uiTests, skipPerformanceBudgets, retryTestsOnFailure) {
   const steps = generationSteps();
   if (command !== "generate") {
     const destinationOverride = process.env.TOASTTY_IOS_DESTINATION?.trim();
@@ -402,7 +414,7 @@ function dryRunPlan(command, context, uiTests, skipPerformanceBudgets) {
     }
     steps.push({
       executable: "xcodebuild",
-      args: xcodebuildArguments(command, context, destination, uiTests, skipPerformanceBudgets),
+      args: xcodebuildArguments(command, context, destination, uiTests, skipPerformanceBudgets, retryTestsOnFailure),
     });
   }
 
@@ -567,12 +579,12 @@ function validatePushRelayConfiguration(command) {
 }
 
 function printHelp() {
-  process.stdout.write(`Usage: node ios/scripts/toastty-ios.mjs <command> [options]\n\nCommands:\n  generate       Install Tuist packages and generate the Xcode workspace\n  build          Generate, select an iOS 18+ simulator, and build the app\n  test           Generate, select an iOS 18+ simulator, and test the native client\n  native-device  Build Debug for the fixed development identity, then install and launch it\n\nAll commands:\n  --dry-run          Print a deterministic plan without invoking tools\n\nTest options:\n  --skip-performance-budgets  Exclude the provisional domain timing/memory budget test\n                             Large-page correctness remains covered\n  --ui-tests smoke   Run app/domain tests and the two CI fixture UI tests\n  --ui-tests all     Run all app, domain, and UI tests (Debug default)\n                   UI selectors require Debug; Release runs app/domain tests without UI tests\n\nNative device options:\n  --preflight-only   Check the toolchain and selected physical iPhone, then stop\n  --build-only       Build and validate the signed app without install or launch\n  --device <value>   Select an exact CoreDevice identifier, UDID, hostname, or unique name\n\nEnvironment:\n  TUIST_TOASTTY_MOBILE_PUSH_PROBE       Opt in to the fixed-identity Debug APNs sandbox receiver\n                                     Use native-device; Release and prod-test are rejected\n  TOASTTY_IOS_CONFIGURATION             Debug or Release (default: Debug)\n  TOASTTY_IOS_DESTINATION               Explicit simulator xcodebuild destination\n  TOASTTY_IOS_SIMULATOR_DEVICE_NAMES    Preferred iPhone names, comma-separated\n  TOASTTY_IOS_RUN_ID                    Simulator run label\n  TOASTTY_IOS_RUN_ROOT                  Simulator run directory override\n  TOASTTY_IOS_DERIVED_DATA_PATH         Simulator DerivedData override\n  TOASTTY_IOS_WORKTREE_ID               Worktree identity override\n  TOASTTY_IOS_DEVELOPMENT_TEAM          Override the repository Apple development team\n  TOASTTY_NATIVE_DEVICE_RUN_ID          Physical-device run label override\n  TOASTTY_NATIVE_DEVICE_RUN_ROOT        Physical-device evidence directory override\n  TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH Physical-device DerivedData override\n`);
+  process.stdout.write(`Usage: node ios/scripts/toastty-ios.mjs <command> [options]\n\nCommands:\n  generate       Install Tuist packages and generate the Xcode workspace\n  build          Generate, select an iOS 18+ simulator, and build the app\n  test           Generate, select an iOS 18+ simulator, and test the native client\n  native-device  Build Debug for the fixed development identity, then install and launch it\n\nAll commands:\n  --dry-run          Print a deterministic plan without invoking tools\n\nTest options:\n  --skip-performance-budgets  Exclude the provisional domain timing/memory budget test\n                             Large-page correctness remains covered\n  --ui-tests smoke   Run app/domain tests and the two CI fixture UI tests\n  --ui-tests all     Run all app, domain, and UI tests (Debug default)\n                   UI selectors require Debug; Release runs app/domain tests without UI tests\n  --retry-tests-on-failure    Give each failed test one more attempt (xcodebuild -test-iterations 2)\n                             For hosted CI runners; local and remote triage runs keep single attempts\n\nNative device options:\n  --preflight-only   Check the toolchain and selected physical iPhone, then stop\n  --build-only       Build and validate the signed app without install or launch\n  --device <value>   Select an exact CoreDevice identifier, UDID, hostname, or unique name\n\nEnvironment:\n  TUIST_TOASTTY_MOBILE_PUSH_PROBE       Opt in to the fixed-identity Debug APNs sandbox receiver\n                                     Use native-device; Release and prod-test are rejected\n  TOASTTY_IOS_CONFIGURATION             Debug or Release (default: Debug)\n  TOASTTY_IOS_DESTINATION               Explicit simulator xcodebuild destination\n  TOASTTY_IOS_SIMULATOR_DEVICE_NAMES    Preferred iPhone names, comma-separated\n  TOASTTY_IOS_RUN_ID                    Simulator run label\n  TOASTTY_IOS_RUN_ROOT                  Simulator run directory override\n  TOASTTY_IOS_DERIVED_DATA_PATH         Simulator DerivedData override\n  TOASTTY_IOS_WORKTREE_ID               Worktree identity override\n  TOASTTY_IOS_DEVELOPMENT_TEAM          Override the repository Apple development team\n  TOASTTY_NATIVE_DEVICE_RUN_ID          Physical-device run label override\n  TOASTTY_NATIVE_DEVICE_RUN_ROOT        Physical-device evidence directory override\n  TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH Physical-device DerivedData override\n`);
 }
 
 function main() {
   const options = parseArguments(process.argv.slice(2));
-  const { command, dryRun, uiTests, skipPerformanceBudgets } = options;
+  const { command, dryRun, uiTests, skipPerformanceBudgets, retryTestsOnFailure } = options;
   if (command === "help") {
     if (dryRun) fail("help does not accept --dry-run");
     printHelp();
@@ -602,7 +614,7 @@ function main() {
     return;
   }
   if (dryRun) {
-    process.stdout.write(`${JSON.stringify(dryRunPlan(command, context, uiTests, skipPerformanceBudgets), null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(dryRunPlan(command, context, uiTests, skipPerformanceBudgets, retryTestsOnFailure), null, 2)}\n`);
     return;
   }
 
@@ -617,7 +629,7 @@ function main() {
     || `platform=iOS Simulator,id=${simulator.udid}`;
   runChecked(
     "xcodebuild",
-    xcodebuildArguments(command, context, destination, uiTests, skipPerformanceBudgets),
+    xcodebuildArguments(command, context, destination, uiTests, skipPerformanceBudgets, retryTestsOnFailure),
     { env: context.environment },
   );
 }
