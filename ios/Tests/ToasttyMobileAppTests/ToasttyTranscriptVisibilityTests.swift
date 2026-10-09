@@ -204,6 +204,51 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertTrue(collapsed.hasLiveEdgeLayoutChange(comparedTo: expanded))
     }
 
+    func testInsetIncreaseWithoutContainerChangeIsAViewportChangeThatHidesTheBottom() {
+        // iOS 27 keyboard dismissal while the composer grows: the keyboard
+        // inset leaves first, then the composer inset returns larger, and the
+        // container height stays put between those two callbacks.
+        let keyboardGone = TranscriptScrollMetrics(geometry: ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: 1_200),
+            contentSize: CGSize(width: 402, height: 1_898),
+            contentInsets: EdgeInsets(top: 116, leading: 0, bottom: 176, trailing: 0),
+            containerSize: CGSize(width: 402, height: 874)
+        ))
+        let composerGrew = TranscriptScrollMetrics(geometry: ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: 1_200),
+            contentSize: CGSize(width: 402, height: 1_898),
+            contentInsets: EdgeInsets(top: 116, leading: 0, bottom: 233, trailing: 0),
+            containerSize: CGSize(width: 402, height: 874)
+        ))
+
+        XCTAssertEqual(keyboardGone.distanceFromBottom, 0)
+        XCTAssertEqual(composerGrew.distanceFromBottom, 57)
+        XCTAssertFalse(composerGrew.hasReachedPhysicalLiveEdge)
+        XCTAssertTrue(composerGrew.hasViewportChange(comparedTo: keyboardGone))
+        XCTAssertFalse(
+            TranscriptScrollMetrics(geometry: ScrollGeometry(
+                contentOffset: CGPoint(x: 0, y: 1_100),
+                contentSize: CGSize(width: 402, height: 1_898),
+                contentInsets: EdgeInsets(top: 116, leading: 0, bottom: 176, trailing: 0),
+                containerSize: CGSize(width: 402, height: 874)
+            )).hasViewportChange(comparedTo: keyboardGone),
+            "An offset-only change is reader movement, not a viewport change"
+        )
+    }
+
+    func testSynchronousLiveEdgeRepairYieldsToAnimatedJumps() {
+        var coordinator = TranscriptScrollCoordinator()
+        XCTAssertTrue(coordinator.allowsSynchronousLiveEdgeRepair)
+        coordinator.requestInitialLiveEdge()
+        XCTAssertTrue(coordinator.allowsSynchronousLiveEdgeRepair)
+        coordinator.requestSend(1)
+        XCTAssertTrue(coordinator.allowsSynchronousLiveEdgeRepair)
+        coordinator.requestJump()
+        XCTAssertFalse(coordinator.allowsSynchronousLiveEdgeRepair)
+        coordinator.cancelForInteraction()
+        XCTAssertTrue(coordinator.allowsSynchronousLiveEdgeRepair)
+    }
+
     func testScrollMetricsAllowOverscrollAndUseExclusiveNearBottomThreshold() {
         XCTAssertTrue(
             TranscriptScrollMetrics(
