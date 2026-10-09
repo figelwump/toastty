@@ -1,4 +1,5 @@
 import SwiftUI
+import ToasttyMobileDomain
 
 /// Disclosure state for per-turn work sections. Settled turns fold by
 /// default; the live turn streams expanded and auto-folds when its response
@@ -115,5 +116,47 @@ struct ToasttyTurnWorkStrip: View {
             parts.append(turn.noteCount == 1 ? "1 note" : "\(turn.noteCount) notes")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// What the transcript's tail shows while the agent works.
+struct ToasttyTranscriptWorkingIndicator: Equatable {
+    /// The running turn's age, when the host reports it.
+    let turnElapsed: MobileActivityAge?
+
+    func elapsedLabel(atMonotonicTime now: TimeInterval) -> String? {
+        turnElapsed.map { MobileConversation.durationLabel(seconds: TimeInterval($0.seconds(atMonotonicTime: now))) }
+    }
+}
+
+/// The in-chat working row at the live edge, below anything the agent has
+/// already received. The turn's running time ticks as in the session list.
+struct ToasttyTranscriptWorkingRow: View {
+    let indicator: ToasttyTranscriptWorkingIndicator
+
+    var body: some View {
+        if indicator.turnElapsed != nil {
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                row(elapsed: indicator.elapsedLabel(atMonotonicTime: ProcessInfo.processInfo.systemUptime))
+            }
+        } else {
+            row(elapsed: nil)
+        }
+    }
+
+    private func row(elapsed: String?) -> some View {
+        HStack(spacing: 8) {
+            ToasttySpinner(size: 9)
+            Text(["working", elapsed].compactMap { $0 }.joined(separator: " · "))
+                .monospacedDigit()
+        }
+        .font(.caption2.monospaced())
+        .foregroundStyle(ToasttyDesignTokens.mutedText)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent working")
+        .accessibilityValue(elapsed ?? "")
+        .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityIdentifier("toastty-mobile-transcript-working")
     }
 }
