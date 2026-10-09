@@ -1049,7 +1049,9 @@ struct ToasttyApp: App {
                 guard let agentLaunchService else {
                     throw WorkspaceTaskHookRunner.FinishProblem.launchFailed("The agent launcher is unavailable.")
                 }
-                let result = try agentLaunchService.launch(
+                // The async path prepares skill snapshots first, so a finish
+                // skill installed or updated since the last launch is delivered.
+                let result = try await agentLaunchService.launchAsync(
                     profileID: profileID,
                     workspaceID: workspaceID,
                     cwd: cwd,

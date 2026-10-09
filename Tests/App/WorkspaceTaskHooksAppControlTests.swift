@@ -65,9 +65,10 @@ private final class TaskHooksFixture {
     var sentTexts: [(text: String, panelID: UUID)] = []
     var launches: [(profileID: String, workspaceID: UUID, cwd: String?, prompt: String)] = []
     var launchResult: Result<(sessionID: String, panelID: UUID), Error> = .success(("launched", UUID()))
+    var notifications: [String] = []
 
     init(
-        cleanupResult: WorkspaceTaskCleanupCommandResult = WorkspaceTaskCleanupCommandResult(exitCode: 0, stdout: "removed worktree\n", stderr: "", failure: nil)
+        cleanupResult: WorkspaceTaskCleanupCommandResult = WorkspaceTaskCleanupCommandResult(exitCode: 0, output: "removed worktree\n", failure: nil)
     ) throws {
         store = AppStore(persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -110,10 +111,19 @@ private final class TaskHooksFixture {
             .appendingPathComponent("worktree-status.py")
         try FileManager.default.createDirectory(at: scriptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try "#!/usr/bin/env python3\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        // Both skills are accepted packages, so the runner's validator scan
+        // finds them the way it finds real installed skills.
+        for skill in ["worktree-cleanup", "worktree-done"] {
+            let skillURL = skillsRoot.appendingPathComponent(skill, isDirectory: true)
+            try FileManager.default.createDirectory(at: skillURL, withIntermediateDirectories: true)
+            try "---\nname: \(skill)\ndescription: test skill\n---\n# \(skill)\n"
+                .write(to: skillURL.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        }
 
         cleanupRunner = FakeCleanupRunner(result: cleanupResult)
         var sendTextSink: (@MainActor (String, UUID) -> Bool)?
         var launchSink: (@MainActor (String, UUID, String?, String) throws -> (sessionID: String, panelID: UUID))?
+        var notifySink: (@MainActor (String, String) -> Void)?
         runner = WorkspaceTaskHookRunner(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -125,8 +135,10 @@ private final class TaskHooksFixture {
             sendText: { text, panelID in sendTextSink?(text, panelID) ?? false },
             launchAgent: { profileID, workspaceID, cwd, prompt in
                 try launchSink!(profileID, workspaceID, cwd, prompt)
-            }
+            },
+            notify: { title, body in notifySink?(title, body) }
         )
+        notifySink = { [unowned self] title, body in notifications.append("\(title): \(body)") }
         sendTextSink = { [unowned self] text, panelID in
             sentTexts.append((text, panelID))
             return true
@@ -260,17 +272,18 @@ struct WorkspaceTaskHooksAppControlTests {
     }
 
     @Test
-    func finishSendsTheSkillToTheLatestAgentSessionInItsOwnSyntax() throws {
+    func finishSendsTheSkillToTheLatestAgentSessionInItsOwnSyntax() async throws {
         let fixture = try TaskHooksFixture()
         let task = try fixture.makeTask()
         try fixture.startSession("older-codex", agent: .codex, in: task, at: 100)
         try fixture.startSession("newer-claude", agent: .claude, in: task, inNewPanel: true, at: 200)
 
-        let outcome = try fixture.run(.workspaceTaskFinish, ["workspaceID": .string(task.uuidString)])
+        let outcome = try await fixture.runAsync(.workspaceTaskFinish, ["workspaceID": .string(task.uuidString)])
         #expect(outcome.result?["delivery"] == .string("sent"))
         #expect(outcome.result?["sessionID"] == .string("newer-claude"))
         #expect(fixture.sentTexts.count == 1)
-        #expect(fixture.sentTexts.first?.text.hasPrefix("/worktree-done ") == true)
+        // An accepted user skill is named through the plugin that delivers it.
+        #expect(fixture.sentTexts.first?.text.hasPrefix("/toastty-user:worktree-done ") == true)
         #expect(fixture.sentTexts.first?.text.contains("clicked Finish Task") == true)
         #expect(fixture.launches.isEmpty)
 
@@ -280,18 +293,23 @@ struct WorkspaceTaskHooksAppControlTests {
             status: SessionStatus(kind: .ready, summary: "Ready", detail: nil),
             at: Date(timeIntervalSince1970: 300)
         )
-        _ = try fixture.run(.workspaceTaskFinish, ["workspaceID": .string(task.uuidString)])
-        #expect(fixture.sentTexts.last?.text.hasPrefix("$worktree-done ") == true)
+        _ = try await fixture.runAsync(.workspaceTaskFinish, ["workspaceID": .string(task.uuidString)])
+        #expect(fixture.sentTexts.last?.text.hasPrefix("$toastty-user:worktree-done ") == true)
+
+        // The synchronous path cannot wait for a launch, so it refuses.
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.run(.workspaceTaskFinish, ["workspaceID": .string(task.uuidString)])
+        }
     }
 
     @Test
-    func finishLaunchesAnAgentWhenNoneIsRunningAndRefusesWithoutAHook() throws {
+    func finishLaunchesAnAgentWhenNoneIsRunningAndRefusesWithoutAHook() async throws {
         let fixture = try TaskHooksFixture()
         let task = try fixture.makeTask()
         try fixture.startSession("gone", agent: .claude, in: task, cwd: "/work/task", at: 100)
         fixture.sessionRuntimeStore.stopSession(sessionID: "gone", at: Date(timeIntervalSince1970: 150))
 
-        let outcome = try fixture.run(.workspaceTaskFinish, ["workspaceID": .string(task.uuidString)])
+        let outcome = try await fixture.runAsync(.workspaceTaskFinish, ["workspaceID": .string(task.uuidString)])
         #expect(outcome.result?["delivery"] == .string("launched"))
         #expect(outcome.result?["sessionID"] == .string("launched"))
         #expect(fixture.sentTexts.isEmpty)
@@ -300,14 +318,19 @@ struct WorkspaceTaskHooksAppControlTests {
         // agent's syntax.
         #expect(fixture.launches.first?.profileID == "claude")
         #expect(fixture.launches.first?.cwd == "/work/task")
-        #expect(fixture.launches.first?.prompt.hasPrefix("/worktree-done ") == true)
+        #expect(fixture.launches.first?.prompt.hasPrefix("/toastty-user:worktree-done ") == true)
+
+        // A finish skill that is not an installed user skill is sent as given.
+        _ = try fixture.run(.workspaceTaskSetHooks, ["workspaceID": .string(task.uuidString), "finishSkill": .string("ship-it")])
+        _ = try await fixture.runAsync(.workspaceTaskFinish, ["workspaceID": .string(task.uuidString)])
+        #expect(fixture.launches.last?.prompt.hasPrefix("/ship-it ") == true)
 
         let bare = try fixture.makeTask(title: "bare", hooks: false)
-        #expect(throws: AutomationSocketError.self) {
-            try fixture.run(.workspaceTaskFinish, ["workspaceID": .string(bare.uuidString)])
+        await #expect(throws: AutomationSocketError.self) {
+            try await fixture.runAsync(.workspaceTaskFinish, ["workspaceID": .string(bare.uuidString)])
         }
-        #expect(throws: AutomationSocketError.self) {
-            try fixture.run(.workspaceTaskFinish, ["workspaceID": .string(fixture.parentWorkspaceID.uuidString)])
+        await #expect(throws: AutomationSocketError.self) {
+            try await fixture.runAsync(.workspaceTaskFinish, ["workspaceID": .string(fixture.parentWorkspaceID.uuidString)])
         }
     }
 
@@ -338,7 +361,7 @@ struct WorkspaceTaskHooksAppControlTests {
     @Test
     func cleanupReportsSkipsAndFailuresOnTheRowUntilDismissed() async throws {
         let fixture = try TaskHooksFixture(cleanupResult: WorkspaceTaskCleanupCommandResult(
-            exitCode: 3, stdout: "checking\nPR #7 is open: still running: CI gate\n", stderr: "", failure: nil
+            exitCode: 3, output: "checking\nPR #7 is open: still running: CI gate\n", failure: nil
         ))
         let task = try fixture.makeTask()
 
@@ -347,7 +370,7 @@ struct WorkspaceTaskHooksAppControlTests {
         #expect(skipped.result?["detail"] == .string("PR #7 is open: still running: CI gate"))
         #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task]?.phase == .skipped(detail: "PR #7 is open: still running: CI gate"))
 
-        fixture.cleanupRunner.result = WorkspaceTaskCleanupCommandResult(exitCode: 1, stdout: "", stderr: "git worktree remove failed\n", failure: nil)
+        fixture.cleanupRunner.result = WorkspaceTaskCleanupCommandResult(exitCode: 1, output: "progress\ngit worktree remove failed\n", failure: nil)
         let failed = try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
         #expect(failed.result?["outcome"] == .string("failed"))
         #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task]?.phase == .failed(detail: "git worktree remove failed"))
@@ -355,9 +378,44 @@ struct WorkspaceTaskHooksAppControlTests {
         fixture.runner.dismissCleanupResult(workspaceID: task)
         #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task] == nil)
 
-        fixture.cleanupRunner.result = WorkspaceTaskCleanupCommandResult(exitCode: nil, stdout: "", stderr: "", failure: "The cleanup script did not finish within 300 seconds")
+        fixture.cleanupRunner.result = WorkspaceTaskCleanupCommandResult(exitCode: nil, output: "", failure: "The cleanup script did not finish within 300 seconds")
         let timedOut = try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
         #expect(timedOut.result?["detail"] == .string("The cleanup script did not finish within 300 seconds"))
+        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task]?.phase == .failed(detail: "The cleanup script did not finish within 300 seconds"))
+
+        // New work in the task clears its done mark; the old result goes
+        // with it, so the row offers Finish Task again, not a stale retry.
+        _ = try fixture.run(.workspaceSetDone, ["workspaceID": .string(task.uuidString)])
+        _ = try fixture.run(.workspaceClearDone, ["workspaceID": .string(task.uuidString)])
+        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task] == nil)
+        #expect(fixture.notifications.isEmpty, "the row was there to show every result")
+    }
+
+    /// A script that closes the workspace and then stops leaves no row to
+    /// report on, so the user hears about it another way.
+    @Test
+    func cleanupFailureAfterTheWorkspaceClosedIsNotified() async throws {
+        let fixture = try TaskHooksFixture(cleanupResult: WorkspaceTaskCleanupCommandResult(
+            exitCode: 1, output: "closed task; worktree kept: uncommitted changes\n", failure: nil
+        ))
+        let task = try fixture.makeTask(title: "closing")
+        let closing = CloseDuringCleanupRunner(store: fixture.store, workspaceID: task, result: fixture.cleanupRunner.result)
+        let runner = WorkspaceTaskHookRunner(
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            runner: closing,
+            userSkillsDirectoryURL: fixture.skillsRoot,
+            baseEnvironment: { [:] },
+            sendText: { _, _ in false },
+            launchAgent: { _, _, _, _ in throw WorkspaceTaskHookRunner.FinishProblem.launchFailed("unused") },
+            notify: { [fixture] title, body in fixture.notifications.append("\(title): \(body)") }
+        )
+        let outcome = try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
+        _ = runner
+        #expect(outcome.result?["outcome"] == .string("failed"))
+        #expect(fixture.store.state.workspacesByID[task] == nil)
+        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task] == nil)
+        #expect(fixture.notifications == ["closing: cleanup did not finish: closed task; worktree kept: uncommitted changes"])
     }
 
     @Test
@@ -371,6 +429,30 @@ struct WorkspaceTaskHooksAppControlTests {
         ])
         await #expect(throws: AutomationSocketError.self) {
             try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
+        }
+        #expect(fixture.cleanupRunner.invocations.isEmpty)
+
+        // A skill directory, or a script, that is a symbolic link could
+        // point anywhere, so neither counts as installed.
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("toastty-outside-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("scripts"), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: outside.appendingPathComponent("scripts/run.sh"), atomically: true, encoding: .utf8)
+        try "---\nname: linked\ndescription: x\n---\n".write(to: outside.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createSymbolicLink(at: fixture.skillsRoot.appendingPathComponent("linked"), withDestinationURL: outside)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.skillsRoot.appendingPathComponent("worktree-cleanup/scripts/escape.sh"),
+            withDestinationURL: outside.appendingPathComponent("scripts/run.sh")
+        )
+        for (skill, script) in [("linked", "scripts/run.sh"), ("worktree-cleanup", "scripts/escape.sh")] {
+            _ = try fixture.run(.workspaceTaskSetHooks, [
+                "workspaceID": .string(task.uuidString),
+                "cleanupSkill": .string(skill),
+                "cleanupScript": .string(script),
+            ])
+            await #expect(throws: AutomationSocketError.self, "\(skill)/\(script)") {
+                try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
+            }
         }
         #expect(fixture.cleanupRunner.invocations.isEmpty)
 
@@ -413,19 +495,130 @@ struct WorkspaceTaskHooksAppControlTests {
         #expect(fromChild.result?["workspaceID"] == .string(fixture.parentWorkspaceID.uuidString))
     }
 
+    /// A task that reopens while an earlier script in the batch is still
+    /// running is left alone, and a second request joins the running batch.
+    @Test
+    func cleanupFinishedRechecksEachTaskBeforeItsScriptStarts() async throws {
+        let fixture = try TaskHooksFixture()
+        let first = try fixture.makeTask(title: "first")
+        let second = try fixture.makeTask(title: "second")
+        for workspaceID in [first, second] {
+            _ = try fixture.run(.workspaceSetDone, ["workspaceID": .string(workspaceID.uuidString)])
+        }
+        let gate = GatedCleanupRunner(result: fixture.cleanupRunner.result)
+        let runner = WorkspaceTaskHookRunner(
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            runner: gate,
+            userSkillsDirectoryURL: fixture.skillsRoot,
+            baseEnvironment: { [:] },
+            sendText: { _, _ in false },
+            launchAgent: { _, _, _, _ in throw WorkspaceTaskHookRunner.FinishProblem.launchFailed("unused") }
+        )
+        let batch = runner.cleanUpFinished(parentWorkspaceID: fixture.parentWorkspaceID)
+        #expect(runner.cleanUpFinished(parentWorkspaceID: fixture.parentWorkspaceID) == batch)
+        await gate.waitForStart()
+        // The first script is running; the second task picks up new work.
+        _ = try fixture.run(.workspaceClearDone, ["workspaceID": .string(second.uuidString)])
+        gate.release()
+        let results = await batch.value
+        #expect(results.map(\.workspaceID) == [first])
+        #expect(gate.startedWorkspaceIDs == [first.uuidString])
+    }
+
     @Test
     func outcomeReadsTheExitStatusAndLastLine() {
         typealias Outcome = WorkspaceTaskHookRunner.CleanupOutcome
-        func outcome(_ code: Int32?, _ stdout: String = "", _ stderr: String = "", failure: String? = nil) -> Outcome {
-            WorkspaceTaskHookRunner.outcome(from: WorkspaceTaskCleanupCommandResult(exitCode: code, stdout: stdout, stderr: stderr, failure: failure))
+        func outcome(_ code: Int32?, _ output: String = "", failure: String? = nil) -> Outcome {
+            WorkspaceTaskHookRunner.outcome(from: WorkspaceTaskCleanupCommandResult(exitCode: code, output: output, failure: failure))
         }
         #expect(outcome(0, "a\nb\n") == .cleaned(detail: "b"))
         #expect(outcome(0) == .cleaned(detail: "cleaned"))
-        #expect(outcome(3, "", "why\n") == .skipped(detail: "why"))
+        #expect(outcome(3, "why\n") == .skipped(detail: "why"))
         #expect(outcome(2) == .failed(detail: "the cleanup script exited with status 2"))
         #expect(outcome(nil, failure: "boom") == .failed(detail: "boom"))
-        #expect(WorkspaceTaskHookRunner.finishPrompt(skill: "worktree-done", agent: .codex).hasPrefix("$worktree-done "))
-        #expect(WorkspaceTaskHookRunner.finishPrompt(skill: "worktree-done", agent: .claude).hasPrefix("/worktree-done "))
-        #expect(WorkspaceTaskHookRunner.finishPrompt(skill: "worktree-done", agent: .cursor).hasPrefix("/worktree-done "))
+        #expect(WorkspaceTaskHookRunner.finishPrompt(skill: "worktree-done", agent: .codex, isUserSkill: true).hasPrefix("$toastty-user:worktree-done "))
+        #expect(WorkspaceTaskHookRunner.finishPrompt(skill: "worktree-done", agent: .claude, isUserSkill: true).hasPrefix("/toastty-user:worktree-done "))
+        #expect(WorkspaceTaskHookRunner.finishPrompt(skill: "worktree-done", agent: .cursor, isUserSkill: false).hasPrefix("/worktree-done "))
+    }
+}
+
+
+/// Closes the workspace while its script "runs", as the real cleanup
+/// script does, then reports the scripted result.
+private final class CloseDuringCleanupRunner: WorkspaceTaskCleanupCommandRunning, @unchecked Sendable {
+    private let store: AppStore
+    private let workspaceID: UUID
+    private let result: WorkspaceTaskCleanupCommandResult
+
+    @MainActor
+    init(store: AppStore, workspaceID: UUID, result: WorkspaceTaskCleanupCommandResult) {
+        self.store = store
+        self.workspaceID = workspaceID
+        self.result = result
+    }
+
+    func run(executable: String, arguments: [String], directory: String?, environment: [String: String], timeout: TimeInterval) async -> WorkspaceTaskCleanupCommandResult {
+        await MainActor.run { _ = store.send(.closeWorkspace(workspaceID: workspaceID)) }
+        return result
+    }
+}
+
+/// Holds each script until released, so a test can change state while a
+/// batch is between tasks.
+private final class GatedCleanupRunner: WorkspaceTaskCleanupCommandRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _started: [String] = []
+    private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
+    private var startContinuations: [CheckedContinuation<Void, Never>] = []
+    private var released = false
+    private let result: WorkspaceTaskCleanupCommandResult
+
+    init(result: WorkspaceTaskCleanupCommandResult) {
+        self.result = result
+    }
+
+    var startedWorkspaceIDs: [String] {
+        lock.withLock { _started }
+    }
+
+    func waitForStart() async {
+        await withCheckedContinuation { continuation in
+            let startedAlready = lock.withLock { () -> Bool in
+                if _started.isEmpty {
+                    startContinuations.append(continuation)
+                    return false
+                }
+                return true
+            }
+            if startedAlready { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let waiting = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            released = true
+            defer { releaseContinuations = [] }
+            return releaseContinuations
+        }
+        waiting.forEach { $0.resume() }
+    }
+
+    func run(executable: String, arguments: [String], directory: String?, environment: [String: String], timeout: TimeInterval) async -> WorkspaceTaskCleanupCommandResult {
+        let starters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            _started.append(environment["TOASTTY_WORKSPACE_ID"] ?? "?")
+            defer { startContinuations = [] }
+            return startContinuations
+        }
+        starters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            let proceed = lock.withLock { () -> Bool in
+                if released { return true }
+                releaseContinuations.append(continuation)
+                return false
+            }
+            if proceed { continuation.resume() }
+        }
+        return result
     }
 }

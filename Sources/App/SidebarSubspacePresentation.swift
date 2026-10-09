@@ -381,20 +381,23 @@ enum SidebarSubspacePresentation {
     }
 
     static func taskButton(_ row: Row) -> TaskButton? {
-        switch row.cleanupRun?.phase {
-        case .running?:
+        if row.cleanupRun?.phase == .running {
             return .cleaningUp
+        }
+        guard row.isDone else {
+            // A result from before the task reopened is no longer the
+            // row's business; the runner drops it, and the row does not
+            // wait for that.
+            return row.taskHooks.finishSkill == nil ? nil : .finish
+        }
+        switch row.cleanupRun?.phase {
         case .skipped(let detail)?:
             return .cleanupSkipped(detail: detail)
         case .failed(let detail)?:
             return .cleanupFailed(detail: detail)
-        case nil:
-            break
-        }
-        if row.isDone {
+        case .running?, nil:
             return row.taskHooks.cleanup == nil ? nil : .cleanUp
         }
-        return row.taskHooks.finishSkill == nil ? nil : .finish
     }
 
     /// Rows the header's clean-up button runs: finished, with a cleanup

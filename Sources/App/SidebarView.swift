@@ -3714,11 +3714,13 @@ struct SidebarView: View {
 
     private func requestFinishSubspaceTask(_ row: SidebarSubspacePresentation.Row) {
         guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else { return }
-        if case .failure(let problem) = runner.finish(workspaceID: row.id) {
-            Self.presentTaskHookAlert(
-                "Unable to Finish \(row.title)",
-                Self.finishProblemMessage(problem)
-            )
+        Task { @MainActor in
+            if case .failure(let problem) = await runner.finish(workspaceID: row.id) {
+                Self.presentTaskHookAlert(
+                    "Unable to Finish \(row.title)",
+                    Self.finishProblemMessage(problem)
+                )
+            }
         }
     }
 
@@ -3752,14 +3754,7 @@ struct SidebarView: View {
         guard Self.confirmTaskHook(confirmation.title, confirmation.message, buttonTitle) else {
             return
         }
-        let workspaceIDs = candidates.map(\.id)
-        Task { @MainActor in
-            for workspaceID in workspaceIDs {
-                if case .success(let task) = runner.cleanUp(workspaceID: workspaceID) {
-                    _ = await task.value
-                }
-            }
-        }
+        _ = runner.cleanUpFinished(parentWorkspaceID: parentWorkspaceID)
     }
 
     static var confirmTaskHook: @MainActor (_ title: String, _ message: String, _ button: String) -> Bool = { title, message, button in
@@ -3786,7 +3781,7 @@ struct SidebarView: View {
         case .noFinishHook: return "This workspace has no finish hook."
         case .workspaceNotFound: return "The workspace is no longer open."
         case .workspaceIsTopLevel: return "Only a subspace can be finished."
-        case .noTerminalToLaunchInto: return "The workspace has no agent session and no terminal to start one in."
+        case .alreadyFinishing: return "Finish Task is still starting an agent for this workspace."
         case .sendFailed(let detail), .launchFailed(let detail): return detail
         }
     }
@@ -3797,7 +3792,7 @@ struct SidebarView: View {
         case .workspaceNotFound: return "The workspace is no longer open."
         case .alreadyRunning: return "The cleanup script is already running."
         case .scriptNotInstalled(let path):
-            return "The cleanup script is not installed at \(path). Install or update the skill, then try again."
+            return "The cleanup script must be a regular file inside an accepted user skill: \(path). Install or update the skill, then try again."
         }
     }
 

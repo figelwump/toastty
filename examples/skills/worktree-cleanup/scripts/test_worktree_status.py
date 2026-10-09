@@ -150,8 +150,12 @@ class CleanupTests(unittest.TestCase):
         self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces,
                                                "own": OWN_WORKSPACE, "scoped": self.scoped,
                                                **self.extra_state}))
+        # Exactly what the recorded hook runs: the flag alone, with the ID in
+        # the environment and no session identity.
         hook_env = dict(env or self.env, TOASTTY_WORKSPACE_ID=workspace_id)
-        result = subprocess.run([sys.executable, str(SCRIPT), "--cleanup-workspace", workspace_id],
+        if env is None:
+            hook_env.pop("TOASTTY_PANEL_ID", None)
+        result = subprocess.run([sys.executable, str(SCRIPT), "--cleanup-workspace"],
                                 cwd=cwd or self.repo, env=hook_env, capture_output=True, text=True)
         lines = [line for line in (result.stdout + result.stderr).splitlines() if line.strip()]
         return result.returncode, (lines[-1] if lines else "")
@@ -533,15 +537,54 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(open_path.exists() and dirty.exists())
         self.assertEqual(self.closed(), [])
 
-    def test_cleanup_workspace_accepts_a_scoped_caller_and_reports_a_partial_as_failure(self):
+    def test_cleanup_workspace_reports_a_partial_as_failure(self):
         branch, path = self.task(1, session=True)
-        self.scoped = True
         self.extra_state["dirty_on_close"] = {self.workspaces[-1]["workspaceID"]: str(path)}
         status, detail = self.cleanup_workspace(self.workspaces[0]["workspaceID"], cwd=path)
         self.assertEqual(status, 1, detail)
         self.assertIn("closed task-1", detail)
         self.assertIn("worktree kept", detail)
         self.assertTrue(path.exists())
+
+    def test_cleanup_workspace_keeps_the_cleanup_merged_guards_for_hand_runs(self):
+        """An agent running the hook form itself gets the same refusals as
+        --cleanup-merged: never its own workspace, never from a partial list."""
+        _, path = self.task(1)
+        own = self.workspaces[0]["workspaceID"]
+        self.extra_state["own"] = own
+        status, detail = self.cleanup_workspace(own, cwd=path, env=dict(self.env, TOASTTY_PANEL_ID="own-panel"))
+        self.assertEqual(status, 3)
+        self.assertIn("own workspace", detail)
+        self.scoped = True
+        status, detail = self.cleanup_workspace(own, cwd=path)
+        self.assertEqual(status, 3)
+        self.assertIn("workspace-scoped", detail)
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_cleanup_workspace_accepts_an_explicit_id_and_a_separate_git_dir(self):
+        branch, path = self.task(1)
+        # A clone with its Git directory elsewhere, as `git clone --separate-git-dir` makes.
+        separate = self.root / "separate"
+        subprocess.run(["git", "clone", "-q", "--separate-git-dir", str(self.root / "separate.git"),
+                        str(self.origin), str(separate)], check=True, capture_output=True)
+        self.git("config", "user.name", "Cleanup Test", cwd=separate)
+        self.git("config", "user.email", "cleanup@example.invalid", cwd=separate)
+        task_path = self.root / "separate-task"
+        self.git("worktree", "add", "-q", "-b", "separate-task", str(task_path), cwd=separate)
+        head = self.commit(task_path, "separate-task")
+        self.git("push", "-q", "-u", "origin", "separate-task", cwd=task_path)
+        self.prs.append(dict(self.prs[-1], number=2, title="separate-task", headRefName="separate-task", headRefOid=head,
+                             url="https://github.com/test/repo/pull/2"))
+        self.workspaces.append(dict(self.workspaces[-1], workspaceID="00000000-0000-0000-0000-000000000002",
+                                    title="separate-task", terminalCwds=[str(task_path)]))
+        self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces, "own": OWN_WORKSPACE,
+                                               "scoped": False}))
+        result = subprocess.run([sys.executable, str(SCRIPT), "--cleanup-workspace", "00000000-0000-0000-0000-000000000002"],
+                                cwd=task_path, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(task_path.exists())
+        self.assertTrue(path.exists(), "the other repository's task is untouched")
 
     def test_keeps_worktree_a_closed_session_dirtied(self):
         branch, path = self.task(1, session=True)

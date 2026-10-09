@@ -408,6 +408,9 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
         XCTAssertFalse(Button.cleaningUp.isEnabled)
         XCTAssertTrue(Button.cleanupSkipped(detail: "x").isEnabled, "a skipped run can be retried from the button")
+        // A result left from before the task reopened does not cover Finish Task.
+        XCTAssertEqual(button(both, done: false, run: WorkspaceTaskCleanupRun(phase: .failed(detail: "old"))), .finish)
+        XCTAssertEqual(button(both, done: false, run: WorkspaceTaskCleanupRun(phase: .running)), .cleaningUp)
 
         var finishRow = row("task", status: .idle, index: 0)
         finishRow.taskHooks = both

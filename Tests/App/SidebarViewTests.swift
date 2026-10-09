@@ -2458,7 +2458,7 @@ final class SidebarViewTests: XCTestCase {
         harness.sessionRuntimeStore.bind(store: harness.store)
         var sentTexts: [(String, UUID)] = []
         let cleanupRunner = RecordingCleanupRunner(result: WorkspaceTaskCleanupCommandResult(
-            exitCode: 3, stdout: "PR #130 has not merged\n", stderr: "", failure: nil
+            exitCode: 3, output: "PR #130 has not merged\n", failure: nil
         ))
         let skillsRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-sidebar-hooks-\(UUID().uuidString)", isDirectory: true)
@@ -2471,6 +2471,7 @@ final class SidebarViewTests: XCTestCase {
             sessionRuntimeStore: harness.sessionRuntimeStore,
             runner: cleanupRunner,
             userSkillsDirectoryURL: skillsRoot,
+            acceptedUserSkillNames: { ["worktree-cleanup", "worktree-done"] },
             baseEnvironment: { [:] },
             sendText: { text, panelID in sentTexts.append((text, panelID)); return true },
             launchAgent: { _, _, _, _ in throw WorkspaceTaskHookRunner.FinishProblem.launchFailed("not expected") }
@@ -2502,10 +2503,10 @@ final class SidebarViewTests: XCTestCase {
 
         // Finish Task goes to the row's agent session as that agent's skill syntax.
         try clickSemanticText("Finish Task", nearRowTitled: "qa-update-visitor-fixture", in: rootView)
-        pumpMainRunLoop(duration: 0.1)
+        pumpMainRunLoop(duration: 0.2)
         XCTAssertEqual(alerts, [])
         XCTAssertEqual(sentTexts.count, 1)
-        XCTAssertTrue(sentTexts.first?.0.hasPrefix("$worktree-done ") == true, "\(sentTexts)")
+        XCTAssertTrue(sentTexts.first?.0.hasPrefix("$toastty-user:worktree-done ") == true, "\(sentTexts)")
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.parentID, "The button does not select the row")
 
         // The skill marks the task done; the row switches to Clean Up and the
