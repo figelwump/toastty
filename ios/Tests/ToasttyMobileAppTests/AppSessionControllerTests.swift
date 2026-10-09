@@ -289,6 +289,25 @@ final class AppSessionControllerTests: XCTestCase {
         XCTAssertEqual(controller.state, .paired(.reconnecting))
     }
 
+    func testRapidSceneChangesDeliverOnlyTheNewestLifecycleIntent() async throws {
+        let spy = AppLiveSessionsSpy()
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: TestAppCredentialVault(initialCredential: try Self.credential(deviceName: "Test iPhone")),
+            pairingClient: TestAppPairingClient(), scanner: TestAppPairingScanner(), deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home, initialConnectionState: .offline,
+            liveSessionsFactory: { _, _, _, _, _ in spy }
+        )
+        await controller.restoreIfNeeded()
+        controller.sceneEnteredBackground()
+        controller.sceneBecameActive()
+        controller.sceneEnteredBackground()
+        controller.sceneBecameActive()
+        await waitUntil { spy.foregroundSequences == [4] }
+        XCTAssertTrue(spy.backgroundSequences.isEmpty)
+        XCTAssertNotNil(spy.foregroundBackgroundTimes.first ?? nil)
+    }
+
     func testInitialConnectTimeoutFallsThroughToUnreachable() async throws {
         let credential = try Self.credential(deviceName: "Hung iPhone")
         let vault = TestAppCredentialVault(initialCredential: credential)
@@ -569,11 +588,17 @@ private final class AppLiveSessionsSpy: AppLiveSessionsControlling {
     private(set) var scopeUpdates: [[RemoteDeviceScope]] = []
     private(set) var startCount = 0
     private(set) var refreshCount = 0
+    private(set) var foregroundSequences: [UInt64] = []
+    private(set) var foregroundBackgroundTimes: [ContinuousClock.Instant?] = []
+    private(set) var backgroundSequences: [UInt64] = []
 
     func start() async { startCount += 1 }
-    func foreground() async {}
+    func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async {
+        foregroundSequences.append(lifecycleSequence)
+        foregroundBackgroundTimes.append(backgroundedAt)
+    }
     func refresh() async { refreshCount += 1 }
-    func background() async {}
+    func background(lifecycleSequence: UInt64) async { backgroundSequences.append(lifecycleSequence) }
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
         scopeUpdates.append(scopes)
     }

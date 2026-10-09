@@ -2,6 +2,7 @@ import Foundation
 
 public protocol WebSocketConnection: Sendable {
     func receive() async throws -> Data
+    func ping() async throws
     func close() async
 }
 
@@ -11,6 +12,7 @@ public protocol WebSocketTransport: Sendable {
 
 public protocol EventStreamSubscriptionProtocol: Sendable {
     func nextMessage() async throws -> CompatibleGatewayStreamMessage
+    func ping() async throws
     func close() async
 }
 
@@ -112,6 +114,21 @@ public actor EventStreamSubscription: EventStreamSubscriptionProtocol {
         }
     }
 
+    public func ping() async throws {
+        guard isClosed == false else { throw CancellationError() }
+        do {
+            try await connection.ping()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let failure as GatewayFailure {
+            throw failure
+        } catch {
+            throw GatewayFailure.network(
+                reason: NativeGatewayResponseClassifier.transportFailure(error)
+            )
+        }
+    }
+
     public func close() async {
         guard isClosed == false else { return }
         isClosed = true
@@ -139,7 +156,7 @@ public struct URLSessionWebSocketTransport: WebSocketTransport, @unchecked Senda
     }
 
     public func connect(request: URLRequest) async throws -> any WebSocketConnection {
-        let openGate = WebSocketOpenGate()
+        let openGate = WebSocketCompletionGate()
         let delegate = URLSessionWebSocketOpenDelegate(openGate: openGate)
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         let task = session.webSocketTask(with: request)
@@ -149,7 +166,7 @@ public struct URLSessionWebSocketTransport: WebSocketTransport, @unchecked Senda
 
         do {
             try await withTaskCancellationHandler {
-                try await openGate.waitUntilOpen()
+                try await openGate.wait()
                 try Task.checkCancellation()
             } onCancel: {
                 openGate.cancel()
@@ -205,6 +222,26 @@ public actor URLSessionWebSocketConnection: WebSocketConnection {
         }
     }
 
+    public func ping() async throws {
+        guard isClosed == false else { throw CancellationError() }
+        let completion = WebSocketCompletionGate()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            task.sendPing { error in
+                if let error {
+                    completion.fail(error)
+                } else {
+                    completion.succeed()
+                }
+            }
+            try await completion.wait()
+            try Task.checkCancellation()
+        } onCancel: {
+            // Only end this wait. The coordinator owns the socket lifetime.
+            completion.cancel()
+        }
+    }
+
     public func close() {
         closeResources()
     }
@@ -233,10 +270,10 @@ private final class URLSessionWebSocketOpeningResources: @unchecked Sendable {
     }
 }
 
-final class WebSocketOpenGate: @unchecked Sendable {
+final class WebSocketCompletionGate: @unchecked Sendable {
     private enum State {
         case waiting([CheckedContinuation<Void, any Error>])
-        case opened
+        case succeeded
         case failed(any Error)
     }
 
@@ -244,7 +281,7 @@ final class WebSocketOpenGate: @unchecked Sendable {
     private var state: State = .waiting([])
     private var cancellationHandler: (@Sendable () -> Void)?
 
-    func waitUntilOpen() async throws {
+    func wait() async throws {
         try await withCheckedThrowingContinuation { continuation in
             lock.lock()
             switch state {
@@ -252,7 +289,7 @@ final class WebSocketOpenGate: @unchecked Sendable {
                 continuations.append(continuation)
                 state = .waiting(continuations)
                 lock.unlock()
-            case .opened:
+            case .succeeded:
                 lock.unlock()
                 continuation.resume()
             case .failed(let error):
@@ -270,17 +307,17 @@ final class WebSocketOpenGate: @unchecked Sendable {
         lock.withLock { cancellationHandler = nil }
     }
 
-    func didOpen() {
+    func succeed() {
         let continuations: [CheckedContinuation<Void, any Error>] = lock.withLock {
             guard case .waiting(let continuations) = state else { return [] }
-            state = .opened
+            state = .succeeded
             cancellationHandler = nil
             return continuations
         }
         continuations.forEach { $0.resume() }
     }
 
-    func didFail(_ error: any Error) {
+    func fail(_ error: any Error) {
         let continuations: [CheckedContinuation<Void, any Error>] = lock.withLock {
             guard case .waiting(let continuations) = state else { return [] }
             state = .failed(error)
@@ -304,9 +341,9 @@ final class WebSocketOpenGate: @unchecked Sendable {
 }
 
 final class URLSessionWebSocketOpenDelegate: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
-    private let openGate: WebSocketOpenGate
+    private let openGate: WebSocketCompletionGate
 
-    init(openGate: WebSocketOpenGate) {
+    init(openGate: WebSocketCompletionGate) {
         self.openGate = openGate
     }
 
@@ -315,7 +352,7 @@ final class URLSessionWebSocketOpenDelegate: NSObject, URLSessionWebSocketDelega
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol protocol: String?
     ) {
-        openGate.didOpen()
+        openGate.succeed()
     }
 
     func urlSession(
@@ -323,7 +360,7 @@ final class URLSessionWebSocketOpenDelegate: NSObject, URLSessionWebSocketDelega
         task: URLSessionTask,
         didCompleteWithError error: (any Error)?
     ) {
-        openGate.didFail(error ?? URLError(.cannotConnectToHost))
+        openGate.fail(error ?? URLError(.cannotConnectToHost))
     }
 
     func urlSession(

@@ -5,6 +5,7 @@ public enum ConnectionCoordinatorPhase: Equatable, Sendable {
     case idle
     case connecting
     case awaitingFreshSessionSnapshot
+    case checkingConnection
     case live
     case reconnecting(failureCount: Int, showsBanner: Bool)
     case suspended
@@ -21,6 +22,7 @@ public enum ConnectionCoordinatorPhase: Equatable, Sendable {
 public actor ConnectionCoordinator {
     private enum LifecycleIntent {
         case active
+        case background
         case suspended
     }
 
@@ -54,6 +56,14 @@ public actor ConnectionCoordinator {
     private let retryPolicy: ConnectionRetryPolicy
     private let firstSnapshotSleeper: any ConnectionSleeping
     private let firstSnapshotTimeout: Duration
+    private let backgroundGracePeriod: Duration
+    private let foregroundProbeTimeout: Duration
+    private let foregroundProbeSleeper: any ConnectionSleeping
+    private let lifecycleNow: @Sendable () -> ContinuousClock.Instant
+    private var latestLifecycleSequence: UInt64 = 0
+    private var backgroundStartedAt: ContinuousClock.Instant?
+    private var foregroundProbeID: UUID?
+    private var foregroundProbeTask: Task<Void, Never>?
     private let eventsPageLimit: Int
     private let requestIDFactory: any SendRequestIDFactory
     private let stateStream: RuntimeStateStream<State>
@@ -126,7 +136,11 @@ public actor ConnectionCoordinator {
         deviceScopes: [RemoteDeviceScope] = [],
         requestIDFactory: any SendRequestIDFactory = UUIDSendRequestIDFactory(),
         firstSnapshotSleeper: any ConnectionSleeping = ContinuousConnectionSleeper(),
-        firstSnapshotTimeout: Duration = .seconds(15)
+        firstSnapshotTimeout: Duration = .seconds(15),
+        backgroundGracePeriod: Duration = .seconds(10),
+        foregroundProbeTimeout: Duration = .seconds(3),
+        foregroundProbeSleeper: any ConnectionSleeping = ContinuousConnectionSleeper(),
+        lifecycleNow: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.gateway = gateway
         self.eventStream = eventStream
@@ -136,6 +150,10 @@ public actor ConnectionCoordinator {
         self.retryPolicy = retryPolicy
         self.firstSnapshotSleeper = firstSnapshotSleeper
         self.firstSnapshotTimeout = firstSnapshotTimeout
+        self.backgroundGracePeriod = backgroundGracePeriod
+        self.foregroundProbeTimeout = foregroundProbeTimeout
+        self.foregroundProbeSleeper = foregroundProbeSleeper
+        self.lifecycleNow = lifecycleNow
         self.eventsPageLimit = min(max(eventsPageLimit, 1), 200)
         self.deviceScopes = deviceScopes
         self.requestIDFactory = requestIDFactory
@@ -182,7 +200,8 @@ public actor ConnectionCoordinator {
 
     /// Starts the coordinator unless it already owns a connection loop.
     public func connectIfNeeded() async {
-        guard lifecycleTransitionsInFlight == 0,
+        guard lifecycleIntent != .background,
+              lifecycleTransitionsInFlight == 0,
               connectionTask == nil,
               connectionRetirementTask == nil else { return }
         switch state.phase {
@@ -191,7 +210,7 @@ public actor ConnectionCoordinator {
             // Terminal admission/authorization failures require an explicit
             // user action (pairing or manual reset), not a scene-driven loop.
             return
-        case .idle, .connecting, .awaitingFreshSessionSnapshot, .live,
+        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection, .live,
              .reconnecting, .suspended:
             break
         }
@@ -201,9 +220,14 @@ public actor ConnectionCoordinator {
 
     /// Cancels all network work while retaining the last readable projection.
     public func suspend() async {
+        await suspend(intent: .suspended)
+    }
+
+    private func suspend(intent: LifecycleIntent) async {
+        clearBackgroundState()
         let requestID = UUID()
         connectionLifecycleRequestID = requestID
-        lifecycleIntent = .suspended
+        lifecycleIntent = intent
         lifecycleTransitionsInFlight += 1
         defer { lifecycleTransitionsInFlight -= 1 }
         await cancelSendsForSuspension()
@@ -224,7 +248,7 @@ public actor ConnectionCoordinator {
         await closeAttemptResources()
         await previousTask?.value
         guard connectionLifecycleRequestID == requestID,
-              lifecycleIntent == .suspended else { return }
+              lifecycleIntent == intent else { return }
         connectionRetirementTask = nil
         state.phase = .suspended
         state.consecutiveFailureCount = 0
@@ -239,18 +263,142 @@ public actor ConnectionCoordinator {
         await publish()
     }
 
-    /// Foregrounding reconnects suspended/nonterminal state, but never revives
-    /// a terminal admission or authorization failure.
-    public func resume() async {
+    /// Keeps a live stream available for a brief app switch. This requests no
+    /// background execution time: iOS remains free to suspend the process.
+    /// Sequence numbers originate synchronously at the scene event, before
+    /// MainActor tasks or actor hops can reorder those events.
+    public func enterBackground(lifecycleSequence: UInt64) async {
+        guard acceptLifecycleSequence(lifecycleSequence) else { return }
+        lifecycleIntent = .background
+        guard !hasTerminalFailure else { return }
+        let canRetain = activeSubscription != nil && connectionTask != nil
+            && lifecycleTransitionsInFlight == 0 && connectionRetirementTask == nil
+        if canRetain, state.phase == .checkingConnection, foregroundProbeID != nil {
+            // A second switch must not extend the original, unverified grace.
+            cancelForegroundProbe()
+            state.phase = .live
+        }
+        guard canRetain, state.phase == .live, backgroundGracePeriod > .zero else {
+            await suspend(intent: .background)
+            return
+        }
+        if backgroundStartedAt == nil { backgroundStartedAt = lifecycleNow() }
+        await publishComposerAuthorities()
+        await publish()
+    }
+
+    /// Reuses a retained stream only after a bounded ping succeeds. A longer
+    /// absence or a failed probe takes the normal fresh-snapshot path.
+    public func resume(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant? = nil) async {
+        guard acceptLifecycleSequence(lifecycleSequence) else { return }
         lifecycleIntent = .active
+        guard !hasTerminalFailure else { return }
+        if let backgroundedAt {
+            // Scene delivery can be delayed until the process wakes. Keep the
+            // event's original time, including when its background task never ran.
+            backgroundStartedAt = min(backgroundStartedAt ?? backgroundedAt, backgroundedAt)
+        }
         if lifecycleTransitionsInFlight > 0 || connectionRetirementTask != nil {
             await restart()
+            return
+        }
+        if foregroundProbeID != nil { return }
+        if let backgroundStartedAt, state.phase == .live, let activeSubscription {
+            if backgroundStartedAt.duration(to: lifecycleNow()) < backgroundGracePeriod {
+                await startForegroundProbe(subscription: activeSubscription)
+            } else {
+                await restart()
+            }
         } else {
+            self.backgroundStartedAt = nil
             await connectIfNeeded()
         }
     }
 
+    private var hasTerminalFailure: Bool {
+        switch state.phase {
+        case .requiresAuthentication, .authorizationDenied, .incompatibleProtocol, .failed:
+            true
+        default:
+            false
+        }
+    }
+
+    private func acceptLifecycleSequence(_ sequence: UInt64) -> Bool {
+        guard sequence > latestLifecycleSequence else { return false }
+        latestLifecycleSequence = sequence
+        return true
+    }
+
+    private func startForegroundProbe(subscription: any EventStreamSubscriptionProtocol) async {
+        let probeID = UUID()
+        let generation = state.connectionGeneration
+        foregroundProbeID = probeID
+        state.phase = .checkingConnection
+        foregroundProbeTask = Task { [weak self] in
+            await self?.runForegroundProbe(subscription: subscription, id: probeID, generation: generation)
+        }
+        await publishComposerAuthorities()
+        await publish()
+    }
+
+    private func runForegroundProbe(
+        subscription: any EventStreamSubscriptionProtocol,
+        id: UUID,
+        generation: UInt64
+    ) async {
+        let failure: GatewayFailure?
+        do {
+            let sleeper = foregroundProbeSleeper
+            let timeout = foregroundProbeTimeout
+            // Both waits honor cancellation. In particular ping cancellation
+            // releases its callback waiter without closing the shared socket.
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                defer { group.cancelAll() }
+                group.addTask { try await subscription.ping() }
+                group.addTask {
+                    try await sleeper.sleep(for: timeout)
+                    throw GatewayFailure.network(reason: .timedOut)
+                }
+                _ = try await group.next()
+            }
+            failure = nil
+        } catch {
+            failure = (error as? GatewayFailure) ?? .network(reason: .other)
+        }
+        guard foregroundProbeID == id, state.connectionGeneration == generation,
+              lifecycleIntent == .active, state.phase == .checkingConnection else { return }
+        foregroundProbeID = nil
+        foregroundProbeTask = nil
+        backgroundStartedAt = nil
+        if let failure {
+            state.latestTransportFailure = failure.transportFailure
+            await restart()
+        } else {
+            state.phase = .live
+            await publishComposerAuthorities()
+            await publish()
+        }
+    }
+
+    private func cancelForegroundProbe() {
+        foregroundProbeID = nil
+        foregroundProbeTask?.cancel()
+        foregroundProbeTask = nil
+    }
+
+    private func clearBackgroundState() {
+        backgroundStartedAt = nil
+        cancelForegroundProbe()
+    }
+
+    private func suspendIfStillBackgrounded(lifecycleSequence: UInt64) async {
+        guard lifecycleIntent == .background, latestLifecycleSequence == lifecycleSequence else { return }
+        await suspend(intent: .background)
+    }
+
     public func restart() async {
+        clearBackgroundState()
         let requestID = UUID()
         connectionLifecycleRequestID = requestID
         lifecycleIntent = .active
@@ -754,8 +902,12 @@ public actor ConnectionCoordinator {
 
     private func runConnectionLoop(loopID: UUID) async {
         var failureCount = 0
+        var stoppedForBackground = false
 
         while !Task.isCancelled, connectionLoopID == loopID {
+            // A fresh connection must not inherit the retained stream's
+            // background deadline when its receive loop failed during a probe.
+            clearBackgroundState()
             state.connectionGeneration &+= 1
             let generation = state.connectionGeneration
             authoritativeSessionSnapshot = nil
@@ -792,10 +944,21 @@ public actor ConnectionCoordinator {
                     break
                 }
 
+                if lifecycleIntent == .background {
+                    stoppedForBackground = true
+                    let sequence = latestLifecycleSequence
+                    // Teardown waits for this receive task. Schedule it outside
+                    // the loop so it never awaits its own completion.
+                    Task { [weak self] in
+                        await self?.suspendIfStillBackgrounded(lifecycleSequence: sequence)
+                    }
+                    break
+                }
+
                 // Once a fresh stream snapshot made this attempt live, a
                 // later disconnect begins a new failure streak. Only failures
                 // that occur before reaching live accumulate across attempts.
-                if state.phase == .live {
+                if state.phase == .live || state.phase == .checkingConnection {
                     failureCount = 0
                 }
                 failureCount += 1
@@ -828,6 +991,11 @@ public actor ConnectionCoordinator {
         if connectionLoopID == loopID {
             connectionTask = nil
             connectionLoopID = nil
+            // Foreground may arrive while the failed background loop retires.
+            // Its resume call could not start another loop until this point.
+            if stoppedForBackground, lifecycleIntent == .active {
+                startConnectionLoop()
+            }
         }
     }
 
@@ -929,7 +1097,9 @@ public actor ConnectionCoordinator {
             authoritativeSessionSnapshot = snapshot
             state.consecutiveFailureCount = 0
             state.latestTransportFailure = nil
-            state.phase = .live
+            // A buffered frame can precede the foreground ping. Keep send
+            // admission closed until that probe confirms the retained socket.
+            state.phase = foregroundProbeID == nil ? .live : .checkingConnection
             await reconcileAuthoritativeSnapshot(snapshot)
             await resolvePendingLegacyConversationNotFound(generation: generation)
             await publishComposerAuthorities()
@@ -2146,6 +2316,7 @@ public actor ConnectionCoordinator {
     }
 
     private func closeAttemptResources() async {
+        cancelForegroundProbe()
         firstSnapshotTimeoutTask?.cancel()
         firstSnapshotTimeoutTask = nil
         for task in conversationCatchUpTasks.values {

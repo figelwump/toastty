@@ -511,7 +511,7 @@ final class LiveConversationController {
         case .reconnecting, .suspended:
             phase = .stale
             return
-        case .idle, .connecting, .awaitingFreshSessionSnapshot, .live:
+        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection, .live:
             break
         }
 
