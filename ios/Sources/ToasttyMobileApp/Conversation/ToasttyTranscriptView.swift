@@ -152,6 +152,27 @@ struct ToasttyTranscriptView: View {
                         // changes; they never race a separate scroll writer.
                         scrollCoordinator.reinforceLiveEdge()
                     }
+                    if hadMeasuredScrollGeometry,
+                       new.hasViewportChange(comparedTo: old),
+                       reachedPhysicalLiveEdge == false,
+                       lastScrollTarget != nil,
+                       followsLiveEdge || scrollCoordinator.ownsLiveEdge,
+                       scrollCoordinator.allowsSynchronousLiveEdgeRepair {
+                        // The size-change anchor compensates container and
+                        // content growth, but not every inset change: when the
+                        // keyboard leaves while the composer grows, iOS 27
+                        // applies the inset decrease and then the increase in
+                        // one pass and leaves the live edge under the composer.
+                        // Repairing here keeps that state off screen: the
+                        // committed-frame traces show only the repaired
+                        // position. The reinforced command above still owns
+                        // any later settling.
+                        scrollWithoutAnimation(
+                            to: ToasttyConversationScrollTarget.liveEdge,
+                            anchor: .bottom,
+                            using: proxy
+                        )
+                    }
                     if reachedPhysicalLiveEdge {
                         if case .send(let request)? = scrollCoordinator.liveEdgeOwner,
                            jumpToLiveEdgeRequest == request,
@@ -804,6 +825,14 @@ struct TranscriptScrollMetrics: Equatable {
             || abs(contentHeight - other.contentHeight) >= Self.viewportResizeThreshold
     }
 
+    /// The usable viewport moved or resized through the keyboard or composer.
+    /// An inset change can arrive before the container catches up, so the
+    /// height alone can look unchanged while the bottom is no longer visible.
+    func hasViewportChange(comparedTo other: Self) -> Bool {
+        hasViewportHeightChange(comparedTo: other)
+            || abs(bottomInset - other.bottomInset) >= Self.viewportResizeThreshold
+    }
+
     var distanceFromBottom: CGFloat {
         contentHeight - visibleMaxY
     }
@@ -1031,6 +1060,13 @@ struct TranscriptScrollCoordinator: Equatable {
         case .send?, .jump?: true
         case .automatic?, nil: false
         }
+    }
+
+    /// A viewport change may snap the live edge back in the same layout pass
+    /// unless an animated jump is still travelling toward it.
+    var allowsSynchronousLiveEdgeRepair: Bool {
+        if case .jump? = liveEdgeOwner { return false }
+        return true
     }
 
     static func shouldResolveFollowing(
