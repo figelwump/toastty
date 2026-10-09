@@ -116,6 +116,7 @@ struct ToasttyTranscriptView: View {
                     if TranscriptFixtureScrollTrace.isEnabled {
                         Color.clear
                             .frame(width: 1, height: 1)
+                            .background(TranscriptFixtureScrollTraceAnchor(trace: fixtureScrollTrace))
                             .accessibilityElement()
                             .accessibilityLabel("Transcript scroll trace")
                             .accessibilityValue(fixtureScrollTrace.encodedSamples)
@@ -828,10 +829,16 @@ struct TranscriptScrollMetrics: Equatable {
 }
 
 #if DEBUG
-/// UI tests collect one coherent geometry sample per layout change. Reading
-/// separate accessibility frames can straddle the keyboard animation and report
-/// movement that never appeared in a single frame.
-private struct TranscriptFixtureScrollTrace {
+/// UI tests collect one coherent geometry sample per committed UI update.
+/// `onScrollGeometryChange` can run several times inside a single update while
+/// the keyboard inset, the container size, and the composer inset settle one
+/// after another; those intermediate states never reach the screen. Callbacks
+/// are folded until `UIUpdateLink` reports `afterCATransactionCommit`, so each
+/// sample is a state that Core Animation actually committed for display.
+/// Reading separate accessibility frames would likewise straddle the keyboard
+/// animation and report movement that never appeared.
+@MainActor @Observable
+private final class TranscriptFixtureScrollTrace {
     static let isEnabled = ProcessInfo.processInfo.environment[
         "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE"
     ] == "1"
@@ -845,43 +852,137 @@ private struct TranscriptFixtureScrollTrace {
         let bottomInset: CGFloat
         let containerHeight: CGFloat
         let hasSendItems: Bool
+        /// Geometry callbacks folded into this committed sample.
+        let layoutPasses: Int
+        /// `distanceFromBottom` of every folded callback, for failure triage.
+        let intermediateDistances: [CGFloat]
+    }
+
+    private struct Pending {
+        var metrics: TranscriptScrollMetrics
+        var hasSendItems: Bool
+        var elapsed: Double
+        var intermediateDistances: [CGFloat]
     }
 
     private var latest: TranscriptScrollMetrics?
     private var startedAt: TimeInterval?
+    private var pending: Pending?
     private var samples: [Sample] = []
+    @ObservationIgnored private var updateLink: UIUpdateLink?
 
     var encodedSamples: String {
         guard let data = try? JSONEncoder().encode(samples) else { return "[]" }
         return String(decoding: data, as: UTF8.self)
     }
 
-    mutating func begin() {
+    func begin() {
         guard Self.isEnabled else { return }
         samples = []
+        pending = nil
         startedAt = ProcessInfo.processInfo.systemUptime
-        if let latest { record(latest, hasSendItems: false) }
+        // The geometry before the send is already on screen; keep it as the
+        // baseline without waiting for a commit.
+        if let latest {
+            append(metrics: latest, hasSendItems: false, elapsed: 0, intermediateDistances: [])
+        }
     }
 
-    mutating func stop() {
+    func stop() {
         startedAt = nil
+        pending = nil
     }
 
-    mutating func record(_ metrics: TranscriptScrollMetrics, hasSendItems: Bool) {
+    /// Flushes folded callbacks once per committed UI update of `view`'s
+    /// window. The link only fires for updates (continuous updates stay off),
+    /// so an idle screen adds no samples.
+    func attach(to view: UIView) {
+        guard Self.isEnabled, updateLink == nil, view.window != nil else { return }
+        let link = UIUpdateLink(view: view)
+        link.addAction(to: .afterCATransactionCommit) { [weak self] _, _ in
+            self?.commitPending()
+        }
+        link.isEnabled = true
+        updateLink = link
+    }
+
+    func record(_ metrics: TranscriptScrollMetrics, hasSendItems: Bool) {
         guard Self.isEnabled else { return }
         latest = metrics
-        guard let startedAt, samples.count < 512 else { return }
+        guard let startedAt else { return }
+        let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+        if var pending {
+            pending.metrics = metrics
+            pending.hasSendItems = hasSendItems
+            pending.elapsed = elapsed
+            pending.intermediateDistances.append(metrics.distanceFromBottom)
+            self.pending = pending
+            return
+        }
+        pending = Pending(
+            metrics: metrics,
+            hasSendItems: hasSendItems,
+            elapsed: elapsed,
+            intermediateDistances: [metrics.distanceFromBottom]
+        )
+    }
+
+    private func commitPending() {
+        guard let pending else { return }
+        self.pending = nil
+        guard startedAt != nil else { return }
+        append(
+            metrics: pending.metrics,
+            hasSendItems: pending.hasSendItems,
+            elapsed: pending.elapsed,
+            intermediateDistances: pending.intermediateDistances
+        )
+    }
+
+    private func append(
+        metrics: TranscriptScrollMetrics,
+        hasSendItems: Bool,
+        elapsed: Double,
+        intermediateDistances: [CGFloat]
+    ) {
+        guard samples.count < 512 else { return }
         samples.append(Sample(
-            elapsed: ProcessInfo.processInfo.systemUptime - startedAt,
+            elapsed: elapsed,
             contentHeight: metrics.contentHeight,
             visibleMaxY: metrics.visibleMaxY,
             visibleHeight: metrics.visibleHeight,
             topInset: metrics.topInset,
             bottomInset: metrics.bottomInset,
             containerHeight: metrics.containerHeight,
-            hasSendItems: hasSendItems
+            hasSendItems: hasSendItems,
+            layoutPasses: max(1, intermediateDistances.count),
+            intermediateDistances: intermediateDistances
         ))
     }
+}
+
+/// Hosts the `UIUpdateLink` that flushes the fixture trace after each commit.
+/// The link needs a view inside a window, so it attaches from `didMoveToWindow`.
+private struct TranscriptFixtureScrollTraceAnchor: UIViewRepresentable {
+    let trace: TranscriptFixtureScrollTrace
+
+    final class AnchorView: UIView {
+        var onMoveToWindow: (() -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            onMoveToWindow?()
+        }
+    }
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.isUserInteractionEnabled = false
+        view.onMoveToWindow = { [trace] in trace.attach(to: view) }
+        return view
+    }
+
+    func updateUIView(_ uiView: AnchorView, context: Context) {}
 }
 #endif
 

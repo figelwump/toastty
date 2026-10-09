@@ -30,6 +30,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let bottomInset: CGFloat
         let containerHeight: CGFloat
         let hasSendItems: Bool
+        let layoutPasses: Int
+        let intermediateDistances: [CGFloat]
         var distanceFromBottom: CGFloat { contentHeight - visibleMaxY }
     }
 
