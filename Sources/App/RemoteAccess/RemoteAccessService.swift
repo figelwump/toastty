@@ -428,11 +428,10 @@ final class RemoteAccessService: ObservableObject {
     /// Staged attachment directories owned by queued entries, so a removed or
     /// expired entry can release its files.
     private var stagedAttachmentsByQueuedRequestID: [String: RemoteMessageAttachmentStore.Staged] = [:]
-    /// Steer types into a running TUI, so it is limited to providers whose
-    /// behavior for input during a turn is verified. Claude Code holds such
-    /// input in its own queue until the turn ends, which Toastty's queue
-    /// already covers.
-    static let steerCapableProviders: Set<AgentKind> = [.codex]
+    /// Limit Steer to providers that can read text during the running turn.
+    /// Claude Code labels it queued, but reads it after active tool calls
+    /// finish. Toastty's queue instead waits for the next open prompt.
+    static let steerCapableProviders: Set<AgentKind> = [.codex, .claude]
     /// A steer's confirming user message arrives when the provider next reads
     /// its input, which can be well after a long tool call.
     private static let steerConfirmationTimeout: Duration = .seconds(180)
