@@ -87,11 +87,11 @@ struct ToasttyTranscriptView: View {
                     // sizes in the regime its estimation handles well.
                     Group {
                         if state.blocks.count <= Self.eagerLayoutBlockLimit {
-                            VStack(alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: Self.transcriptStackSpacing) {
                                 transcriptStackContent
                             }
                         } else {
-                            LazyVStack(alignment: .leading, spacing: 12) {
+                            LazyVStack(alignment: .leading, spacing: Self.transcriptStackSpacing) {
                                 transcriptStackContent
                             }
                         }
@@ -275,6 +275,19 @@ struct ToasttyTranscriptView: View {
                         else { return }
                     }
                     guard scrollCoordinator.command == command else { return }
+                    if case .responseStart(let blockID) = command.target,
+                       state.blocks.count > Self.eagerLayoutBlockLimit {
+                        let context = responseEntryContext(for: blockID, items: displayItems)
+                        if let host = context.markerHostID {
+                            // A lazy row must exist before its background target
+                            // can be resolved. Both moves keep the same owner.
+                            scrollWithoutAnimation(to: host, anchor: .top, using: proxy)
+                            try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
+                            guard Task.isCancelled == false,
+                                  scrollCoordinator.command == command
+                            else { return }
+                        }
+                    }
                     execute(command, using: proxy)
 
                     guard command.target == .liveEdge else {
@@ -363,13 +376,30 @@ struct ToasttyTranscriptView: View {
 
     /// Above this block count the transcript falls back to lazy layout.
     private static let eagerLayoutBlockLimit = 150
+    private static let transcriptStackSpacing: CGFloat = 12
+    private static let responseEntryContextHeight: CGFloat = 32
 
     @ViewBuilder
     private var transcriptStackContent: some View {
         olderHistoryControl
 
-        ForEach(displayItems) { item in
+        let items = displayItems
+        let entryContext: TranscriptResponseEntryContext? = entryScrollPosition.selectedTarget.flatMap { target in
+            guard case .responseStart(let blockID) = target else { return nil }
+            return responseEntryContext(for: blockID, items: items)
+        }
+        ForEach(items) { item in
             displayItemView(item)
+                .background(alignment: .bottom) {
+                    if let entryContext, entryContext.markerHostID == item.id {
+                        // This target includes 20 points of the preceding row
+                        // plus the 12-point stack gap, without changing layout.
+                        Color.clear
+                            .frame(height: Self.responseEntryContextHeight - Self.transcriptStackSpacing)
+                            .id(entryContext.target)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .id(item.id)
         }
 
@@ -603,6 +633,15 @@ struct ToasttyTranscriptView: View {
         )
     }
 
+    private func responseEntryContext(
+        for blockID: ToasttyTranscriptBlockID,
+        items: [ToasttyTranscriptDisplayItem]
+    ) -> TranscriptResponseEntryContext {
+        TranscriptResponseEntryContext(
+            responseID: blockID, items: items, expandedToolBatchIDs: toolBatchDisclosure.expandedIDs
+        )
+    }
+
     private func reconcileScrollChange() {
         if let target = entryScrollPosition.target(
             for: state,
@@ -619,6 +658,10 @@ struct ToasttyTranscriptView: View {
                 }
             case .transcript(let blockID):
                 followsLiveEdge = !scrollCoordinator.requestHistoryAnchor(blockID)
+            case .responseStart(let blockID):
+                followsLiveEdge = !scrollCoordinator.requestHistoryAnchor(
+                    blockID, includesResponseContext: true
+                )
             }
             return
         }
@@ -661,6 +704,9 @@ struct ToasttyTranscriptView: View {
             anchor = .bottom
         case .transcript(let blockID):
             target = .transcript(blockID)
+            anchor = .top
+        case .responseStart(let blockID):
+            target = responseEntryContext(for: blockID, items: displayItems).target
             anchor = .top
         }
 
@@ -751,7 +797,7 @@ struct TranscriptEntryScrollPosition {
               })
         else { return .liveEdge }
 
-        let target = TranscriptScrollCoordinator.Target.transcript(
+        let target = TranscriptScrollCoordinator.Target.responseStart(
             ToasttyTranscriptBlockID(rowID: response.id)
         )
         selectedTarget = target
@@ -1005,6 +1051,7 @@ struct TranscriptScrollCoordinator: Equatable {
     enum Target: Equatable {
         case liveEdge
         case transcript(ToasttyTranscriptBlockID)
+        case responseStart(ToasttyTranscriptBlockID)
     }
 
     struct Command: Equatable {
@@ -1091,13 +1138,20 @@ struct TranscriptScrollCoordinator: Equatable {
     /// Returns false when an explicit send or jump still owns the live edge;
     /// a late pagination result must not steal that user-requested movement.
     @discardableResult
-    mutating func requestHistoryAnchor(_ blockID: ToasttyTranscriptBlockID) -> Bool {
+    mutating func requestHistoryAnchor(
+        _ blockID: ToasttyTranscriptBlockID,
+        includesResponseContext: Bool = false
+    ) -> Bool {
         guard hasExplicitLiveEdgeOwner == false else {
             reinforceLiveEdge()
             return false
         }
         liveEdgeOwner = nil
-        issue(target: .transcript(blockID), motion: .stable, liveEdgeOwner: nil)
+        issue(
+            target: includesResponseContext ? .responseStart(blockID) : .transcript(blockID),
+            motion: .stable,
+            liveEdgeOwner: nil
+        )
         return true
     }
 
@@ -1204,14 +1258,15 @@ struct TranscriptLiveEdgeVisibilityKey: Equatable {
     }
 }
 
-private enum ToasttyConversationScrollTarget: Hashable {
+enum ToasttyConversationScrollTarget: Hashable {
     case transcript(ToasttyTranscriptBlockID)
+    case responseContext(ToasttyTranscriptBlockID)
     case turnWork(ToasttyTranscriptRowID)
     case send(String)
     case liveEdge
 }
 
-private enum ToasttyTranscriptDisplayItem: Identifiable {
+enum ToasttyTranscriptDisplayItem: Identifiable {
     case block(ToasttyTranscriptBlock, isWork: Bool)
     case workStrip(ToasttyTranscriptTurn)
 
@@ -1219,6 +1274,48 @@ private enum ToasttyTranscriptDisplayItem: Identifiable {
         switch self {
         case .block(let block, _): .transcript(block.id)
         case .workStrip(let turn): .turnWork(turn.id)
+        }
+    }
+}
+
+/// Entry anchors use the rendered timeline, so folded work never supplies a
+/// hidden tool target and an earlier turn's work cannot replace the response.
+struct TranscriptResponseEntryContext: Equatable {
+    let target: ToasttyConversationScrollTarget
+    let markerHostID: ToasttyConversationScrollTarget?
+
+    init(
+        responseID: ToasttyTranscriptBlockID,
+        items: [ToasttyTranscriptDisplayItem],
+        expandedToolBatchIDs: Set<ToasttyTranscriptBlockID> = []
+    ) {
+        guard let index = items.firstIndex(where: { $0.id == .transcript(responseID) }),
+              index > items.startIndex
+        else {
+            target = .transcript(responseID)
+            markerHostID = nil
+            return
+        }
+        let preceding = items[index - 1]
+        let isCard: Bool
+        switch preceding {
+        case .workStrip:
+            isCard = true
+        case .block(let block, _):
+            if case .toolBatch = block.content {
+                // Expanded tool output can fill the viewport. Keep the answer
+                // visible instead of opening at the top of those details.
+                isCard = !expandedToolBatchIDs.contains(block.id)
+            } else {
+                isCard = false
+            }
+        }
+        if isCard {
+            target = preceding.id
+            markerHostID = nil
+        } else {
+            target = .responseContext(responseID)
+            markerHostID = preceding.id
         }
     }
 }

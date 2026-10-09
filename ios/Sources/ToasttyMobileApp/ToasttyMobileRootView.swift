@@ -502,6 +502,13 @@ struct ToasttyMobileRootView: View {
 #if DEBUG
         switch fixtureScenario {
         case .home, .reconnecting:
+            let hasWork = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_WORK"] == "1"
+            let hasLongHistory = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_HISTORY"] == "1"
+            if hasWork || hasLongHistory {
+                return ToasttyConversationFixture.responseEntryPresentation(
+                    for: conversationID, hasWork: hasWork, hasLongHistory: hasLongHistory
+                )
+            }
             return ToasttyConversationFixture.presentation(for: conversationID)
         case .transcriptPerformance:
             return ToasttyConversationFixture.performancePresentation(for: conversationID)

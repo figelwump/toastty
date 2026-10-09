@@ -963,7 +963,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         let title = app.staticTexts["toastty-mobile-conversation-title"]
         XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
-        assertReadyMessageStartsAtTop(in: app)
+        assertReadyMessageStartsWithContext(in: app)
         attachScreenshot(named: "fixture-ready-message-start-from-home", of: app)
         let scratchpad = app.buttons["toastty-conversation-scratchpad"]
         let next = app.buttons["toastty-conversation-next"]
@@ -985,12 +985,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         // Touch and hold lists the queue to choose from.
         next.press(forDuration: 1.2)
-        let choice = app.buttons["toastty-conversation-next-\(openPromptConversationID)"]
+        // Native menu actions expose their visible title on iOS 27, but do
+        // not retain the SwiftUI accessibility identifier.
+        let choice = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Changelog + tag")
+        ).firstMatch
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
         attachScreenshot(named: "fixture-conversation-next-menu", of: app)
         choice.tap()
         XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
-        assertReadyMessageStartsAtTop(in: app)
+        assertReadyMessageStartsWithContext(in: app)
         attachScreenshot(named: "fixture-ready-message-start-from-next", of: app)
 
         // Next replaced the conversation instead of pushing, so Back
@@ -998,6 +1002,52 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 5))
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+    }
+
+    func testReadyResponseOpensWithItsCollapsedWorkCardAboveIt() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_READY_WORK": "1"])
+        let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.tap()
+
+        let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-15"]
+        let work = app.buttons["toastty-mobile-transcript-turn-12"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertTrue(work.waitForExistence(timeout: 5))
+        let showsWorkContext = waitUntil(timeout: 5) {
+            let top = max(
+                app.scrollViews["toastty-mobile-transcript"].frame.minY,
+                app.navigationBars.firstMatch.frame.maxY
+            )
+            return work.isHittable && work.frame.minY >= top - 2
+                && work.frame.minY <= top + 16
+                // The work button's touch bounds include its vertical padding.
+                && message.frame.minY >= work.frame.maxY - 8
+                && message.frame.minY <= top + 100
+        }
+        print("ENTRY_WORK_FRAMES work=\(work.frame) response=\(message.frame) transcript=\(app.scrollViews["toastty-mobile-transcript"].frame) navigation=\(app.navigationBars.firstMatch.frame)")
+        attachScreenshot(named: "fixture-ready-response-with-work-card", of: app)
+        XCTAssertTrue(showsWorkContext, "The unread response should open below its visible work card")
+        XCTAssertEqual(work.value as? String, "Collapsed")
+
+        // Expanding and collapsing the card must not restart entry scrolling.
+        work.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { work.value as? String == "Expanded" })
+        work.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { work.value as? String == "Collapsed" })
+        let latest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        latest.tap()
+        XCTAssertTrue(latest.waitForNonExistence(timeout: 5))
+    }
+
+    func testReadyResponseInLongHistoryShowsPrecedingContext() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_READY_HISTORY": "1"])
+        let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.tap()
+        assertReadyMessageStartsWithContext(in: app, sequence: 213)
+        attachScreenshot(named: "fixture-ready-response-long-history", of: app)
     }
 
     func testWorkingSessionStillOpensAtLiveEdge() {
@@ -2419,16 +2469,21 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         return top
     }
 
-    private func assertReadyMessageStartsAtTop(in app: XCUIApplication) {
-        let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-13"]
+    private func assertReadyMessageStartsWithContext(in app: XCUIApplication, sequence: UInt64 = 13) {
+        let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-\(sequence)"]
         XCTAssertTrue(message.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitUntil(timeout: 5) {
+        let showsResponseContext = waitUntil(timeout: 5) {
             let top = max(
                 app.scrollViews["toastty-mobile-transcript"].frame.minY,
                 app.navigationBars.firstMatch.frame.maxY
             )
-            return message.frame.minY >= top - 2 && message.frame.minY <= top + 32
-        }, "The ready session should show the start of its latest response", file: #filePath, line: #line)
+            // The navigation bar extends below the scroll content's top
+            // inset. Require visible context, not an exact inset measurement.
+            return message.frame.minY >= top + 12 && message.frame.minY <= top + 44
+        }
+        print("ENTRY_RESPONSE_FRAMES response=\(message.frame) transcript=\(app.scrollViews["toastty-mobile-transcript"].frame) navigation=\(app.navigationBars.firstMatch.frame)")
+        attachScreenshot(named: "fixture-ready-response-context-\(sequence)", of: app)
+        XCTAssertTrue(showsResponseContext, "The ready session should show some context above its latest response", file: #filePath, line: #line)
         XCTAssertTrue(app.buttons["toastty-mobile-transcript-jump-latest"].waitForExistence(timeout: 5))
     }
 

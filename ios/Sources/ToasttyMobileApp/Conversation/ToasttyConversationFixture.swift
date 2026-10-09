@@ -195,6 +195,36 @@ enum ToasttyConversationFixture {
         )
     }
 
+    static func responseEntryPresentation(
+        for conversationID: UUID,
+        hasWork: Bool,
+        hasLongHistory: Bool
+    ) -> ToasttyConversationPresentationState {
+        let fixture = presentation(for: conversationID)
+        let historyCount: UInt64 = hasLongHistory ? 200 : 0
+        var rows: [ToasttyTranscriptRow] = (0 ..< historyCount).map { index in
+            row(conversationID, index + 1, Date(timeIntervalSince1970: 1_786_406_400),
+                .assistantMessage(text: "Earlier response \(index + 1)", phase: .final))
+        }
+        for original in fixture.rows {
+            if hasWork, original.id.sequence == 13 {
+                rows.append(row(conversationID, historyCount + 13, original.timestamp,
+                    .toolStarted(callID: "response-check", name: "Read", detail: nil)))
+                rows.append(row(conversationID, historyCount + 14, original.timestamp,
+                    .toolFinished(callID: "response-check", name: "Read", outcome: .succeeded, detail: nil)))
+            }
+            rows.append(row(
+                conversationID,
+                historyCount + original.id.sequence + (hasWork && original.id.sequence >= 13 ? 2 : 0),
+                original.timestamp,
+                original.content
+            ))
+        }
+        return ToasttyConversationPresentationState(
+            rows: rows, phase: .live, revision: .initial, historyTruncated: false
+        )
+    }
+
     static func performancePresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {
