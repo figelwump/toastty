@@ -1633,31 +1633,45 @@ final class WorkspaceViewTests: XCTestCase {
     func testPullRequestSubspaceHeaderShowsMergeControlInSubtitleSlot() throws {
         var mergeRequests: [UUID] = []
         var mergeModes: [WorkspaceMergeMode] = []
+        let configurePullRequestSubspace: (inout AppState, UUID, UUID) throws -> Void = { state, windowID, workspaceID in
+            let parent = WorkspaceState.bootstrap(title: "toastty")
+            state.workspacesByID[parent.id] = parent
+            let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
+            state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            workspace.title = "fix-claude-question-lifetime"
+            workspace.parentWorkspaceID = parent.id
+            workspace.annotations["github-pr"] = try XCTUnwrap(
+                WorkspaceAnnotation.validated(text: "PR #59", url: "https://github.com/example/toastty/pull/59")
+            )
+            // An unread panel would otherwise claim the subtitle slot.
+            workspace.unreadPanelIDs = Set([workspace.focusedPanelID].compactMap { $0 })
+            state.workspacesByID[workspaceID] = workspace
+        }
+        // The control sits under the title: 12pt in from the leading edge,
+        // 16pt tall starting below the title line.
+        let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
+
+        // With the hidden flag off, which is the default, there is no control.
+        let hiddenHarness = try makeWorkspaceHarness(
+            hostWidth: 720,
+            configureState: configurePullRequestSubspace,
+            requestWorkspaceMerge: { mergeRequests.append($0); mergeModes.append($1) }
+        )
+        try writeTopBarEvidence(hiddenHarness, name: "topbar-merge-hidden")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: hiddenHarness)
+        hiddenHarness.window.orderOut(nil)
+        XCTAssertEqual(mergeRequests, [])
+
         let harness = try makeWorkspaceHarness(
             hostWidth: 720,
-            configureState: { state, windowID, workspaceID in
-                let parent = WorkspaceState.bootstrap(title: "toastty")
-                state.workspacesByID[parent.id] = parent
-                let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
-                state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
-                var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
-                workspace.title = "fix-claude-question-lifetime"
-                workspace.parentWorkspaceID = parent.id
-                workspace.annotations["github-pr"] = try XCTUnwrap(
-                    WorkspaceAnnotation.validated(text: "PR #59", url: "https://github.com/example/toastty/pull/59")
-                )
-                // An unread panel would otherwise claim the subtitle slot.
-                workspace.unreadPanelIDs = Set([workspace.focusedPanelID].compactMap { $0 })
-                state.workspacesByID[workspaceID] = workspace
-            },
+            isWorkspaceMergeEnabled: true,
+            configureState: configurePullRequestSubspace,
             requestWorkspaceMerge: { mergeRequests.append($0); mergeModes.append($1) }
         )
         defer { harness.window.orderOut(nil) }
         try writeTopBarEvidence(harness, name: "topbar-merge-ready")
 
-        // The control sits under the title: 12pt in from the leading edge,
-        // 16pt tall starting below the title line.
-        let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
         // The store's default mode is the button's default.
@@ -2876,6 +2890,7 @@ final class WorkspaceViewTests: XCTestCase {
         tabCount: Int = 1,
         hostWidth: CGFloat = 900,
         appIsActive: Bool? = nil,
+        isWorkspaceMergeEnabled: Bool = false,
         configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
     ) throws -> WorkspaceHarness {
@@ -2909,10 +2924,15 @@ final class WorkspaceViewTests: XCTestCase {
             store = AppStore(
                 state: state,
                 persistTerminalFontPreference: false,
+                isWorkspaceMergeEnabled: isWorkspaceMergeEnabled,
                 appIsActiveProvider: { appIsActive }
             )
         } else {
-            store = AppStore(state: state, persistTerminalFontPreference: false)
+            store = AppStore(
+                state: state,
+                persistTerminalFontPreference: false,
+                isWorkspaceMergeEnabled: isWorkspaceMergeEnabled
+            )
         }
         let registry = TerminalRuntimeRegistry()
         registry.bind(store: store)

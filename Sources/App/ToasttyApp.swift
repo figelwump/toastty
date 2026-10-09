@@ -773,6 +773,7 @@ struct ToasttyApp: App {
             initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
             initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
+            isWorkspaceMergeEnabled: initialToasttySettings.isWorkspaceMergeEnabled,
             recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()

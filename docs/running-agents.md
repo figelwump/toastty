@@ -547,6 +547,11 @@ need the user's review and a new `worktree-done` request.
 
 ### Merging a task's pull request
 
+The Merge button, its context menu items, and `Option+Shift+M` are off by
+default while task lifecycle hooks are built to replace them. To turn them on,
+run `defaults write com.GiantThings.toastty toastty.workspaceMergeEnabled -bool true`
+and relaunch Toastty.
+
 A subspace with a `github-pr` annotation shows a **Merge PR #N** button under
 its title in the top bar. The arrow beside it picks what the button does. The
 button label does not change; the menu marks the selected mode.
