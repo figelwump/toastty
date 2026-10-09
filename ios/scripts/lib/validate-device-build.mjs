@@ -29,13 +29,14 @@ function requireOption(options, name) {
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
-    encoding: options.encoding ?? "utf8",
+    encoding: options.encoding === undefined ? "utf8" : options.encoding,
     input: options.input,
   });
   if (result.error) throw new Error(`Failed to run ${command}: ${result.error.message}`);
   if (result.status !== 0) {
     const detail = String(result.stderr || result.stdout || "").trim();
-    throw new Error(`${command} ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`);
+    const label = options.label ?? `${command} ${args.join(" ")}`;
+    throw new Error(`${label} failed${detail ? `: ${detail}` : ""}`);
   }
   return result.stdout;
 }
@@ -53,6 +54,45 @@ function plistDataJSON(data, label) {
   } catch (error) {
     throw new Error(`${label} did not decode to JSON: ${error.message}`);
   }
+}
+
+function provisioningProfileJSON(data) {
+  // Provisioning profiles contain Date and Data values that plutil cannot
+  // convert to JSON. Decode the plist, then return only the validation fields.
+  const raw = run("python3", ["-I", "-c", `
+import datetime
+import json
+import plistlib
+import sys
+
+try:
+    profile = plistlib.loads(sys.stdin.buffer.read())
+    if not isinstance(profile, dict):
+        raise ValueError("Expected a plist dictionary")
+    expiration = profile.get("ExpirationDate")
+    if isinstance(expiration, datetime.datetime):
+        expiration = expiration.replace(tzinfo=datetime.timezone.utc).isoformat()
+    else:
+        expiration = None
+    entitlements = profile.get("Entitlements", {})
+    fields = {
+        "TeamIdentifier": profile.get("TeamIdentifier"),
+        "ProvisionedDevices": profile.get("ProvisionedDevices"),
+        "ProvisionsAllDevices": profile.get("ProvisionsAllDevices"),
+        "ExpirationDate": expiration,
+        "Entitlements": {key: entitlements.get(key) for key in [
+            "application-identifier",
+            "com.apple.developer.team-identifier",
+            "get-task-allow",
+            "aps-environment",
+        ]},
+    }
+    sys.stdout.write(json.dumps(fields))
+except Exception:
+    print("Provisioning profile could not be decoded for validation", file=sys.stderr)
+    sys.exit(1)
+`], { input: data, label: "Provisioning profile decoder" });
+  return JSON.parse(raw);
 }
 
 function requireEqual(label, actual, expected) {
@@ -77,6 +117,22 @@ export function validateBuildSettings(value, expected) {
   requireEqual("CODE_SIGN_STYLE", settings.CODE_SIGN_STYLE, "Automatic");
   requireEqual("TOASTTY_MOBILE_APP_DISPLAY_NAME", settings.TOASTTY_MOBILE_APP_DISPLAY_NAME, expected.displayName);
   requireEqual("TOASTTY_MOBILE_URL_SCHEME", settings.TOASTTY_MOBILE_URL_SCHEME, expected.urlScheme);
+  const conditions = String(settings.SWIFT_ACTIVE_COMPILATION_CONDITIONS ?? "").split(/\s+/);
+  const hasPushProbe = conditions.includes("TOASTTY_MOBILE_PUSH_PROBE");
+  if (expected.pushProbe && !hasPushProbe) {
+    throw new Error("Push probe compilation condition is missing from the Debug build");
+  }
+  if (!expected.pushProbe && hasPushProbe) {
+    throw new Error("Push probe compilation condition is present in a normal Debug build");
+  }
+  if (expected.pushNotifications) {
+    if (hasPushProbe) throw new Error("Normal notifications cannot run in the operator probe");
+    requireEqual("TOASTTY_MOBILE_PUSH_RELAY_URL", settings.TOASTTY_MOBILE_PUSH_RELAY_URL, expected.pushRelayURL);
+    requireEqual("TOASTTY_MOBILE_PUSH_RELAY_ID", settings.TOASTTY_MOBILE_PUSH_RELAY_ID, "toastty-push-dev-v1");
+    requireEqual("TOASTTY_MOBILE_PUSH_ENVIRONMENT", settings.TOASTTY_MOBILE_PUSH_ENVIRONMENT, "development");
+  } else if (settings.TOASTTY_MOBILE_PUSH_RELAY_URL) {
+    throw new Error("Push relay is configured in a build expected to have notifications disabled");
+  }
 
   if (!settings.TARGET_BUILD_DIR || !settings.FULL_PRODUCT_NAME) {
     throw new Error("xcodebuild settings are missing TARGET_BUILD_DIR or FULL_PRODUCT_NAME");
@@ -93,9 +149,17 @@ export function validateAppInfo(info, expected) {
   if (!schemes.includes(expected.urlScheme)) {
     throw new Error(`CFBundleURLSchemes does not include ${expected.urlScheme}`);
   }
+  if (expected.pushNotifications) {
+    requireEqual("ToasttyMobilePushRelayURL", info.ToasttyMobilePushRelayURL, expected.pushRelayURL);
+    requireEqual("ToasttyMobilePushRelayID", info.ToasttyMobilePushRelayID, "toastty-push-dev-v1");
+    requireEqual("ToasttyMobilePushEnvironment", info.ToasttyMobilePushEnvironment, "development");
+  } else if (info.ToasttyMobilePushRelayURL) {
+    throw new Error("Push relay is configured in app metadata expected to have notifications disabled");
+  }
 }
 
 export function validateDevelopmentProfile(profile, expected) {
+  // Keep the fields read here in provisioningProfileJSON's projection.
   const teams = Array.isArray(profile.TeamIdentifier) ? profile.TeamIdentifier : [];
   if (!teams.includes(expected.team)) {
     throw new Error(
@@ -117,6 +181,9 @@ export function validateDevelopmentProfile(profile, expected) {
     expected.team,
   );
   requireEqual("provisioning get-task-allow", entitlements["get-task-allow"], true);
+  if (expected.pushProbe || expected.pushNotifications) {
+    requireEqual("provisioning aps-environment", entitlements["aps-environment"], "development");
+  }
 
   const devices = Array.isArray(profile.ProvisionedDevices) ? profile.ProvisionedDevices : [];
   if (!devices.includes(expected.deviceUDID)) {
@@ -148,17 +215,31 @@ export function validateSignedEntitlements(entitlements, expected) {
     expected.team,
   );
   requireEqual("signed get-task-allow", entitlements["get-task-allow"], true);
+  if (expected.pushProbe || expected.pushNotifications) {
+    requireEqual("signed aps-environment", entitlements["aps-environment"], "development");
+  } else if (entitlements["aps-environment"] !== undefined) {
+    throw new Error("Unexpected signed aps-environment in a build with notifications disabled");
+  }
 }
 
 function main(argv) {
   const options = parseArgs(argv);
   const settingsPath = requireOption(options, "settings");
+  const pushProbeFlag = options["push-probe"] ?? "0";
+  const notificationsFlag = options["push-notifications"] ?? "0";
+  if (!["0", "1"].includes(notificationsFlag)) throw new Error("--push-notifications must be 0 or 1");
+  if (pushProbeFlag !== "0" && pushProbeFlag !== "1") {
+    throw new Error("--push-probe must be 0 or 1");
+  }
   const expected = {
     bundleID: requireOption(options, "bundle-id"),
     deviceUDID: requireOption(options, "device-udid"),
     displayName: requireOption(options, "display-name"),
     team: requireOption(options, "team"),
     urlScheme: requireOption(options, "url-scheme"),
+    pushProbe: pushProbeFlag === "1",
+    pushNotifications: notificationsFlag === "1",
+    pushRelayURL: options["push-relay-url"],
   };
 
   const appPath = validateBuildSettings(
@@ -176,7 +257,7 @@ function main(argv) {
 
   validateAppInfo(plistFileJSON(infoPath), expected);
   const decodedProfile = run("security", ["cms", "-D", "-i", profilePath], { encoding: null });
-  validateDevelopmentProfile(plistDataJSON(decodedProfile, "provisioning profile"), expected);
+  validateDevelopmentProfile(provisioningProfileJSON(decodedProfile), expected);
   run("codesign", ["--verify", "--deep", "--strict", appPath]);
   const signedEntitlements = run(
     "codesign",

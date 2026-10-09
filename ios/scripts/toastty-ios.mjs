@@ -445,6 +445,7 @@ function nativeDeviceSpec(options, context) {
     TOASTTY_NATIVE_DEVICE_PREFLIGHT_ONLY: options.preflightOnly ? "1" : "0",
     TOASTTY_NATIVE_DEVICE_REQUESTED: options.device ?? "",
     TOASTTY_NATIVE_DEVICE_URL_SCHEME: "toastty-mobile-dev",
+    TOASTTY_NATIVE_DEVICE_PUSH_PROBE: pushProbeEnabled() ? "1" : "0",
     TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX: ".dev.local",
     TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM: developmentTeam,
     TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE: "1",
@@ -476,6 +477,8 @@ function nativeDeviceSpec(options, context) {
       device: options.device ?? null,
       displayName: "Toastty Dev",
       physicalDeviceManifestFlag: true,
+      pushProbe: pushProbeEnabled(),
+      pushNotifications: Boolean(process.env.TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL),
       preflightOnly: options.preflightOnly,
       runID: runIDOverride || "<auto:UTC-timestamp-pid>",
       runRoot: runRootOverride || null,
@@ -485,13 +488,86 @@ function nativeDeviceSpec(options, context) {
         TOASTTY_NATIVE_DEVICE_BUNDLE_ID: "com.giantthings.toastty.mobile.dev",
         TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX: ".dev.local",
         TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE: "1",
+        TUIST_TOASTTY_MOBILE_PUSH_PROBE: pushProbeEnabled() ? "1" : "0",
       },
     },
   };
 }
 
+function environmentFlag(name) {
+  const value = process.env[name];
+  if (value === undefined) return false;
+  if (["1", "true", "yes", "on"].includes(value.toLowerCase())) return true;
+  if (["0", "false", "no", "off"].includes(value.toLowerCase())) return false;
+  fail(`${name} must be a boolean flag`);
+}
+
+function pushProbeEnabled() {
+  return environmentFlag("TUIST_TOASTTY_MOBILE_PUSH_PROBE");
+}
+
+function validatePushProbe(command) {
+  if (!pushProbeEnabled()) return;
+  if (environmentFlag("TUIST_TOASTTY_MOBILE_PROD_TEST")) {
+    fail("TUIST_TOASTTY_MOBILE_PUSH_PROBE cannot use prod-test identity");
+  }
+  for (const name of ["TOASTTY_IOS_CONFIGURATION", "TOASTTY_NATIVE_DEVICE_BUILD_CONFIGURATION"]) {
+    if (process.env[name] !== undefined && process.env[name] !== "Debug") {
+      fail("TUIST_TOASTTY_MOBILE_PUSH_PROBE requires Debug configuration");
+    }
+  }
+  for (const name of ["TUIST_TOASTTY_MOBILE_BUNDLE_ID", "TOASTTY_MOBILE_BUNDLE_ID"]) {
+    if (process.env[name] !== undefined && process.env[name] !== "com.giantthings.toastty.mobile.dev") {
+      fail("TUIST_TOASTTY_MOBILE_PUSH_PROBE requires the fixed physical-device Debug identity");
+    }
+  }
+  if (command !== "native-device"
+    && !(command === "generate" && environmentFlag("TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE"))) {
+    fail("TUIST_TOASTTY_MOBILE_PUSH_PROBE requires native-device, or generate with TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE=1");
+  }
+}
+
+function validatePushRelayConfiguration(command) {
+  const developmentURL = process.env.TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL;
+  const productionURL = process.env.TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL;
+  for (const raw of [developmentURL, productionURL].filter((value) => value !== undefined)) {
+    let url;
+    try { url = new URL(raw); } catch { fail("Push relay must be an HTTPS origin"); }
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash
+      || !["", "/"].includes(url.pathname) || url.port) {
+      fail("Push relay must be an HTTPS origin without credentials, query, or path");
+    }
+  }
+  if (!developmentURL && !productionURL) return;
+  if (pushProbeEnabled() || environmentFlag("TUIST_TOASTTY_MOBILE_PROD_TEST")) {
+    fail("Notifications cannot use the operator probe or prod-test identity");
+  }
+  if (developmentURL) {
+    if (process.env.TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT !== "development") {
+      fail("Development notifications require explicit development environment");
+    }
+    for (const name of ["TUIST_TOASTTY_MOBILE_BUNDLE_ID", "TOASTTY_MOBILE_BUNDLE_ID"]) {
+      if (process.env[name] !== undefined && process.env[name] !== "com.giantthings.toastty.mobile.dev") {
+        fail("Development notifications require the fixed physical-device identity");
+      }
+    }
+    if (command !== "native-device" && !environmentFlag("TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE")) {
+      fail("Development notifications require the fixed physical-device identity");
+    }
+  }
+  if (productionURL) {
+    if (productionURL === developmentURL) fail("Production notifications require a separate relay origin");
+    if (command === "native-device") fail("Native Debug device builds cannot configure production notifications");
+    const relayID = process.env.TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID;
+    if (process.env.TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT !== "production"
+      || !relayID || relayID === "toastty-push-dev-v1") {
+      fail("Production notifications require a separate relay ID and explicit production environment");
+    }
+  }
+}
+
 function printHelp() {
-  process.stdout.write(`Usage: node ios/scripts/toastty-ios.mjs <command> [options]\n\nCommands:\n  generate       Install Tuist packages and generate the Xcode workspace\n  build          Generate, select an iOS 18+ simulator, and build the app\n  test           Generate, select an iOS 18+ simulator, and test the native client\n  native-device  Build Debug for the fixed development identity, then install and launch it\n\nAll commands:\n  --dry-run          Print a deterministic plan without invoking tools\n\nTest options:\n  --skip-performance-budgets  Exclude the provisional domain timing/memory budget test\n                             Large-page correctness remains covered\n  --ui-tests smoke   Run app/domain tests and the two CI fixture UI tests\n  --ui-tests all     Run all app, domain, and UI tests (Debug default)\n                   UI selectors require Debug; Release runs app/domain tests without UI tests\n\nNative device options:\n  --preflight-only   Check the toolchain and selected physical iPhone, then stop\n  --build-only       Build and validate the signed app without install or launch\n  --device <value>   Select an exact CoreDevice identifier, UDID, hostname, or unique name\n\nEnvironment:\n  TOASTTY_IOS_CONFIGURATION             Debug or Release (default: Debug)\n  TOASTTY_IOS_DESTINATION               Explicit simulator xcodebuild destination\n  TOASTTY_IOS_SIMULATOR_DEVICE_NAMES    Preferred iPhone names, comma-separated\n  TOASTTY_IOS_RUN_ID                    Simulator run label\n  TOASTTY_IOS_RUN_ROOT                  Simulator run directory override\n  TOASTTY_IOS_DERIVED_DATA_PATH         Simulator DerivedData override\n  TOASTTY_IOS_WORKTREE_ID               Worktree identity override\n  TOASTTY_IOS_DEVELOPMENT_TEAM          Override the repository Apple development team\n  TOASTTY_NATIVE_DEVICE_RUN_ID          Physical-device run label override\n  TOASTTY_NATIVE_DEVICE_RUN_ROOT        Physical-device evidence directory override\n  TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH Physical-device DerivedData override\n`);
+  process.stdout.write(`Usage: node ios/scripts/toastty-ios.mjs <command> [options]\n\nCommands:\n  generate       Install Tuist packages and generate the Xcode workspace\n  build          Generate, select an iOS 18+ simulator, and build the app\n  test           Generate, select an iOS 18+ simulator, and test the native client\n  native-device  Build Debug for the fixed development identity, then install and launch it\n\nAll commands:\n  --dry-run          Print a deterministic plan without invoking tools\n\nTest options:\n  --skip-performance-budgets  Exclude the provisional domain timing/memory budget test\n                             Large-page correctness remains covered\n  --ui-tests smoke   Run app/domain tests and the two CI fixture UI tests\n  --ui-tests all     Run all app, domain, and UI tests (Debug default)\n                   UI selectors require Debug; Release runs app/domain tests without UI tests\n\nNative device options:\n  --preflight-only   Check the toolchain and selected physical iPhone, then stop\n  --build-only       Build and validate the signed app without install or launch\n  --device <value>   Select an exact CoreDevice identifier, UDID, hostname, or unique name\n\nEnvironment:\n  TUIST_TOASTTY_MOBILE_PUSH_PROBE       Opt in to the fixed-identity Debug APNs sandbox receiver\n                                     Use native-device; Release and prod-test are rejected\n  TOASTTY_IOS_CONFIGURATION             Debug or Release (default: Debug)\n  TOASTTY_IOS_DESTINATION               Explicit simulator xcodebuild destination\n  TOASTTY_IOS_SIMULATOR_DEVICE_NAMES    Preferred iPhone names, comma-separated\n  TOASTTY_IOS_RUN_ID                    Simulator run label\n  TOASTTY_IOS_RUN_ROOT                  Simulator run directory override\n  TOASTTY_IOS_DERIVED_DATA_PATH         Simulator DerivedData override\n  TOASTTY_IOS_WORKTREE_ID               Worktree identity override\n  TOASTTY_IOS_DEVELOPMENT_TEAM          Override the repository Apple development team\n  TOASTTY_NATIVE_DEVICE_RUN_ID          Physical-device run label override\n  TOASTTY_NATIVE_DEVICE_RUN_ROOT        Physical-device evidence directory override\n  TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH Physical-device DerivedData override\n`);
 }
 
 function main() {
@@ -506,6 +582,9 @@ function main() {
     printHelp();
     throw new CommandFailure(`unknown command: ${command}`);
   }
+
+  validatePushProbe(command);
+  validatePushRelayConfiguration(command);
 
   if (command === "test" && uiTests !== undefined
     && (process.env.TOASTTY_IOS_CONFIGURATION?.trim() || "Debug") === "Release") {

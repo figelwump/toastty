@@ -119,6 +119,32 @@ Browser profiles paired by earlier Toastty builds may continue to connect and
 appear in the paired-device list, but the current UI does not issue new browser
 pairing codes.
 
+## iPhone notifications
+
+Notification-enabled builds offer session alerts after the first connection to a
+compatible Mac. Continue requests alerts, sound, and app icon badges together
+through Apple's permission prompt. After Allow, Toastty returns to Home and
+finishes setup automatically. Not now defers all three permissions. Not now and
+Don't Allow are remembered. You can change the choice in Settings.
+Existing iOS permission choices stay in effect. Use iOS Settings to change them.
+
+Badge permission alone does not enable session alerts. If all alert delivery
+locations are off, Toastty links to iOS Settings. Delivery to Notification Center
+or the Lock Screen remains supported when banners or sound are off.
+
+Alerts include the session title and Ready or Needs approval. The title passes
+through Toastty's notification service and Apple. There is no title-hiding option.
+Tapping an alert opens its conversation if it still belongs to the current Mac
+pairing. The Mac must remain running with Remote Access enabled to send new
+alerts. The phone does not need an open connection to receive Apple's alert, but
+opening the conversation still requires access to the Mac through Tailscale.
+
+Interrupted setup resumes when the app returns to the foreground. A failure shows
+a small Retry message. Off and unpairing retain pending notification revocation
+until the service accepts it. Settings shows when turning off is still pending;
+alerts already sent can still arrive. Unconfigured builds hide these controls.
+See [development setup](../workers/push/README.md) for the current opt-in relay.
+
 ## Reading and replying
 
 A newly paired device can read managed Codex, Claude Code, OpenCode, MiMo Code,
@@ -205,11 +231,13 @@ badge when the Mac sends the new state. Opening the app alone does not clear it.
 Reading an error does not dismiss it; it counts until the session leaves its
 error state or is removed on the Mac.
 
-Toastty asks for badge permission when attention first appears while the app is
-active. It requests badges only. You can change this permission in iOS Settings.
+Notification-enabled builds request badge permission with alerts and sound when
+you choose Continue. They do not show a separate badge prompt. Builds without
+push configuration ask for badge permission only when attention first appears
+while the app is active. You can change this permission in iOS Settings.
 The badge keeps its last count during a connection loss or while the app is
-suspended. This version has no push delivery, so new activity cannot update the
-badge until the app reconnects. Unpairing, losing access, or a pairing that
+suspended. Session push alerts do not carry a badge count, so new activity cannot
+update the badge until the app reconnects. Unpairing, losing access, or a pairing that
 needs repair because it is corrupt or incompatible clears the badge.
 
 Remote replies are enabled by default for active sessions. For every supported

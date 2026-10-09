@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import Foundation
 import Network
@@ -596,6 +597,148 @@ private actor RemoteAccessTailnetSetupSpy {
 }
 
 struct RemoteAccessServiceSafetyTests {
+    @MainActor
+    @Test func acceptedSessionEventSendsDurableConversationAndCurrentTitle() async throws {
+        let relay = RemotePushRelaySpy()
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay)
+        defer { fixture.removeRuntimeFiles() }
+        let registration = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: Data(repeating: 1, count: 32).base64EncodedString().replacingOccurrences(of: "=", with: ""), relayID: configuration.relayID)
+        try fixture.setPushRegistration(registration)
+        let title = fixture.summary.title
+        fixture.sessionRuntimeStore.updateStatus(sessionID: fixture.sessionID, status: .init(kind: .working, summary: "Working"), at: fixture.confirmedAt.addingTimeInterval(1))
+        fixture.sessionRuntimeStore.updateStatus(sessionID: fixture.sessionID, status: .init(kind: .ready, summary: "Ready", detail: "Private details"), at: fixture.confirmedAt.addingTimeInterval(2))
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.count == 1 }
+        let sent = try #require(relay.notifications.first)
+        #expect(sent.conversationID == fixture.conversationID)
+        #expect(sent.sessionTitle == title)
+        #expect(sent.status == .ready)
+        #expect(relay.registrations.first?.registrationID == registration.registrationID)
+
+        let event = ManagedSessionActionableEvent(eventID: UUID(), kind: .needsApproval, timestamp: .now, sessionID: "stale-session", agent: .codex, workspaceID: fixture.summary.placement.workspaceID!, panelID: fixture.panelID)
+        fixture.sessionRuntimeStore.onActionableEvent?(event)
+        fixture.service.setEnabled(false, persist: false)
+        fixture.sessionRuntimeStore.onActionableEvent?(.init(eventID: UUID(), kind: .needsApproval, timestamp: .now, sessionID: fixture.sessionID, agent: .codex, workspaceID: event.workspaceID, panelID: fixture.panelID))
+        await Task.yield()
+        #expect(relay.notifications.count == 1)
+    }
+
+    @MainActor
+    @Test func temporaryRelayFailureKeepsGrantButDeadGrantClearsDurablyAndRetainsCleanup() async throws {
+        let relay = RemotePushRelaySpy()
+        relay.sendOutcome = .dropped
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay)
+        defer { fixture.removeRuntimeFiles() }
+        let registration = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: Data(repeating: 2, count: 32).base64EncodedString().replacingOccurrences(of: "=", with: ""), relayID: configuration.relayID)
+        try fixture.setPushRegistration(registration)
+        func event() -> ManagedSessionActionableEvent {
+            .init(eventID: UUID(), kind: .needsApproval, timestamp: .now, sessionID: fixture.sessionID, agent: .codex, workspaceID: fixture.summary.placement.workspaceID!, panelID: fixture.panelID)
+        }
+        fixture.sessionRuntimeStore.onActionableEvent?(event())
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.count == 1 }
+        #expect(try fixture.pushConfigurationResponse().registrationID == registration.registrationID)
+        relay.sendOutcome = .registrationUnavailable
+        fixture.sessionRuntimeStore.onActionableEvent?(event())
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.count == 1 }
+        #expect(try fixture.pushConfigurationResponse().registrationID == nil)
+        let runtimePaths = ToasttyRuntimePaths.resolve(homeDirectoryPath: "/tmp", environment: [ToasttyRuntimePaths.environmentKey: fixture.runtimeHome])
+        #expect(RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL).pendingPushCleanup.map(\.registrationID) == [registration.registrationID])
+        relay.revokeSucceeds = true
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.count == 2 }
+        await Task.yield()
+        #expect(RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL).pendingPushCleanup.isEmpty)
+        #expect(relay.notifications.count == 2)
+    }
+
+    @MainActor
+    @Test func revocationBeforeQueuedSendPreventsDeliveryAndLateFailurePreservesReplacement() async throws {
+        let relay = RemotePushRelaySpy()
+        relay.holdSend = true
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay)
+        defer { fixture.removeRuntimeFiles() }
+        let first = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        try fixture.setPushRegistration(first)
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+        func event() -> ManagedSessionActionableEvent {
+            .init(eventID: UUID(), kind: .needsApproval, timestamp: .now, sessionID: fixture.sessionID, agent: .codex, workspaceID: workspaceID, panelID: fixture.panelID)
+        }
+        fixture.sessionRuntimeStore.onActionableEvent?(event())
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.sendContinuation != nil }
+        let replacement = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        try fixture.setPushRegistration(replacement)
+        relay.sendContinuation?.resume(returning: .registrationUnavailable)
+        relay.sendContinuation = nil
+        await Task.yield()
+        #expect(try fixture.pushConfigurationResponse().registrationID == replacement.registrationID)
+        relay.holdSend = false
+        fixture.sessionRuntimeStore.onActionableEvent?(event())
+        fixture.service.revokeDevice(try #require(fixture.service.devices.first { $0.authKind == .native }?.id))
+        await Task.yield()
+        #expect(relay.notifications.count == 1)
+    }
+
+    @MainActor
+    @Test func boundedCleanupRotationReachesLaterRecordsAfterOldRelayFailures() async throws {
+        let relay = RemotePushRelaySpy()
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay, pendingPushCleanupCount: 17)
+        defer { fixture.removeRuntimeFiles() }
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.count == 16 }
+        #expect(Set(relay.revoked.map(\.registrationID)).count == 16)
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.count == 32 }
+        #expect(Set(relay.revoked.map(\.registrationID)).count == 17)
+        let paths = ToasttyRuntimePaths.resolve(homeDirectoryPath: "/tmp", environment: [ToasttyRuntimePaths.environmentKey: fixture.runtimeHome])
+        #expect(RemoteDeviceStore(fileURL: paths.remoteAccessDevicesFileURL).pendingPushCleanup.count == 17)
+    }
+
+    @MainActor
+    @Test func stalledDeviceDoesNotDelayAnotherEnrolledDevice() async throws {
+        let relay = RemotePushRelaySpy()
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay)
+        defer { fixture.removeRuntimeFiles() }
+        defer {
+            relay.sendContinuation?.resume(returning: .accepted)
+            relay.sendContinuation = nil
+        }
+        let first = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        try fixture.setPushRegistration(first)
+        let secondID = try fixture.pairAnotherPushDevice(configuration: configuration)
+        relay.holdSend = true
+        relay.heldRegistrationID = first.registrationID
+        fixture.sessionRuntimeStore.onActionableEvent?(.init(eventID: UUID(), kind: .needsApproval, timestamp: .now,
+            sessionID: fixture.sessionID, agent: .codex, workspaceID: try #require(fixture.summary.placement.workspaceID), panelID: fixture.panelID))
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.count == 2 }
+        #expect(Set(relay.registrations.map(\.registrationID)) == [first.registrationID, secondID])
+        #expect(relay.sendContinuation != nil)
+    }
+
+    @MainActor
+    @Test func cleanupQueuedDuringBatchRunsWithoutAnotherForeground() async throws {
+        let relay = RemotePushRelaySpy()
+        relay.holdRevoke = true
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay, pendingPushCleanupCount: 16)
+        defer { fixture.removeRuntimeFiles() }
+        defer {
+            relay.revokeContinuation?.resume(returning: false)
+            relay.revokeContinuation = nil
+        }
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revokeContinuation != nil }
+        let registration = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        try fixture.setPushRegistration(registration)
+        try fixture.setPushRegistration(nil)
+        relay.holdRevoke = false
+        relay.revokeContinuation?.resume(returning: false)
+        relay.revokeContinuation = nil
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.contains { $0.registrationID == registration.registrationID } }
+        #expect(relay.revoked.contains { $0.registrationID == registration.registrationID })
+    }
+
     @MainActor
     @Test func terminalOnlyTabRenameAndResetPublishPlacementWithoutActivity() async throws {
         let fixture = try RemoteBootstrapFixture()
@@ -2242,7 +2385,10 @@ private final class RemoteBootstrapFixture {
         statusKind: SessionStatusKind = .idle,
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
-        pairNativeDevice: Bool = false
+        pairNativeDevice: Bool = false,
+        pushConfiguration: RemotePushConfiguration? = nil,
+        pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
+        pendingPushCleanupCount: Int = 0
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -2289,8 +2435,15 @@ private final class RemoteBootstrapFixture {
             let devices = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
             let now = Date()
             let offer = try devices.issueNativePairingOffer(gatewayURL: URL(string: "https://test.tailnet.ts.net")!, at: now)
-            guard case .paired(_, let token) = try devices.redeemNativePairingOffer(using: .qr(offerID: offer.id, secret: offer.qrPayload.secret), deviceName: "Test phone", tailscaleLogin: "owner@example.com", at: now) else { throw CocoaError(.coderInvalidValue) }
+            guard case .paired(let device, let token) = try devices.redeemNativePairingOffer(using: .qr(offerID: offer.id, secret: offer.qrPayload.secret), deviceName: "Test phone", tailscaleLogin: "owner@example.com", at: now) else { throw CocoaError(.coderInvalidValue) }
             nativeCredential = token
+            if pendingPushCleanupCount > 0 {
+                let configuration = try #require(pushConfiguration)
+                for _ in 0..<pendingPushCleanupCount {
+                    try devices.setPushRegistration(.init(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID), forDevice: device.id, configuration: configuration)
+                    try devices.setPushRegistration(nil, forDevice: device.id, configuration: configuration)
+                }
+            }
         } else { nativeCredential = nil }
         service = RemoteAccessService(
             store: store,
@@ -2302,6 +2455,8 @@ private final class RemoteBootstrapFixture {
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,
             sendConfirmationTimeout: sendConfirmationTimeout,
+            pushConfiguration: pushConfiguration,
+            pushRelay: pushRelay,
             gatewayServerFactory: { handler in
                 capturedHandler = handler
                 return gatewayServer
@@ -2322,6 +2477,36 @@ private final class RemoteBootstrapFixture {
         service.facadeSessionList(at: confirmedAt).conversations.first {
             $0.conversationID == conversationID
         }!
+    }
+
+    func setPushRegistration(_ registration: RemoteGatewayPushRegistration?) throws {
+        let request = RemoteGatewayHTTPRequest(method: "POST", path: RemotePushPolicy.registrationPath,
+            headers: ["authorization": "Bearer \(try #require(nativeCredential))", "tailscale-user-login": "owner@example.com"],
+            body: try JSONEncoder().encode(RemoteGatewayPushRegistrationRequest(registration: registration)))
+        guard case .respond(let response) = gatewayHandler.handle(request, at: .now), response.status == 200 else { throw CocoaError(.coderInvalidValue) }
+    }
+
+    func pushConfigurationResponse() throws -> RemoteGatewayPushConfigurationResponse {
+        let request = RemoteGatewayHTTPRequest(method: "GET", path: RemotePushPolicy.configurationPath,
+            headers: ["authorization": "Bearer \(try #require(nativeCredential))", "tailscale-user-login": "owner@example.com"], body: Data())
+        guard case .respond(let response) = gatewayHandler.handle(request, at: .now) else { throw CocoaError(.coderInvalidValue) }
+        return try JSONDecoder().decode(RemoteGatewayPushConfigurationResponse.self, from: response.body)
+    }
+
+    func pairAnotherPushDevice(configuration: RemotePushConfiguration) throws -> UUID {
+        service.tailnetOrigin = "https://test.tailnet.ts.net"
+        service.issueNativePairingOffer()
+        let offer = try #require(service.currentNativePairingOffer)
+        let exchange = RemoteGatewayNativePairingExchangeRequest(deviceName: "Second phone", offerID: offer.id, secret: offer.qrPayload.secret)
+        let headers = ["tailscale-user-login": "second@example.com"]
+        guard case .respond(let paired) = gatewayHandler.handle(.init(method: "POST", path: "/v1/native-pairing/exchange", headers: headers,
+            body: try JSONEncoder().encode(exchange)), at: .now), paired.status == 200 else { throw CocoaError(.coderInvalidValue) }
+        let native = try ConversationEventCoding.makeDecoder().decode(RemoteGatewayNativePairingExchangeResponse.self, from: paired.body)
+        let registration = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        guard case .respond(let saved) = gatewayHandler.handle(.init(method: "POST", path: RemotePushPolicy.registrationPath,
+            headers: ["authorization": "Bearer \(native.credential)", "tailscale-user-login": "second@example.com"],
+            body: try JSONEncoder().encode(RemoteGatewayPushRegistrationRequest(registration: registration))), at: .now), saved.status == 200 else { throw CocoaError(.coderInvalidValue) }
+        return registration.registrationID
     }
 
     func confirmCurrentLaunchBinding() -> Bool {
@@ -2574,6 +2759,35 @@ private extension RemoteBootstrapFixture {
                          generationID: generationID, status: status, text: text),
             at: confirmedAt.addingTimeInterval(1)
         )
+    }
+}
+
+@MainActor
+private final class RemotePushRelaySpy: RemotePushRelaying {
+    var notifications: [RemotePushSessionNotification] = []
+    var registrations: [RemoteDevicePushRegistration] = []
+    var revoked: [RemoteDevicePushRegistration] = []
+    var sendOutcome: RemotePushSendOutcome = .accepted
+    var revokeSucceeds = false
+    var holdSend = false
+    var heldRegistrationID: UUID?
+    var sendContinuation: CheckedContinuation<RemotePushSendOutcome, Never>?
+    var holdRevoke = false
+    var revokeContinuation: CheckedContinuation<Bool, Never>?
+
+    func send(_ notification: RemotePushSessionNotification, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome {
+        notifications.append(notification)
+        registrations.append(registration)
+        if holdSend && (heldRegistrationID == nil || heldRegistrationID == registration.registrationID) {
+            return await withCheckedContinuation { sendContinuation = $0 }
+        }
+        return sendOutcome
+    }
+
+    func revoke(_ registration: RemoteDevicePushRegistration) async -> Bool {
+        revoked.append(registration)
+        if holdRevoke { return await withCheckedContinuation { revokeContinuation = $0 } }
+        return revokeSucceeds
     }
 }
 

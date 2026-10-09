@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "toastty-push-dev",
+  "main": "src/relay.ts",
+  "compatibility_date": "2026-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "logpush": false,
+  // Registration bodies contain device tokens and capabilities. Do not retain
+  // invocation logs; application responses expose bounded error codes only.
+  "observability": { "enabled": false },
+  "vars": {
+    "PUSH_ENABLED": "false",
+    "PUSH_RELAY_ID": "toastty-push-dev-v1",
+    "APNS_ENVIRONMENT": "development",
+    "APNS_TOPIC": "com.giantthings.toastty.mobile.dev"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "PUSH_STATE", "class_name": "PushRelayState" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PushRelayState"] }],
+  "env": {
+    "test": {
+      "name": "toastty-push-relay-test",
+      "vars": {
+        "PUSH_ENABLED": "true",
+        "PUSH_RELAY_ID": "toastty-push-dev-v1",
+        "APNS_ENVIRONMENT": "development",
+        "APNS_TOPIC": "com.giantthings.toastty.mobile.dev",
+        "APNS_PRIVATE_KEY": "",
+        "APNS_KEY_ID": "TESTKEY001",
+        "APNS_TEAM_ID": "TESTTEAM01"
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "PUSH_STATE", "class_name": "PushRelayState" }]
+      }
+    }
+  }
+}

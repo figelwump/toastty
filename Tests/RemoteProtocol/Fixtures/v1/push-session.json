@@ -1,0 +1,17 @@
+{
+  "aps": {
+    "alert": {
+      "title": "Fix checkout bug",
+      "body": "Ready"
+    },
+    "sound": "default"
+  },
+  "toastty": {
+    "version": 1,
+    "kind": "session",
+    "registrationID": "fb7b26a7-5b77-4afd-9f30-349d90bd0970",
+    "pairingID": "c0d6d62e-dd0b-4b90-81cd-45083da827ce",
+    "conversationID": "0ab4643d-aeda-43da-96f2-2d04d0e476f0",
+    "eventID": "8d77ac2e-bfc1-4b2e-90f1-9e1cb5b0e80b"
+  }
+}

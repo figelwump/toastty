@@ -118,6 +118,44 @@ let debugBundleID = manifestValue(
     ["TUIST_TOASTTY_MOBILE_BUNDLE_ID", "TOASTTY_MOBILE_BUNDLE_ID"],
     default: defaultDebugBundleID
 )
+let usesPushProbe = manifestFlag("TUIST_TOASTTY_MOBILE_PUSH_PROBE")
+let debugPushRelayURL = optionalManifestValue(["TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL"])
+let productionPushRelayURL = optionalManifestValue(["TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL"])
+let productionPushRelayID = optionalManifestValue(["TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID"])
+func validatePushOrigin(_ value: String) {
+    guard let url = URLComponents(string: value), url.scheme == "https", url.host?.isEmpty == false,
+          url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+          (url.path.isEmpty || url.path == "/"), (url.port == nil || url.port == 443) else {
+        fatalError("Push relay must be an HTTPS origin without credentials, query, or path.")
+    }
+}
+if let debugPushRelayURL {
+    validatePushOrigin(debugPushRelayURL)
+    guard usesFixedDeviceDebugIdentity, debugBundleID == fixedDeviceDebugBundleID,
+          !usesProdTestIdentity, !usesPushProbe,
+          environment["TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT"] == "development" else {
+        fatalError("Development notifications require the fixed physical-device identity, explicit development environment, and normal app mode.")
+    }
+}
+if let productionPushRelayURL {
+    validatePushOrigin(productionPushRelayURL)
+    guard productionPushRelayURL != debugPushRelayURL, !usesProdTestIdentity, !usesPushProbe,
+          environment["TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT"] == "production",
+          let productionPushRelayID, !productionPushRelayID.isEmpty,
+          productionPushRelayID != "toastty-push-dev-v1" else {
+        fatalError("Production notifications require a separate production relay ID and explicit production environment.")
+    }
+}
+if usesPushProbe {
+    guard usesFixedDeviceDebugIdentity, debugBundleID == fixedDeviceDebugBundleID, !usesProdTestIdentity else {
+        fatalError("TUIST_TOASTTY_MOBILE_PUSH_PROBE requires the fixed physical-device Debug identity and cannot use prod-test.")
+    }
+    for key in ["TOASTTY_IOS_CONFIGURATION", "TOASTTY_NATIVE_DEVICE_BUILD_CONFIGURATION"] {
+        if let configuration = environment[key], configuration != "Debug" {
+            fatalError("TUIST_TOASTTY_MOBILE_PUSH_PROBE requires Debug configuration.")
+        }
+    }
+}
 let enablesComposerTrace = manifestFlag("TUIST_TOASTTY_MOBILE_COMPOSER_TRACE")
 let debugDisplayName = enablesComposerTrace
     ? "Toastty Trace"
@@ -144,6 +182,24 @@ var appSettings: SettingsDictionary = [
 
 appSettings["CODE_SIGN_STYLE"] = "Automatic"
 appSettings["DEVELOPMENT_TEAM"] = SettingValue(stringLiteral: developmentTeam)
+if usesPushProbe {
+    // Keep the APNs receiver and development entitlement out of Release even
+    // when both configurations come from this same generated project.
+    appSettings["SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]"] = "$(inherited) DEBUG TOASTTY_MOBILE_PUSH_PROBE"
+    appSettings["CODE_SIGN_ENTITLEMENTS[config=Debug]"] = "Entitlements/PushProbe.entitlements"
+}
+if debugPushRelayURL != nil {
+    appSettings["CODE_SIGN_ENTITLEMENTS[config=Debug]"] = "Entitlements/PushDevelopment.entitlements"
+}
+if productionPushRelayURL != nil {
+    appSettings["CODE_SIGN_ENTITLEMENTS[config=Release]"] = "Entitlements/PushProduction.entitlements"
+}
+appSettings["TOASTTY_MOBILE_PUSH_RELAY_URL[config=Debug]"] = SettingValue(stringLiteral: debugPushRelayURL ?? "")
+appSettings["TOASTTY_MOBILE_PUSH_RELAY_URL[config=Release]"] = SettingValue(stringLiteral: productionPushRelayURL ?? "")
+appSettings["TOASTTY_MOBILE_PUSH_RELAY_ID[config=Debug]"] = SettingValue(stringLiteral: debugPushRelayURL == nil ? "" : "toastty-push-dev-v1")
+appSettings["TOASTTY_MOBILE_PUSH_RELAY_ID[config=Release]"] = SettingValue(stringLiteral: productionPushRelayURL == nil ? "" : productionPushRelayID ?? "")
+appSettings["TOASTTY_MOBILE_PUSH_ENVIRONMENT[config=Debug]"] = SettingValue(stringLiteral: debugPushRelayURL == nil ? "" : "development")
+appSettings["TOASTTY_MOBILE_PUSH_ENVIRONMENT[config=Release]"] = SettingValue(stringLiteral: productionPushRelayURL == nil ? "" : "production")
 if let releaseProvisioningProfile {
     appSettings["CODE_SIGN_STYLE[config=Release]"] = "Manual"
     appSettings["PROVISIONING_PROFILE_SPECIFIER[config=Release]"] = SettingValue(stringLiteral: releaseProvisioningProfile)
@@ -167,6 +223,9 @@ var appInfoPlist: [String: Plist.Value] = [
         ]),
     ]),
     "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
+    "ToasttyMobilePushRelayURL": .string("$(TOASTTY_MOBILE_PUSH_RELAY_URL)"),
+    "ToasttyMobilePushRelayID": .string("$(TOASTTY_MOBILE_PUSH_RELAY_ID)"),
+    "ToasttyMobilePushEnvironment": .string("$(TOASTTY_MOBILE_PUSH_ENVIRONMENT)"),
     "ToasttyComposerTraceEnabled": .string("$(TOASTTY_COMPOSER_TRACE_ENABLED)"),
     "ITSAppUsesNonExemptEncryption": .boolean(false),
     "NSCameraUsageDescription": .string("Toastty uses the camera to take photos for messages and scan a pairing code shown by your Mac."),

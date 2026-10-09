@@ -1,0 +1,18 @@
+{
+  "name": "@toastty/push-probe-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "types": "wrangler types --env test --strict-vars=false && wrangler types relay-configuration.d.ts --config wrangler.relay.jsonc --env test --env-interface RelayEnv --include-runtime=false --strict-vars=false",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && vitest run --config vitest.relay.config.ts",
+    "check": "npm run types && npm run typecheck && npm test && node --test scripts/*.test.mjs",
+    "probe": "node scripts/probe.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.3.7",
+    "typescript": "6.0.3",
+    "vitest": "4.1.9",
+    "wrangler": "4.148.0"
+  }
+}

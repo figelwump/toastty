@@ -27,6 +27,8 @@ DISPLAY_NAME="${TOASTTY_NATIVE_DEVICE_DISPLAY_NAME:-}"
 PREFLIGHT_ONLY="${TOASTTY_NATIVE_DEVICE_PREFLIGHT_ONLY:-0}"
 REQUESTED_DEVICE="${TOASTTY_NATIVE_DEVICE_REQUESTED:-}"
 URL_SCHEME="${TOASTTY_NATIVE_DEVICE_URL_SCHEME:-}"
+PUSH_PROBE="${TOASTTY_NATIVE_DEVICE_PUSH_PROBE:-0}"
+PUSH_RELAY_URL="${TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL:-}"
 APP_PATH=""
 ACTIVE_CHILD_PID=""
 GENERATED_STATE_CAPTURED=0
@@ -343,6 +345,7 @@ write_preflight_summary() {
   TOASTTY_BUILD_CONFIGURATION="$BUILD_CONFIGURATION" \
   TOASTTY_DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
   TOASTTY_PREFLIGHT_ONLY="$PREFLIGHT_ONLY" \
+  TOASTTY_PUSH_PROBE="$PUSH_PROBE" \
   node --input-type=commonjs <<'NODE'
 const fs = require("node:fs");
 let physicalDevice = null;
@@ -357,6 +360,7 @@ fs.writeFileSync(process.env.TOASTTY_PREFLIGHT_PATH, `${JSON.stringify({
   bundleID: process.env.TOASTTY_BUNDLE_ID,
   developmentTeam: process.env.TOASTTY_DEVELOPMENT_TEAM,
   preflightOnly: process.env.TOASTTY_PREFLIGHT_ONLY === "1",
+  pushProbe: process.env.TOASTTY_PUSH_PROBE === "1",
   physicalDevice,
   generatedAt: new Date().toISOString(),
 }, null, 2)}\n`);
@@ -377,6 +381,7 @@ write_instance_summary() {
   TOASTTY_DEVICE_OS_VERSION="$DEVICE_OS_VERSION" \
   TOASTTY_INSTANCE_PHASE="$phase" \
   TOASTTY_APP_PATH="$APP_PATH" \
+  TOASTTY_PUSH_PROBE="$PUSH_PROBE" \
   node --input-type=commonjs <<'NODE'
 const fs = require("node:fs");
 fs.writeFileSync(process.env.TOASTTY_INSTANCE_PATH, `${JSON.stringify({
@@ -393,6 +398,7 @@ fs.writeFileSync(process.env.TOASTTY_INSTANCE_PATH, `${JSON.stringify({
   physicalDeviceOSVersion: process.env.TOASTTY_DEVICE_OS_VERSION,
   phase: process.env.TOASTTY_INSTANCE_PHASE,
   appPath: process.env.TOASTTY_APP_PATH || undefined,
+  pushProbe: process.env.TOASTTY_PUSH_PROBE === "1",
   generatedAt: new Date().toISOString(),
 }, null, 2)}\n`);
 NODE
@@ -403,7 +409,18 @@ require_value DISPLAY_NAME
 require_value URL_SCHEME
 validate_flag BUILD_ONLY
 validate_flag PREFLIGHT_ONLY
+validate_flag PUSH_PROBE
 validate_paths
+if [[ -n "$PUSH_RELAY_URL" ]]; then
+  if [[ "$BUNDLE_ID" != "com.giantthings.toastty.mobile.dev" || "$PUSH_PROBE" == "1" || "${TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT:-}" != "development" ]]; then
+    fail "normal notifications require the fixed development identity and explicit development environment"
+  fi
+fi
+if [[ "$PUSH_PROBE" == "1" ]]; then
+  if [[ "$BUNDLE_ID" != "com.giantthings.toastty.mobile.dev" || "${TUIST_TOASTTY_MOBILE_PROD_TEST:-0}" != "0" ]]; then
+    fail "push probe requires the fixed physical-device Debug identity without prod-test"
+  fi
+fi
 if [[ "$PREFLIGHT_ONLY" == "1" && "$BUILD_ONLY" == "1" ]]; then
   fail "TOASTTY_NATIVE_DEVICE_PREFLIGHT_ONLY and TOASTTY_NATIVE_DEVICE_BUILD_ONLY cannot both be 1"
 fi
@@ -420,6 +437,7 @@ require_command grep
 require_command node
 require_command plutil
 require_command ps
+require_command python3
 require_command security
 require_command tail
 require_command tuist
@@ -463,6 +481,7 @@ unset TUIST_TOASTTY_MOBILE_RELEASE_PROVISIONING_PROFILE_SPECIFIER
 export TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX=".dev.local"
 export TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"
 export TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE=1
+export TUIST_TOASTTY_MOBILE_PUSH_PROBE="$PUSH_PROBE"
 
 trap cleanup_native_device_run EXIT
 trap 'exit 130' INT
@@ -527,12 +546,18 @@ xcodebuild \
   -showBuildSettings \
   -json >"$BUILD_SETTINGS_PATH" 2>"$LOG_DIR/xcodebuild-settings.log"
 
+push_validation_args=(--push-notifications 0)
+if [[ -n "$PUSH_RELAY_URL" ]]; then
+  push_validation_args=(--push-notifications 1 --push-relay-url "$PUSH_RELAY_URL")
+fi
 APP_PATH="$(node "$BUILD_VALIDATOR" \
   --settings "$BUILD_SETTINGS_PATH" \
   --bundle-id "$BUNDLE_ID" \
   --device-udid "$DEVICE_UDID" \
   --display-name "$DISPLAY_NAME" \
   --team "$DEVELOPMENT_TEAM" \
+  --push-probe "$PUSH_PROBE" \
+  "${push_validation_args[@]}" \
   --url-scheme "$URL_SCHEME")"
 write_instance_summary build-validated
 log "validated app: $APP_PATH"
