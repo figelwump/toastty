@@ -330,6 +330,15 @@ node scripts/website/render-hero-video.mjs \
 
 The script uses local Google Chrome (or `CHROME_PATH`) and `ffmpeg`, reads only local files, and writes to `artifacts/website-hero/`: `toastty-tour.mp4`, `poster.png`, one PNG per still, and `social-preview.png`. Copy `poster.png` to `docs/assets/toastty-hero.png` and the workflow stills, downscaled to 1600px wide, to `docs/assets/readme/`.
 
+The Toastty Mobile section of the page is a second recreation, an iPhone driven by `website/mobile.js`; its colors mirror `ios/Sources/ToasttyMobileApp/ToasttyDesignTokens.swift`, so update both when the native client's look changes. `--target mobile` renders it the same way, to a portrait MP4 for social posts plus a poster, stills, and a 1200x630 card with the phone beside the Toastty Mobile tagline:
+
+```bash
+node scripts/website/render-hero-video.mjs --target mobile --social \
+  --stills 'question=3.6,typing=12.2,ready=16.0'
+```
+
+This writes `toastty-mobile.mp4`, `mobile-poster.png`, `mobile-<name>.png`, and `mobile-social.png` into the same directory. The site keeps using the desktop card as its share image; the mobile card is for posts about the iPhone app. The README's Toastty Mobile image is the phone cropped out of the `ready` still with transparent corners: `scripts/website/crop-mobile-phone.sh artifacts/website-hero/mobile-ready.png docs/assets/readme/mobile.png`.
+
 The README's other images and the social card's close-up are screenshots of the real app. `scripts/website/capture-demo-screenshots.sh` launches an isolated Debug build with its own runtime home, home folder, shell, and Ghostty config, builds a made-up `lumen` demo through the `toastty` CLI with fake sessions, and captures the window with `screencapture -l`. It needs a Mac GUI session with Screen Recording permission for your terminal, and it shows a Toastty window on screen for about a minute without focusing or clicking anything. The demo app gets its own home folder and temporary directory, so it never reads or changes your Toastty settings, `~/.toastty`, Codex hooks, or the socket discovery record your CLI uses:
 
 ```bash

@@ -1,22 +1,26 @@
 #!/usr/bin/env node
-// Renders the landing page's hero video (website/hero.js) to an MP4, a poster PNG, named
-// stills, and the social preview card. Frames are captured one at a time through the
-// page's window.toasttyHero.renderFrame(t) API, so the output does not depend on how fast
-// this machine renders. Requires Google Chrome (or CHROME_PATH) and ffmpeg with libx264.
+// Renders the landing page's hero video (website/hero.js) or the Toastty Mobile video
+// (website/mobile.js) to an MP4, a poster PNG, named stills, and a social preview card.
+// Frames are captured one at a time through the page's window.toasttyHero.renderFrame(t)
+// (or window.toasttyMobile) API, so the output does not depend on how fast this machine
+// renders. Requires Google Chrome (or CHROME_PATH) and ffmpeg with libx264.
 //
 // Usage:
-//   node scripts/website/render-hero-video.mjs [--out-dir DIR] [--fps 30] [--width 1600]
-//        [--stills name=seconds[@selector],...] [--no-video] [--social]
+//   node scripts/website/render-hero-video.mjs [--target hero|mobile] [--out-dir DIR] [--fps 30]
+//        [--width PX] [--stills name=seconds[@selector],...] [--no-video] [--social]
 //        [--social-image PNG --social-crop x,y,w,h]
 //
-// Outputs (default DIR: artifacts/website-hero):
-//   toastty-tour.mp4   the full loop, H.264, width --width
+// Outputs (default DIR: artifacts/website-hero), for --target hero (the default):
+//   toastty-tour.mp4   the full loop, H.264, width --width (default 1600)
 //   poster.png         the reduced-motion poster frame
 //   <name>.png         one PNG per --stills entry: the padded stage at that time, or only the
 //                      element matching @selector (e.g. sidebar=0@.sbdemo, annotate=11.7@.rp)
 //   social-preview.png 1200x630 card, with --social. Its close-up defaults to the poster's
 //                      sidebar; --social-image and --social-crop (pixels) use another image,
 //                      such as sidebar.png from capture-demo-screenshots.sh.
+// For --target mobile the same files are toastty-mobile.mp4 (portrait, width --width, default
+// 1080), mobile-poster.png, mobile-<name>.png, and mobile-social.png (the phone poster beside
+// the Toastty Mobile tagline; --social-image replaces the poster).
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -26,13 +30,35 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const args = parseArgs(process.argv.slice(2));
+const TARGETS = {
+  // The hero stage is designed at 1200x740 CSS px; the phone stage at 440x900.
+  hero: {
+    api: 'toasttyHero', wrap: 'wrap', stageWidth: 1200, viewportHeight: 1000, defaultWidth: 1600,
+    video: 'toastty-tour.mp4', poster: 'poster.png', still: (n) => `${n}.png`,
+    social: 'social-card.html', socialOut: 'social-preview.png',
+    // The caption under the stage would otherwise show inside the bottom padding.
+    prepare: `document.querySelector('section.video').style.width = '1200px';
+      document.querySelector('.example-cap').style.visibility = 'hidden';`,
+  },
+  mobile: {
+    api: 'toasttyMobile', wrap: 'mwrap', stageWidth: 440, viewportHeight: 1100, defaultWidth: 1080,
+    video: 'toastty-mobile.mp4', poster: 'mobile-poster.png', still: (n) => `mobile-${n}.png`,
+    social: 'social-card-mobile.html', socialOut: 'mobile-social.png',
+    // Chrome mis-clips captures far down a page, so everything above the phone is hidden.
+    prepare: `document.querySelectorAll('header.nav, main > section:not(#mobile), #mobile > :not(.mobile-grid), .mobile-grid > :not(.mstage-col), footer')
+      .forEach((el) => { el.style.display = 'none'; });
+      document.getElementById('mobile').style.paddingTop = '0';`,
+  },
+};
+const target = TARGETS[args.target ?? 'hero'];
+if (!target) throw new Error(`unknown --target ${args.target}; use hero or mobile`);
 const outDir = resolve(args['out-dir'] ?? join(repoRoot, 'artifacts/website-hero'));
 const fps = Number(args.fps ?? 30);
-const videoWidth = Number(args.width ?? 1600);
+const videoWidth = Number(args.width ?? target.defaultWidth);
 const stills = parseStills(args.stills ?? '');
 
-// The stage is designed at 1200x740 CSS px; capture at 2x and pad it with page background.
-const STAGE_WIDTH = 1200;
+// Capture at 2x and pad the stage with page background.
+const STAGE_WIDTH = target.stageWidth;
 const PAD = 32;
 const SCALE = 2;
 
@@ -44,21 +70,19 @@ try {
   const openHero = async () => {
     const page = await chrome.openPage(pathToFileURL(join(repoRoot, 'website/index.html')).href);
     await page.send('Emulation.setDeviceMetricsOverride', {
-      width: STAGE_WIDTH + 2 * PAD + 100, height: 1000, deviceScaleFactor: SCALE, mobile: false,
+      width: Math.max(STAGE_WIDTH + 2 * PAD + 100, 1300), height: target.viewportHeight, deviceScaleFactor: SCALE, mobile: false,
     });
     await page.evaluate(`document.fonts.ready.then(() => true)`);
     const clip = await page.evaluate(`(() => {
-      document.querySelector('section.video').style.width = '${STAGE_WIDTH}px';
-      // The caption under the stage would otherwise show inside the bottom padding.
-      document.querySelector('.example-cap').style.visibility = 'hidden';
-      window.toasttyHero.startRendering();
+      ${target.prepare}
+      window.${target.api}.startRendering();
       window.scrollTo(0, 0);
-      const r = document.getElementById('wrap').getBoundingClientRect();
+      const r = document.getElementById('${target.wrap}').getBoundingClientRect();
       return { x: r.left - ${PAD}, y: r.top + window.scrollY - ${PAD}, width: r.width + ${2 * PAD}, height: r.height + ${2 * PAD} };
     })()`);
     // Stills jump straight to their time, so they settle new transitions; video frames run in order.
     const capture = async (t, settle = false, selector = null) => {
-      await page.evaluate(`toasttyHero.renderFrame(${t}, ${settle})`);
+      await page.evaluate(`${target.api}.renderFrame(${t}, ${settle})`);
       const region = selector ? await page.evaluate(`(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) throw new Error('no element for ${selector}');
@@ -75,11 +99,11 @@ try {
   };
 
   const { page, clip, capture } = await openHero();
-  const hero = await page.evaluate(`({ duration: toasttyHero.duration, poster: toasttyHero.poster })`);
+  const hero = await page.evaluate(`({ duration: ${target.api}.duration, poster: ${target.api}.poster })`);
 
-  writeFileSync(join(outDir, 'poster.png'), await capture(hero.poster, true));
-  // Sidebar region of the poster (in poster pixels) for the social card's close-up.
-  const sidebarCrop = await page.evaluate(`(() => {
+  writeFileSync(join(outDir, target.poster), await capture(hero.poster, true));
+  // Sidebar region of the hero poster (in poster pixels) for the social card's close-up.
+  const sidebarCrop = target !== TARGETS.hero ? null : await page.evaluate(`(() => {
     const sb = document.querySelector('.sb').getBoundingClientRect();
     const docs = document.getElementById('card-docs').getBoundingClientRect();
     // Start a few pixels inside the window so its rounded corner and the page background stay out.
@@ -87,7 +111,7 @@ try {
     return [x, y, sb.width + 34, docs.bottom + window.scrollY - ${clip.y} - y + 12].map((v) => Math.round(v * ${SCALE}));
   })()`);
   for (const { name, t, selector } of stills) {
-    writeFileSync(join(outDir, `${name}.png`), await capture(t, true, selector));
+    writeFileSync(join(outDir, target.still(name)), await capture(t, true, selector));
   }
   await page.close();
 
@@ -105,7 +129,7 @@ try {
         '-y', '-loglevel', 'error', '-framerate', String(fps), '-i', join(frameDir, 'f%05d.png'),
         '-vf', `scale=${videoWidth}:-2:flags=lanczos`, '-c:v', 'libx264', '-preset', 'slow',
         '-crf', '22', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
-        join(outDir, 'toastty-tour.mp4'),
+        join(outDir, target.video),
       ]);
     } finally {
       rmSync(frameDir, { recursive: true, force: true });
@@ -114,16 +138,16 @@ try {
   }
 
   if (args.social) {
-    const image = args['social-image'] ? resolve(args['social-image']) : join(outDir, 'poster.png');
-    const crop = args['social-crop'] ?? sidebarCrop.join(',');
+    const image = args['social-image'] ? resolve(args['social-image']) : join(outDir, target.poster);
+    const crop = args['social-crop'] ?? (sidebarCrop ? sidebarCrop.join(',') : '');
     const card = await chrome.openPage(
-      pathToFileURL(join(repoRoot, 'scripts/website/social-card.html')).href
+      pathToFileURL(join(repoRoot, 'scripts/website', target.social)).href
         + `?poster=${encodeURIComponent(pathToFileURL(image).href)}&crop=${crop}`,
     );
     await card.send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 630, deviceScaleFactor: 1, mobile: false });
     await card.evaluate(`Promise.all([document.fonts.ready, document.querySelector('img').decode()]).then(() => true)`);
     const shot = await card.send('Page.captureScreenshot', { format: 'png' });
-    writeFileSync(join(outDir, 'social-preview.png'), Buffer.from(shot.data, 'base64'));
+    writeFileSync(join(outDir, target.socialOut), Buffer.from(shot.data, 'base64'));
   }
   console.log(`wrote ${outDir}`);
 } finally {

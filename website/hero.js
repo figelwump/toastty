@@ -52,7 +52,7 @@
     var cb = document.getElementById('cb');
     var cursor = document.getElementById('cursor');
     var fade = document.getElementById('fade');
-    var beats = Array.prototype.slice.call(document.querySelectorAll('.beat'));
+    var beats = Array.prototype.slice.call(document.querySelectorAll('#beats .beat'));
 
     // Replacing innerHTML every frame restarts the spinner animation; only write on change.
     function setIcon(el, html) { if (el.__icon !== html) { el.innerHTML = html; el.__icon = html; } }
