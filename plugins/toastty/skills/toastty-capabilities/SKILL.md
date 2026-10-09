@@ -116,7 +116,7 @@ an agent can access it; session-targeted actions then require a live binding.
 Common workflow families:
 
 - Annotation discovery: `annotation.keys`.
-- Workspaces and tabs: `workspace.list` (find workspaces by title, annotation, or terminal directory), `workspace.create`, `workspace.select`, `workspace.rename`, `workspace.set-annotation`, `workspace.clear-annotation`, `workspace.set-done`, `workspace.clear-done`, `workspace.tab.create`, `workspace.tab.select`.
+- Workspaces and tabs: `workspace.list` (find workspaces by title, annotation, or terminal directory), `workspace.create`, `workspace.select`, `workspace.rename`, `workspace.set-annotation`, `workspace.clear-annotation`, `workspace.set-done`, `workspace.clear-done`, `workspace.task.set-hooks`, `workspace.tab.create`, `workspace.tab.select`.
 - Panels: `panel.create.browser`, `panel.create.local-document`, `panel.close`, `panel.focus-mode.toggle`.
 - Terminal control: `terminal.send-text`, `terminal.visible-text`, `terminal.state`. To read another terminal's output in the same workspace, use the toastty-read-terminal skill. When sending a follow-up to a known managed session, pass its exact `expectedSessionID` together with the target `panelID`; Toastty then rejects delivery if that panel no longer hosts that session, without requiring a selected-tab snapshot. Do not use `allowUnavailable` to hide an expected-session mismatch.
 - Agents: `agent.launch`.
@@ -256,6 +256,15 @@ starts new work, so do not clear it yourself before continuing. A top-level
 workspace has no check and `workspace.set-done` rejects it; mark it with a
 `task-status` annotation with text `DONE` instead, and clear that annotation
 yourself if work resumes.
+
+When you create a task subspace, set its lifecycle hooks with
+`workspace.task.set-hooks` so its row shows a Finish Task button while the task
+is open and a Clean Up button once it is done: `finishSkill` names the skill the
+task's agent runs to finish, and `cleanupSkill` plus `cleanupScript` (with
+repeatable `cleanupArgs`) name a script inside an installed user skill that
+Toastty runs without an agent. The cleanup script gets `TOASTTY_WORKSPACE_ID`,
+exits 0 when it cleaned up and 3 when it changed nothing, and closes the
+workspace itself. Do not run a workspace's cleanup from a session inside it.
 
 ## Agent Model And Reasoning Selection
 

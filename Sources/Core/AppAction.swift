@@ -62,6 +62,9 @@ public enum AppAction: Equatable, Sendable {
     case setWorkspaceParent(workspaceID: UUID, parentWorkspaceID: UUID?, spawningSessionID: String?)
     /// Marks a workspace done at `doneAt`, or clears the mark when it is `nil`.
     case setWorkspaceDone(workspaceID: UUID, doneAt: Date?)
+    /// Sets how a subspace's task is finished and cleaned up. Empty hooks
+    /// clear them. A top-level workspace cannot hold hooks.
+    case setWorkspaceTaskHooks(workspaceID: UUID, hooks: WorkspaceTaskHooks)
     case setWorkspaceTabCustomTitle(workspaceID: UUID, tabID: UUID, title: String?)
     case closeWorkspace(workspaceID: UUID)
     case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
@@ -179,6 +182,8 @@ public extension AppAction {
             return "setWorkspaceParent"
         case .setWorkspaceDone:
             return "setWorkspaceDone"
+        case .setWorkspaceTaskHooks:
+            return "setWorkspaceTaskHooks"
         case .setWorkspaceTabCustomTitle:
             return "setWorkspaceTabCustomTitle"
         case .closeWorkspace:

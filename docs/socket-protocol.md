@@ -219,6 +219,10 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `workspace.set-parent`
 - `workspace.set-done`
 - `workspace.clear-done`
+- `workspace.task.set-hooks`
+- `workspace.task.finish`
+- `workspace.task.cleanup`
+- `workspace.task.cleanup-finished`
 - `workspace.select`
 - `workspace.move`
 - `workspace.rename`
@@ -278,6 +282,22 @@ Notable action-specific behavior:
     work. The turn that set it, restored sessions, and process watches do not
     clear it. Both `workspace.list` and `workspace.snapshot` return a `done`
     boolean.
+- `workspace.task.set-hooks`
+  - Optional `args.finishSkill` (a skill directory name) and
+    `args.cleanupSkill` + `args.cleanupScript` (a relative path inside that
+    skill, no `..`) + repeatable `args.cleanupArgs`. No parameters clears the
+    hooks. Rejects top-level workspaces. Both `workspace.list` and
+    `workspace.snapshot` return the hooks as `taskHooks`.
+- `workspace.task.finish`
+  - Sends the finish skill to the workspace's latest active agent session,
+    or launches one with it. Returns `delivery` (`sent` or `launched`),
+    `sessionID`, and `panelID`.
+- `workspace.task.cleanup`, `workspace.task.cleanup-finished`
+  - Run through `app_control.run_action` only; they wait for the script.
+    The first returns `outcome` and `detail` for one workspace and refuses a
+    caller inside that workspace. The second returns `results`, one per done
+    subspace with a cleanup hook under the named workspace (a subspace names
+    its parent's group), skipping the caller's own workspace.
 - `workspace.select`
   - requires `args.workspaceID` or `args.index` (1-based).
   - Changes the user's visible workspace. Use only for user-authorized

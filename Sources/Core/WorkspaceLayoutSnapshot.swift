@@ -173,6 +173,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var parentWorkspaceID: UUID?
     public var spawningSessionID: String?
     public var doneAt: Date?
+    public var taskHooks: WorkspaceTaskHooks
 
     public init(
         id: UUID,
@@ -186,7 +187,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         parentWorkspaceID: UUID? = nil,
         spawningSessionID: String? = nil,
         primaryAnnotationKey: String? = nil,
-        doneAt: Date? = nil
+        doneAt: Date? = nil,
+        taskHooks: WorkspaceTaskHooks = WorkspaceTaskHooks()
     ) {
         self.id = id
         self.title = title
@@ -203,6 +205,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         self.parentWorkspaceID = parentWorkspaceID
         self.spawningSessionID = spawningSessionID
         self.doneAt = doneAt
+        self.taskHooks = taskHooks.sanitized
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -221,6 +224,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         parentWorkspaceID = workspace.parentWorkspaceID
         spawningSessionID = workspace.spawningSessionID
         doneAt = workspace.doneAt
+        taskHooks = workspace.taskHooks
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -276,7 +280,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             parentWorkspaceID: parentWorkspaceID,
             spawningSessionID: spawningSessionID,
             primaryAnnotationKey: primaryAnnotationKey,
-            doneAt: doneAt
+            doneAt: doneAt,
+            taskHooks: taskHooks
         )
     }
 }
@@ -295,6 +300,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case parentWorkspaceID
         case spawningSessionID
         case doneAt
+        case taskHooks
         case layoutTree
         case panels
         case focusedPanelID
@@ -343,6 +349,8 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         parentWorkspaceID = (try? container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)) ?? nil
         spawningSessionID = (try? container.decodeIfPresent(String.self, forKey: .spawningSessionID)) ?? nil
         doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
+        taskHooks = ((try? container.decodeIfPresent(WorkspaceTaskHooks.self, forKey: .taskHooks)) ?? nil)?.sanitized
+            ?? WorkspaceTaskHooks()
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -360,6 +368,9 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
+        if taskHooks.isEmpty == false {
+            try container.encode(taskHooks, forKey: .taskHooks)
+        }
         // Preserve a selected-tab legacy mirror while older layout snapshots
         // are still on disk in the field.
         let legacyTab = selectedTabID.flatMap { tabsByID[$0] } ?? tabIDs.first.flatMap { tabsByID[$0] }

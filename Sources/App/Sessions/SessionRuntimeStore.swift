@@ -73,11 +73,11 @@ final class SessionRuntimeStore: ObservableObject {
     var programStatusRuntime = TerminalProgramStatusRuntime()
     var programStatusPublicationTask: Task<Void, Never>?
     @Published private(set) var providerConversationRevision: UInt64 = 0
-    /// What each subspace's Merge button is doing, by workspace, published
-    /// for the button. `WorkspaceMergeCoordinator` owns and updates them.
-    @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
-    /// Set once at launch; runs what the Merge button asks for.
-    var workspaceMergeCoordinator: WorkspaceMergeCoordinator?
+    /// Each subspace's cleanup script run, by workspace, published for its
+    /// row. `WorkspaceTaskHookRunner` owns and updates them.
+    @Published private(set) var workspaceTaskCleanupRuns: [UUID: WorkspaceTaskCleanupRun] = [:]
+    /// Set once at launch; runs what the Finish Task and Clean Up buttons ask for.
+    var workspaceTaskHookRunner: WorkspaceTaskHookRunner?
 
     /// Receives accepted actionable transitions after deduplication and any
     /// child/resume delay. Delivery is independent of shell hooks and Mac focus.
@@ -5380,9 +5380,9 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
-    func setWorkspaceMergeRequests(_ requests: [UUID: WorkspaceMergeRequest]) {
-        if workspaceMergeRequests != requests {
-            workspaceMergeRequests = requests
+    func setWorkspaceTaskCleanupRun(_ run: WorkspaceTaskCleanupRun?, for workspaceID: UUID) {
+        if workspaceTaskCleanupRuns[workspaceID] != run {
+            workspaceTaskCleanupRuns[workspaceID] = run
         }
     }
 

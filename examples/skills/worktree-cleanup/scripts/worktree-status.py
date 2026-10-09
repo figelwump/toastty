@@ -3,6 +3,7 @@
 clean up worktrees whose PR has merged.
 
 Usage: worktree-status.py [--json] [--cleanup-merged] [--repo PATH]
+       worktree-status.py --cleanup-workspace ID [--repo PATH]
 
 Run from any checkout of the repository, or pass --repo. Needs `git` and an
 authenticated `gh`. Toastty workspaces are matched through TOASTTY_CLI_PATH and
@@ -30,6 +31,15 @@ workspace is the caller's own, holds another worktree or another PR's chip, or h
 unsaved documents; or when the worktree is locked. It rereads the workspace list
 just before closing each workspace, rechecks the worktree just before removing it,
 and deletes each branch only while it still points at the merged commit.
+
+--cleanup-workspace ID is the form Toastty's Clean Up button runs, through the
+workspace's cleanup hook. It cleans only the task whose Toastty workspace is ID,
+with the same guards as --cleanup-merged, and reports through its exit status:
+0 cleaned, 3 skipped (nothing changed; the last line printed says why), any
+other status failed. It runs in the task's directory, so --repo defaults to the
+current directory. Unlike --cleanup-merged it accepts a workspace-scoped caller,
+because Toastty itself names the one workspace to clean and rereads the full
+list before closing it.
 """
 
 from __future__ import annotations
@@ -131,6 +141,15 @@ class Row:
     verdict: str = "blocked"
     reason: str = ""
     cleanup: str | None = None
+
+
+def main_checkout(checkout: str | None) -> str:
+    """The repository's main working tree. Git commands run there, so a task
+    worktree being removed is never the current directory; from a task
+    worktree, --show-toplevel alone would name the worktree itself."""
+    common = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=checkout).strip()
+    main = run(["git", "rev-parse", "--show-toplevel"], cwd=os.path.dirname(common)).strip()
+    return real(main)
 
 
 def real(path: str) -> str:
@@ -510,15 +529,73 @@ def clean_up(row: Row, worktree: Worktree, repo: str, repo_slug: str, own_worksp
     return "; ".join(done)
 
 
+CLEANUP_SKIPPED_EXIT = 3
+
+
+def cleanup_one_workspace(workspace_id: str, rows: list[Row], without_pr: list[Row], worktrees: list[Worktree],
+                          worktree_by_path: dict[str, Worktree], repo: str, repo_slug: str,
+                          default_branch: str) -> None:
+    """Cleans the one task whose workspace is workspace_id and exits with the
+    hook contract: the last line printed is the reason, and the status says
+    whether anything changed."""
+    def finish(status: int, message: str) -> None:
+        print(message)
+        sys.exit(status)
+
+    matches = [row for row in rows if workspace_id in row.workspace_ids]
+    if not matches:
+        if any(workspace_id in (row.workspace or "") for row in without_pr):
+            finish(CLEANUP_SKIPPED_EXIT, "no PR for this worktree's branch")
+        finish(CLEANUP_SKIPPED_EXIT, "no task worktree matches this workspace")
+    if len(matches) > 1:
+        finish(CLEANUP_SKIPPED_EXIT, "several PRs match this workspace: " + ", ".join(f"#{r.pr}" for r in matches))
+    row = matches[0]
+    if row.verdict != "cleanup":
+        if row.pr_state == "MERGED":
+            finish(CLEANUP_SKIPPED_EXIT, row.reason or "not ready for cleanup")
+        finish(CLEANUP_SKIPPED_EXIT, f"PR #{row.pr} is {row.pr_state.lower()}: " + (row.reason or "not merged"))
+    if not row.worktree:
+        finish(CLEANUP_SKIPPED_EXIT, f"PR #{row.pr} has no local worktree")
+    # Toastty runs the hook in the task's directory, which `git worktree
+    # remove` is about to delete; move out first so nothing below runs from
+    # a directory that no longer exists.
+    os.chdir(repo)
+    # Toastty names the one workspace to clean, so a scoped list is enough
+    # as long as it still holds that workspace.
+    current, _ = toastty_workspaces()
+    if current is None:
+        finish(CLEANUP_SKIPPED_EXIT, "could not reread the Toastty workspace list")
+    worktree = worktree_by_path[row.worktree]
+    workspaces = (detached_workspace_matches(current, row.worktree, row.pr, repo_slug)
+                  if worktree.branch is None else match_workspaces(current, row.worktree, row.pr, repo_slug))
+    if [w.workspace_id for w in workspaces] != [workspace_id]:
+        finish(CLEANUP_SKIPPED_EXIT, "the workspace no longer matches this task's worktree")
+    others = [w.path for w in worktrees if w.path != row.worktree]
+    # The caller is Toastty acting for the user, never a session inside the
+    # task, so there is no own workspace to protect.
+    report = clean_up(row, worktree, repo, repo_slug, None, workspaces, others, default_branch)
+    if report.startswith("skipped: "):
+        finish(CLEANUP_SKIPPED_EXIT, report.removeprefix("skipped: "))
+    if report.startswith("stopped: "):
+        finish(1, report.removeprefix("stopped: "))
+    if report.startswith("partial: "):
+        finish(1, report.removeprefix("partial: "))
+    finish(0, report)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", action="store_true", help="print rows as JSON")
     parser.add_argument("--cleanup-merged", action="store_true",
                         help="close workspaces, remove worktrees, and delete branches for merged PRs")
+    parser.add_argument("--cleanup-workspace", metavar="ID",
+                        help="clean up only the task whose Toastty workspace is ID; exit 0 cleaned, 3 skipped")
     parser.add_argument("--repo", help="any checkout of the repository (default: current directory)")
     options = parser.parse_args()
+    if options.cleanup_workspace and options.cleanup_merged:
+        parser.error("--cleanup-workspace and --cleanup-merged are exclusive")
 
-    repo = run(["git", "rev-parse", "--show-toplevel"], cwd=options.repo).strip()
+    repo = main_checkout(options.repo)
     fetched = subprocess.run(["git", "fetch", "--quiet", "--prune", "origin"], cwd=repo,
                              capture_output=True).returncode == 0
     repo_info = json.loads(run(["gh", "repo", "view", "--json", "nameWithOwner,defaultBranchRef"], cwd=repo))
@@ -539,6 +616,8 @@ def main() -> None:
         return (candidates[0] if candidates else None), False
 
     workspace_list, workspace_list_complete = toastty_workspaces()
+    if options.cleanup_workspace and workspace_list is None:
+        sys.exit("worktree-status: --cleanup-workspace needs TOASTTY_CLI_PATH and a Toastty with workspace.list")
     if options.cleanup_merged and workspace_list is None:
         sys.exit("worktree-status: --cleanup-merged needs TOASTTY_CLI_PATH and a Toastty with workspace.list, "
                  "so it can check each workspace before closing it")
@@ -594,6 +673,11 @@ def main() -> None:
     for pr in prs:
         if pr["state"] == "OPEN" and pr["number"] not in seen_prs:
             rows.append(pr_row(pr, None))
+
+    if options.cleanup_workspace:
+        cleanup_one_workspace(options.cleanup_workspace, rows, without_pr, worktrees, worktree_by_path,
+                              repo, repo_slug, default_branch)
+        return
 
     if options.cleanup_merged:
         own_workspace = caller_workspace_id()

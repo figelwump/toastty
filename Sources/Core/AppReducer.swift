@@ -220,6 +220,17 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .setWorkspaceTaskHooks(let workspaceID, let hooks):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            let sanitized = hooks.sanitized
+            // Only a subspace row shows the buttons, so a top-level workspace
+            // cannot hold hooks.
+            guard sanitized.isEmpty || workspace.parentWorkspaceID != nil else { return false }
+            guard workspace.taskHooks != sanitized else { return false }
+            workspace.taskHooks = sanitized
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
         case .setWorkspaceParent(let workspaceID, let parentWorkspaceID, let spawningSessionID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let resolvedParentID: UUID?
@@ -249,6 +260,7 @@ public struct AppReducer {
             workspace.spawningSessionID = resolvedSpawningSessionID
             if resolvedParentID == nil {
                 workspace.doneAt = nil
+                workspace.taskHooks = WorkspaceTaskHooks()
             }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             for nestedWorkspaceID in nestedWorkspaceIDs {
@@ -2120,6 +2132,7 @@ public struct AppReducer {
             state.workspacesByID[subspaceID]?.parentWorkspaceID = nil
             state.workspacesByID[subspaceID]?.spawningSessionID = nil
             state.workspacesByID[subspaceID]?.doneAt = nil
+            state.workspacesByID[subspaceID]?.taskHooks = WorkspaceTaskHooks()
         }
         state.workspacesByID.removeValue(forKey: workspaceID)
         window.workspaceIDs.remove(at: workspaceIndex)

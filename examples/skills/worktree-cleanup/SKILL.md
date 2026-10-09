@@ -82,6 +82,17 @@ a workspace ended, and every skipped row with its reason. Do not work around a
 skip with manual `workspace.close`, `git worktree remove --force`, or branch
 deletion.
 
+## Clean up one task from Toastty
+
+A task space created by `worktree-create` carries a cleanup hook that runs
+`scripts/worktree-status.py --cleanup-workspace` for that one workspace, with
+`TOASTTY_WORKSPACE_ID` set. The subspace row's Clean Up button, the Subspaces
+header's clean-up icon, and `workspace.task.cleanup` all run it. It applies the
+same guards as `--cleanup-merged` and reports through its exit status: 0 cleaned,
+3 skipped with the reason as the last line printed, anything else failed. A PR
+that has not merged yet is a skip, so Clean Up on a task that `worktree-done`
+just accepted waits for the merge; run it again later.
+
 ## Changes to this workflow
 
 Run `python3 scripts/test_worktree_status.py`. It uses disposable Git

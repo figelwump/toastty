@@ -772,7 +772,6 @@ struct ToasttyApp: App {
             persistTerminalFontPreference: persistUserSettings,
             initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
-            initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
             recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()
@@ -886,16 +885,6 @@ struct ToasttyApp: App {
         }
         let sessionRuntimeStore = SessionRuntimeStore(agentHookDispatcher: agentHookDispatcher)
         sessionRuntimeStore.bind(store: store)
-        // Kept alive by the session runtime store, which the Merge button reads.
-        _ = WorkspaceMergeCoordinator(
-            store: store,
-            sessionRuntimeStore: sessionRuntimeStore,
-            runner: WorkspaceMergeLiveCommandRunner(
-                socketPath: socketPath,
-                cliExecutablePath: cliExecutablePath
-            ),
-            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
-        )
         let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             // Layout profile selection is fixed for this app process, so the
@@ -1019,7 +1008,7 @@ struct ToasttyApp: App {
         DispatchQueue.global(qos: .utility).async {
             skillArtifactSweeper.sweep()
         }
-        agentLaunchService = AgentLaunchService(
+        let agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -1036,7 +1025,40 @@ struct ToasttyApp: App {
             },
             managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
         )
+        self.agentLaunchService = agentLaunchService
         terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
+        // Kept alive by the session runtime store, which the subspace rows read.
+        _ = WorkspaceTaskHookRunner(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            runner: WorkspaceTaskCleanupLiveCommandRunner(),
+            userSkillsDirectoryURL: runtimePaths.userSkillsDirectoryURL,
+            baseEnvironment: { [weak terminalRuntimeRegistry] in
+                // A cleanup script needs the same socket and CLI the
+                // terminals get; the panel ID in it is scrubbed by the runner.
+                var environment = processInfo.environment
+                for (key, value) in terminalRuntimeRegistry?.baseLaunchEnvironment(panelID: UUID()) ?? [:] {
+                    environment[key] = value
+                }
+                return environment
+            },
+            sendText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendText(text, submit: true, panelID: panelID, focusPolicy: .preserveFirstResponder) ?? false
+            },
+            launchAgent: { [weak agentLaunchService] profileID, workspaceID, cwd, prompt in
+                guard let agentLaunchService else {
+                    throw WorkspaceTaskHookRunner.FinishProblem.launchFailed("The agent launcher is unavailable.")
+                }
+                let result = try agentLaunchService.launch(
+                    profileID: profileID,
+                    workspaceID: workspaceID,
+                    cwd: cwd,
+                    initialPrompt: prompt,
+                    focusPolicy: .preserveFirstResponder
+                )
+                return (result.sessionID, result.panelID)
+            }
+        )
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
@@ -1196,10 +1218,6 @@ struct ToasttyApp: App {
             },
             toggleCommandPalette: { [weak commandPaletteController] originWindowID in
                 commandPaletteController?.toggle(originWindowID: originWindowID) ?? false
-            },
-            requestWorkspaceMerge: { workspaceID, mode in
-                WorkspaceMergeController.live(store: store, sessionRuntimeStore: sessionRuntimeStore)
-                    .requestMerge(workspaceID: workspaceID, mode: mode)
             }
         )
         _store = StateObject(wrappedValue: store)

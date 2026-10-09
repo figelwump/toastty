@@ -16,6 +16,10 @@ Release and deployment management are outside this workflow.
 ## Typical use
 
 From a project workspace, invoke `worktree-create` with a brief task description.
+It also sets the task space's lifecycle hooks, so the subspace row in the
+sidebar shows a Finish Task button that sends `worktree-done` to the task's
+agent, and, once the task is done, a Clean Up button that runs the cleanup
+script without an agent.
 The task session designs, implements, verifies, and publishes a PR in its own
 workspace. After testing or reviewing the result there, invoke `worktree-done` in
 that workspace. It checks that the worktree matches the PR, enables auto-merge,

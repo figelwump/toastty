@@ -375,6 +375,74 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertTrue(SidebarSubspacePresentation.tally(rows).ready == 1)
     }
 
+    /// The done mark picks the button: Finish Task until the task is done,
+    /// Clean Up after. A missing hook hides its button, and a cleanup run
+    /// takes the button's place while it matters.
+    func testTaskButtonFollowsTheDoneMarkAndTheHooks() {
+        typealias Button = SidebarSubspacePresentation.TaskButton
+        let both = WorkspaceTaskHooks(
+            finishSkill: "worktree-done",
+            cleanup: WorkspaceTaskHooks.CleanupScript(skill: "worktree-cleanup", script: "scripts/worktree-status.py")
+        )
+        func button(_ hooks: WorkspaceTaskHooks, done: Bool, run: WorkspaceTaskCleanupRun? = nil) -> Button? {
+            var row = self.row("task", status: done ? .done : .idle, index: 0)
+            row.isDone = done
+            row.taskHooks = hooks
+            row.cleanupRun = run
+            return SidebarSubspacePresentation.taskButton(row)
+        }
+        XCTAssertEqual(button(both, done: false), .finish)
+        XCTAssertEqual(button(both, done: true), .cleanUp)
+        XCTAssertNil(button(WorkspaceTaskHooks(), done: false))
+        XCTAssertNil(button(WorkspaceTaskHooks(), done: true))
+        XCTAssertNil(button(WorkspaceTaskHooks(finishSkill: "worktree-done"), done: true))
+        XCTAssertNil(button(WorkspaceTaskHooks(cleanup: both.cleanup), done: false))
+        XCTAssertEqual(button(both, done: true, run: WorkspaceTaskCleanupRun(phase: .running)), .cleaningUp)
+        XCTAssertEqual(
+            button(both, done: true, run: WorkspaceTaskCleanupRun(phase: .skipped(detail: "PR #7 has not merged"))),
+            .cleanupSkipped(detail: "PR #7 has not merged")
+        )
+        XCTAssertEqual(
+            button(both, done: true, run: WorkspaceTaskCleanupRun(phase: .failed(detail: "git failed"))),
+            .cleanupFailed(detail: "git failed")
+        )
+        XCTAssertFalse(Button.cleaningUp.isEnabled)
+        XCTAssertTrue(Button.cleanupSkipped(detail: "x").isEnabled, "a skipped run can be retried from the button")
+
+        var finishRow = row("task", status: .idle, index: 0)
+        finishRow.taskHooks = both
+        XCTAssertTrue(
+            SidebarSubspacePresentation.rowAccessibilityLabel(finishRow, showsSpawnerTag: false).hasSuffix(", finish task")
+        )
+    }
+
+    /// The header icon runs only finished tasks that have a cleanup hook and
+    /// are not already cleaning up, and names them in its confirmation.
+    func testCleanupCandidatesAndHeaderWording() {
+        let cleanup = WorkspaceTaskHooks.CleanupScript(skill: "worktree-cleanup", script: "scripts/worktree-status.py")
+        var done = row("a-done", status: .done, index: 0)
+        done.isDone = true
+        done.taskHooks = WorkspaceTaskHooks(cleanup: cleanup)
+        var doneNoHook = row("b-done-no-hook", status: .done, index: 1)
+        doneNoHook.isDone = true
+        var running = row("c-running", status: .done, index: 2)
+        running.isDone = true
+        running.taskHooks = WorkspaceTaskHooks(cleanup: cleanup)
+        running.cleanupRun = WorkspaceTaskCleanupRun(phase: .running)
+        var open = row("d-open", status: .idle, index: 3)
+        open.taskHooks = WorkspaceTaskHooks(finishSkill: "worktree-done", cleanup: cleanup)
+
+        let rows = [done, doneNoHook, running, open]
+        XCTAssertEqual(SidebarSubspacePresentation.cleanupCandidates(rows).map(\.title), ["a-done"])
+        XCTAssertEqual(SidebarSubspacePresentation.cleanupFinishedTitle(count: 1), "Clean Up 1 Finished Task…")
+        XCTAssertEqual(SidebarSubspacePresentation.cleanupFinishedTitle(count: 2), "Clean Up 2 Finished Tasks…")
+
+        let confirmation = SidebarSubspacePresentation.cleanupFinishedConfirmation(rows: [done], skippedCount: 3)
+        XCTAssertEqual(confirmation.title, "Clean up 1 finished task?")
+        XCTAssertTrue(confirmation.message.contains("• a-done"))
+        XCTAssertTrue(confirmation.message.contains("3 other subspaces"))
+    }
+
     func testFrozenOrderHoldsExistingRowsAndAppendsNewOnes() {
         let first = row("first", status: .working, index: 0)
         let second = row("second", status: .working, index: 1)

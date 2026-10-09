@@ -354,6 +354,35 @@ it as `done`.
 "$TOASTTY_CLI_PATH" action run workspace.set-done
 ```
 
+`workspace.task.set-hooks` records how a subspace's task is finished and
+cleaned up, which its sidebar row shows as a **Finish Task** button until the
+task is done and a **Clean Up** button after. `finishSkill` names a skill the
+task's agent runs; `cleanupSkill`, `cleanupScript`, and repeatable `cleanupArgs`
+name a script inside an installed user skill that runs without an agent, in
+the task's directory, with `TOASTTY_CLI_PATH` and `TOASTTY_WORKSPACE_ID` set.
+The script exits 0 when it cleaned up, 3 when it changed nothing (its last
+output line says why), and anything else on failure. With no parameters the
+action clears the hooks; with no `workspaceID` a managed agent's call targets
+its own workspace. Only subspaces hold hooks, and moving one to top level
+drops them. `workspace.list` and `workspace.snapshot` report them as
+`taskHooks`.
+
+```bash
+"$TOASTTY_CLI_PATH" action run workspace.task.set-hooks --workspace "$WORKSPACE_ID" \
+  finishSkill=worktree-done \
+  cleanupSkill=worktree-cleanup cleanupScript=scripts/worktree-status.py \
+  cleanupArgs=--cleanup-workspace
+```
+
+`workspace.task.finish` runs the finish hook as the button does: it sends the
+skill to the workspace's most recently active agent session, or launches one
+with it, and returns the `sessionID` and `panelID` that received it.
+`workspace.task.cleanup` runs the cleanup script and waits for it, returning
+`outcome` (`cleaned`, `skipped`, or `failed`) and the script's `detail`; a
+session inside the workspace being cleaned may not call it.
+`workspace.task.cleanup-finished` runs the script of every done subspace with
+a cleanup hook under a workspace, one at a time, and returns one result each.
+
 `workspace.select` accepts a `workspaceID` selector or a 1-based `index`
 argument. The index counts every workspace in the window's order, including
 subspaces; the sidebar's numbered shortcuts count only top-level cards, so
@@ -469,6 +498,10 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `workspace.set-parent`
 - `workspace.set-done`
 - `workspace.clear-done`
+- `workspace.task.set-hooks`
+- `workspace.task.finish`
+- `workspace.task.cleanup`
+- `workspace.task.cleanup-finished`
 - `workspace.close`
 - `workspace.tab.create`
 - `workspace.tab.select`

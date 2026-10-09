@@ -13,6 +13,10 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceSetParent = "workspace.set-parent"
     case workspaceSetDone = "workspace.set-done"
     case workspaceClearDone = "workspace.clear-done"
+    case workspaceTaskSetHooks = "workspace.task.set-hooks"
+    case workspaceTaskFinish = "workspace.task.finish"
+    case workspaceTaskCleanup = "workspace.task.cleanup"
+    case workspaceTaskCleanupFinished = "workspace.task.cleanup-finished"
     case workspaceClose = "workspace.close"
     case workspaceTabCreate = "workspace.tab.create"
     case workspaceTabSelect = "workspace.tab.select"
@@ -217,6 +221,40 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 id: rawValue,
                 kind: .action,
                 summary: "Clear a workspace's done mark. Targets the calling agent's own workspace when no workspace is given.",
+                selectors: [.windowID, .workspaceID]
+            )
+        case .workspaceTaskSetHooks:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Set how a subspace's task is finished and cleaned up. finishSkill names a skill the task's agent runs when the user clicks Finish Task. cleanupSkill, cleanupScript, and cleanupArgs name a script inside an installed user skill that Clean Up runs without an agent: cwd is the task directory, TOASTTY_CLI_PATH and TOASTTY_WORKSPACE_ID are set, exit 0 means cleaned, exit 3 means skipped with the last output line as the reason, and the script closes the workspace itself. Omitting every parameter clears the hooks. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [
+                    .taskFinishSkill(required: false),
+                    .taskCleanupSkill(required: false),
+                    .taskCleanupScript(required: false),
+                    .taskCleanupArgs(required: false),
+                ]
+            )
+        case .workspaceTaskFinish:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Run a subspace's finish hook, as the Finish Task button does: sends the finish skill to the workspace's most recently active agent session, or launches one with it when none is running. Returns the sessionID and panelID that received it.",
+                selectors: [.windowID, .workspaceID]
+            )
+        case .workspaceTaskCleanup:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Run a subspace's cleanup script, as the Clean Up button does, and wait for it. Returns outcome (cleaned, skipped, or failed) and the script's detail. The script must not be run from inside the workspace it cleans.",
+                selectors: [.windowID, .workspaceID]
+            )
+        case .workspaceTaskCleanupFinished:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Run the cleanup script of every subspace under a workspace that is marked done and has a cleanup hook, one at a time, as the Subspaces header's clean-up button does. Returns one result per subspace.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClose:
@@ -724,6 +762,22 @@ private extension AppControlParameterDescriptor {
 
     static func files(required: Bool) -> Self {
         .init(name: "files", summary: "Image file path. Repeat to provide multiple paths.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func taskFinishSkill(required: Bool) -> Self {
+        .init(name: "finishSkill", summary: "Skill the task's agent runs to finish the task, such as worktree-done. Sent as /<skill> or $<skill> in the agent's own syntax.", valueType: .string, required: required)
+    }
+
+    static func taskCleanupSkill(required: Bool) -> Self {
+        .init(name: "cleanupSkill", summary: "Installed user skill that holds the cleanup script, such as worktree-cleanup. Required with cleanupScript.", valueType: .string, required: required)
+    }
+
+    static func taskCleanupScript(required: Bool) -> Self {
+        .init(name: "cleanupScript", summary: "Path of the cleanup script relative to the skill's directory, such as scripts/worktree-status.py. Required with cleanupSkill.", valueType: .string, required: required)
+    }
+
+    static func taskCleanupArgs(required: Bool) -> Self {
+        .init(name: "cleanupArgs", summary: "Argument passed to the cleanup script. Repeat to pass several.", valueType: .string, required: required, repeatable: true)
     }
 
     static func initialPrompt(required: Bool) -> Self {

@@ -144,6 +144,18 @@ class CleanupTests(unittest.TestCase):
         return [line for line in self.log.read_text().splitlines() if "workspace.close" in line] \
             if self.log.exists() else []
 
+    def cleanup_workspace(self, workspace_id, cwd=None, env=None):
+        """Runs the hook form from the task directory, as Toastty does, and returns
+        (exit status, last line printed)."""
+        self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces,
+                                               "own": OWN_WORKSPACE, "scoped": self.scoped,
+                                               **self.extra_state}))
+        hook_env = dict(env or self.env, TOASTTY_WORKSPACE_ID=workspace_id)
+        result = subprocess.run([sys.executable, str(SCRIPT), "--cleanup-workspace", workspace_id],
+                                cwd=cwd or self.repo, env=hook_env, capture_output=True, text=True)
+        lines = [line for line in (result.stdout + result.stderr).splitlines() if line.strip()]
+        return result.returncode, (lines[-1] if lines else "")
+
     def remote_has(self, branch):
         return bool(self.git("ls-remote", "--heads", "origin", branch))
 
@@ -492,6 +504,44 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(with_sessions.exists() or busy.exists())
         self.assertFalse(self.remote_has(branch))
         self.assertEqual(len(self.closed()), 2)
+
+    def test_cleanup_workspace_cleans_one_merged_task_from_its_directory(self):
+        branch, path = self.task(1, session=True)
+        _, other = self.task(2)
+        status, detail = self.cleanup_workspace(self.workspaces[0]["workspaceID"], cwd=path)
+        self.assertEqual(status, 0, detail)
+        self.assertIn("removed worktree", detail)
+        self.assertFalse(path.exists())
+        self.assertTrue(other.exists(), "only the named workspace is cleaned")
+        self.assertEqual(self.git("branch", "--list", branch), "")
+        self.assertFalse(self.remote_has(branch))
+        self.assertEqual(len(self.closed()), 1)
+
+    def test_cleanup_workspace_skips_unmerged_dirty_and_unknown_tasks_with_exit_3(self):
+        _, open_path = self.task(1, state="OPEN")
+        _, dirty = self.task(2)
+        (dirty / "notes.txt").write_text("unsaved\n")
+        status, detail = self.cleanup_workspace(self.workspaces[0]["workspaceID"], cwd=open_path)
+        self.assertEqual(status, 3)
+        self.assertIn("PR #1 is open", detail)
+        status, detail = self.cleanup_workspace(self.workspaces[1]["workspaceID"], cwd=dirty)
+        self.assertEqual(status, 3)
+        self.assertIn("uncommitted", detail)
+        status, detail = self.cleanup_workspace("00000000-0000-0000-0000-0000000000ff")
+        self.assertEqual(status, 3)
+        self.assertIn("no task worktree matches", detail)
+        self.assertTrue(open_path.exists() and dirty.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_cleanup_workspace_accepts_a_scoped_caller_and_reports_a_partial_as_failure(self):
+        branch, path = self.task(1, session=True)
+        self.scoped = True
+        self.extra_state["dirty_on_close"] = {self.workspaces[-1]["workspaceID"]: str(path)}
+        status, detail = self.cleanup_workspace(self.workspaces[0]["workspaceID"], cwd=path)
+        self.assertEqual(status, 1, detail)
+        self.assertIn("closed task-1", detail)
+        self.assertIn("worktree kept", detail)
+        self.assertTrue(path.exists())
 
     def test_keeps_worktree_a_closed_session_dirtied(self):
         branch, path = self.task(1, session=True)

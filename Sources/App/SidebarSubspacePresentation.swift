@@ -59,6 +59,11 @@ enum SidebarSubspacePresentation {
         /// The workspace's done mark, which `status` shows only while its
         /// sessions are quiet.
         var isDone = false
+        /// How the task is finished and cleaned up; empty for a subspace
+        /// without hooks.
+        var taskHooks = WorkspaceTaskHooks()
+        /// The cleanup script run shown on the row, if any.
+        var cleanupRun: WorkspaceTaskCleanupRun? = nil
         let annotations: [String: WorkspaceAnnotation]
         var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
@@ -334,6 +339,98 @@ enum SidebarSubspacePresentation {
         isDone ? "Mark as not done" : "Mark as done"
     }
 
+    /// The task lifecycle button a row shows, if any. The done mark is the
+    /// switch: Finish Task until the task is done, Clean Up once it is. A
+    /// missing hook hides its button. A running or finished cleanup script
+    /// replaces the button with its state.
+    enum TaskButton: Equatable, Sendable {
+        case finish
+        case cleanUp
+        case cleaningUp
+        /// The script changed nothing and said why; the row offers to run
+        /// it again or drop the result.
+        case cleanupSkipped(detail: String)
+        case cleanupFailed(detail: String)
+
+        var title: String {
+            switch self {
+            case .finish: return "Finish Task"
+            case .cleanUp: return "Clean Up"
+            case .cleaningUp: return "Cleaning Up…"
+            case .cleanupSkipped: return "Skipped"
+            case .cleanupFailed: return "Cleanup Failed"
+            }
+        }
+
+        var isEnabled: Bool {
+            switch self {
+            case .finish, .cleanUp, .cleanupSkipped, .cleanupFailed: return true
+            case .cleaningUp: return false
+            }
+        }
+
+        /// What the button's tooltip and spoken label say.
+        var detail: String? {
+            switch self {
+            case .finish: return "Run this task's finish skill in its agent session"
+            case .cleanUp: return "Run this task's cleanup script"
+            case .cleaningUp: return "The cleanup script is running"
+            case .cleanupSkipped(let detail), .cleanupFailed(let detail): return detail
+            }
+        }
+    }
+
+    static func taskButton(_ row: Row) -> TaskButton? {
+        switch row.cleanupRun?.phase {
+        case .running?:
+            return .cleaningUp
+        case .skipped(let detail)?:
+            return .cleanupSkipped(detail: detail)
+        case .failed(let detail)?:
+            return .cleanupFailed(detail: detail)
+        case nil:
+            break
+        }
+        if row.isDone {
+            return row.taskHooks.cleanup == nil ? nil : .cleanUp
+        }
+        return row.taskHooks.finishSkill == nil ? nil : .finish
+    }
+
+    /// Rows the header's clean-up button runs: finished, with a cleanup
+    /// hook, and not already running one.
+    static func cleanupCandidates(_ rows: [Row]) -> [Row] {
+        rows.filter { row in
+            row.isDone && row.taskHooks.cleanup != nil && row.cleanupRun?.phase != .running
+        }
+    }
+
+    static func cleanupFinishedTitle(count: Int) -> String {
+        count == 1 ? "Clean Up 1 Finished Task…" : "Clean Up \(count) Finished Tasks…"
+    }
+
+    static func cleanupFinishedConfirmation(rows: [Row], skippedCount: Int) -> (title: String, message: String) {
+        let count = rows.count
+        let title = count == 1 ? "Clean up 1 finished task?" : "Clean up \(count) finished tasks?"
+        var lines = ["Toastty runs each task's cleanup script. The script decides whether cleanup is safe and can skip the task."]
+        lines.append("")
+        lines.append(contentsOf: rows.map { "• \($0.title)" })
+        if skippedCount > 0 {
+            lines.append("")
+            lines.append(skippedCount == 1
+                ? "1 other subspace is not finished or has no cleanup hook."
+                : "\(skippedCount) other subspaces are not finished or have no cleanup hook.")
+        }
+        return (title, lines.joined(separator: "\n"))
+    }
+
+    static func cleanupConfirmation(row: Row) -> (title: String, message: String) {
+        (
+            "Clean up \(row.title)?",
+            "Toastty runs this task's cleanup script. The script decides whether cleanup is safe, and may close this workspace, end its sessions, and remove its worktree."
+        )
+    }
+
     static func spawnerFilterActionTitle(_ chip: SpawnerChip) -> String {
         switch (chip.isFilterActive, chip.targetWorkspaceTitle) {
         case (true, nil): return "Show all subspaces"
@@ -374,6 +471,9 @@ enum SidebarSubspacePresentation {
         }
         if showsSpawnerTag, let spawnerName = row.spawnerName {
             components.append("spawned by \(spawnerName)")
+        }
+        if let button = taskButton(row) {
+            components.append(button.title.lowercased().replacingOccurrences(of: "…", with: ""))
         }
         return components.joined(separator: ", ")
     }
