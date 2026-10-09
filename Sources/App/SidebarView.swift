@@ -3768,7 +3768,7 @@ struct SidebarView: View {
         case .ready(let pullRequest, let currentMode):
             ForEach(WorkspaceMergeMode.allCases, id: \.self) { mode in
                 let title = WorkspaceMergePresentation.actionTitle(mode: mode, pullRequest: pullRequest)
-                // The shortcut runs the mode the top bar button shows.
+                // The shortcut runs the mode selected in the top bar button menu.
                 Button(mode == currentMode ? ToasttyKeyboardShortcuts.mergeWorkspacePullRequest.menuTitle(title) : title) {
                     requestWorkspaceMerge(row.id, mode)
                 }
@@ -3785,7 +3785,7 @@ struct SidebarView: View {
             Button("Don't Clean Up") {
                 sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)
             }
-        case .merging, .awaitingMerge, .cleaningUp, .closing, .done:
+        case .merging, .cleaningUp, .closing, .done:
             Button(presentation.title) {}
                 .disabled(true)
         }

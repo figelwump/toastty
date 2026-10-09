@@ -65,13 +65,8 @@ struct WorkspaceHeaderMergeControl: View {
             }
 
         case .merging, .cleaningUp, .closing:
-            progressLabel(showsSpinner: true)
+            progressLabel
                 .accessibilityIdentifier("topbar.workspace.merge.progress")
-
-        case .awaitingMerge:
-            progressLabel(showsSpinner: true)
-            .help("Toastty closes this workspace, removes its worktree, and deletes its branches when the pull request merges")
-            .accessibilityIdentifier("topbar.workspace.merge.awaiting")
 
         case .cleanupFailed(_, let reason):
             cleanupMenu {
@@ -112,11 +107,9 @@ struct WorkspaceHeaderMergeControl: View {
         }
     }
 
-    private func progressLabel(showsSpinner: Bool) -> some View {
+    private var progressLabel: some View {
         HStack(spacing: 4) {
-            if showsSpinner {
-                SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.5)
-            }
+            SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.5)
             titleText
         }
         .font(ToastyTheme.fontWorkspaceMergeProgress)

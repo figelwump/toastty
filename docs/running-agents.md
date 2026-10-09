@@ -547,19 +547,20 @@ need the user's review and a new `worktree-done` request.
 
 ### Merging a task's pull request
 
-A subspace with a `github-pr` annotation shows a Merge button under its title
-in the top bar. The arrow beside it picks what the button does:
+A subspace with a `github-pr` annotation shows a **Merge PR #N** button under
+its title in the top bar. The arrow beside it picks what the button does. The
+button label does not change; the menu marks the selected mode.
 
-- **Merge and Clean**, the default, labels the button **Merge & Clean
-  PR #N**. After the pull request merges, Toastty closes the workspace, removes
-  its worktree, and deletes its branches.
-- **Merge Only** labels the button **Merge PR #N** and leaves the workspace in
-  place.
+- **Merge and Clean Workspace**, the default: after the pull request merges, Toastty
+  closes the workspace, removes its worktree, and deletes its branches.
+- **Merge Only** merges the pull request and leaves the workspace in place.
 
 The choice applies to every workspace and is kept across launches.
-`Option+Shift+M` runs the selected subspace's button in the mode it shows. In a
+`Option+Shift+M` runs the selected subspace's button in the mode its menu
+marks. In a
 workspace without a Merge button, the key goes to the terminal as usual. The
-subspace's sidebar context menu offers both actions.
+subspace's sidebar context menu offers both actions, as **Merge PR #N and Clean
+Workspace** and **Merge PR #N Only**.
 
 Toastty merges the pull request itself, with no agent and no skills
 installed. It needs `gh`, `git`, and `python3` on your login shell's `PATH`, and
@@ -604,8 +605,8 @@ moved. Toastty marks the workspace done when you click, so a Merge Only shows
 - Top-level workspaces do not show the button, because only a subspace holds a
   done mark.
 
-After a Merge and Clean, the button reads **Cleans Up When PR #N Merges** until
-the merge is done. Toastty confirms with `gh pr view` that the pull request
+After a Merge and Clean, the button reads **Merging PR #N…** until the merge is
+done, and **Cleaning Up PR #N…** while Toastty cleans up. Toastty confirms with `gh pr view` that the pull request
 merged, then closes the workspace, removes the worktree, and deletes the local
 and remote branch, and a notification reports the result.
 
