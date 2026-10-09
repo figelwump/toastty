@@ -108,11 +108,17 @@ struct ToasttyConversationScreen: View {
                     isSubmitting: isSubmitting,
                     loadOlder: loadOlder,
                     dismissSendReceipt: dismissSendReceipt,
-                    queuedMessageAction: queuedMessageAction,
+                    queuedMessageAction: { action in
+                        // Edit returns the text for more typing; the send that
+                        // queued it had dismissed the keyboard.
+                        if case .edit = action { isComposerFocused = true }
+                        queuedMessageAction(action)
+                    },
                     interactionAnswerStates: interactionAnswerStates,
                     editInteractionAnswer: editInteractionAnswer,
                     submitInteractionAnswer: submitInteractionAnswer,
                     readAcknowledgementEpoch: conversation.state,
+                    workingIndicator: transcriptWorkingIndicator(conversation),
                     jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
                     onVisibleLiveEdge: {
                         onVisibleLiveEdge(conversation.state)
@@ -309,11 +315,23 @@ struct ToasttyConversationScreen: View {
     }
 
     /// The composer is a one-line field until it has focus or content; then it
-    /// grows into a card with a button bar underneath the text. The agent's
-    /// working state lives in the transcript, not under the field.
+    /// grows into a card with a button bar underneath the text. While input
+    /// stays open, the agent's working state lives at the transcript's tail,
+    /// not under the field.
     private func isExpandedComposer(_ presentation: ToasttyComposerPresentation) -> Bool {
         presentation.gate.allowsInput
             && (isComposerFocused || !draft.isEmpty || !attachments.isEmpty)
+    }
+
+    /// Shown while the agent works, unless a locked composer already says so
+    /// under the field (hosts without queue support).
+    private func transcriptWorkingIndicator(
+        _ conversation: MobileConversation
+    ) -> ToasttyTranscriptWorkingIndicator? {
+        guard conversation.state.bucket == .working, controller.freshness == .live else { return nil }
+        let gate = (composer ?? lockedComposerFallback(conversation)).gate
+        if gate == .disabled(.prompt(.working)) { return nil }
+        return ToasttyTranscriptWorkingIndicator(turnElapsed: conversation.turnElapsed)
     }
 
     private func composerBar(_ conversation: MobileConversation) -> some View {
@@ -664,6 +682,10 @@ struct ToasttyConversationScreen: View {
         let mode: RemoteMessageDeliveryMode? = isWorking ? effectiveDeliveryMode(presentation) : nil
         if submitDraft(mode) {
             steerSelected = false
+            // A send ends the edit: the keyboard leaves and, once the draft
+            // clears, the field folds back to one line. Queue and steer keep
+            // the gate open, so nothing else drops focus for them.
+            isComposerFocused = false
             jumpToLiveEdgeRequest &+= 1
         }
     }

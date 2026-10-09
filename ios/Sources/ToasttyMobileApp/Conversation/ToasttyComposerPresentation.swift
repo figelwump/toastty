@@ -542,6 +542,11 @@ struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
     let clientRequestID: String
     let text: String
     let content: Content
+
+    var isQueued: Bool {
+        if case .queued = content { return true }
+        return false
+    }
 }
 
 struct ToasttyQueuedSendPresentation: Equatable, Sendable {

@@ -195,6 +195,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertEqual(status.label, "Agent working. Composer locked.")
         XCTAssertEqual(status.value as? String, "In progress")
         XCTAssertEqual(composerInput(in: app).value as? String, "Agent working…")
+        // The locked composer already shows the working state; the
+        // transcript does not repeat it.
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-transcript-working"].exists)
         attachScreenshot(named: "fixture-conversation-working", of: app)
 
         // A conversation pushed from a workspace pops back to that workspace,
@@ -1543,6 +1546,17 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(stop.exists)
         XCTAssertFalse(send.exists)
         XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
+        assertComposerCollapsed(input: input, stop: stop)
+
+        // The transcript's tail says the agent is working, with the turn's
+        // running time, above anything still waiting in the queue.
+        let working = app.descendants(matching: .any)["toastty-mobile-transcript-working"]
+        XCTAssertTrue(working.waitForExistence(timeout: 5))
+        XCTAssertEqual(working.label, "Agent working")
+        XCTAssertNotNil(
+            (working.value as? String)?.range(of: #"^\d+m \d{2}s$"#, options: .regularExpression),
+            "Unexpected elapsed time: \(String(describing: working.value))"
+        )
 
         // Typing expands the card: attach, then the Queue chip next to Send.
         // Send replaces Stop while the field is open.
@@ -1563,9 +1577,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(queued.waitForExistence(timeout: 5))
         XCTAssertTrue(queued.label.contains("Also add a UI test"))
         XCTAssertTrue(queued.label.contains("Queued"))
-        // Queueing never locks the composer the way a prompt send does.
+        XCTAssertLessThan(working.frame.maxY, queued.frame.minY)
+        // Queueing never locks the composer the way a prompt send does, but
+        // the send still ends the edit: the keyboard leaves and the card
+        // folds back to the one-line field.
         XCTAssertTrue(input.isEnabled)
         XCTAssertEqual(input.value as? String, "Message Codex…")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(mode.waitForNonExistence(timeout: 5))
+        assertComposerCollapsed(input: input, stop: stop)
+        attachScreenshot(named: "fixture-queue-steer-collapsed-after-send", of: app)
 
         // The chip offers Steer; choosing it changes what Send does and the
         // choice resets to Queue after the send.
@@ -1595,13 +1616,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         app.buttons["toastty-mobile-queued-edit-fixture-queued-3"].tap()
         XCTAssertFalse(second.waitForExistence(timeout: 2))
         XCTAssertEqual(input.value as? String, "Then run the suite")
+        // Edit opens the keyboard again so the text can change right away.
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         send.tap()
         let third = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-4"]
         XCTAssertTrue(third.waitForExistence(timeout: 5))
 
-        // With the field open but empty, Stop is back and Send is gone.
+        // Back to the one-line field: Stop is back and Send is gone.
         XCTAssertTrue(stop.waitForExistence(timeout: 5))
         XCTAssertFalse(send.exists)
+        assertComposerCollapsed(input: input, stop: stop)
 
         // Stop holds the queue; the paused row offers to send it next.
         stop.tap()
@@ -1613,6 +1637,19 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         resume.tap()
         XCTAssertFalse(resume.waitForExistence(timeout: 2))
         XCTAssertTrue(third.label.contains("Queued"))
+    }
+
+    /// The collapsed composer keeps Stop beside the one-line field; the
+    /// expanded card moves it into the button bar under the text.
+    private func assertComposerCollapsed(
+        input: XCUIElement,
+        stop: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(stop.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertGreaterThanOrEqual(stop.frame.minX, input.frame.maxX, file: file, line: line)
+        XCTAssertLessThan(stop.frame.minY, input.frame.maxY, file: file, line: line)
     }
 
     func testGatedSendWithChangingComposerHeightJumpsToLiveEdgeAndFollowsAppendedTail() {
