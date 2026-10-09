@@ -448,7 +448,7 @@
       <ul class="feats">
         <li><b>Every session, live</b><span>Workspaces and subspaces with live status. Rows that need you are tinted green, amber, or red, just like on the Mac.</span></li>
         <li><b>Answer your agents' questions</b><span>When an agent asks you to choose, pick an option or type a custom answer. It lands in the terminal on your Mac as if you were there.</span></li>
-        <li><b>Reply from anywhere</b><span>Send the next prompt with photos and files attached, then watch the tool calls come in.</span></li>
+        <li><b>Reply from anywhere</b><span>Send the next prompt with photos and files attached. While the agent works, queue a follow-up for the next turn, steer a Codex turn, or stop it.</span></li>
         <li><b>Scratchpads and files</b><span>Open the pages, documents, and previews your agents published, and tap a PR chip to read the pull request.</span></li>
         <li><b>Private by design</b><span>Toastty listens only on your Mac, and Tailscale Serve carries the connection over your own tailnet. No Toastty account, no hosted relay.</span></li>
       </ul>
@@ -514,18 +514,30 @@
                     </div>
                   </div>
                   <div class="tr strip" id="strip2" data-at="7.2"><span class="spin" id="strip2-spin"></span><span class="chev" id="strip2-chev"></span><span id="strip2-t">working · 1 tool call</span></div>
-                  <div class="tr at" data-at="8.9">Added <code>fulfillment_status</code> as a nullable column. Backfilling in batches of 5,000 rows…</div>
-                  <div class="tr at" data-at="10.1">Backfill done: 2.1M rows in 3m 12s. The constraint is in place and all 214 tests pass. Want me to open a PR?</div>
-                  <div class="tr ub" data-at="13.45"><span>Open a PR once CI is green</span></div>
-                  <div class="tr strip" data-at="13.9"><span class="spin"></span>working · 1 tool call</div>
+                  <div class="tr at" data-at="8.6">Added <code>fulfillment_status</code> as a nullable column. Backfilling in batches of 5,000 rows…</div>
+                  <div class="tr at" data-at="11.9">Backfill done: 2.1M rows in 3m 12s. The constraint is in place and all 214 tests pass.</div>
+                  <div class="tr ub" data-at="12.4"><span>Then open a PR once CI is green</span></div>
+                  <div class="tr strip" data-at="12.8"><span class="spin"></span>working · 1 tool call</div>
+                  <!-- The working row sits below what reached the agent and above queued messages, as in the app. -->
+                  <div class="tr wrow" id="wrow"><span class="spin"></span><span id="wrow-t">working · 3s</span></div>
+                  <div class="tr qd" data-at="10.75" data-until="12.4"><div><div class="qdh">Queued 1 · sends after this turn</div><div class="qdt">Then open a PR once CI is green</div><div class="qda"><span>Edit</span><span>Remove</span></div></div></div>
                 </div>
-                <div class="comp">
+                <div class="comp" id="comp">
                   <div class="cmeta">claude-opus-5-5 · high reasoning</div>
-                  <div class="crow">
-                    <div class="cfield" id="cfield"><span class="cph" id="cph">Pending request — input paused</span><span class="ctyped" id="ctyped"></span><span class="ccaret" id="ccaret"></span><span class="clip"><svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></span></div>
-                    <span class="csend" id="csend"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></span>
+                  <!-- One line until the field has focus or text; then a card with a button bar under the text. -->
+                  <div class="cbox">
+                    <div class="crow">
+                      <div class="cfield" id="cfield"><span class="cph" id="cph">Pending request — input paused</span><span class="ctyped" id="ctyped"></span><span class="ccaret" id="ccaret"></span><span class="clip"><svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></span></div>
+                      <span class="cstop" id="cstop"><i></i></span>
+                      <span class="csend" id="csend"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></span>
+                    </div>
+                    <div class="cbar">
+                      <span class="clip"><svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></span>
+                      <span class="cstop" id="cstop2"><i></i></span>
+                      <span class="cmode" id="cmode">Queue<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+                      <span class="csend" id="csend2"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg><span class="spin"></span></span>
+                    </div>
                   </div>
-                  <div class="cstatus" id="cstatus"><span class="spin"></span>Agent working…</div>
                 </div>
                 <div class="kbd" id="kbd">
                   <div class="krow"><span>q</span><span>w</span><span>e</span><span>r</span><span>t</span><span>y</span><span>u</span><span>i</span><span>o</span><span>p</span></div>
@@ -577,12 +589,12 @@
       </div>
     </div>
   </div>
-  <div class="example-cap">Example: answer a question from the train, reply, and come back to a PR.</div>
+  <div class="example-cap">Example: answer a question from the train, queue the next step, and come back to a PR.</div>
   <div class="beats mbeats" id="mbeats" aria-label="Mobile video steps">
     <button type="button" class="pp" id="mpp" aria-label="Pause"><svg viewBox="0 0 24 24" id="mpp-ic"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
     <button type="button" class="beat" data-t="0" data-seek="0.6" aria-label="Step 1: Every session at a glance"><span class="bar"><i></i></span><span class="n">01</span><span class="l">Every session at a glance</span></button>
     <button type="button" class="beat" data-t="2.5" data-seek="3.3" aria-label="Step 2: Answer the question your agent asked"><span class="bar"><i></i></span><span class="n">02</span><span class="l">Answer the question your agent asked</span></button>
-    <button type="button" class="beat" data-t="10.9" data-seek="12.2" aria-label="Step 3: Reply from anywhere"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Reply from anywhere</span></button>
+    <button type="button" class="beat" data-t="8.0" data-seek="11.4" aria-label="Step 3: Queue the next step while it works"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Queue the next step while it works</span></button>
     <button type="button" class="beat" data-t="14.3" data-seek="18.5" aria-label="Step 4: Open the PR when a subspace is ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">Open the PR when a subspace is ready</span></button>
   </div>
 </section>

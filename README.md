@@ -113,7 +113,7 @@ The same sidebar, on your iPhone, over your private tailnet.
 
 - **Every session, live:** workspaces and subspaces with the same green, amber, and red tints as on the Mac.
 - **Answer your agents' questions:** pick an option or type a custom answer. It lands in the terminal on your Mac as if you were there.
-- **Reply from anywhere** with photos and files attached, and watch the tool calls come in.
+- **Reply from anywhere** with photos and files attached. While the agent works, queue a follow-up for the next turn, steer a Codex turn, or stop it.
 - **Scratchpads and files:** open the pages, documents, and previews your agents published, and tap a PR chip to read the pull request.
 - **Private by design:** Toastty listens only on your Mac, and Tailscale Serve carries the connection over your own tailnet. No Toastty account, no hosted relay.
 

@@ -30,10 +30,11 @@
     var cstatIc = $('cstat-ic'), cstatT = $('cstat-t'), cstat = cstatT.parentNode;
     var qcard = $('qcard'), qstate = $('qstate'), opt1 = $('opt1'), qstatus = $('qstatus'), qsubmit = $('qsubmit');
     var strip2Spin = $('strip2-spin'), strip2Chev = $('strip2-chev'), strip2T = $('strip2-t');
-    var comp = conv.querySelector('.comp'), cfield = $('cfield'), cph = $('cph'), ctyped = $('ctyped'), csend = $('csend'), cstatus = $('cstatus'), kbd = $('kbd');
+    var comp = $('comp'), cfield = $('cfield'), cph = $('cph'), ctyped = $('ctyped'), csend = $('csend'), cstop = $('cstop'), kbd = $('kbd');
+    var cstop2 = $('cstop2'), cmode = $('cmode'), csend2 = $('csend2'), wrow = $('wrow'), wrowT = $('wrow-t');
     var backb = $('backb'), subPr = $('msub-pr'), touch = $('touch'), fade = $('mfade');
     var beats = Array.prototype.slice.call(document.querySelectorAll('#mbeats .beat'));
-    var REPLY = 'Open a PR once CI is green';
+    var REPLY = 'Then open a PR once CI is green';
 
     function setIcon(el, html) { if (el.__icon !== html) { el.innerHTML = html; el.__icon = html; } }
     function setText(el, s) { if (el.__text !== s) { el.textContent = s; el.__text = s; } }
@@ -52,8 +53,10 @@
     var T = {
       tapRow: 2.5, push: [2.75, 3.1],
       tapOpt: 4.3, tapSubmit: 5.4, sending: [5.45, 6.0], sent: [6.0, 6.8], resolved: 6.8,
-      strip2: [[7.2, 'working · 1 tool call'], [7.9, 'working · 2 tool calls'], [8.6, 'working · 3 tool calls'], [10.0, 'worked · 5 tool calls']],
-      ready: 10.0, tapField: 10.9, kbd: [11.0, 11.3], type: [11.4, 12.7], tapSend: 13.3, sentMsg: 13.45, kbdOut: [13.55, 13.85], working2: 13.9,
+      strip2: [[7.2, 'working · 1 tool call'], [7.9, 'working · 2 tool calls'], [8.6, 'working · 3 tool calls'], [9.8, 'working · 4 tool calls'], [11.9, 'worked · 5 tool calls']],
+      // While the agent works, the reply is queued; it reaches the agent when the turn ends (ready → working2).
+      tapField: 8.0, kbd: [8.1, 8.4], type: [8.5, 9.9], tapSend: 10.4, queueSend: [10.45, 10.75], kbdOut: [10.5, 10.8],
+      ready: 11.9, working2: 12.4,
       tapBack: 14.3, pop: [14.4, 14.75],
       checkoutReady: 15.8, tapCheckout: 16.4, pushSub: [16.55, 16.9], tapPr: 17.8, sheetUp: [17.95, 18.3],
       fadeOut: 20.2
@@ -63,12 +66,12 @@
       [T.tapOpt, function () { var b = offsetIn(opt1); return { x: b.x + 9, y: b.y + 13 }; }],
       [T.tapSubmit, function () { return center(qsubmit); }],
       [T.tapField, function () { var b = offsetIn(cfield); return { x: b.x + 120, y: b.y + b.h / 2 }; }],
-      [T.tapSend, function () { return center(csend); }],
+      [T.tapSend, function () { return center(csend2); }],
       [T.tapBack, function () { return center(backb); }],
       [T.tapCheckout, function () { var b = offsetIn(rowCheckout); return { x: b.x + 110, y: b.y + b.h / 2 }; }],
       [T.tapPr, function () { return center(subPr); }]
     ];
-    var MIGRATE_S = [[0, 'Needs approval: run migration'], [T.resolved, 'Backfilling orders in batches…'], [T.ready, 'Backfill done. Want me to open a PR?'], [T.working2, 'Opening a pull request…']];
+    var MIGRATE_S = [[0, 'Needs approval: run migration'], [T.resolved, 'Backfilling orders in batches…'], [T.ready, 'Backfill done. All 214 tests pass.'], [T.working2, 'Opening a pull request…']];
     var CHECKOUT_S = [[0, 'Capturing screenshots…'], [11.0, 'Writing verification report…'], [14.6, 'Opening PR…'], [T.checkoutReady, 'Ready for review']];
 
     function render() {
@@ -94,7 +97,7 @@
       sheet.style.transform = 'translateY(' + (SH * (1 - sp)) + 'px)';
 
       // Home: the migration session moves through approval, working, ready, and working again.
-      var mstate = t < T.resolved ? 'approval' : t < T.ready ? 'working' : t < T.sentMsg ? 'ready' : 'working';
+      var mstate = t < T.resolved ? 'approval' : t < T.ready ? 'working' : t < T.working2 ? 'ready' : 'working';
       rowMigrate.className = 'mrow ' + mstate;
       migrateBadge.style.display = mstate === 'approval' ? '' : 'none';
       setIcon(migrateIc, mstate === 'approval' ? '<i class="mk dot appr"></i>' : mstate === 'ready' ? '<i class="mk dot ready"></i>' : '<span class="spin"></span>');
@@ -112,7 +115,7 @@
       tally.classList.toggle('show', cready);
 
       // Conversation header status
-      var hstate = t < T.resolved ? 'approval' : t < T.ready ? 'working' : t < T.sentMsg ? 'ready' : 'working';
+      var hstate = mstate;
       cstat.className = 'cstat ' + hstate;
       setIcon(cstatIc, hstate === 'working' ? '<span class="spin"></span>' : '');
       cstatIc.className = hstate === 'working' ? 'spin' : '';
@@ -136,16 +139,35 @@
       strip2Spin.style.display = s2live ? '' : 'none';
       strip2Chev.style.display = s2live ? 'none' : '';
 
-      // Composer: locked while the question is pending or the agent works, then the reply is typed and sent.
-      var typed = t < T.type[0] ? '' : t < T.sentMsg ? REPLY.slice(0, Math.round(Math.max(0, Math.min(1, (t - T.type[0]) / (T.type[1] - T.type[0]))) * REPLY.length)) : '';
+      // Working row at the transcript tail; the turn time runs at the same pace as the Home row.
+      var working = hstate === 'working';
+      wrow.classList.toggle('show', working);
+      if (working) {
+        var secs = Math.round((t - (t < T.ready ? T.resolved : T.working2)) * 9 + 3);
+        setText(wrowT, 'working · ' + (secs < 60 ? secs + 's' : mmss(secs)));
+      }
+
+      // Composer: locked while the question is pending. Once the agent works, input stays open: the
+      // one-line field shows Stop, focus expands it into a card, and text swaps Stop for Queue + Send.
+      var sendingNow = t >= T.queueSend[0] && t < T.queueSend[1];
+      var typed = t < T.type[0] || t >= T.queueSend[1] ? '' : REPLY.slice(0, Math.round(Math.max(0, Math.min(1, (t - T.type[0]) / (T.type[1] - T.type[0]))) * REPLY.length));
       setText(ctyped, typed);
-      var focused = t >= T.tapField && t < T.sentMsg + 0.1;
+      var focused = t >= T.tapField && t < T.queueSend[0];
+      var open = hstate !== 'approval';
+      var expanded = open && (focused || typed.length > 0);
+      comp.classList.toggle('exp', expanded);
       cfield.classList.toggle('focus', focused);
-      var cph_s = hstate === 'approval' ? 'Pending request — input paused' : hstate === 'working' ? 'Agent working…' : 'Message Claude Code…';
-      setText(cph, typed ? '' : cph_s);
-      csend.classList.toggle('on', typed.length > 0);
-      csend.classList.toggle('press', t >= T.tapSend && t < T.tapSend + 0.18);
-      cstatus.classList.toggle('show', hstate === 'working');
+      comp.classList.toggle('focus', focused);
+      setText(cph, typed ? '' : open ? 'Message Claude Code…' : 'Pending request — input paused');
+      cstop.classList.toggle('show', working);
+      csend.classList.toggle('hide', working);
+      var hasContent = typed.length > 0;
+      cstop2.classList.toggle('show', working && !hasContent && !sendingNow);
+      cmode.classList.toggle('show', working && (hasContent || sendingNow));
+      csend2.classList.toggle('show', !working || hasContent || sendingNow);
+      csend2.classList.toggle('on', hasContent && !sendingNow);
+      csend2.classList.toggle('busy', sendingNow);
+      csend2.classList.toggle('press', t >= T.tapSend && t < T.tapSend + 0.18);
       var k = seg(T.kbd[0], T.kbd[1]) - seg(T.kbdOut[0], T.kbdOut[1]);
       kbd.style.height = (248 * k) + 'px';
       // The composer clears the home indicator until the keyboard, which has its own bottom inset, takes over.
@@ -156,7 +178,9 @@
       for (var i = 0; i < TAPS.length; i++) {
         var dt = t - TAPS[i][0];
         if (dt >= 0 && dt < 0.45) {
+          // A target can hide mid-pulse (Send folds away); keep the pulse where it was last seen.
           var p = TAPS[i][1]();
+          if (p.x || p.y) TAPS[i].last = p; else p = TAPS[i].last || p;
           touch.style.transform = 'translate(' + p.x + 'px,' + p.y + 'px) scale(' + (0.55 + dt) + ')';
           touch.style.opacity = Math.max(0, 1 - dt / 0.45);
         }

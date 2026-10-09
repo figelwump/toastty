@@ -525,8 +525,10 @@ a { color: inherit; }
 .nextb svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .nextn { font: 700 15px var(--sans); color: #46A57E; flex: none; padding-right: 6px; }
 .ctx { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 16px 10px; overflow: hidden; }
-.tr { opacity: 0; max-height: 0; overflow: hidden; transform: translateY(8px); transition: opacity 0.3s, transform 0.3s, max-height 0.35s ease; flex: none; }
+.tr { opacity: 0; max-height: 0; overflow: hidden; transform: translateY(8px); transition: opacity 0.3s, transform 0.3s, max-height 0.35s ease, padding 0.35s ease, margin 0.35s ease; flex: none; }
 .tr.show, .tr.always { opacity: 1; max-height: 520px; transform: none; }
+/* Hidden rows also drop their padding, so rows that have not arrived yet leave no gap at the live edge. */
+.tr:not(.show):not(.always) { padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; border-width: 0; }
 .ub { display: flex; justify-content: flex-end; padding: 6px 0; }
 .ub span { max-width: 86%; background: #402F15; border: 1px solid #5A3E1B; color: #F0E8D8; border-radius: 14px 14px 5px 14px; padding: 10px 14px; font: 16px/1.35 var(--sans); }
 .strip { display: inline-flex; align-self: flex-start; align-items: center; gap: 8px; font: 11px var(--mono); color: #928D85; background: rgba(255,255,255,0.055); border: 1px solid rgba(255,255,255,0.11); border-radius: 8px; padding: 8px 11px; margin: 6px 0; }
@@ -581,9 +583,35 @@ a { color: inherit; }
 .csend.on { opacity: 1; }
 .csend.press { filter: brightness(0.85); }
 .csend svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
-.cstatus { display: none; align-items: center; gap: 8px; margin-top: 8px; font: 12px var(--mono); color: #928D85; }
-.cstatus.show { display: flex; }
-.cstatus .spin { width: 10px; height: 10px; }
+/* Expanded composer: the field and a button bar share one card while the field has focus or text. */
+.cbox { border: 1px solid transparent; border-radius: 14px; }
+.comp.exp .cbox { background: #1C1917; border-color: #2C2722; padding: 8px; }
+.comp.exp.focus .cbox { border-color: rgba(232,147,12,0.55); }
+.comp.exp .cfield { background: transparent; border-color: transparent; padding-right: 12px; }
+.comp.exp .cfield .clip, .comp.exp .crow .csend, .comp.exp .crow .cstop { display: none; }
+.cbar { display: none; align-items: center; gap: 8px; margin-top: 8px; }
+.comp.exp .cbar { display: flex; }
+.cbar .clip { position: static; margin-right: auto; }
+.cstop { display: none; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 10px; background: #1C1917; border: 1px solid #2C2722; }
+.cstop i { width: 11px; height: 11px; border-radius: 2px; background: #E8E6E1; }
+.cstop.show { display: grid; }
+.crow .csend.hide { display: none; }
+.cbar .cstop, .cbar .csend { width: 38px; height: 38px; display: none; }
+.cbar .cstop.show, .cbar .csend.show { display: grid; }
+.csend .spin { display: none; width: 11px; height: 11px; border-color: #161006; border-right-color: transparent; }
+.csend.busy svg { display: none; }
+.csend.busy .spin { display: inline-block; }
+.cmode { display: none; align-items: center; gap: 4px; height: 30px; padding: 0 10px; border-radius: 15px; background: rgba(255,255,255,0.07); font: 500 12.5px var(--sans); color: #B8B4AC; }
+.cmode.show { display: inline-flex; }
+.cmode svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+/* Transcript tail while the agent works: the working row, then dashed queued messages. */
+.wrow { display: flex; align-items: center; gap: 8px; font: 11px var(--mono); color: #928D85; padding: 8px 0 6px; }
+.wrow .spin { width: 9px; height: 9px; }
+.qd { display: flex; justify-content: flex-end; padding: 6px 0; }
+.qd > div { margin-left: 48px; border: 1px dashed #6E4C1F; border-radius: 14px 14px 5px 14px; padding: 12px; text-align: right; }
+.qdh { font: 600 10.5px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: #E8B46A; }
+.qdt { font: 16px/1.35 var(--sans); color: #B8B4AC; margin-top: 7px; }
+.qda { display: flex; justify-content: flex-end; gap: 16px; margin-top: 9px; font: 600 12px var(--sans); color: #928D85; }
 .kbd { flex: none; height: 0; overflow: hidden; background: #2A2724; padding: 0 3px; }
 .kbd .krow { display: flex; justify-content: center; gap: 6px; margin-top: 10px; }
 .kbd .krow:first-child { margin-top: 10px; }
