@@ -44,7 +44,7 @@ struct WorkspaceTaskHooksTests {
 
     private static let hooks = WorkspaceTaskHooks(
         finishSkill: "worktree-done",
-        cleanup: WorkspaceTaskHooks.CleanupScript(
+        cleanup: WorkspaceTaskHooks.ScriptHook(
             skill: "worktree-cleanup",
             script: "scripts/worktree-status.py",
             arguments: ["--cleanup-workspace"]
@@ -74,10 +74,16 @@ struct WorkspaceTaskHooksTests {
         // A hand-edited layout file keeps what is valid and drops the rest.
         let sanitized = WorkspaceTaskHooks(
             finishSkill: "../escape",
-            cleanup: WorkspaceTaskHooks.CleanupScript(skill: "ok", script: "run.sh")
+            cleanup: WorkspaceTaskHooks.ScriptHook(skill: "ok", script: "run.sh")
         ).sanitized
         #expect(sanitized.finishSkill == nil)
         #expect(sanitized.cleanup?.skill == "ok")
+
+        let closeOnly = WorkspaceTaskHooks(close: WorkspaceTaskHooks.ScriptHook(skill: "worktree-cleanup", script: "scripts/x.py"))
+        #expect(closeOnly.isEmpty == false)
+        #expect(closeOnly.script(.close)?.script == "scripts/x.py")
+        #expect(closeOnly.script(.cleanup) == nil)
+        #expect(WorkspaceTaskHooks(close: WorkspaceTaskHooks.ScriptHook(skill: "x", script: "/abs")).sanitized.isEmpty)
     }
 
     @Test
@@ -123,6 +129,62 @@ struct WorkspaceTaskHooksTests {
 
         #expect(AppReducer.reduce(action: .closeWorkspace(workspaceID: ids[0]), state: &fixture.state))
         #expect(fixture.state.workspacesByID[ids[2]]?.taskHooks.isEmpty == true)
+    }
+
+    /// open → review → done, and back: review and done belong to subspaces,
+    /// open clears both marks, and the marks survive a layout round trip.
+    @Test
+    func taskStageMovesThroughReviewAndDoneAndBack() throws {
+        var fixture = Fixture()
+        let ids = fixture.workspaceIDs
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let t1 = Date(timeIntervalSince1970: 2_000)
+
+        // A top-level workspace is always open.
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[0], stage: .review, at: t0), state: &fixture.state) == false)
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[0], stage: .done, at: t0), state: &fixture.state) == false)
+        #expect(fixture.state.workspacesByID[ids[0]]?.taskStage == .open)
+
+        let didNest = fixture.nest(1, under: 0)
+        #expect(didNest)
+        #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .open)
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .open, at: t0), state: &fixture.state) == false, "already open")
+
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .review, at: t0), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .review)
+        #expect(fixture.state.workspacesByID[ids[1]]?.reviewReadyAt == t0)
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .review, at: t1), state: &fixture.state) == false, "review keeps its first time")
+
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .done, at: t1), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .done)
+        #expect(fixture.state.workspacesByID[ids[1]]?.doneAt == t1)
+
+        let encoded = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: fixture.state))
+        let restored = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: encoded).makeAppState()
+        #expect(restored.workspacesByID[ids[1]]?.taskStage == .done)
+        #expect(restored.workspacesByID[ids[1]]?.reviewReadyAt == t0)
+
+        // Back to review drops the done mark; the set-done form still works
+        // on top of a review mark.
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .review, at: t1), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .review)
+        #expect(fixture.state.workspacesByID[ids[1]]?.doneAt == nil)
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[1], doneAt: t1), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .done)
+
+        // Reopen clears both marks at once.
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .open, at: t1), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .open)
+        #expect(fixture.state.workspacesByID[ids[1]]?.reviewReadyAt == nil)
+        #expect(fixture.state.workspacesByID[ids[1]]?.doneAt == nil)
+
+        // Leaving the parent drops the stage with the hooks.
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .review, at: t1), state: &fixture.state))
+        #expect(AppReducer.reduce(
+            action: .setWorkspaceParent(workspaceID: ids[1], parentWorkspaceID: nil, spawningSessionID: nil),
+            state: &fixture.state
+        ))
+        #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .open)
     }
 
     @Test

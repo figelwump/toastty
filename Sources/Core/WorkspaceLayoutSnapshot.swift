@@ -173,6 +173,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var parentWorkspaceID: UUID?
     public var spawningSessionID: String?
     public var doneAt: Date?
+    public var reviewReadyAt: Date?
     public var taskHooks: WorkspaceTaskHooks
 
     public init(
@@ -188,6 +189,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         spawningSessionID: String? = nil,
         primaryAnnotationKey: String? = nil,
         doneAt: Date? = nil,
+        reviewReadyAt: Date? = nil,
         taskHooks: WorkspaceTaskHooks = WorkspaceTaskHooks()
     ) {
         self.id = id
@@ -205,6 +207,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         self.parentWorkspaceID = parentWorkspaceID
         self.spawningSessionID = spawningSessionID
         self.doneAt = doneAt
+        self.reviewReadyAt = reviewReadyAt
         self.taskHooks = taskHooks.sanitized
         normalizeSidebarSessionPanelOrder()
     }
@@ -224,6 +227,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         parentWorkspaceID = workspace.parentWorkspaceID
         spawningSessionID = workspace.spawningSessionID
         doneAt = workspace.doneAt
+        reviewReadyAt = workspace.reviewReadyAt
         taskHooks = workspace.taskHooks
         normalizeSidebarSessionPanelOrder()
     }
@@ -281,6 +285,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             spawningSessionID: spawningSessionID,
             primaryAnnotationKey: primaryAnnotationKey,
             doneAt: doneAt,
+            reviewReadyAt: reviewReadyAt,
             taskHooks: taskHooks
         )
     }
@@ -300,6 +305,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case parentWorkspaceID
         case spawningSessionID
         case doneAt
+        case reviewReadyAt
         case taskHooks
         case layoutTree
         case panels
@@ -349,6 +355,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         parentWorkspaceID = (try? container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)) ?? nil
         spawningSessionID = (try? container.decodeIfPresent(String.self, forKey: .spawningSessionID)) ?? nil
         doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
+        reviewReadyAt = (try? container.decodeIfPresent(Date.self, forKey: .reviewReadyAt)) ?? nil
         taskHooks = ((try? container.decodeIfPresent(WorkspaceTaskHooks.self, forKey: .taskHooks)) ?? nil)?.sanitized
             ?? WorkspaceTaskHooks()
         normalizeSidebarSessionPanelOrder()
@@ -368,6 +375,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
+        try container.encodeIfPresent(reviewReadyAt, forKey: .reviewReadyAt)
         if taskHooks.isEmpty == false {
             try container.encode(taskHooks, forKey: .taskHooks)
         }

@@ -674,6 +674,7 @@ enum CLICommand: Equatable {
         "workspace.task.finish",
         "workspace.task.cleanup",
         "workspace.task.cleanup-finished",
+        "workspace.task.close",
     ]
 
     var socketTimeoutInterval: TimeInterval {

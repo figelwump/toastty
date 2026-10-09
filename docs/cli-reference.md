@@ -354,24 +354,39 @@ it as `done`.
 "$TOASTTY_CLI_PATH" action run workspace.set-done
 ```
 
-`workspace.task.set-hooks` records how a subspace's task is finished and
-cleaned up, which its sidebar row shows as a **Finish Task** button until the
-task is done and a **Clean Up** button after. `finishSkill` names a skill the
-task's agent runs; `cleanupSkill`, `cleanupScript`, and repeatable `cleanupArgs`
-name a script inside an installed user skill that runs without an agent, in
-the task's directory, with `TOASTTY_CLI_PATH` and `TOASTTY_WORKSPACE_ID` set.
-The script exits 0 when it cleaned up, 3 when it changed nothing (its last
-output line says why), and anything else on failure. With no parameters the
-action clears the hooks; with no `workspaceID` a managed agent's call targets
-its own workspace. Only subspaces hold hooks, and moving one to top level
-drops them. `workspace.list` and `workspace.snapshot` report them as
-`taskHooks`.
+`workspace.set-task-stage` moves a subspace's task to `open`, `review`, or
+`done`. `review` means the work is ready for the user to review and test; the
+workspace header and the subspace row then offer **Finish Task**. `done`
+offers **Clean Up**. With no `workspaceID` a managed agent's call targets its
+own workspace; a top-level workspace is always `open`. An agent in the
+workspace starting new work moves it back to `open`. `workspace.set-done` and
+`workspace.clear-done` are the `done` and `open` forms. `workspace.list` and
+`workspace.snapshot` report it as `taskStage`.
+
+```bash
+"$TOASTTY_CLI_PATH" action run workspace.set-task-stage stage=review
+```
+
+`workspace.task.set-hooks` records how a subspace's task is finished, cleaned
+up, and closed. `finishSkill` names a skill the task's agent runs when the
+user clicks Finish Task; `cleanupSkill`, `cleanupScript`, and repeatable
+`cleanupArgs` name a script inside an installed user skill that Clean Up runs
+without an agent; `closeSkill`, `closeScript`, and `closeArgs` name the script
+Close Task runs to abandon the task. A script runs in the task's directory
+with `TOASTTY_CLI_PATH` and `TOASTTY_WORKSPACE_ID` set, and exits 0 when it
+changed the task, 3 when it changed nothing (its last output line says why),
+and anything else on failure. With no parameters the action clears the hooks;
+with no `workspaceID` a managed agent's call targets its own workspace. Only
+subspaces hold hooks, and moving one to top level drops them. `workspace.list`
+and `workspace.snapshot` report them as `taskHooks`.
 
 ```bash
 "$TOASTTY_CLI_PATH" action run workspace.task.set-hooks --workspace "$WORKSPACE_ID" \
   finishSkill=worktree-done \
   cleanupSkill=worktree-cleanup cleanupScript=scripts/worktree-status.py \
-  cleanupArgs=--cleanup-workspace
+  cleanupArgs=--cleanup-workspace \
+  closeSkill=worktree-cleanup closeScript=scripts/worktree-status.py \
+  closeArgs=--close-workspace
 ```
 
 `workspace.task.finish` runs the finish hook as the button does: it sends the
@@ -382,8 +397,10 @@ with it, and returns the `sessionID` and `panelID` that received it.
 session inside the workspace being cleaned may not call it.
 `workspace.task.cleanup-finished` runs the script of every done subspace with
 a cleanup hook under a workspace, one at a time, and returns one result each.
-The CLI waits up to 30 minutes for these three actions, instead of its usual
-10 seconds, because each cleanup script may run for up to 5 minutes.
+`workspace.task.close` runs the close script the way `workspace.task.cleanup`
+runs the cleanup script, returning `closed`, `skipped`, or `failed`. The CLI
+waits up to 30 minutes for these four actions, instead of its usual 10
+seconds, because each script may run for up to 5 minutes.
 
 `workspace.select` accepts a `workspaceID` selector or a 1-based `index`
 argument. The index counts every workspace in the window's order, including
@@ -500,10 +517,12 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `workspace.set-parent`
 - `workspace.set-done`
 - `workspace.clear-done`
+- `workspace.set-task-stage`
 - `workspace.task.set-hooks`
 - `workspace.task.finish`
 - `workspace.task.cleanup`
 - `workspace.task.cleanup-finished`
+- `workspace.task.close`
 - `workspace.close`
 - `workspace.tab.create`
 - `workspace.tab.select`

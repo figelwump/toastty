@@ -59,15 +59,6 @@ enum ToastyTheme {
     static let sidebarSubspaceDoneMarkBackground = Color(hex: 0x7CC47F, alpha: 0.2)
     /// A done subspace's title recedes next to open work.
     static let sidebarSubspaceDoneTitleText = Color(hex: 0x9A9189)
-    /// The subspace row's Finish Task button: a quiet violet, so it reads as
-    /// an action without competing with the status tints.
-    static let sidebarTaskFinishText = Color(hex: 0xE4D8FF)
-    static let sidebarTaskFinishBackground = Color(hex: 0x3A2F52)
-    static let sidebarTaskFinishBorder = Color(hex: 0x6C55A0)
-    /// The Clean Up button once the task is done.
-    static let sidebarTaskCleanupText = Color(hex: 0xD6E2FF)
-    static let sidebarTaskCleanupBackground = Color(hex: 0x263450)
-    static let sidebarTaskCleanupBorder = Color(hex: 0x3F5A8C)
     static let sidebarSessionRailApprovalHalo = Color(hex: 0xE8A635, alpha: 0.22)
     static let hoverTipBackground = Color(hex: 0x26231F)
     static let hoverTipBorder = Color(hex: 0x4E4841)
@@ -192,6 +183,14 @@ enum ToastyTheme {
     static let fontWorkspaceName = Font.system(size: sidebarWorkspaceNameFontSize, weight: .semibold, design: .default)
     static let fontWorkspaceNameInactive = Font.system(size: sidebarWorkspaceNameFontSize, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)
+    /// The task control in the top bar's subtitle slot and on a hovered
+    /// subspace row. 16pt is what fits between the title and the bar's
+    /// bottom hairline.
+    static let fontWorkspaceTaskButton = Font.system(size: 10, weight: .semibold, design: .rounded)
+    static let fontWorkspaceTaskProgress = Font.system(size: 10, weight: .medium, design: .rounded)
+    static let workspaceTaskControlHeight: CGFloat = 16
+    static let workspaceTaskControlHorizontalPadding: CGFloat = 6
+    static let workspaceTaskControlCornerRadius: CGFloat = 4
     static let fontWorkspaceSessionAgent = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontWorkspaceSessionChip = Font.system(size: 10, weight: .medium, design: .default)
     static let fontWorkspaceSessionDetail = Font.system(size: 11, weight: .regular, design: .default)

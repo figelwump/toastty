@@ -2239,6 +2239,104 @@ final class WorkspaceViewTests: XCTestCase {
         try assertColor(borderColor, equals: ToastyTheme.subtleBorder)
     }
 
+    /// The top-bar task control is a real button: Finish Task runs the
+    /// finish hook, the arrow menu beside it holds the stage moves and
+    /// Close Task, and the tooltip names the skill.
+    @MainActor
+    func testWorkspaceHeaderTaskControlRunsItsButtonAndNamesTheHook() throws {
+        var runs = 0
+        let hook = WorkspaceTaskHooks.ScriptHook(skill: "worktree-cleanup", script: "scripts/worktree-status.py", arguments: ["--close-workspace"])
+        let control = WorkspaceHeaderTaskControl(
+            button: .finish(skill: "worktree-done"),
+            stageActions: SidebarSubspacePresentation.stageActions(for: .review),
+            closeHook: hook,
+            runButton: { runs += 1 }
+        )
+        let hostingView = NSHostingView(rootView: control.frame(width: 240, height: 24))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 24),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        pumpMainRunLoop(duration: 0.2)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let button = try XCTUnwrap(
+            accessibilityElement(withIdentifier: "topbar.workspace.task", in: hostingView),
+            "no task button: \(accessibilityIdentifiers(in: hostingView))"
+        )
+        XCTAssertEqual(accessibilityString("accessibilityLabel", of: button), "Finish Task")
+        XCTAssertEqual(accessibilityString("accessibilityHelp", of: button), WorkspaceTaskHookPresentation.finishHelp(skill: "worktree-done"))
+        XCTAssertNotNil(accessibilityElement(withIdentifier: "topbar.workspace.task.options", in: hostingView))
+        let press = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(button.responds(to: press), "the task button is pressable")
+        _ = button.perform(press)
+        pumpMainRunLoop(duration: 0.1)
+        XCTAssertEqual(runs, 1)
+
+        // A stopped script shows its state in the same slot.
+        hostingView.rootView = WorkspaceHeaderTaskControl(
+            button: .skipped(.cleanup, detail: "PR #130 has not merged"),
+            stageActions: SidebarSubspacePresentation.stageActions(for: .done),
+            closeHook: hook
+        ).frame(width: 240, height: 24)
+        pumpMainRunLoop(duration: 0.2)
+        hostingView.layoutSubtreeIfNeeded()
+        XCTAssertNil(accessibilityElement(withIdentifier: "topbar.workspace.task", in: hostingView))
+        let stopped = try XCTUnwrap(accessibilityElement(withIdentifier: "topbar.workspace.task.stopped", in: hostingView))
+        XCTAssertEqual(accessibilityString("accessibilityHelp", of: stopped), "PR #130 has not merged")
+    }
+
+    /// SwiftUI's accessibility nodes answer the Objective-C selectors but
+    /// do not always bridge to `NSAccessibilityProtocol`, so the walk uses
+    /// the selectors, as the sidebar tests do.
+    private func accessibilityElement(withIdentifier identifier: String, in view: NSView) -> AnyObject? {
+        accessibilityElements(in: view).first { accessibilityString("accessibilityIdentifier", of: $0) == identifier }
+    }
+
+    private func accessibilityIdentifiers(in view: NSView) -> [String] {
+        accessibilityElements(in: view).compactMap { accessibilityString("accessibilityIdentifier", of: $0) }
+    }
+
+    private func accessibilityString(_ selectorName: String, of object: AnyObject) -> String? {
+        let selector = NSSelectorFromString(selectorName)
+        guard object.responds(to: selector),
+              let result = object.perform(selector)?.takeUnretainedValue() as? String,
+              result.isEmpty == false else {
+            return nil
+        }
+        return result
+    }
+
+    private func accessibilityElements(in view: NSView) -> [AnyObject] {
+        var visited: Set<ObjectIdentifier> = []
+        var elements: [AnyObject] = []
+        func walk(_ object: AnyObject) {
+            guard visited.insert(ObjectIdentifier(object)).inserted else { return }
+            elements.append(object)
+            var children: [AnyObject] = []
+            for selectorName in ["accessibilityChildrenInNavigationOrder", "accessibilityChildren"] {
+                let selector = NSSelectorFromString(selectorName)
+                guard object.responds(to: selector),
+                      let result = object.perform(selector)?.takeUnretainedValue() as? [AnyObject],
+                      result.isEmpty == false else {
+                    continue
+                }
+                children = result
+                break
+            }
+            for child in NSAccessibility.unignoredChildren(from: children) {
+                walk(child as AnyObject)
+            }
+        }
+        walk((NSAccessibility.unignoredDescendant(of: view) as AnyObject?) ?? view)
+        return elements
+    }
+
     func testWorkspaceTabUnreadDotUsesLargerDiameter() {
         XCTAssertEqual(ToastyTheme.workspaceTabUnreadDotDiameter, 7)
     }

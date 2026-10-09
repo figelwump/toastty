@@ -706,7 +706,30 @@ struct WorkspaceView: View {
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        if let unreadText {
+        if workspace.parentWorkspaceID != nil,
+           let button = SidebarSubspacePresentation.taskButton(
+            stage: workspace.taskStage,
+            hooks: workspace.taskHooks,
+            run: sessionRuntimeStore.workspaceTaskScriptRuns[workspace.id]
+           ) {
+            // A task subspace gives the whole slot to its task control; the
+            // sidebar and tab dots still show unreads.
+            WorkspaceHeaderTaskControl(
+                button: button,
+                stageActions: SidebarSubspacePresentation.stageActions(for: workspace.taskStage),
+                closeHook: workspace.taskHooks.close,
+                runButton: { runWorkspaceTaskButton(button, workspace: workspace) },
+                setStage: { stage in
+                    _ = store.send(
+                        .setWorkspaceTaskStage(workspaceID: workspace.id, stage: stage, at: Date()),
+                        source: .ui("topbar_task_set_stage")
+                    )
+                },
+                close: { requestWorkspaceTaskScript(.close, workspace: workspace) },
+                retry: { kind in requestWorkspaceTaskScript(kind, workspace: workspace) },
+                dismiss: { sessionRuntimeStore.workspaceTaskHookRunner?.dismissScriptResult(workspaceID: workspace.id) }
+            )
+        } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show
             // one summary, never both, so the title column never overflows.
             WorkspaceHeaderSubtitleText(text: unreadText)
@@ -726,6 +749,39 @@ struct WorkspaceView: View {
                     .frame(width: 0, height: 0)
                     .accessibilityHidden(true)
             }
+        }
+    }
+
+    private func runWorkspaceTaskButton(_ button: SidebarSubspacePresentation.TaskButton, workspace: WorkspaceState) {
+        switch button {
+        case .finish:
+            guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else { return }
+            Task { @MainActor in
+                if case .failure(let problem) = await runner.finish(workspaceID: workspace.id) {
+                    WorkspaceTaskHookPrompts.presentAlert(
+                        "Unable to Finish \(workspace.title)",
+                        WorkspaceTaskHookRunner.message(for: problem)
+                    )
+                }
+            }
+        case .cleanUp:
+            requestWorkspaceTaskScript(.cleanup, workspace: workspace)
+        case .running, .skipped, .failed:
+            break
+        }
+    }
+
+    private func requestWorkspaceTaskScript(_ kind: WorkspaceTaskHooks.ScriptKind, workspace: WorkspaceState) {
+        guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else { return }
+        let confirmation = WorkspaceTaskHookPresentation.confirmation(kind, taskTitle: workspace.title)
+        guard WorkspaceTaskHookPrompts.confirm(confirmation.title, confirmation.message, confirmation.button) else {
+            return
+        }
+        if case .failure(let problem) = runner.runScript(kind, workspaceID: workspace.id) {
+            WorkspaceTaskHookPrompts.presentAlert(
+                "Unable to \(WorkspaceTaskHookPresentation.title(kind)) \(workspace.title)",
+                WorkspaceTaskHookRunner.message(for: problem)
+            )
         }
     }
 

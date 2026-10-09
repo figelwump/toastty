@@ -545,50 +545,69 @@ and marks the workspace done with `workspace.set-done`, which shows as a check
 on its subspace row. New work in the workspace clears the check; new commits
 need the user's review and a new `worktree-done` request.
 
-### Finishing and cleaning up a task
+### Task stages, Finish Task, Clean Up, and Close Task
 
-Whoever creates a task space chooses how it is finished and how it is cleaned
-up, and Toastty shows a button for each. `worktree-create` sets both hooks
+A subspace's task is in one of three stages: **open** (being worked on),
+**ready for review** (the agent published its work for your testing), or
+**done** (accepted). Agents move it with `workspace.set-task-stage`; the task
+workflow has the task session set `review` when its PR is ready, and
+`worktree-done` sets `done`. You can move it from the subspace row's context
+menu (Mark Ready for Review, Mark Done, Reopen Task) or the arrow beside the
+header button. Toastty moves a task back to open when an agent in it starts
+new work, so you review each new version before finishing it. The stage shows
+on the row: "ready for review" in the summary, a check in the rail once done,
+and `taskStage` in `workspace.list` and `workspace.snapshot`.
+
+Whoever creates a task space chooses how it is finished, cleaned up, and
+closed, and Toastty shows a button for each. `worktree-create` sets the hooks
 through `workspace.task.set-hooks`; another workflow can set its own. Toastty
 knows nothing about git or GitHub: the finish hook names a skill, the cleanup
-hook names a script inside an installed user skill, and Toastty runs them.
+and close hooks name a script inside an installed user skill, and Toastty runs
+them.
 
-The workspace's done mark is the switch. A subspace row shows **Finish Task**
-until its task is done, and **Clean Up** once it is. A missing hook hides its
-button. The row's context menu offers the same actions.
+The workspace header shows the task's button under the title, in the slot the
+Merge button used, and the subspace row shows the same button while the
+pointer is on it. Its tooltip names what a click runs.
 
-- **Finish Task** sends the finish skill to the task's most recently active
-  agent session, in that agent's own syntax (`/worktree-done` for Claude,
-  `$worktree-done` for Codex), with a note that the user clicked the button.
-  The click is the user's acceptance of the version in the worktree, which is
-  what `worktree-done` needs; the agent queues the prompt if it is busy. If
+- **Finish Task** appears once the task is ready for review. It sends the
+  finish skill to the task's most recently active agent session, in that
+  agent's own syntax (`/toastty-user:worktree-done` for Claude,
+  `$toastty-user:worktree-done` for Codex), with a note that you clicked the
+  button. The click is your acceptance of the version in the worktree, which
+  is what `worktree-done` needs; the agent queues the prompt if it is busy. If
   the task has no agent session, Toastty launches one with the prompt, using
-  the profile of the task's last agent. The skill then marks the workspace
-  done, and the row switches to Clean Up.
-- **Clean Up** runs the cleanup script without an agent, after a confirmation.
-  Toastty resolves `~/.toastty/skills/<skill>/<script>` each time, so a saved
-  hook keeps working after the skill is updated, and only scripts inside
-  installed skills can run. The script runs in the task's directory with
-  `TOASTTY_CLI_PATH` and `TOASTTY_WORKSPACE_ID` set and no session identity.
-  It decides whether cleanup is safe and closes the workspace itself:
-  `worktree-cleanup`'s script refuses, for example, while the pull request has
-  not merged or the worktree has uncommitted changes. Exit 0 means cleaned, exit
-  3 means skipped, and anything else failed; the last line the script printed is
-  the reason. A skipped or failed run stays on the row as **Skipped** or
-  **Cleanup Failed**, with the reason in its tooltip and **Retry Clean Up…** and
-  **Dismiss** in the context menu. A cleaned task's workspace is gone, so there
-  is nothing left to show.
-- The **Subspaces** header shows a clean-up icon with a count while any finished
+  the profile of the task's last agent. The skill then marks the task done.
+  The arrow menu offers **Mark Done** without running the skill, and
+  **Close Task…**.
+- **Clean Up** appears once the task is done, after a confirmation. Toastty
+  resolves `~/.toastty/skills/<skill>/<script>` each time, so a saved hook
+  keeps working after the skill is updated; the skill must be an accepted
+  user skill and the script a regular file inside it. The script runs in the
+  task's directory with `TOASTTY_CLI_PATH` and `TOASTTY_WORKSPACE_ID` set and
+  no session identity. It decides whether cleanup is safe and closes the
+  workspace itself: `worktree-cleanup`'s script refuses, for example, while
+  the pull request has not merged or the worktree has uncommitted changes.
+  Exit 0 means it cleaned up, exit 3 means it skipped, and anything else
+  failed; the last line the script printed is the reason. A skipped or failed
+  run stays on the row as **Skipped** or **Cleanup Failed** with the reason in
+  its tooltip and **Retry** and **Dismiss** in its menu. The arrow menu offers
+  **Reopen Task** and **Close Task…**.
+- **Close Task…** abandons a task from any stage. It runs the close script the
+  same way: `worktree-cleanup`'s script closes an open pull request on GitHub,
+  then with cleanup's guards closes the workspace, removes the worktree, and
+  deletes the local branch, keeping the branch on GitHub so the pull request
+  can be reopened.
+- The **Subspaces** header shows a clean-up icon with a count while any done
   subspace has a cleanup hook. It confirms once, listing the tasks it will run
   and how many it skips, then runs each script in turn. A task whose script
   skips, such as one whose merge has not landed yet, stays a candidate for the
   next click.
 
 The CLI runs the same hooks: `workspace.task.finish`, `workspace.task.cleanup`,
-and `workspace.task.cleanup-finished`. `workspace.list` and `workspace.snapshot`
-report each workspace's hooks as `taskHooks`. Cleanup from a session inside the
-workspace being cleaned is refused, because the script would close that
-session's terminal.
+`workspace.task.cleanup-finished`, and `workspace.task.close`. `workspace.list`
+and `workspace.snapshot` report each workspace's hooks as `taskHooks`. Running
+a workspace's cleanup or close from a session inside it is refused, because
+the script would close that session's terminal.
 
 For tasks created without hooks, or merged another way, run `worktree-cleanup`
 from an outside project workspace. Its status script lists each task PR as

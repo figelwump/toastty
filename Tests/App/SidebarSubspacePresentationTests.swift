@@ -375,73 +375,81 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertTrue(SidebarSubspacePresentation.tally(rows).ready == 1)
     }
 
-    /// The done mark picks the button: Finish Task until the task is done,
-    /// Clean Up after. A missing hook hides its button, and a cleanup run
-    /// takes the button's place while it matters.
-    func testTaskButtonFollowsTheDoneMarkAndTheHooks() {
+    /// The stage picks the button: nothing while open, Finish Task once the
+    /// agent marked the task ready for review, Clean Up once done. A missing
+    /// hook hides its button, and a script run takes the button's place.
+    func testTaskButtonFollowsTheStageAndTheHooks() {
         typealias Button = SidebarSubspacePresentation.TaskButton
-        let both = WorkspaceTaskHooks(
-            finishSkill: "worktree-done",
-            cleanup: WorkspaceTaskHooks.CleanupScript(skill: "worktree-cleanup", script: "scripts/worktree-status.py")
-        )
-        func button(_ hooks: WorkspaceTaskHooks, done: Bool, run: WorkspaceTaskCleanupRun? = nil) -> Button? {
-            var row = self.row("task", status: done ? .done : .idle, index: 0)
-            row.isDone = done
+        let cleanup = WorkspaceTaskHooks.ScriptHook(skill: "worktree-cleanup", script: "scripts/worktree-status.py", arguments: ["--cleanup-workspace"])
+        let both = WorkspaceTaskHooks(finishSkill: "worktree-done", cleanup: cleanup)
+        func button(_ hooks: WorkspaceTaskHooks, stage: WorkspaceTaskStage, run: WorkspaceTaskScriptRun? = nil) -> Button? {
+            var row = self.row("task", status: stage == .done ? .done : .idle, index: 0)
+            row.isDone = stage == .done
+            row.taskStage = stage
             row.taskHooks = hooks
-            row.cleanupRun = run
+            row.scriptRun = run
             return SidebarSubspacePresentation.taskButton(row)
         }
-        XCTAssertEqual(button(both, done: false), .finish)
-        XCTAssertEqual(button(both, done: true), .cleanUp)
-        XCTAssertNil(button(WorkspaceTaskHooks(), done: false))
-        XCTAssertNil(button(WorkspaceTaskHooks(), done: true))
-        XCTAssertNil(button(WorkspaceTaskHooks(finishSkill: "worktree-done"), done: true))
-        XCTAssertNil(button(WorkspaceTaskHooks(cleanup: both.cleanup), done: false))
-        XCTAssertEqual(button(both, done: true, run: WorkspaceTaskCleanupRun(phase: .running)), .cleaningUp)
+        XCTAssertNil(button(both, stage: .open))
+        XCTAssertEqual(button(both, stage: .review), .finish(skill: "worktree-done"))
+        XCTAssertEqual(button(both, stage: .done), .cleanUp(cleanup))
+        XCTAssertNil(button(WorkspaceTaskHooks(), stage: .review))
+        XCTAssertNil(button(WorkspaceTaskHooks(), stage: .done))
+        XCTAssertNil(button(WorkspaceTaskHooks(finishSkill: "worktree-done"), stage: .done))
+        XCTAssertNil(button(WorkspaceTaskHooks(cleanup: cleanup), stage: .review))
+        XCTAssertEqual(button(both, stage: .done, run: WorkspaceTaskScriptRun(kind: .cleanup, phase: .running)), .running(.cleanup))
         XCTAssertEqual(
-            button(both, done: true, run: WorkspaceTaskCleanupRun(phase: .skipped(detail: "PR #7 has not merged"))),
-            .cleanupSkipped(detail: "PR #7 has not merged")
+            button(both, stage: .done, run: WorkspaceTaskScriptRun(kind: .cleanup, phase: .skipped(detail: "PR #7 has not merged"))),
+            .skipped(.cleanup, detail: "PR #7 has not merged")
         )
         XCTAssertEqual(
-            button(both, done: true, run: WorkspaceTaskCleanupRun(phase: .failed(detail: "git failed"))),
-            .cleanupFailed(detail: "git failed")
+            button(both, stage: .open, run: WorkspaceTaskScriptRun(kind: .close, phase: .failed(detail: "git failed"))),
+            .failed(.close, detail: "git failed")
         )
-        XCTAssertFalse(Button.cleaningUp.isEnabled)
-        XCTAssertTrue(Button.cleanupSkipped(detail: "x").isEnabled, "a skipped run can be retried from the button")
-        // A result left from before the task reopened does not cover Finish Task.
-        XCTAssertEqual(button(both, done: false, run: WorkspaceTaskCleanupRun(phase: .failed(detail: "old"))), .finish)
-        XCTAssertEqual(button(both, done: false, run: WorkspaceTaskCleanupRun(phase: .running)), .cleaningUp)
+        XCTAssertFalse(Button.running(.cleanup).isEnabled)
+        XCTAssertEqual(Button.finish(skill: "worktree-done").help, "Runs the worktree-done skill in this task's agent session")
+        XCTAssertEqual(Button.cleanUp(cleanup).help, "Runs worktree-cleanup/scripts/worktree-status.py --cleanup-workspace")
+        XCTAssertEqual(Button.cleanUp(cleanup).symbolName, "trash")
+        XCTAssertEqual(Button.finish(skill: "x").symbolName, "checkmark")
 
-        var finishRow = row("task", status: .idle, index: 0)
-        finishRow.taskHooks = both
+        var reviewRow = row("task", status: .idle, index: 0)
+        reviewRow.taskStage = .review
+        reviewRow.taskHooks = both
         XCTAssertTrue(
-            SidebarSubspacePresentation.rowAccessibilityLabel(finishRow, showsSpawnerTag: false).hasSuffix(", finish task")
+            SidebarSubspacePresentation.rowAccessibilityLabel(reviewRow, showsSpawnerTag: false).hasSuffix(", ready for review, finish task")
         )
+        XCTAssertEqual(SidebarSubspacePresentation.stageActions(for: .open), [.markReadyForReview, .markDone])
+        XCTAssertEqual(SidebarSubspacePresentation.stageActions(for: .review), [.markDone, .reopen])
+        XCTAssertEqual(SidebarSubspacePresentation.stageActions(for: .done), [.reopen])
     }
 
-    /// The header icon runs only finished tasks that have a cleanup hook and
-    /// are not already cleaning up, and names them in its confirmation.
+    /// The header icon runs only done tasks that have a cleanup hook and are
+    /// not already running a script, and names them in its confirmation.
     func testCleanupCandidatesAndHeaderWording() {
-        let cleanup = WorkspaceTaskHooks.CleanupScript(skill: "worktree-cleanup", script: "scripts/worktree-status.py")
+        let cleanup = WorkspaceTaskHooks.ScriptHook(skill: "worktree-cleanup", script: "scripts/worktree-status.py")
         var done = row("a-done", status: .done, index: 0)
         done.isDone = true
+        done.taskStage = .done
         done.taskHooks = WorkspaceTaskHooks(cleanup: cleanup)
         var doneNoHook = row("b-done-no-hook", status: .done, index: 1)
         doneNoHook.isDone = true
+        doneNoHook.taskStage = .done
         var running = row("c-running", status: .done, index: 2)
         running.isDone = true
+        running.taskStage = .done
         running.taskHooks = WorkspaceTaskHooks(cleanup: cleanup)
-        running.cleanupRun = WorkspaceTaskCleanupRun(phase: .running)
-        var open = row("d-open", status: .idle, index: 3)
-        open.taskHooks = WorkspaceTaskHooks(finishSkill: "worktree-done", cleanup: cleanup)
+        running.scriptRun = WorkspaceTaskScriptRun(kind: .cleanup, phase: .running)
+        var review = row("d-review", status: .idle, index: 3)
+        review.taskStage = .review
+        review.taskHooks = WorkspaceTaskHooks(finishSkill: "worktree-done", cleanup: cleanup)
 
-        let rows = [done, doneNoHook, running, open]
+        let rows = [done, doneNoHook, running, review]
         XCTAssertEqual(SidebarSubspacePresentation.cleanupCandidates(rows).map(\.title), ["a-done"])
-        XCTAssertEqual(SidebarSubspacePresentation.cleanupFinishedTitle(count: 1), "Clean Up 1 Finished Task…")
-        XCTAssertEqual(SidebarSubspacePresentation.cleanupFinishedTitle(count: 2), "Clean Up 2 Finished Tasks…")
+        XCTAssertEqual(SidebarSubspacePresentation.cleanupFinishedTitle(count: 1), "Clean Up 1 Done Task…")
+        XCTAssertEqual(SidebarSubspacePresentation.cleanupFinishedTitle(count: 2), "Clean Up 2 Done Tasks…")
 
         let confirmation = SidebarSubspacePresentation.cleanupFinishedConfirmation(rows: [done], skippedCount: 3)
-        XCTAssertEqual(confirmation.title, "Clean up 1 finished task?")
+        XCTAssertEqual(confirmation.title, "Clean up 1 done task?")
         XCTAssertTrue(confirmation.message.contains("• a-done"))
         XCTAssertTrue(confirmation.message.contains("3 other subspaces"))
     }

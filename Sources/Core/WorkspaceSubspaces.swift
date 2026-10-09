@@ -105,6 +105,7 @@ extension AppState {
                     if resolvedParentID == nil {
                         workspacesByID[workspaceID]?.spawningSessionID = nil
                         workspacesByID[workspaceID]?.doneAt = nil
+                        workspacesByID[workspaceID]?.reviewReadyAt = nil
                         workspacesByID[workspaceID]?.taskHooks = WorkspaceTaskHooks()
                     }
                 }
@@ -121,6 +122,9 @@ extension AppState {
                 if workspace.doneAt != nil {
                     workspacesByID[workspaceID]?.doneAt = nil
                 }
+                if workspace.reviewReadyAt != nil {
+                    workspacesByID[workspaceID]?.reviewReadyAt = nil
+                }
                 if workspace.taskHooks.isEmpty == false {
                     workspacesByID[workspaceID]?.taskHooks = WorkspaceTaskHooks()
                 }
@@ -135,6 +139,7 @@ extension AppState {
                 workspacesByID[workspaceID]?.parentWorkspaceID = nil
                 workspacesByID[workspaceID]?.spawningSessionID = nil
                 workspacesByID[workspaceID]?.doneAt = nil
+                workspacesByID[workspaceID]?.reviewReadyAt = nil
                 workspacesByID[workspaceID]?.taskHooks = WorkspaceTaskHooks()
             }
         }

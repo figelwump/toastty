@@ -134,10 +134,11 @@ struct WorkspaceTaskCleanupLiveCommandRunner: WorkspaceTaskCleanupCommandRunning
     }
 }
 
-/// One cleanup script run for a workspace, from the click until the result
-/// has been shown. Not saved across launches: a quit while a script runs
-/// leaves whatever the script got to, which it reports the next time.
-struct WorkspaceTaskCleanupRun: Equatable, Sendable {
+/// One script hook run (cleanup or close) for a workspace, from the click
+/// until the result has been shown. Not saved across launches: a quit while
+/// a script runs leaves whatever the script got to, which it reports the
+/// next time.
+struct WorkspaceTaskScriptRun: Equatable, Sendable {
     enum Phase: Equatable, Sendable {
         case running
         /// The script exited 3: it changed nothing and said why.
@@ -147,12 +148,87 @@ struct WorkspaceTaskCleanupRun: Equatable, Sendable {
         case failed(detail: String)
     }
 
+    var kind: WorkspaceTaskHooks.ScriptKind
     var phase: Phase
 }
 
+/// What the task buttons and their tooltips say about each hook, so the
+/// user knows what a click runs before clicking.
+enum WorkspaceTaskHookPresentation {
+    static func finishHelp(skill: String) -> String {
+        "Runs the \(skill) skill in this task's agent session"
+    }
+
+    static func scriptHelp(_ hook: WorkspaceTaskHooks.ScriptHook) -> String {
+        "Runs " + ([hook.skill + "/" + hook.script] + hook.arguments).joined(separator: " ")
+    }
+
+    static func title(_ kind: WorkspaceTaskHooks.ScriptKind) -> String {
+        switch kind {
+        case .cleanup: return "Clean Up"
+        case .close: return "Close Task"
+        }
+    }
+
+    static func runningTitle(_ kind: WorkspaceTaskHooks.ScriptKind) -> String {
+        switch kind {
+        case .cleanup: return "Cleaning Up…"
+        case .close: return "Closing…"
+        }
+    }
+
+    static func failedTitle(_ kind: WorkspaceTaskHooks.ScriptKind) -> String {
+        switch kind {
+        case .cleanup: return "Cleanup Failed"
+        case .close: return "Close Failed"
+        }
+    }
+
+    static func confirmation(_ kind: WorkspaceTaskHooks.ScriptKind, taskTitle: String) -> (title: String, message: String, button: String) {
+        switch kind {
+        case .cleanup:
+            return (
+                "Clean up \(taskTitle)?",
+                "Toastty runs this task's cleanup script. The script decides whether cleanup is safe, and may close this workspace, end its sessions, and remove its worktree.",
+                "Clean Up"
+            )
+        case .close:
+            return (
+                "Close \(taskTitle) without finishing?",
+                "Toastty runs this task's close script. It may close the task's pull request, close this workspace, end its sessions, and remove its worktree. Work pushed to GitHub stays there.",
+                "Close Task"
+            )
+        }
+    }
+}
+
+/// The confirmation and failure alerts the task buttons show. Statics so
+/// hosted tests can replace the modal dialogs.
+@MainActor
+enum WorkspaceTaskHookPrompts {
+    static var confirm: (_ title: String, _ message: String, _ button: String) -> Bool = { title, message, button in
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: button)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    static var presentAlert: (_ title: String, _ message: String) -> Void = { title, message in
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+}
+
 /// Runs a subspace's task lifecycle hooks: Finish Task sends the finish
-/// skill to the task's agent, and Clean Up runs the cleanup script without
-/// an agent. Cleanup runs are shown through `SessionRuntimeStore`.
+/// skill to the task's agent; Clean Up and Close Task run their scripts
+/// without an agent. Script runs are shown through `SessionRuntimeStore`.
 @MainActor
 final class WorkspaceTaskHookRunner {
     static let cleanupTimeout: TimeInterval = 300
@@ -188,8 +264,8 @@ final class WorkspaceTaskHookRunner {
         case launchFailed(String)
     }
 
-    enum CleanupProblem: Error, Equatable {
-        case noCleanupHook
+    enum ScriptProblem: Error, Equatable {
+        case noHook(WorkspaceTaskHooks.ScriptKind)
         case workspaceNotFound
         case alreadyRunning
         /// The hook names a skill that is not an accepted user skill, or a
@@ -197,8 +273,8 @@ final class WorkspaceTaskHookRunner {
         case scriptNotInstalled(path: String)
     }
 
-    /// How a cleanup script finished, for the caller that started it.
-    enum CleanupOutcome: Equatable, Sendable {
+    /// How a script hook finished, for the caller that started it.
+    enum ScriptOutcome: Equatable, Sendable {
         case cleaned(detail: String)
         case skipped(detail: String)
         case failed(detail: String)
@@ -214,8 +290,8 @@ final class WorkspaceTaskHookRunner {
     private let launchAgent: LaunchAgent
     private let notify: @MainActor (_ title: String, _ body: String) -> Void
     private let fileManager: FileManager
-    private var cleanupTasks: [UUID: Task<CleanupOutcome, Never>] = [:]
-    private var batchTasks: [UUID: Task<[(workspaceID: UUID, outcome: CleanupOutcome)], Never>] = [:]
+    private var scriptTasks: [UUID: Task<ScriptOutcome, Never>] = [:]
+    private var batchTasks: [UUID: Task<[(workspaceID: UUID, outcome: ScriptOutcome)], Never>] = [:]
     private var finishingWorkspaceIDs: Set<UUID> = []
     private var storeObserverToken: UUID?
 
@@ -250,7 +326,7 @@ final class WorkspaceTaskHookRunner {
         // once the task reopens or closes, the row is back to Finish Task
         // or gone, so the old result must not cover it.
         storeObserverToken = store.addActionAppliedObserver { [weak self] _, _, nextState in
-            self?.dropStaleCleanupResults(state: nextState)
+            self?.dropStaleScriptResults(state: nextState)
         }
     }
 
@@ -333,23 +409,28 @@ final class WorkspaceTaskHookRunner {
         }
     }
 
-    // MARK: - Clean up
-
-    func isCleaningUp(workspaceID: UUID) -> Bool {
-        cleanupTasks[workspaceID] != nil
+    /// Whether `skill` is an accepted user skill, which Toastty delivers
+    /// under its plugin name; the tooltips and prompts name it that way.
+    func isUserSkill(_ skill: String) -> Bool {
+        acceptedUserSkillNames().contains(skill)
     }
 
-    /// The script the workspace's cleanup hook names, or why it cannot run.
-    /// The skill must be an accepted user skill package, and the script a
-    /// regular file reached without any symbolic link, so a hook cannot run
-    /// anything outside the installed skills.
-    func cleanupScriptPath(for hooks: WorkspaceTaskHooks) -> Result<String, CleanupProblem> {
-        guard let cleanup = hooks.cleanup else { return .failure(.noCleanupHook) }
+    // MARK: - Script hooks
+
+    func isRunningScript(workspaceID: UUID) -> Bool {
+        scriptTasks[workspaceID] != nil
+    }
+
+    /// The script a hook names, or why it cannot run. The skill must be an
+    /// accepted user skill package, and the script a regular file reached
+    /// without any symbolic link, so a hook cannot run anything outside the
+    /// installed skills.
+    func scriptPath(for hook: WorkspaceTaskHooks.ScriptHook) -> Result<String, ScriptProblem> {
         let rootURL = userSkillsDirectoryURL.resolvingSymlinksInPath().standardizedFileURL
         let scriptURL = rootURL
-            .appending(path: cleanup.skill, directoryHint: .isDirectory)
-            .appending(path: cleanup.script)
-        guard acceptedUserSkillNames().contains(cleanup.skill),
+            .appending(path: hook.skill, directoryHint: .isDirectory)
+            .appending(path: hook.script)
+        guard acceptedUserSkillNames().contains(hook.skill),
               Self.isRegularFileWithoutSymlinks(scriptURL, under: rootURL, fileManager: fileManager) else {
             return .failure(.scriptNotInstalled(path: scriptURL.path))
         }
@@ -383,18 +464,29 @@ final class WorkspaceTaskHookRunner {
     /// Runs the workspace's cleanup script. The script closes the workspace
     /// itself after its own checks; Toastty only reports what it said.
     @discardableResult
-    func cleanUp(workspaceID: UUID) -> Result<Task<CleanupOutcome, Never>, CleanupProblem> {
+    func cleanUp(workspaceID: UUID) -> Result<Task<ScriptOutcome, Never>, ScriptProblem> {
+        runScript(.cleanup, workspaceID: workspaceID)
+    }
+
+    /// Runs the workspace's close script, which abandons the task.
+    @discardableResult
+    func close(workspaceID: UUID) -> Result<Task<ScriptOutcome, Never>, ScriptProblem> {
+        runScript(.close, workspaceID: workspaceID)
+    }
+
+    @discardableResult
+    func runScript(_ kind: WorkspaceTaskHooks.ScriptKind, workspaceID: UUID) -> Result<Task<ScriptOutcome, Never>, ScriptProblem> {
         guard let store, let sessionRuntimeStore else { return .failure(.workspaceNotFound) }
         guard let workspace = store.state.workspacesByID[workspaceID] else { return .failure(.workspaceNotFound) }
-        guard cleanupTasks[workspaceID] == nil else { return .failure(.alreadyRunning) }
+        guard let hook = workspace.taskHooks.script(kind) else { return .failure(.noHook(kind)) }
+        guard scriptTasks[workspaceID] == nil else { return .failure(.alreadyRunning) }
         let scriptPath: String
-        switch cleanupScriptPath(for: workspace.taskHooks) {
+        switch self.scriptPath(for: hook) {
         case .success(let path):
             scriptPath = path
         case .failure(let problem):
             return .failure(problem)
         }
-        let cleanup = workspace.taskHooks.cleanup!
         let sessions = Self.agentSessions(in: workspaceID, registry: sessionRuntimeStore.sessionRegistry)
         let directory = Self.taskDirectory(workspace: workspace, sessions: sessions)
         var environment = baseEnvironment()
@@ -410,8 +502,8 @@ final class WorkspaceTaskHookRunner {
             environment.removeValue(forKey: key)
         }
         let title = workspace.title
-        let (executable, arguments) = Self.command(scriptPath: scriptPath, arguments: cleanup.arguments)
-        let task = Task<CleanupOutcome, Never> { [runner, weak self] in
+        let (executable, arguments) = Self.command(scriptPath: scriptPath, arguments: hook.arguments)
+        let task = Task<ScriptOutcome, Never> { [runner, weak self] in
             let result = await runner.run(
                 executable: executable,
                 arguments: arguments,
@@ -420,16 +512,17 @@ final class WorkspaceTaskHookRunner {
                 timeout: Self.cleanupTimeout
             )
             let outcome = Self.outcome(from: result)
-            self?.finishCleanup(workspaceID: workspaceID, title: title, outcome: outcome)
+            self?.finishScript(kind, workspaceID: workspaceID, title: title, outcome: outcome)
             return outcome
         }
-        cleanupTasks[workspaceID] = task
-        sessionRuntimeStore.setWorkspaceTaskCleanupRun(WorkspaceTaskCleanupRun(phase: .running), for: workspaceID)
+        scriptTasks[workspaceID] = task
+        sessionRuntimeStore.setWorkspaceTaskScriptRun(WorkspaceTaskScriptRun(kind: kind, phase: .running), for: workspaceID)
         ToasttyLog.info(
-            "Started task cleanup script",
+            "Started task script hook",
             category: .terminal,
             metadata: [
                 "workspace_id": workspaceID.uuidString,
+                "kind": kind.rawValue,
                 "script": scriptPath,
                 "directory": directory ?? "none",
             ]
@@ -446,12 +539,12 @@ final class WorkspaceTaskHookRunner {
     func cleanUpFinished(
         parentWorkspaceID: UUID,
         isAllowed: @escaping @MainActor (UUID) -> Bool = { _ in true }
-    ) -> Task<[(workspaceID: UUID, outcome: CleanupOutcome)], Never> {
+    ) -> Task<[(workspaceID: UUID, outcome: ScriptOutcome)], Never> {
         if let running = batchTasks[parentWorkspaceID] {
             return running
         }
-        let task = Task<[(workspaceID: UUID, outcome: CleanupOutcome)], Never> { [weak self] in
-            var results: [(workspaceID: UUID, outcome: CleanupOutcome)] = []
+        let task = Task<[(workspaceID: UUID, outcome: ScriptOutcome)], Never> { [weak self] in
+            var results: [(workspaceID: UUID, outcome: ScriptOutcome)] = []
             guard let self else { return results }
             // The order is fixed at the start; membership is rechecked per task.
             let candidates = self.cleanupCandidates(under: parentWorkspaceID).filter(isAllowed)
@@ -480,43 +573,44 @@ final class WorkspaceTaskHookRunner {
         let rootID = store.state.workspacesByID[parentWorkspaceID]?.parentWorkspaceID ?? parentWorkspaceID
         return store.state.subspaceWorkspaceIDs(of: rootID).filter { subspaceID in
             guard let workspace = store.state.workspacesByID[subspaceID] else { return false }
-            return workspace.doneAt != nil && workspace.taskHooks.cleanup != nil && cleanupTasks[subspaceID] == nil
+            return workspace.taskStage == .done && workspace.taskHooks.cleanup != nil && scriptTasks[subspaceID] == nil
         }
     }
 
     /// Drops a skipped or failed run from the row.
-    func dismissCleanupResult(workspaceID: UUID) {
-        guard cleanupTasks[workspaceID] == nil else { return }
-        sessionRuntimeStore?.setWorkspaceTaskCleanupRun(nil, for: workspaceID)
+    func dismissScriptResult(workspaceID: UUID) {
+        guard scriptTasks[workspaceID] == nil else { return }
+        sessionRuntimeStore?.setWorkspaceTaskScriptRun(nil, for: workspaceID)
     }
 
-    private func finishCleanup(workspaceID: UUID, title: String, outcome: CleanupOutcome) {
-        cleanupTasks[workspaceID] = nil
+    private func finishScript(_ kind: WorkspaceTaskHooks.ScriptKind, workspaceID: UUID, title: String, outcome: ScriptOutcome) {
+        scriptTasks[workspaceID] = nil
         let workspaceIsOpen = store?.state.workspacesByID[workspaceID] != nil
-        let run: WorkspaceTaskCleanupRun?
+        let run: WorkspaceTaskScriptRun?
         switch outcome {
         case .cleaned:
             run = nil
         case .skipped(let detail):
-            run = WorkspaceTaskCleanupRun(phase: .skipped(detail: detail))
+            run = WorkspaceTaskScriptRun(kind: kind, phase: .skipped(detail: detail))
         case .failed(let detail):
-            run = WorkspaceTaskCleanupRun(phase: .failed(detail: detail))
+            run = WorkspaceTaskScriptRun(kind: kind, phase: .failed(detail: detail))
         }
         if workspaceIsOpen {
-            sessionRuntimeStore?.setWorkspaceTaskCleanupRun(run, for: workspaceID)
+            sessionRuntimeStore?.setWorkspaceTaskScriptRun(run, for: workspaceID)
         } else {
             // The script closed the workspace, so there is no row to show
             // what happened after; say it another way when it is not done.
-            sessionRuntimeStore?.setWorkspaceTaskCleanupRun(nil, for: workspaceID)
+            sessionRuntimeStore?.setWorkspaceTaskScriptRun(nil, for: workspaceID)
             if run != nil {
-                notify("\(title): cleanup did not finish", Self.outcomeDetail(outcome))
+                notify("\(title): \(kind == .cleanup ? "cleanup" : "close") did not finish", Self.outcomeDetail(outcome))
             }
         }
         ToasttyLog.info(
-            "Task cleanup script finished",
+            "Task script hook finished",
             category: .terminal,
             metadata: [
                 "workspace_id": workspaceID.uuidString,
+                "kind": kind.rawValue,
                 "workspace_title": title,
                 "outcome": Self.outcomeName(outcome),
                 "detail": Self.outcomeDetail(outcome),
@@ -524,11 +618,16 @@ final class WorkspaceTaskHookRunner {
         )
     }
 
-    private func dropStaleCleanupResults(state: AppState) {
+    /// A skipped or failed result belongs to the stage it ran in: a cleanup
+    /// result to the done task, a close result to any stage. Once the task
+    /// moves on or closes, the row shows its stage's button again.
+    private func dropStaleScriptResults(state: AppState) {
         guard let sessionRuntimeStore else { return }
-        for (workspaceID, run) in sessionRuntimeStore.workspaceTaskCleanupRuns where run.phase != .running {
-            guard let workspace = state.workspacesByID[workspaceID], workspace.doneAt != nil, workspace.taskHooks.cleanup != nil else {
-                sessionRuntimeStore.setWorkspaceTaskCleanupRun(nil, for: workspaceID)
+        for (workspaceID, run) in sessionRuntimeStore.workspaceTaskScriptRuns where run.phase != .running {
+            guard let workspace = state.workspacesByID[workspaceID],
+                  workspace.taskHooks.script(run.kind) != nil,
+                  run.kind == .close || workspace.taskStage == .done else {
+                sessionRuntimeStore.setWorkspaceTaskScriptRun(nil, for: workspaceID)
                 continue
             }
         }
@@ -552,7 +651,7 @@ final class WorkspaceTaskHookRunner {
 
     /// Exit 0 is cleaned, 3 is skipped, and anything else failed. The last
     /// non-empty line the script printed is the detail shown on the row.
-    static func outcome(from result: WorkspaceTaskCleanupCommandResult) -> CleanupOutcome {
+    static func outcome(from result: WorkspaceTaskCleanupCommandResult) -> ScriptOutcome {
         if let failure = result.failure {
             return .failed(detail: failure)
         }
@@ -610,7 +709,7 @@ final class WorkspaceTaskHookRunner {
         return nil
     }
 
-    static func outcomeName(_ outcome: CleanupOutcome) -> String {
+    static func outcomeName(_ outcome: ScriptOutcome) -> String {
         switch outcome {
         case .cleaned: return "cleaned"
         case .skipped: return "skipped"
@@ -618,7 +717,7 @@ final class WorkspaceTaskHookRunner {
         }
     }
 
-    static func outcomeDetail(_ outcome: CleanupOutcome) -> String {
+    static func outcomeDetail(_ outcome: ScriptOutcome) -> String {
         switch outcome {
         case .cleaned(let detail), .skipped(let detail), .failed(let detail):
             return detail
@@ -636,11 +735,11 @@ final class WorkspaceTaskHookRunner {
         }
     }
 
-    static func message(for problem: CleanupProblem) -> String {
+    static func message(for problem: ScriptProblem) -> String {
         switch problem {
-        case .noCleanupHook: return "this workspace has no cleanup hook; set one with workspace.task.set-hooks"
+        case .noHook(let kind): return "this workspace has no \(kind.rawValue) hook; set one with workspace.task.set-hooks"
         case .workspaceNotFound: return "workspaceID does not exist"
-        case .alreadyRunning: return "this workspace's cleanup script is already running"
+        case .alreadyRunning: return "a script hook is already running for this workspace"
         case .scriptNotInstalled(let path):
             return "the cleanup script is not an installed user skill script: \(path)"
         }

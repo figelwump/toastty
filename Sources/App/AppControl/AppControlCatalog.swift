@@ -13,10 +13,12 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceSetParent = "workspace.set-parent"
     case workspaceSetDone = "workspace.set-done"
     case workspaceClearDone = "workspace.clear-done"
+    case workspaceSetTaskStage = "workspace.set-task-stage"
     case workspaceTaskSetHooks = "workspace.task.set-hooks"
     case workspaceTaskFinish = "workspace.task.finish"
     case workspaceTaskCleanup = "workspace.task.cleanup"
     case workspaceTaskCleanupFinished = "workspace.task.cleanup-finished"
+    case workspaceTaskClose = "workspace.task.close"
     case workspaceClose = "workspace.close"
     case workspaceTabCreate = "workspace.tab.create"
     case workspaceTabSelect = "workspace.tab.select"
@@ -223,17 +225,28 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Clear a workspace's done mark. Targets the calling agent's own workspace when no workspace is given.",
                 selectors: [.windowID, .workspaceID]
             )
+        case .workspaceSetTaskStage:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Move a subspace's task to a stage: open (being worked on), review (ready for the user to review and test; the row shows Finish Task), or done (accepted; the row shows Clean Up). Set review once the task's pull request is published for the user. An agent in the workspace starting new work moves it back to open. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is always open. workspace.set-done and workspace.clear-done are the done and open forms.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [.taskStage(required: true)]
+            )
         case .workspaceTaskSetHooks:
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Set how a subspace's task is finished and cleaned up. finishSkill names a skill the task's agent runs when the user clicks Finish Task. cleanupSkill, cleanupScript, and cleanupArgs name a script inside an installed user skill that Clean Up runs without an agent: cwd is the task directory, TOASTTY_CLI_PATH and TOASTTY_WORKSPACE_ID are set, exit 0 means cleaned, exit 3 means skipped with the last output line as the reason, and the script closes the workspace itself. Omitting every parameter clears the hooks. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected.",
+                summary: "Set how a subspace's task is finished, cleaned up, and closed. finishSkill names a skill the task's agent runs when the user clicks Finish Task. cleanupSkill, cleanupScript, and cleanupArgs name a script inside an installed user skill that Clean Up runs without an agent; closeSkill, closeScript, and closeArgs name the script Close Task runs to abandon the task. For a script: cwd is the task directory, TOASTTY_CLI_PATH and TOASTTY_WORKSPACE_ID are set, exit 0 means it changed the task, exit 3 means skipped with the last output line as the reason, and the script closes the workspace itself. Omitting every parameter clears the hooks. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [
                     .taskFinishSkill(required: false),
                     .taskCleanupSkill(required: false),
                     .taskCleanupScript(required: false),
                     .taskCleanupArgs(required: false),
+                    .taskCloseSkill(required: false),
+                    .taskCloseScript(required: false),
+                    .taskCloseArgs(required: false),
                 ]
             )
         case .workspaceTaskFinish:
@@ -255,6 +268,13 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 id: rawValue,
                 kind: .action,
                 summary: "Run the cleanup script of every subspace under a workspace that is marked done and has a cleanup hook, one at a time, as the Subspaces header's clean-up button does. Returns one result per subspace.",
+                selectors: [.windowID, .workspaceID]
+            )
+        case .workspaceTaskClose:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Run a subspace's close script, as the Close Task menu item does, and wait for it. Returns outcome (closed, skipped, or failed) and the script's detail. The script must not be run from inside the workspace it closes.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClose:
@@ -778,6 +798,28 @@ private extension AppControlParameterDescriptor {
 
     static func taskCleanupArgs(required: Bool) -> Self {
         .init(name: "cleanupArgs", summary: "Argument passed to the cleanup script. Repeat to pass several.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func taskCloseSkill(required: Bool) -> Self {
+        .init(name: "closeSkill", summary: "Installed user skill that holds the close script. Required with closeScript.", valueType: .string, required: required)
+    }
+
+    static func taskCloseScript(required: Bool) -> Self {
+        .init(name: "closeScript", summary: "Path of the close script relative to the skill's directory. Required with closeSkill.", valueType: .string, required: required)
+    }
+
+    static func taskCloseArgs(required: Bool) -> Self {
+        .init(name: "closeArgs", summary: "Argument passed to the close script. Repeat to pass several.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func taskStage(required: Bool) -> Self {
+        .init(
+            name: "stage",
+            summary: "open, review, or done.",
+            valueType: .string,
+            required: required,
+            allowedValues: WorkspaceTaskStage.allCases.map(\.rawValue)
+        )
     }
 
     static func initialPrompt(required: Bool) -> Self {

@@ -1,18 +1,20 @@
 import Foundation
 
-/// What finishes and cleans up a subspace's task, set by whoever created the
-/// task space (`worktree-create`, for example) or later through the CLI.
-/// Toastty knows nothing about git or GitHub: it shows a button for each hook
-/// and runs it. The finish hook names a skill that the task's agent runs in
-/// its session, because finishing needs judgment. The cleanup hook names a
-/// script inside a skill that runs without an agent, because cleanup is
-/// mechanical and must also work in bulk after the agent has exited.
+/// What finishes, cleans up, and closes a subspace's task, set by whoever
+/// created the task space (`worktree-create`, for example) or later through
+/// the CLI. Toastty knows nothing about git or GitHub: it shows a button for
+/// each hook and runs it. The finish hook names a skill that the task's agent
+/// runs in its session, because finishing needs judgment. The cleanup and
+/// close hooks name a script inside a skill that runs without an agent,
+/// because they remove the task's worktree and workspace, which a session
+/// inside it cannot do, and cleanup must also work in bulk after the agent
+/// has exited.
 public struct WorkspaceTaskHooks: Codable, Equatable, Sendable {
     /// Runs a script inside an installed user skill. Toastty resolves
     /// `<user skills directory>/<skill>/<script>` each time it runs the hook,
     /// so a saved hook keeps working after the skill is updated and in an
     /// isolated dev run, and only scripts inside installed skills can run.
-    public struct CleanupScript: Codable, Equatable, Sendable {
+    public struct ScriptHook: Codable, Equatable, Sendable {
         public var skill: String
         /// Relative to the skill's directory, such as `scripts/cleanup.py`.
         public var script: String
@@ -29,15 +31,32 @@ public struct WorkspaceTaskHooks: Codable, Equatable, Sendable {
     /// `worktree-done`. Toastty sends it as a skill invocation in the agent's
     /// own syntax.
     public var finishSkill: String?
-    public var cleanup: CleanupScript?
+    public var cleanup: ScriptHook?
+    /// Abandons the task: the script closes any pull request, then removes
+    /// the worktree and closes the workspace the way cleanup does.
+    public var close: ScriptHook?
 
-    public init(finishSkill: String? = nil, cleanup: CleanupScript? = nil) {
+    public init(finishSkill: String? = nil, cleanup: ScriptHook? = nil, close: ScriptHook? = nil) {
         self.finishSkill = finishSkill
         self.cleanup = cleanup
+        self.close = close
     }
 
     public var isEmpty: Bool {
-        finishSkill == nil && cleanup == nil
+        finishSkill == nil && cleanup == nil && close == nil
+    }
+
+    /// The script hooks, which run without an agent.
+    public enum ScriptKind: String, Codable, Equatable, Sendable {
+        case cleanup
+        case close
+    }
+
+    public func script(_ kind: ScriptKind) -> ScriptHook? {
+        switch kind {
+        case .cleanup: return cleanup
+        case .close: return close
+        }
     }
 
     // MARK: - Validation
@@ -90,13 +109,13 @@ public struct WorkspaceTaskHooks: Codable, Equatable, Sendable {
     }
 
     /// Whole-value validation shared by the CLI and defensive decoding.
-    public static func validatedCleanup(skill: String, script: String, arguments: [String]) -> CleanupScript? {
+    public static func validatedScriptHook(skill: String, script: String, arguments: [String]) -> ScriptHook? {
         guard let skill = validatedSkillName(skill),
               let script = validatedScriptPath(script),
               let arguments = validatedArguments(arguments) else {
             return nil
         }
-        return CleanupScript(skill: skill, script: script, arguments: arguments)
+        return ScriptHook(skill: skill, script: script, arguments: arguments)
     }
 
     /// The hooks with invalid parts dropped, for a hand-edited or stale
@@ -107,12 +126,23 @@ public struct WorkspaceTaskHooks: Codable, Equatable, Sendable {
             result.finishSkill = validated
         }
         if let cleanup {
-            result.cleanup = Self.validatedCleanup(
-                skill: cleanup.skill,
-                script: cleanup.script,
-                arguments: cleanup.arguments
-            )
+            result.cleanup = Self.validatedScriptHook(skill: cleanup.skill, script: cleanup.script, arguments: cleanup.arguments)
+        }
+        if let close {
+            result.close = Self.validatedScriptHook(skill: close.skill, script: close.script, arguments: close.arguments)
         }
         return result
     }
+}
+
+
+/// Where a subspace's task is in its life: being worked on, waiting for the
+/// user to review and test it, or accepted. The agent moves it to `review`
+/// when the work is ready, the finish skill (or the user) marks it `done`,
+/// and new agent work moves it back to `open`. Cleanup then removes the
+/// workspace, so there is no stage after `done`.
+public enum WorkspaceTaskStage: String, Codable, Equatable, CaseIterable, Sendable {
+    case open
+    case review
+    case done
 }

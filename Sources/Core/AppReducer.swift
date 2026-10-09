@@ -220,6 +220,23 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .setWorkspaceTaskStage(let workspaceID, let stage, let now):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard stage == .open || workspace.parentWorkspaceID != nil else { return false }
+            switch stage {
+            case .open:
+                workspace.doneAt = nil
+                workspace.reviewReadyAt = nil
+            case .review:
+                workspace.doneAt = nil
+                workspace.reviewReadyAt = workspace.reviewReadyAt ?? now
+            case .done:
+                workspace.doneAt = workspace.doneAt ?? now
+            }
+            guard workspace != state.workspacesByID[workspaceID] else { return false }
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
         case .setWorkspaceTaskHooks(let workspaceID, let hooks):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let sanitized = hooks.sanitized
@@ -260,6 +277,7 @@ public struct AppReducer {
             workspace.spawningSessionID = resolvedSpawningSessionID
             if resolvedParentID == nil {
                 workspace.doneAt = nil
+                workspace.reviewReadyAt = nil
                 workspace.taskHooks = WorkspaceTaskHooks()
             }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
@@ -2132,6 +2150,7 @@ public struct AppReducer {
             state.workspacesByID[subspaceID]?.parentWorkspaceID = nil
             state.workspacesByID[subspaceID]?.spawningSessionID = nil
             state.workspacesByID[subspaceID]?.doneAt = nil
+            state.workspacesByID[subspaceID]?.reviewReadyAt = nil
             state.workspacesByID[subspaceID]?.taskHooks = WorkspaceTaskHooks()
         }
         state.workspacesByID.removeValue(forKey: workspaceID)

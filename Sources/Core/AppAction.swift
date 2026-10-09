@@ -65,6 +65,10 @@ public enum AppAction: Equatable, Sendable {
     /// Sets how a subspace's task is finished and cleaned up. Empty hooks
     /// clear them. A top-level workspace cannot hold hooks.
     case setWorkspaceTaskHooks(workspaceID: UUID, hooks: WorkspaceTaskHooks)
+    /// Moves a subspace's task to `stage` at `at`: `done` keeps an existing
+    /// done time, `review` keeps an existing review time, and `open` clears
+    /// both. A top-level workspace is always `open`.
+    case setWorkspaceTaskStage(workspaceID: UUID, stage: WorkspaceTaskStage, at: Date)
     case setWorkspaceTabCustomTitle(workspaceID: UUID, tabID: UUID, title: String?)
     case closeWorkspace(workspaceID: UUID)
     case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
@@ -184,6 +188,8 @@ public extension AppAction {
             return "setWorkspaceDone"
         case .setWorkspaceTaskHooks:
             return "setWorkspaceTaskHooks"
+        case .setWorkspaceTaskStage:
+            return "setWorkspaceTaskStage"
         case .setWorkspaceTabCustomTitle:
             return "setWorkspaceTabCustomTitle"
         case .closeWorkspace:

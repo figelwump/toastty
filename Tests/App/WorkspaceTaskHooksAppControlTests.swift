@@ -242,7 +242,7 @@ struct WorkspaceTaskHooksAppControlTests {
         _ = try fixture.run(.workspaceTaskSetHooks, ["workspaceID": .string(task.uuidString), "finishSkill": .string("worktree-done")])
         #expect(fixture.hooks(task)?.cleanup == nil)
         let snapshot = try fixture.executor.runQuery(id: AppControlQueryID.workspaceSnapshot.rawValue, args: ["workspaceID": .string(task.uuidString)])
-        #expect(snapshot["taskHooks"] == .object(["finishSkill": .string("worktree-done"), "cleanup": .null]))
+        #expect(snapshot["taskHooks"] == .object(["finishSkill": .string("worktree-done"), "cleanup": .null, "close": .null]))
 
         // No parameters clears.
         let cleared = try fixture.run(.workspaceTaskSetHooks, ["workspaceID": .string(task.uuidString)])
@@ -269,6 +269,103 @@ struct WorkspaceTaskHooksAppControlTests {
                 "finishSkill": .string("worktree-done"),
             ])
         }
+    }
+
+    @Test
+    func setTaskStageMovesASubspaceAndTheListReportsIt() throws {
+        let fixture = try TaskHooksFixture()
+        let task = try fixture.makeTask()
+
+        let review = try fixture.run(.workspaceSetTaskStage, ["workspaceID": .string(task.uuidString), "stage": .string("review")])
+        #expect(review.didMutateState)
+        #expect(review.result?["taskStage"] == .string("review"))
+        #expect(fixture.store.state.workspacesByID[task]?.taskStage == .review)
+        let snapshot = try fixture.executor.runQuery(id: AppControlQueryID.workspaceSnapshot.rawValue, args: ["workspaceID": .string(task.uuidString)])
+        #expect(snapshot["taskStage"] == .string("review"))
+
+        _ = try fixture.run(.workspaceSetTaskStage, ["workspaceID": .string(task.uuidString), "stage": .string("done")])
+        #expect(fixture.store.state.workspacesByID[task]?.taskStage == .done)
+        let list = try fixture.executor.runQuery(id: AppControlQueryID.workspaceList.rawValue, args: [:])
+        guard case .array(let rows)? = list["workspaces"] else {
+            Issue.record("workspace.list has no workspaces array: \(list)")
+            return
+        }
+        let row = try #require(rows.lazy.compactMap { value -> [String: AutomationJSONValue]? in
+            guard case .object(let object) = value, object.string("workspaceID") == task.uuidString else { return nil }
+            return object
+        }.first)
+        #expect(row.string("taskStage") == "done")
+        #expect(row.bool("done") == true)
+
+        let reopened = try fixture.run(.workspaceSetTaskStage, ["workspaceID": .string(task.uuidString), "stage": .string("open")])
+        #expect(reopened.didMutateState)
+        #expect(fixture.store.state.workspacesByID[task]?.taskStage == .open)
+        #expect(fixture.store.state.workspacesByID[task]?.reviewReadyAt == nil)
+
+        // The caller's own workspace is the default target.
+        try fixture.startSession("agent", agent: .claude, in: task, at: 100)
+        _ = try fixture.run(.workspaceSetTaskStage, ["stage": .string("review")], caller: "agent")
+        #expect(fixture.store.state.workspacesByID[task]?.taskStage == .review)
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.run(.workspaceSetTaskStage, ["workspaceID": .string(task.uuidString), "stage": .string("shipped")])
+        }
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.run(.workspaceSetTaskStage, ["workspaceID": .string(fixture.parentWorkspaceID.uuidString), "stage": .string("review")])
+        }
+        // open is harmless on a top-level workspace.
+        let topLevelOpen = try fixture.run(.workspaceSetTaskStage, ["workspaceID": .string(fixture.parentWorkspaceID.uuidString), "stage": .string("open")])
+        #expect(topLevelOpen.didMutateState == false)
+    }
+
+    @Test
+    func closeRunsTheCloseHookAndKeepsItsResultApartFromCleanup() async throws {
+        let fixture = try TaskHooksFixture(cleanupResult: WorkspaceTaskCleanupCommandResult(
+            exitCode: 3, output: "the worktree has uncommitted changes\n", failure: nil
+        ))
+        let task = try fixture.makeTask()
+        try fixture.startSession("agent", agent: .claude, in: task, cwd: "/work/task", at: 100)
+
+        // No close hook yet.
+        await #expect(throws: AutomationSocketError.self) {
+            try await fixture.runAsync(.workspaceTaskClose, ["workspaceID": .string(task.uuidString)])
+        }
+        let set = try fixture.run(.workspaceTaskSetHooks, [
+            "workspaceID": .string(task.uuidString),
+            "finishSkill": .string("worktree-done"),
+            "cleanupSkill": .string("worktree-cleanup"),
+            "cleanupScript": .string("scripts/worktree-status.py"),
+            "cleanupArgs": .string("--cleanup-workspace"),
+            "closeSkill": .string("worktree-cleanup"),
+            "closeScript": .string("scripts/worktree-status.py"),
+            "closeArgs": .array([.string("--close-workspace")]),
+        ])
+        #expect(set.result?["close"] != nil)
+        #expect(fixture.hooks(task)?.close?.arguments == ["--close-workspace"])
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.run(.workspaceTaskSetHooks, ["workspaceID": .string(task.uuidString), "closeScript": .string("scripts/x.py")])
+        }
+
+        let outcome = try await fixture.runAsync(.workspaceTaskClose, ["workspaceID": .string(task.uuidString)])
+        #expect(outcome.result?["outcome"] == .string("skipped"))
+        #expect(outcome.result?["detail"] == .string("the worktree has uncommitted changes"))
+        let invocation = try #require(fixture.cleanupRunner.invocations.first)
+        #expect(invocation.arguments.last == "--close-workspace")
+        #expect(invocation.directory == "/work/task")
+        #expect(invocation.workspaceID == task.uuidString)
+        #expect(invocation.sessionID == nil)
+        let run = try #require(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task])
+        #expect(run.kind == .close)
+        #expect(run.phase == .skipped(detail: "the worktree has uncommitted changes"))
+
+        // Close works at any stage, so the result survives a stage move;
+        // a successful close that leaves the workspace in place clears it.
+        _ = try fixture.run(.workspaceSetTaskStage, ["workspaceID": .string(task.uuidString), "stage": .string("review")])
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task]?.kind == .close)
+        fixture.cleanupRunner.result = WorkspaceTaskCleanupCommandResult(exitCode: 0, output: "closed PR #7\n", failure: nil)
+        let closed = try await fixture.runAsync(.workspaceTaskClose, ["workspaceID": .string(task.uuidString)])
+        #expect(closed.result?["outcome"] == .string("closed"))
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task] == nil)
     }
 
     @Test
@@ -355,7 +452,7 @@ struct WorkspaceTaskHooksAppControlTests {
         #expect(invocation.cliPath == "/tmp/toastty-cli")
         #expect(invocation.sessionID == nil, "a cleanup script acts for the user, not for a session")
         // A cleaned result leaves nothing on the row.
-        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task] == nil)
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task] == nil)
     }
 
     @Test
@@ -368,26 +465,26 @@ struct WorkspaceTaskHooksAppControlTests {
         let skipped = try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
         #expect(skipped.result?["outcome"] == .string("skipped"))
         #expect(skipped.result?["detail"] == .string("PR #7 is open: still running: CI gate"))
-        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task]?.phase == .skipped(detail: "PR #7 is open: still running: CI gate"))
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task]?.phase == .skipped(detail: "PR #7 is open: still running: CI gate"))
 
         fixture.cleanupRunner.result = WorkspaceTaskCleanupCommandResult(exitCode: 1, output: "progress\ngit worktree remove failed\n", failure: nil)
         let failed = try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
         #expect(failed.result?["outcome"] == .string("failed"))
-        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task]?.phase == .failed(detail: "git worktree remove failed"))
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task]?.phase == .failed(detail: "git worktree remove failed"))
 
-        fixture.runner.dismissCleanupResult(workspaceID: task)
-        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task] == nil)
+        fixture.runner.dismissScriptResult(workspaceID: task)
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task] == nil)
 
         fixture.cleanupRunner.result = WorkspaceTaskCleanupCommandResult(exitCode: nil, output: "", failure: "The cleanup script did not finish within 300 seconds")
         let timedOut = try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
         #expect(timedOut.result?["detail"] == .string("The cleanup script did not finish within 300 seconds"))
-        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task]?.phase == .failed(detail: "The cleanup script did not finish within 300 seconds"))
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task]?.phase == .failed(detail: "The cleanup script did not finish within 300 seconds"))
 
         // New work in the task clears its done mark; the old result goes
         // with it, so the row offers Finish Task again, not a stale retry.
         _ = try fixture.run(.workspaceSetDone, ["workspaceID": .string(task.uuidString)])
         _ = try fixture.run(.workspaceClearDone, ["workspaceID": .string(task.uuidString)])
-        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task] == nil)
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task] == nil)
         #expect(fixture.notifications.isEmpty, "the row was there to show every result")
     }
 
@@ -414,7 +511,7 @@ struct WorkspaceTaskHooksAppControlTests {
         _ = runner
         #expect(outcome.result?["outcome"] == .string("failed"))
         #expect(fixture.store.state.workspacesByID[task] == nil)
-        #expect(fixture.sessionRuntimeStore.workspaceTaskCleanupRuns[task] == nil)
+        #expect(fixture.sessionRuntimeStore.workspaceTaskScriptRuns[task] == nil)
         #expect(fixture.notifications == ["closing: cleanup did not finish: closed task; worktree kept: uncommitted changes"])
     }
 
@@ -528,7 +625,7 @@ struct WorkspaceTaskHooksAppControlTests {
 
     @Test
     func outcomeReadsTheExitStatusAndLastLine() {
-        typealias Outcome = WorkspaceTaskHookRunner.CleanupOutcome
+        typealias Outcome = WorkspaceTaskHookRunner.ScriptOutcome
         func outcome(_ code: Int32?, _ output: String = "", failure: String? = nil) -> Outcome {
             WorkspaceTaskHookRunner.outcome(from: WorkspaceTaskCleanupCommandResult(exitCode: code, output: output, failure: failure))
         }

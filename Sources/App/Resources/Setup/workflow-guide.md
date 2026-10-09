@@ -12,7 +12,7 @@ Write the skill as intended behavior and constraints, not as a fixed script of c
 
 ## Building blocks
 
-- **Workspaces and subspaces**: `workspace.create` makes a workspace for a project or task. `workspace.set-parent` nests it under the workspace that started it, so it shows as a subspace in the sidebar. `workspace.set-done` marks finished work. `workspace.task.set-hooks` names the skill that finishes the task and the script that cleans it up, which the subspace row shows as Finish Task and Clean Up buttons.
+- **Workspaces and subspaces**: `workspace.create` makes a workspace for a project or task. `workspace.set-parent` nests it under the workspace that started it, so it shows as a subspace in the sidebar. `workspace.set-task-stage` moves a task to review (ready for the user) or done. `workspace.task.set-hooks` names the skill that finishes the task and the scripts that clean it up or close it, which the workspace header shows as Finish Task, Clean Up, and Close Task.
 - **Tabs and splits**: `workspace.tab.create` and `workspace.split.right` arrange terminals.
 - **Agents**: `agent.launch` starts a managed agent in a pane. It can pick a model and reasoning effort, and for Codex and Claude it can fork the current conversation with `forkFromSessionID`.
 - **Right panel**: `panel.create.local-document` opens Markdown, code, and logs beside the terminal. `panel.create.browser` opens previews, PRs, and dashboards. Scratchpad pages for plans, mockups, and reports come from the shipped `toastty-scratchpad` skill.
