@@ -59,6 +59,11 @@ final class LiveConversationController {
     private(set) var composerAuthority = ConversationComposerAuthority()
     private(set) var sendReconciliation = SendReconciliationState()
     private(set) var lastSendGateFailure: ConversationSendGateFailure?
+    /// Set when a send from this phone becomes a failure receipt.
+    private(set) var sendFeedback: ToasttyOutcomeFeedback?
+    /// The first reconciliation state is a baseline: its receipts are from
+    /// earlier sends, so they must not play a haptic.
+    private var hasSendReconciliationBaseline = false
     private(set) var interactionAnswerStates: [
         RemotePendingInteraction.ID: ToasttyInteractionAnswerState
     ] = [:]
@@ -336,11 +341,14 @@ final class LiveConversationController {
         switch result {
         case .success(.submitted), .success(.duplicate):
             current.status = .awaitingClaude
+            current.lastSubmission = .next(after: current.lastSubmission, .success)
         case .success(.rejected(let reason)):
             current.retryRequest = nil
             current.status = questionRejectionStatus(reason)
+            current.lastSubmission = .next(after: current.lastSubmission, .failure)
         case .failure:
             current.status = .failed("Answer could not be sent. Try again.")
+            current.lastSubmission = .next(after: current.lastSubmission, .failure)
         }
         interactionAnswerStates[interactionID] = current
     }
@@ -426,6 +434,11 @@ final class LiveConversationController {
     }
 
     func consumeSendReconciliation(_ state: SendReconciliationState) {
+        if hasSendReconciliationBaseline,
+           let outcome = ToasttyHapticFeedback.sendOutcome(from: sendReconciliation, to: state) {
+            sendFeedback = .next(after: sendFeedback, outcome)
+        }
+        hasSendReconciliationBaseline = true
         for event in ToasttyAppDiagnosticProjection.events(from: sendReconciliation, to: state) {
             onDiagnosticEvent(event)
         }

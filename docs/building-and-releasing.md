@@ -131,6 +131,12 @@ Tuist or Xcode.
 For App Store Connect signing, validation, upload, and internal TestFlight
 distribution, see [iOS Release CI](ios-release-ci.md).
 
+For session notifications in the normal development iPhone app, see the
+[push relay setup](../workers/push/README.md). Both the paired Mac and the fixed
+development Debug app need matching explicit relay configuration. The same
+runbook also covers the separate operator probe, which replaces the normal
+development app. Unconfigured builds keep session push disabled.
+
 ## Validate
 
 ```bash

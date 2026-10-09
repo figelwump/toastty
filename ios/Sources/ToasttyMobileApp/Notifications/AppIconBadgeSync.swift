@@ -17,11 +17,14 @@ struct AppIconBadgeSync: View {
 
     // One observed value makes the initial count and scene phase atomic.
     private var update: Update {
-        Update(count: sessionController.appIconBadgeCount, isActive: scenePhase == .active)
+        Update(count: sessionController.appIconBadgeCount, isActive: scenePhase == .active,
+               permission: sessionController.pushController?.permission)
     }
 
     private struct Update: Equatable {
         let count: Int?
         let isActive: Bool
+        // Continue can grant permission without changing the count or scene.
+        let permission: ToasttyNotificationPermission?
     }
 }

@@ -35,6 +35,7 @@ struct ToasttyConversationScreen: View {
     let interrupt: () -> Void
     let dismissSendReceipt: (String) -> Void
     let queuedMessageAction: (ToasttyQueuedMessageAction) -> Void
+    let sendFeedback: ToasttyOutcomeFeedback?
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
@@ -62,6 +63,7 @@ struct ToasttyConversationScreen: View {
         interrupt: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
         queuedMessageAction: @escaping (ToasttyQueuedMessageAction) -> Void = { _ in },
+        sendFeedback: ToasttyOutcomeFeedback? = nil,
         interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
         editInteractionAnswer: @escaping (
             RemotePendingInteraction.ID,
@@ -91,6 +93,7 @@ struct ToasttyConversationScreen: View {
         self.interrupt = interrupt
         self.dismissSendReceipt = dismissSendReceipt
         self.queuedMessageAction = queuedMessageAction
+        self.sendFeedback = sendFeedback
         self.interactionAnswerStates = interactionAnswerStates
         self.editInteractionAnswer = editInteractionAnswer
         self.submitInteractionAnswer = submitInteractionAnswer
@@ -138,6 +141,7 @@ struct ToasttyConversationScreen: View {
             ToasttyPreviewSheet(selection: selection, detents: previewDetents(for: selection))
         }
         .background(ToasttyDesignTokens.elevatedSurface)
+        .sensoryFeedback(trigger: sendFeedback) { _, new in new?.sensoryFeedback }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)

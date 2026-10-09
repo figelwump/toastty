@@ -25,6 +25,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case subscribe
     case nativeDevice
     case nativeDeviceRevoke
+    case nativePushConfiguration
+    case nativePushRegistration
 
     var path: String {
         switch self {
@@ -49,6 +51,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .subscribe: "/api/subscribe"
         case .nativeDevice: "/v1/native-device"
         case .nativeDeviceRevoke: "/v1/native-device/revoke"
+        case .nativePushConfiguration: RemotePushPolicy.configurationPath
+        case .nativePushRegistration: RemotePushPolicy.registrationPath
         }
     }
 }
@@ -114,6 +118,8 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .subscribe: .init(route: .subscribe, method: "GET", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
         .nativeDevice: .init(route: .nativeDevice, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
         .nativeDeviceRevoke: .init(route: .nativeDeviceRevoke, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
+        .nativePushConfiguration: .init(route: .nativePushConfiguration, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
+        .nativePushRegistration: .init(route: .nativePushRegistration, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

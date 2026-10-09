@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "toastty-push-probe-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "logpush": false,
+  "observability": { "enabled": false },
+  "env": {
+    "test": {
+      "name": "toastty-push-probe-test",
+      "vars": {
+        "PUSH_PROBE_AUTH": "test-only-probe-authorization",
+        "PUSH_PROBE_EXPIRES_AT": "0",
+        "APNS_PROVIDER_TOKEN": "",
+        "APNS_DEVICE_TOKEN": ""
+      }
+    }
+  }
+}

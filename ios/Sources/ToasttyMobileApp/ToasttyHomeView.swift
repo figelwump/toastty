@@ -188,6 +188,8 @@ struct ToasttyHomeView: View {
     let refresh: () async -> Void
     let onSettings: () -> Void
     let openWorkspace: (UUID) -> Void
+    let notificationError: String?
+    let retryNotifications: () -> Void
 
     @AppStorage private var storedWorkspaceSessionFilter: String
     @AppStorage(ToasttyCollapsedSubspaceGroups.preferenceKey) private var storedCollapsedGroups = ""
@@ -205,12 +207,16 @@ struct ToasttyHomeView: View {
         refresh: @escaping () async -> Void = {},
         onSettings: @escaping () -> Void = {},
         openWorkspace: @escaping (UUID) -> Void = { _ in },
+        notificationError: String? = nil,
+        retryNotifications: @escaping () -> Void = {},
         defaults: UserDefaults = .standard
     ) {
         self.controller = controller
         self.refresh = refresh
         self.onSettings = onSettings
         self.openWorkspace = openWorkspace
+        self.notificationError = notificationError
+        self.retryNotifications = retryNotifications
         self.defaults = defaults
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
@@ -251,6 +257,9 @@ struct ToasttyHomeView: View {
             // sessions scroll underneath them.
             VStack(spacing: 10) {
                 header
+                if let notificationError {
+                    ToasttyNotificationErrorBanner(message: notificationError, retry: retryNotifications)
+                }
                 connectionNotice
                 workspaceSessionFilterPicker
             }

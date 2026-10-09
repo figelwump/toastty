@@ -94,6 +94,8 @@ function readCommands(logPath) {
 test("preflight-only records selected-device evidence without generation, build, install, or launch", () => {
   const toolchain = createPreflightToolchain();
   toolchain.environment.TOASTTY_IOS_DEVELOPMENT_TEAM = "";
+  toolchain.environment.TOASTTY_IOS_CONFIGURATION = "Debug";
+  toolchain.environment.TUIST_TOASTTY_MOBILE_PUSH_PROBE = "1";
   const result = spawnSync(process.execPath, [
     dispatcherPath,
     "native-device",
@@ -115,6 +117,7 @@ test("preflight-only records selected-device evidence without generation, build,
   assert.equal(preflight.buildConfiguration, "Debug");
   assert.equal(preflight.bundleID, "com.giantthings.toastty.mobile.dev");
   assert.equal(preflight.developmentTeam, "");
+  assert.equal(preflight.pushProbe, true);
   assert.equal(preflight.physicalDevice.selectedDevice.udid, "PHYSICAL-UDID");
 
   const instance = JSON.parse(readFileSync(
@@ -126,6 +129,7 @@ test("preflight-only records selected-device evidence without generation, build,
   assert.equal(instance.physicalDeviceIdentifier, "CORE-DEVICE-ID");
   assert.equal(instance.physicalDeviceUDID, "PHYSICAL-UDID");
   assert.equal(instance.bundleID, "com.giantthings.toastty.mobile.dev");
+  assert.equal(instance.pushProbe, true);
 
   const commands = readCommands(toolchain.logPath);
   assert.ok(commands.some(({ tool, args }) => (

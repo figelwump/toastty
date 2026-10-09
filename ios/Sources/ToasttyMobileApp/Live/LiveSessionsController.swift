@@ -258,6 +258,10 @@ final class LiveSessionsController {
         activeConversationController?.cursor?.afterSequence
     }
 
+    var supportsPushNotifications: Bool {
+        coordinatorState.capabilities.contains(.pushNotifications) && deviceScopes.contains(.read)
+    }
+
     var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in }
 
     private let runtime: any LiveConnectionRuntime

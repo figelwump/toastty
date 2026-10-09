@@ -16,15 +16,16 @@ final class ToasttyMobileBadgeUITests: XCTestCase {
         let allow = springboard.buttons["Allow"]
         if allow.waitForExistence(timeout: 3) { allow.tap() }
 
+        let iconLabel = app.label
+        XCTAssertFalse(iconLabel.isEmpty)
         XCUIDevice.shared.press(.home)
-        let icon = springboard.icons.matching(NSPredicate(format: "label BEGINSWITH %@", "Toastty")).firstMatch
+        let icon = springboard.icons[iconLabel]
         XCTAssertTrue(icon.waitForExistence(timeout: 5))
         XCTAssertTrue(waitForBadge("7", on: icon), "Expected seven attention sessions. Icon: \(icon.debugDescription)")
         attachHomeScreen(springboard, name: "ios-app-badge-seven")
 
         // A new process has no known badge count until its first live snapshot.
         // The reconnecting fixture must preserve the badge stored by iOS.
-        let iconLabel = icon.label
         app.terminate()
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_SCENARIO"] = "reconnecting"
         app.launch()

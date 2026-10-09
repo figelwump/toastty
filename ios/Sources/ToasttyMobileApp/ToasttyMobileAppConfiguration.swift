@@ -32,6 +32,10 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     let runtimeMode: ToasttyMobileRuntimeMode
     let fixtureScenario: ToasttyMobileFixtureScenario?
     let urlScheme: String?
+    let pushConfiguration: ToasttyPushConfiguration?
+#if DEBUG
+    let pushFixtureMode: ToasttyPushFixtureMode?
+#endif
     let enablesSystemAppIconBadge: Bool
 
     init(
@@ -45,6 +49,11 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             bundledGatewayURL: bundledURL
         )
         urlScheme = Self.routingURLScheme(in: infoDictionary)
+        pushConfiguration = ToasttyPushConfiguration(infoDictionary: infoDictionary)
+#if DEBUG
+        pushFixtureMode = runtimeMode == .fixture
+            ? environment["TOASTTY_MOBILE_FIXTURE_NOTIFICATIONS"].flatMap(ToasttyPushFixtureMode.init(rawValue:)) : nil
+#endif
         if runtimeMode == .fixture {
             fixtureScenario = environment["TOASTTY_MOBILE_FIXTURE_SCENARIO"]
                 .flatMap(ToasttyMobileFixtureScenario.init(rawValue:)) ?? .home
@@ -97,7 +106,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     }
 
     @MainActor
-    func makeSessionController() -> AppSessionController {
+    func makeSessionController(pushBridge: ToasttyPushNotificationBridge? = nil) -> AppSessionController {
 #if DEBUG
         if let fixtureScenario {
             let scanner: FixturePairingScanner
@@ -139,6 +148,9 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             }
             let initialCredential = usesPairedFixture ? Self.fixtureCredential : nil
             let vault = FixtureAppCredentialVault(initialCredential: initialCredential)
+            let push = initialCredential.flatMap { credential in
+                pushFixtureMode.map { ToasttyPushFixtures.make(mode: $0, credential: credential, vault: vault) }
+            }
             let controller = AppSessionController(
                 runtimeMode: runtimeMode,
                 usesFixtureHarness: true,
@@ -153,7 +165,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
                     : (usesPairedFixture ? .paired(pairedPresentation) : .unpaired),
                 initialPairedDevice: initialCredential.map(PairedDevicePresentation.init),
                 initialSnapshot: initialSnapshot,
-                initialConnectionState: initialConnectionState
+                initialConnectionState: initialConnectionState,
+                pushController: push
             )
             if fixtureScenario == .pairingPrivacy {
                 controller.beginPairing()
@@ -163,6 +176,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
         }
 #endif
         let vault = MobileCredentialVault()
+        let push = ToasttyPushController(configuration: pushConfiguration, vault: vault, bridge: pushBridge)
         return AppSessionController(
             runtimeMode: runtimeMode,
             credentialVault: vault,
@@ -170,7 +184,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             scanner: LivePairingCodeScanner(),
             deviceName: { UIDevice.current.name },
             initialSnapshot: initialSnapshot,
-            initialConnectionState: initialConnectionState
+            initialConnectionState: initialConnectionState,
+            pushController: push
         )
     }
 

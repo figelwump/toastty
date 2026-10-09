@@ -56,6 +56,24 @@ final class AppSessionControllerTests: XCTestCase {
         XCTAssertTrue(controller.state.isPaired)
     }
 
+    func testUnpairCompletionCannotDeleteAPairingInstalledDuringRevoke() async throws {
+        let first = try Self.credential(deviceName: "First iPhone")
+        let replacement = try Self.credential(deviceName: "Replacement iPhone",
+            id: UUID(uuidString: "D1000000-0000-0000-0000-000000000002")!)
+        let vault = TestAppCredentialVault(initialCredential: first)
+        _ = await vault.restore()
+        let controller = makeController(vault: vault, credential: first)
+
+        let unpaired = await controller.unpair {
+            _ = try? await vault.install(replacement)
+        }
+
+        XCTAssertFalse(unpaired)
+        let retainedCredential = await vault.currentCredential()
+        XCTAssertEqual(retainedCredential, replacement)
+        XCTAssertTrue(controller.state.isPaired)
+    }
+
     func testCurrentUnauthorizedCallbackDeletesCredentialAndReturnsToPairingGate() async throws {
         let credential = try Self.credential(deviceName: "Current iPhone")
         let vault = TestAppCredentialVault(initialCredential: credential)

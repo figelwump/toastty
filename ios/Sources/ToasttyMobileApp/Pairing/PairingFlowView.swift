@@ -17,6 +17,13 @@ struct PairingFlowView: View {
             }
         }
         .tint(ToasttyDesignTokens.amber)
+        .sensoryFeedback(trigger: controller.state) { old, new in
+            ToasttyHapticFeedback.pairing(from: old, to: new)
+        }
+        // Camera failures keep the state at `.scanning`.
+        .sensoryFeedback(.error, trigger: controller.scannerFailure) { old, new in
+            old == nil && new != nil
+        }
     }
 
     @ViewBuilder

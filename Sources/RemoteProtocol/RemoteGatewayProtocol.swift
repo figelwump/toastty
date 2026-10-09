@@ -51,6 +51,8 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// the next prompt, steer the running turn, stop it, and manage the
     /// queue. Each summary then carries `inputControl`.
     case conversationInputControl = "conversation_input_control"
+    /// A configured host accepts a native device's verified notification grant.
+    case pushNotifications = "push_notifications"
 }
 
 /// Public compatibility probe used before a client has credentials.

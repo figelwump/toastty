@@ -7,8 +7,8 @@ import CryptoKit
 /// and fidelity contract as the Codex parser.
 ///
 /// Sourcing decisions (from auditing real transcripts):
-/// - A "real" user turn is a `user` record that is not `isMeta` and not
-///   `isSidechain`, and whose structured `origin.kind` is not
+/// - A "real" user turn is a `user` record that is not `isMeta`,
+///   `isCompactSummary`, or `isSidechain`, and whose structured `origin.kind` is not
 ///   `task-notification`, with content that is a string or an array of
 ///   text/image blocks. `tool_result` blocks arriving as `user` records are
 ///   tool completions, not user turns. Missing or malformed `origin` values
@@ -63,6 +63,13 @@ public struct ClaudeTranscriptParser: Sendable {
 
         var observations: [ProviderTranscriptObservation] = []
         observations.append(contentsOf: sessionIdentityObservation(object, timestamp: timestamp))
+
+        // Compaction summaries are internal context, not new user input.
+        // Keep session identity discovery, but do not replace the current turn
+        // or emit a user message that would close an idle conversation's prompt.
+        if recordType == "user", object["isCompactSummary"] as? Bool == true {
+            return observations
+        }
 
         if let promptID = Self.nonEmptyString(object["promptId"]) {
             currentTurnID = promptID

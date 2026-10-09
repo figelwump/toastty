@@ -37,13 +37,15 @@ struct SystemAppIconBadgeClient: AppIconBadgeClient {
 final class AppIconBadgeController {
     private static let logger = Logger(subsystem: "com.giantthings.toastty.mobile", category: "badge")
     private let client: any AppIconBadgeClient
+    private let requestsAuthorization: Bool
     private var desiredCount: Int?
     private var canRequestAuthorization = false
     private var needsSync = false
     private var worker: Task<Void, Never>?
 
-    init(client: any AppIconBadgeClient) {
+    init(client: any AppIconBadgeClient, requestsAuthorization: Bool = true) {
         self.client = client
+        self.requestsAuthorization = requestsAuthorization
     }
 
     /// `nil` means the current count is unknown. Preserve the last count,
@@ -52,7 +54,7 @@ final class AppIconBadgeController {
     @discardableResult
     func update(count: Int?, isActive: Bool) -> Task<Void, Never>? {
         if let count { desiredCount = count }
-        canRequestAuthorization = isActive && count != nil
+        canRequestAuthorization = requestsAuthorization && isActive && count != nil
         guard desiredCount != nil else { return worker }
         needsSync = true
         if worker == nil {
