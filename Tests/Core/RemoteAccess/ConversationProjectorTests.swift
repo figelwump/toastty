@@ -306,7 +306,9 @@ struct ConversationProjectorTests {
                 payload: payload
             ))
 
-            #expect(projector.pendingPromptStabilizationToken == nil)
+            // The completion's token is gone; an aborted turn starts its own
+            // stabilization under a different token.
+            #expect(projector.pendingPromptStabilizationToken != token)
             #expect(projector.completePromptStabilization(
                 token: token,
                 at: Self.epochDate.addingTimeInterval(1.5)
@@ -498,6 +500,8 @@ struct ConversationProjectorTests {
         #expect(projector.state == .interrupted)
         #expect(projector.inputAvailability == .unavailable(reason: .interrupted))
         #expect(projector.inputAvailability.allowsRemoteSend == false)
+        // The prompt opens only once the host's stabilization window passes.
+        #expect(projector.pendingPromptStabilizationToken != nil)
     }
 
     @Test func statusChangedEventsAreCoalesced() {
@@ -774,5 +778,110 @@ struct ConversationExecutionProfileTests {
         #expect(projector.executionProfile?.modelIdentifier == "model-a")
         projector.ingest(.init(timestamp: Self.date, fingerprint: "session-b", payload: .providerSessionObserved(providerSessionID: "b")))
         #expect(projector.executionProfile == nil)
+    }
+}
+
+// MARK: - Turn identity for steer and stop
+
+extension ConversationProjectorTests {
+    private static func observation(
+        _ fingerprint: String,
+        at offset: TimeInterval,
+        _ payload: ProviderObservationPayload
+    ) -> ProviderTranscriptObservation {
+        ProviderTranscriptObservation(
+            timestamp: epochDate.addingTimeInterval(offset),
+            fingerprint: fingerprint,
+            payload: payload
+        )
+    }
+
+    @Test func turnEpochIsTheConsumedPromptEpochWhileWorkingOnly() throws {
+        var projector = Self.makeProjector()
+        #expect(projector.turnEpoch == nil)
+        #expect(projector.bindingID == Self.bindingID)
+
+        _ = projector.ingest(Self.observation("end-0", at: 1, .turnEnded(turnID: "turn-0", reason: .completed)))
+        guard case .openPrompt(let prompt) = projector.inputAvailability else {
+            Issue.record("Expected an open prompt")
+            return
+        }
+        #expect(projector.turnEpoch == nil)
+
+        _ = projector.ingest(Self.observation("user-1", at: 2, .transcript(.userMessage(.init(text: "Go")))))
+        #expect(projector.state == .working)
+        #expect(projector.turnEpoch == prompt)
+        _ = projector.ingest(Self.observation("start-1", at: 2.1, .turnStarted(turnID: "turn-1")))
+        #expect(projector.turnEpoch == prompt)
+
+        // A modal interaction closes steer: typing there would answer it.
+        _ = projector.ingest(Self.observation("ask", at: 3, .interactionPresented(.init(
+            kind: .permission, providerCallID: "call-1", prompt: "Run tests?"))))
+        #expect(projector.turnEpoch == nil)
+        _ = projector.ingest(Self.observation("tool-done", at: 4, .transcript(.toolFinished(.init(callID: "call-1")))))
+        #expect(projector.turnEpoch == prompt)
+
+        _ = projector.ingest(Self.observation("end-1", at: 5, .turnEnded(turnID: "turn-1", reason: .completed)))
+        #expect(projector.turnEpoch == nil)
+        guard case .openPrompt(let nextPrompt) = projector.inputAvailability else {
+            Issue.record("Expected the next prompt")
+            return
+        }
+        #expect(nextPrompt == prompt.next())
+    }
+
+    @Test func abortedTurnRetiresItsEpochAndOpensThePromptAfterStabilization() throws {
+        var projector = Self.makeProjector()
+        _ = projector.ingest(Self.observation("end-0", at: 1, .turnEnded(turnID: "turn-0", reason: .completed)))
+        _ = projector.ingest(Self.observation("user-1", at: 2, .transcript(.userMessage(.init(text: "Go")))))
+        let turn = try #require(projector.turnEpoch)
+
+        _ = projector.ingest(Self.observation("abort-1", at: 3, .turnEnded(turnID: "turn-1", reason: .aborted)))
+        #expect(projector.state == .interrupted)
+        #expect(projector.inputAvailability == .unavailable(reason: .interrupted))
+        #expect(projector.turnEpoch == nil)
+        let token = try #require(projector.pendingPromptStabilizationToken)
+
+        // A turn the provider starts from its own queue right after the abort
+        // never shares the aborted turn's identity.
+        var restarted = projector
+        _ = restarted.ingest(Self.observation("user-2", at: 3.5, .transcript(.userMessage(.init(text: "Next")))))
+        #expect(restarted.turnEpoch != nil)
+        #expect(restarted.turnEpoch != turn)
+        #expect(restarted.pendingPromptStabilizationToken == nil)
+
+        let emitted = projector.completePromptStabilization(token: token, at: Self.epochDate.addingTimeInterval(3.6))
+        #expect(emitted.contains { $0.kind == .statusChanged })
+        guard case .openPrompt(let reopened) = projector.inputAvailability else {
+            Issue.record("Expected the prompt to open after the aborted turn settled")
+            return
+        }
+        #expect(reopened != turn)
+        #expect(projector.state == .awaitingInput)
+    }
+
+    @Test func cancelledStabilizationAfterAbortKeepsThePromptClosed() throws {
+        var projector = Self.makeProjector()
+        _ = projector.ingest(Self.observation("end-0", at: 1, .turnEnded(turnID: "turn-0", reason: .completed)))
+        _ = projector.ingest(Self.observation("user-1", at: 2, .transcript(.userMessage(.init(text: "Go")))))
+        _ = projector.ingest(Self.observation("abort-1", at: 3, .turnEnded(turnID: "turn-1", reason: .aborted)))
+        let token = try #require(projector.pendingPromptStabilizationToken)
+        let cancelled = projector.cancelPromptStabilization()
+        #expect(cancelled)
+        let reopened = projector.completePromptStabilization(token: token, at: Self.epochDate.addingTimeInterval(4))
+        #expect(reopened.isEmpty)
+        #expect(projector.inputAvailability == .unavailable(reason: .interrupted))
+    }
+
+    @Test func claudeCompletionRetiresTheTurnEpochBeforeStabilization() throws {
+        var projector = Self.makeClaudeProjector()
+        _ = projector.ingest(Self.observation("user-1", at: 1, .transcript(.userMessage(.init(text: "Go")))))
+        let turn = try #require(projector.turnEpoch)
+        _ = projector.ingest(Self.observation("end-1", at: 2, .turnEnded(turnID: "turn-1", reason: .completed)))
+        #expect(projector.turnEpoch == nil)
+        // Claude consumed its own queue before the host finished stabilizing.
+        _ = projector.ingest(Self.observation("user-2", at: 2.1, .transcript(.userMessage(.init(text: "Queued")))))
+        #expect(projector.turnEpoch != nil)
+        #expect(projector.turnEpoch != turn)
     }
 }

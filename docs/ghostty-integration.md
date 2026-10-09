@@ -17,6 +17,10 @@ branch of the Toastty maintainer's Ghostty fork. The branch contains upstream
 Ghostty plus these downstream changes:
 
 - the `ghostty_surface_is_at_prompt` embedder API used for prompt state
+- an opt-in OSC 7501 bridge. Toastty enables `supports_program_status`;
+  Ghostty validates reports, replies to support queries, and passes owned
+  report data and ordered lifecycle events to the host. Other embedders
+  remain opted out by default.
 - link hover detection stays active while Command is held even when the
   running program has enabled mouse reporting (for example Claude Code in
   fullscreen mode). A mouse report can encode Shift, Alt, and Ctrl but not
@@ -38,12 +42,20 @@ record the exact Ghostty commit because the branch name is not a stable pin.
 
 ## Recommended Ghostty build
 
+This checkout requires the OSC 7501 bridge and clipboard API from Ghostty fork commit
+[`e696c5ba94121d76b7dc2e56f2c29bf578b6a211`](https://github.com/figelwump/ghostty/commit/e696c5ba94121d76b7dc2e56f2c29bf578b6a211),
+which is based on upstream `c770410dbb57909ff4f6921a6497688a957f85db` and preserves
+the downstream changes above. Use Zig **0.16.0** for this revision. The embedded
+clipboard API now passes MIME requests and explicit byte lengths. Rebuild older
+local artifacts before compiling this Toastty checkout.
+
 Clone the maintained branch as a sibling of the Toastty checkout:
 
 ```bash
 git clone --branch toastty-downstream \
   https://github.com/figelwump/ghostty.git \
   ../ghostty
+git -C ../ghostty checkout e696c5ba94121d76b7dc2e56f2c29bf578b6a211
 ```
 
 Then, from that Ghostty checkout:
@@ -56,7 +68,10 @@ zig build \
   -Dsentry=false
 ```
 
-For local Toastty development, `-Dxcframework-target=native` is also acceptable if you only need the macOS slice. `universal` additionally builds the iOS slices.
+For local Toastty development, `-Dxcframework-target=native` builds the current
+Mac architecture. `universal` builds both macOS arm64 and x86_64. This Ghostty
+revision does not include iOS slices in `GhosttyKit`; Toastty's native iOS client
+does not embed this framework.
 
 Why `-Dsentry=false`:
 
@@ -186,6 +201,12 @@ platform defaults, Toastty routes the Ghostty selection clipboard through a
 Toastty-private pasteboard instead of the shared system clipboard. That preserves
 Ghostty's selection-paste behavior without overwriting the normal macOS clipboard;
 explicit copy actions still target the system clipboard.
+
+Toastty preserves its existing text paste and OSC 52 confirmation behavior.
+It does not have clipboard permission UI. With `clipboard-read=ask` or
+`clipboard-write=ask`, new Kitty clipboard requests that need approval are
+denied instead of being approved automatically. Ghostty still honors `allow`
+and `deny` settings; metadata-only type listings follow its normal policy.
 
 With a terminal focused, `Cmd+C` goes through Ghostty's configured key binding.
 The default binding copies a terminal selection; without one, Ghostty forwards

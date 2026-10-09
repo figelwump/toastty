@@ -251,6 +251,7 @@ final class TerminalMetadataService {
     }
 
     func invalidate(panelID: UUID) {
+        sessionLifecycleTracker?.handleProgramStatusEvent(.reset, panelID: panelID)
         processWorkingDirectoryResolver.invalidate(panelID: panelID)
         immediateProcessRefreshTaskByPanelID.removeValue(forKey: panelID)?.cancel()
         immediateProcessRefreshTokenByPanelID.removeValue(forKey: panelID)

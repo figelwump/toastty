@@ -14,6 +14,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case conversationReadAcknowledge
     case workspaceDone
     case conversationFlag
+    case conversationQueueUpdate
+    case conversationInterrupt
     case sessionStartOptions
     case sessionStart
     case sessionStartWithAttachments
@@ -23,6 +25,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case subscribe
     case nativeDevice
     case nativeDeviceRevoke
+    case nativePushConfiguration
+    case nativePushRegistration
 
     var path: String {
         switch self {
@@ -36,6 +40,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .conversationReadAcknowledge: "/api/conversation.read.acknowledge"
         case .workspaceDone: "/api/workspace.done.set"
         case .conversationFlag: "/api/conversation.flag.set"
+        case .conversationQueueUpdate: "/api/conversation.queue.update"
+        case .conversationInterrupt: "/api/conversation.interrupt"
         case .sessionStartOptions: RemoteSessionStartPolicy.optionsPath
         case .sessionStart: RemoteSessionStartPolicy.startPath
         case .sessionStartWithAttachments: RemoteSessionStartPolicy.startWithAttachmentsPath
@@ -45,6 +51,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .subscribe: "/api/subscribe"
         case .nativeDevice: "/v1/native-device"
         case .nativeDeviceRevoke: "/v1/native-device/revoke"
+        case .nativePushConfiguration: RemotePushPolicy.configurationPath
+        case .nativePushRegistration: RemotePushPolicy.registrationPath
         }
     }
 }
@@ -94,6 +102,10 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // even though it sends no text to an agent.
         .workspaceDone: .init(route: .workspaceDone, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .conversationFlag: .init(route: .conversationFlag, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // Editing the Mac-side queue and stopping a turn change what the
+        // agent receives, so both need send scope like a message send.
+        .conversationQueueUpdate: .init(route: .conversationQueueUpdate, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .conversationInterrupt: .init(route: .conversationInterrupt, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         // The options answer says whether this device may start, so reading
         // it needs only read. Starting sends a first message, so it needs
         // send; the handler checks the separate start permission itself.
@@ -106,6 +118,8 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .subscribe: .init(route: .subscribe, method: "GET", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .read),
         .nativeDevice: .init(route: .nativeDevice, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
         .nativeDeviceRevoke: .init(route: .nativeDeviceRevoke, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
+        .nativePushConfiguration: .init(route: .nativePushConfiguration, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
+        .nativePushRegistration: .init(route: .nativePushRegistration, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

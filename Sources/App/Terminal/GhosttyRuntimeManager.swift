@@ -5,7 +5,6 @@ import CoreVideo
 import Darwin
 import Foundation
 import GhosttyKit
-import UniformTypeIdentifiers
 
 @MainActor
 protocol GhosttyRuntimeActionHandling: AnyObject {
@@ -28,6 +27,7 @@ struct GhosttyRuntimeAction: Sendable {
         case setTerminalCWD(String)
         case showChildExited(exitCode: Int)
         case commandFinished(exitCode: Int?)
+        case programStatus(TerminalProgramStatusEvent)
         case desktopNotification(title: String, body: String)
     }
 
@@ -62,6 +62,8 @@ struct GhosttyRuntimeAction: Sendable {
             return "show_child_exited"
         case .commandFinished:
             return "command_finished"
+        case .programStatus:
+            return "program_status"
         case .desktopNotification:
             return "desktop_notification"
         }
@@ -172,6 +174,10 @@ private func ghosttyActionName(_ action: ghostty_action_s) -> String {
         return "mouse_over_link"
     case GHOSTTY_ACTION_COMMAND_FINISHED:
         return "command_finished"
+    case GHOSTTY_ACTION_PROGRAM_STATUS:
+        return "program_status"
+    case GHOSTTY_ACTION_PROGRAM_STATUS_RESET:
+        return "program_status_reset"
     case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
         return "desktop_notification"
     default:
@@ -251,6 +257,45 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         let rawExitCode = Int(action.action.command_finished.exit_code)
         let exitCode = rawExitCode >= 0 ? rawExitCode : nil
         intent = .commandFinished(exitCode: exitCode)
+
+    case GHOSTTY_ACTION_PROGRAM_STATUS:
+        guard let pointer = action.action.program_status else { return nil }
+        let report = pointer.pointee
+        let state: TerminalProgramStatusReport.State
+        switch report.state {
+        case GHOSTTY_PROGRAM_STATUS_STATE_IDLE: state = .idle
+        case GHOSTTY_PROGRAM_STATUS_STATE_WORKING: state = .working
+        case GHOSTTY_PROGRAM_STATUS_STATE_DONE: state = .done
+        case GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED: state = .blocked
+        case GHOSTTY_PROGRAM_STATUS_STATE_ERROR: state = .error
+        case GHOSTTY_PROGRAM_STATUS_STATE_CLEAR: state = .clear
+        default: return nil
+        }
+        let kind: TerminalProgramStatusReport.Kind?
+        switch report.kind {
+        case GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION: kind = .permission
+        case GHOSTTY_PROGRAM_STATUS_KIND_QUESTION: kind = .question
+        case GHOSTTY_PROGRAM_STATUS_KIND_AUTH: kind = .auth
+        default: kind = nil
+        }
+        // Copy every borrowed field before returning from the native callback.
+        intent = .programStatus(.report(.init(
+            state: state,
+            id: ghosttyString(pointer: report.id, length: Int(report.id_len)),
+            app: ghosttyString(pointer: report.app, length: Int(report.app_len)),
+            title: ghosttyString(pointer: report.title, length: Int(report.title_len)),
+            message: ghosttyString(pointer: report.msg, length: Int(report.msg_len)),
+            kind: kind,
+            progress: report.progress >= 0 ? Int(report.progress) : nil
+        )))
+
+    case GHOSTTY_ACTION_PROGRAM_STATUS_RESET:
+        switch action.action.program_status_reset {
+        case GHOSTTY_PROGRAM_STATUS_RESET_TERMINAL: intent = .programStatus(.reset)
+        case GHOSTTY_PROGRAM_STATUS_RESET_PROMPT: intent = .programStatus(.prompt)
+        case GHOSTTY_PROGRAM_STATUS_RESET_CHILD_EXIT: intent = .programStatus(.exit)
+        default: return nil
+        }
 
     case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
         let notification = action.action.desktop_notification
@@ -493,58 +538,10 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
     return result.handled
 }
 
-private struct GhosttyClipboardEntry {
-    let mime: String
-    let value: String
-}
-
-enum GhosttyClipboardBridge {
-    nonisolated(unsafe) private static let selectionPasteboard = NSPasteboard.withUniqueName()
-    static var selectionPasteboardName: NSPasteboard.Name {
-        selectionPasteboard.name
-    }
-    static let supportsSelectionClipboard = true
+extension GhosttyClipboardBridge {
     static var runtimeSupportsSelectionClipboard: Bool {
         makeGhosttyRuntimeConfig(userdata: nil).supports_selection_clipboard
     }
-
-    static func pasteboard(for location: ghostty_clipboard_e) -> NSPasteboard? {
-        switch location {
-        case GHOSTTY_CLIPBOARD_STANDARD:
-            return .general
-        case GHOSTTY_CLIPBOARD_SELECTION:
-            // macOS has no shared X11-style selection clipboard. Keep Ghostty's
-            // selection buffer available for selection-paste semantics without
-            // treating every text selection as an implicit system clipboard copy.
-            return selectionPasteboard
-        default:
-            return nil
-        }
-    }
-
-    static func releaseSelectionPasteboardIfNeeded() {
-        selectionPasteboard.releaseGlobally()
-    }
-}
-
-private func ghosttyPasteboard(for location: ghostty_clipboard_e) -> NSPasteboard? {
-    GhosttyClipboardBridge.pasteboard(for: location)
-}
-
-private func ghosttyShellEscape(_ path: String) -> String {
-    guard !path.isEmpty else { return "''" }
-    return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-}
-
-private func ghosttyClipboardStringContents(from pasteboard: NSPasteboard) -> String? {
-    if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
-       !urls.isEmpty {
-        return urls
-            .map { $0.isFileURL ? ghosttyShellEscape($0.path) : $0.absoluteString }
-            .joined(separator: " ")
-    }
-
-    return pasteboard.string(forType: .string)
 }
 
 private func ghosttyClipboardLocationName(_ location: ghostty_clipboard_e) -> String {
@@ -566,62 +563,25 @@ private func ghosttyClipboardRequestName(_ request: ghostty_clipboard_request_e)
         return "osc_52_read"
     case GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE:
         return "osc_52_write"
+    case GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ:
+        return "kitty_read"
+    case GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE:
+        return "kitty_write"
+    case GHOSTTY_CLIPBOARD_REQUEST_LIST:
+        return "list"
     default:
         return "unknown(\(request.rawValue))"
     }
 }
 
-private func ghosttyPasteboardType(for mime: String) -> NSPasteboard.PasteboardType {
-    if mime == "text/plain" {
-        return .string
-    }
-    if let type = UTType(mimeType: mime) {
-        return NSPasteboard.PasteboardType(type.identifier)
-    }
-    return NSPasteboard.PasteboardType(mime)
-}
-
-private func ghosttyClipboardEntries(
-    from content: UnsafePointer<ghostty_clipboard_content_s>?,
-    count: Int
-) -> [GhosttyClipboardEntry] {
-    guard let content, count > 0 else { return [] }
-
-    let buffer = UnsafeBufferPointer(start: content, count: count)
-    return buffer.compactMap { entry in
-        guard let mimePointer = entry.mime,
-              let valuePointer = entry.data else {
-            return nil
-        }
-        return GhosttyClipboardEntry(
-            mime: String(cString: mimePointer),
-            value: String(cString: valuePointer)
-        )
-    }
-}
-
 private func ghosttyCompleteClipboardRead(
-    surface: ghostty_surface_t?,
-    state: UnsafeMutableRawPointer?,
-    data: String,
+    surface: ghostty_surface_t,
+    state: UnsafeMutableRawPointer,
+    contents: GhosttyClipboardBridge.ReadContents,
     confirmed: Bool
 ) {
-    guard let state else {
-        ToasttyLog.warning(
-            "Skipping Ghostty clipboard completion because request state is missing",
-            category: .ghostty
-        )
-        return
-    }
-    guard let surface else {
-        ToasttyLog.debug(
-            "Skipping Ghostty clipboard completion because surface is unavailable",
-            category: .ghostty
-        )
-        return
-    }
-    data.withCString { pointer in
-        ghostty_surface_complete_clipboard_request(surface, pointer, state, confirmed)
+    contents.withCompletion(confirmed: confirmed) { complete in
+        ghostty_surface_complete_clipboard_request(surface, complete, state)
     }
 }
 
@@ -641,69 +601,76 @@ private func ghosttyRunClipboardWorkOnMainThread(_ work: () -> Void) {
     DispatchQueue.main.sync(execute: work)
 }
 
-// Ghostty v1.3.1 expects this callback to report whether a request started,
-// while older builds treat it as a fire-and-forget void callback.
-@discardableResult
 private func ghosttyReadClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
     location: ghostty_clipboard_e,
-    state: UnsafeMutableRawPointer?
-) -> Bool {
-    guard let userdata else {
-        ToasttyLog.warning("Ghostty read clipboard callback missing userdata", category: .ghostty)
-        return false
-    }
-    guard let state else { return false }
-
+    state: UnsafeMutableRawPointer?,
+    mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+    mimesCount: Int,
+    list: Bool
+) -> ghostty_clipboard_read_result_e {
+    guard let userdata, let state else { return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED }
+    let requestedMimes = GhosttyClipboardBridge.mimeStrings(from: mimes, count: mimesCount)
     let hostViewHandle = UInt(bitPattern: userdata)
-    // This helper runs inline on main and synchronously hops to main otherwise,
-    // so the callback result is determined before returning to Ghostty.
-    var didStartRequest = false
+    var result = GHOSTTY_CLIPBOARD_READ_UNSUPPORTED
     ghosttyRunClipboardWorkOnMainThread {
-        let surfaceHandle = ghosttyResolveSurfaceHandle(hostViewHandle: hostViewHandle)
-        guard let surfaceHandle else { return }
-        guard let surface = ghostty_surface_t(bitPattern: surfaceHandle) else { return }
-        guard let pasteboard = ghosttyPasteboard(for: location) else { return }
-        guard let clipboardValue = ghosttyClipboardStringContents(from: pasteboard) else { return }
-        ghosttyCompleteClipboardRead(
-            surface: surface,
-            state: state,
-            data: clipboardValue,
-            confirmed: false
-        )
-        didStartRequest = true
+        guard let surfaceHandle = ghosttyResolveSurfaceHandle(hostViewHandle: hostViewHandle),
+              let surface = ghostty_surface_t(bitPattern: surfaceHandle),
+              let pasteboard = GhosttyClipboardBridge.pasteboard(for: location) else { return }
+        guard let contents = GhosttyClipboardBridge.read(from: pasteboard, mimes: requestedMimes, list: list) else {
+            result = GHOSTTY_CLIPBOARD_READ_UNAVAILABLE
+            return
+        }
+        ghosttyCompleteClipboardRead(surface: surface, state: state, contents: contents, confirmed: false)
+        result = GHOSTTY_CLIPBOARD_READ_STARTED
     }
-    return didStartRequest
+    return result
 }
 
 private func ghosttyConfirmReadClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
-    string: UnsafePointer<CChar>?,
+    confirmation: UnsafePointer<ghostty_clipboard_confirm_s>?,
     state: UnsafeMutableRawPointer?,
     request: ghostty_clipboard_request_e
 ) {
-    guard let userdata else {
-        ToasttyLog.warning("Ghostty confirm clipboard callback missing userdata", category: .ghostty)
-        return
-    }
-
+    guard let userdata, let state else { return }
     let hostViewHandle = UInt(bitPattern: userdata)
-    let content = string.map { String(cString: $0) } ?? ""
-
+    // Copy the offered values before completion: Ghostty may release its request
+    // during this call, and confirmation must never re-read the pasteboard.
+    let contents = confirmation.map {
+        GhosttyClipboardBridge.ReadContents(
+            contents: GhosttyClipboardBridge.entries(from: $0.pointee.contents, count: $0.pointee.contents_len),
+            available: GhosttyClipboardBridge.mimeStrings(from: $0.pointee.available, count: $0.pointee.available_len)
+        )
+    }
     ghosttyRunClipboardWorkOnMainThread {
-        let surfaceHandle = ghosttyResolveSurfaceHandle(hostViewHandle: hostViewHandle)
-        let surface = surfaceHandle.flatMap { ghostty_surface_t(bitPattern: $0) }
+        guard let surfaceHandle = ghosttyResolveSurfaceHandle(hostViewHandle: hostViewHandle),
+              let surface = ghostty_surface_t(bitPattern: surfaceHandle) else { return }
+        guard let contents else {
+            ghostty_surface_deny_clipboard_request(surface, state)
+            return
+        }
+        switch request {
+        case GHOSTTY_CLIPBOARD_REQUEST_PASTE,
+             GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ,
+             GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE:
+            break
+        default:
+            // New protocols must not inherit the legacy text-only approval policy.
+            ToasttyLog.info(
+                "Denying Ghostty clipboard request because confirmation UI is unavailable",
+                category: .ghostty,
+                metadata: ["request": ghosttyClipboardRequestName(request)]
+            )
+            ghostty_surface_deny_clipboard_request(surface, state)
+            return
+        }
         ToasttyLog.info(
             "Auto-confirming Ghostty clipboard request because Toastty has no confirmation UI yet",
             category: .ghostty,
             metadata: ["request": ghosttyClipboardRequestName(request)]
         )
-        ghosttyCompleteClipboardRead(
-            surface: surface,
-            state: state,
-            data: content,
-            confirmed: true
-        )
+        ghosttyCompleteClipboardRead(surface: surface, state: state, contents: contents, confirmed: true)
     }
 }
 
@@ -719,12 +686,12 @@ private func ghosttyWriteClipboardCallback(
         return
     }
 
-    let entries = ghosttyClipboardEntries(from: content, count: count)
+    let entries = GhosttyClipboardBridge.entries(from: content, count: count)
     guard entries.isEmpty == false else { return }
     let locationName = ghosttyClipboardLocationName(location)
 
     ghosttyRunClipboardWorkOnMainThread {
-        guard let pasteboard = ghosttyPasteboard(for: location) else {
+        guard let pasteboard = GhosttyClipboardBridge.pasteboard(for: location) else {
             ToasttyLog.warning(
                 "Skipping Ghostty clipboard write for unsupported clipboard location",
                 category: .ghostty,
@@ -741,11 +708,7 @@ private func ghosttyWriteClipboardCallback(
             )
         }
 
-        let entriesByType = entries.map { (type: ghosttyPasteboardType(for: $0.mime), value: $0.value) }
-        pasteboard.declareTypes(entriesByType.map(\.type), owner: nil)
-        for entry in entriesByType {
-            pasteboard.setString(entry.value, forType: entry.type)
-        }
+        GhosttyClipboardBridge.write(entries, to: pasteboard)
     }
 }
 
@@ -817,13 +780,13 @@ private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer?) -> gho
         action_cb: { app, target, action in
             ghosttyActionCallback(app: app, target: target, action: action)
         },
-        read_clipboard_cb: { userdata, location, state in
-            ghosttyReadClipboardCallback(userdata: userdata, location: location, state: state)
+        read_clipboard_cb: { userdata, location, state, mimes, count, list in
+            ghosttyReadClipboardCallback(userdata: userdata, location: location, state: state, mimes: mimes, mimesCount: count, list: list)
         },
-        confirm_read_clipboard_cb: { userdata, string, state, request in
+        confirm_read_clipboard_cb: { userdata, confirmation, state, request in
             ghosttyConfirmReadClipboardCallback(
                 userdata: userdata,
-                string: string,
+                confirmation: confirmation,
                 state: state,
                 request: request
             )
@@ -839,7 +802,8 @@ private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer?) -> gho
         },
         close_surface_cb: { userdata, confirmed in
             ghosttyCloseSurfaceCallback(userdata: userdata, confirmed: confirmed)
-        }
+        },
+        supports_program_status: true
     )
 }
 

@@ -77,12 +77,31 @@ enum ToasttyComposerDisabledReason: Equatable, Sendable {
     }
 }
 
+/// What Send does while input is allowed.
+enum ToasttyComposerSendMode: Equatable, Sendable {
+    /// The prompt is open: Send types the message now.
+    case prompt
+    /// The agent is working: Send holds the message on the Mac for the next
+    /// prompt. Steer, when the host allows it, types into the running turn.
+    case working(canSteer: Bool)
+}
+
 enum ToasttyComposerGate: Equatable, Sendable {
-    case enabled
+    case enabled(ToasttyComposerSendMode)
     case disabled(ToasttyComposerDisabledReason)
 
     var allowsInput: Bool {
         if case .enabled = self { return true }
+        return false
+    }
+
+    var sendMode: ToasttyComposerSendMode? {
+        if case .enabled(let mode) = self { return mode }
+        return nil
+    }
+
+    var isWorking: Bool {
+        if case .enabled(.working) = self { return true }
         return false
     }
 }
@@ -91,15 +110,19 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     let agentDisplayName: String
     let gate: ToasttyComposerGate
     let inlineFeedback: String?
+    /// The running turn can be stopped from this device.
+    let canInterrupt: Bool
 
     init(
         agentDisplayName: String,
         gate: ToasttyComposerGate,
-        inlineFeedback: String? = nil
+        inlineFeedback: String? = nil,
+        canInterrupt: Bool = false
     ) {
         self.agentDisplayName = agentDisplayName
         self.gate = gate
         self.inlineFeedback = inlineFeedback
+        self.canInterrupt = canInterrupt
     }
 
     static func make(
@@ -109,7 +132,8 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         return ToasttyComposerPresentation(
             agentDisplayName: agentDisplayName,
             gate: gate(for: authority),
-            inlineFeedback: feedback(for: authority.gateFailure)
+            inlineFeedback: feedback(for: authority.gateFailure),
+            canInterrupt: authority.canInterrupt
         )
     }
 
@@ -195,8 +219,15 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
                 return gate(for: authority.inputAvailability)
             }
         }
-        guard authority.canSend else { return .disabled(.connection(.catchingUp)) }
-        return gate(for: authority.inputAvailability)
+        guard authority.canSend, let stamp = authority.stamp else {
+            return .disabled(.connection(.catchingUp))
+        }
+        switch stamp.deliveryMode {
+        case .prompt:
+            return gate(for: authority.inputAvailability)
+        case .queue, .steer:
+            return .enabled(.working(canSteer: authority.canSteer))
+        }
     }
 
     private static func feedback(
@@ -226,7 +257,7 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     private static func gate(for availability: CompatibleInputAvailability?) -> ToasttyComposerGate {
         switch availability {
         case .openPrompt:
-            .enabled
+            .enabled(.prompt)
         case .localDraft:
             .disabled(.localDraft)
         case .pendingInteraction:
@@ -347,6 +378,15 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         }
     }
 
+    /// Puts a queued message back into the composer for editing. An existing
+    /// draft is kept ahead of it rather than overwritten.
+    mutating func restoreDraft(_ text: String, for conversationID: UUID) {
+        guard isSubmitting(conversationID) == false else { return }
+        let current = draft(for: conversationID)
+        let combined = current.isEmpty ? text : current + "\n\n" + text
+        replaceDraft(combined, for: conversationID)
+    }
+
     private mutating func replaceDraft(_ text: String, for conversationID: UUID) {
         replacementRevision += 1
         replacements[conversationID] = ToasttyComposerReplacement(
@@ -444,7 +484,8 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
                         ? "A rejected attachment draft is saved until this send finishes. Dismiss the rejected send to discard its attachments."
                         : "A rejected attachment draft is saved. Clear this draft to restore it, or dismiss the rejected send to discard its attachments."
                 }
-            case .pending(.accepted), .pending(.duplicate), .confirmed, .uncertain, .operationFailed, .deliveryUnconfirmed:
+            case .pending(.accepted), .pending(.duplicate), .pending(.queued), .confirmed, .uncertain,
+                 .operationFailed, .deliveryUnconfirmed:
                 attachmentRecoveries.removeValue(forKey: record.clientRequestID)
             }
         }
@@ -492,6 +533,8 @@ struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
     enum Content: Equatable, Sendable {
         case optimistic(response: PendingSendResponse)
         case receipt(ToasttySendReceiptPresentation)
+        /// Held on the Mac for the next prompt, as the host currently lists it.
+        case queued(ToasttyQueuedSendPresentation)
     }
 
     var id: String { clientRequestID }
@@ -499,6 +542,29 @@ struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
     let clientRequestID: String
     let text: String
     let content: Content
+
+    var isQueued: Bool {
+        if case .queued = content { return true }
+        return false
+    }
+}
+
+struct ToasttyQueuedSendPresentation: Equatable, Sendable {
+    /// 1-based delivery order.
+    let position: Int
+    let attachmentCount: Int
+    /// The queue holds after a stop until the user resumes it.
+    let isPaused: Bool
+    /// "Steer now" is offered on the row.
+    let canSteer: Bool
+}
+
+/// What the user asked for on a queued message in the transcript.
+enum ToasttyQueuedMessageAction: Equatable, Sendable {
+    case edit(clientRequestID: String, text: String)
+    case steer(clientRequestID: String, text: String)
+    case remove(clientRequestID: String)
+    case resume
 }
 
 struct ToasttySendReceiptPresentation: Equatable, Sendable {
@@ -535,6 +601,14 @@ struct ToasttySendReceiptPresentation: Equatable, Sendable {
             "The Mac could not save the attachments"
         case .rejected(.emptyText):
             "The message was empty"
+        case .rejected(.queueFull):
+            "The Mac's queue for this session is full"
+        case .rejected(.notWorking):
+            "The agent finished before this message was queued"
+        case .rejected(.turnMismatch):
+            "The agent moved to another turn before this message was sent"
+        case .rejected(.steerUnavailable):
+            "Someone is typing on the Mac, so this message could not steer the turn"
         case .uncertain:
             "Delivery could not be confirmed"
         case .operationFailed:
@@ -562,6 +636,12 @@ struct ToasttySendReceiptPresentation: Equatable, Sendable {
             "The attachments were not delivered. Review the draft and check Toastty on your Mac before sending again."
         case .rejected(.emptyText):
             "Enter a message before sending."
+        case .rejected(.queueFull):
+            "Wait for a queued message to send, or remove one. Your draft is still here."
+        case .rejected(.notWorking), .rejected(.turnMismatch):
+            "Review the current prompt before sending again. Toastty did not retry."
+        case .rejected(.steerUnavailable):
+            "Queue it for the next prompt instead, or wait for the Mac. Toastty did not retry."
         case .uncertain:
             "Check the transcript or the Mac before sending anything else. Toastty will not retry this message."
         case .operationFailed:
@@ -573,6 +653,33 @@ struct ToasttySendReceiptPresentation: Equatable, Sendable {
 }
 
 enum ToasttySendPresentationAdapter {
+    /// Reconciliation records first, then the Mac's queue in delivery order.
+    /// A queued record the host still lists renders from the host's list,
+    /// so the two never show the same message twice.
+    static func makeItems(
+        from state: SendReconciliationState,
+        inputControl: RemoteConversationInputControl? = nil
+    ) -> [ToasttySendPresentationItem] {
+        let queued = inputControl?.queuedMessages ?? []
+        let queuedIDs = Set(queued.map(\.clientRequestID))
+        var items = makeItems(from: state).filter { queuedIDs.contains($0.clientRequestID) == false }
+        for (index, message) in queued.enumerated() {
+            items.append(ToasttySendPresentationItem(
+                clientRequestID: message.clientRequestID,
+                text: message.text,
+                content: .queued(ToasttyQueuedSendPresentation(
+                    position: index + 1,
+                    attachmentCount: message.attachmentCount,
+                    isPaused: inputControl?.isQueuePaused == true,
+                    // Attachments stay staged on the Mac; a steer resends only
+                    // text, so it is not offered for those entries.
+                    canSteer: inputControl?.canSteer == true && message.attachmentCount == 0
+                ))
+            ))
+        }
+        return items
+    }
+
     static func makeItems(
         from state: SendReconciliationState
     ) -> [ToasttySendPresentationItem] {

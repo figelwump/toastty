@@ -102,27 +102,86 @@ final class EventStreamClientTests: XCTestCase {
         XCTAssertTrue(wasClosed)
     }
 
-    func testOpenGateDoesNotCompleteBeforeDidOpen() async throws {
-        let gate = WebSocketOpenGate()
+    func testPingForwardsToConnectionAndLeavesMessagesAvailable() async throws {
+        let connection = MockWebSocketConnection(messages: [
+            try CompatibilityFixture.data("stream-unknown-top-level"),
+        ])
+        let subscription = EventStreamSubscription(connection: connection, decoder: GatewayCompatibilityDecoder())
+
+        try await subscription.ping()
+
+        let pingCount = await connection.recordedPingCount()
+        XCTAssertEqual(pingCount, 1)
+        let message = try await subscription.nextMessage()
+        XCTAssertEqual(message, .ignoredUnknown(type: "future_notification"))
+        let wasClosed = await connection.wasClosed()
+        XCTAssertFalse(wasClosed)
+        await subscription.close()
+    }
+
+    func testPingClassifiesTransportFailureWithoutClosingConnection() async {
+        let connection = MockWebSocketConnection(messages: [], pingError: URLError(.timedOut))
+        let subscription = EventStreamSubscription(connection: connection, decoder: GatewayCompatibilityDecoder())
+
+        do {
+            try await subscription.ping()
+            XCTFail("Expected a classified transport failure")
+        } catch let failure as GatewayFailure {
+            XCTAssertEqual(failure, .network(reason: .timedOut))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        let wasClosed = await connection.wasClosed()
+        XCTAssertFalse(wasClosed)
+        await subscription.close()
+    }
+
+    func testPingPreservesCancellationAndClosedSubscriptionRejectsPing() async {
+        let connection = MockWebSocketConnection(messages: [], pingError: CancellationError())
+        let subscription = EventStreamSubscription(connection: connection, decoder: GatewayCompatibilityDecoder())
+
+        do {
+            try await subscription.ping()
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        await subscription.close()
+        do {
+            try await subscription.ping()
+            XCTFail("Expected cancellation after close")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        let pingCount = await connection.recordedPingCount()
+        XCTAssertEqual(pingCount, 1)
+    }
+
+    func testCompletionGateDoesNotCompleteBeforeCallback() async throws {
+        let gate = WebSocketCompletionGate()
         let completion = AsyncSignal()
         let waiterStarted = AsyncSignal()
         let task = Task {
             await waiterStarted.signal()
-            try await gate.waitUntilOpen()
+            try await gate.wait()
             await completion.signal()
         }
         await waiterStarted.wait()
         let completedBeforeOpen = await completion.isSignalled()
         XCTAssertFalse(completedBeforeOpen)
 
-        gate.didOpen()
+        gate.succeed()
         try await task.value
         let completedAfterOpen = await completion.isSignalled()
         XCTAssertTrue(completedAfterOpen)
     }
 
-    func testOpenGateCancellationResumesWaiterAndCancelsResources() async {
-        let gate = WebSocketOpenGate()
+    func testCompletionGateCancellationResumesWaiterAndCancelsResources() async {
+        let gate = WebSocketCompletionGate()
         let cancellation = AsyncSignal()
         gate.setCancellationHandler {
             Task { await cancellation.signal() }
@@ -130,7 +189,7 @@ final class EventStreamClientTests: XCTestCase {
         let waiterStarted = AsyncSignal()
         let task = Task {
             await waiterStarted.signal()
-            try await gate.waitUntilOpen()
+            try await gate.wait()
         }
         await waiterStarted.wait()
         gate.cancel()
@@ -144,6 +203,49 @@ final class EventStreamClientTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
         await cancellation.wait()
+    }
+
+    func testCompletionGateKeepsFirstSuccessWhenCallbacksRepeat() async throws {
+        let gate = WebSocketCompletionGate()
+        gate.succeed()
+        gate.succeed()
+        gate.fail(URLError(.networkConnectionLost))
+        gate.cancel()
+
+        try await gate.wait()
+    }
+
+    func testCompletionGateKeepsFirstFailureBeforeWaiterIsInstalled() async {
+        let gate = WebSocketCompletionGate()
+        gate.fail(URLError(.timedOut))
+        gate.succeed()
+        gate.fail(URLError(.networkConnectionLost))
+
+        do {
+            try await gate.wait()
+            XCTFail("Expected the first failure")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .timedOut)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testCompletionGateCancellationBeforeWaitIgnoresLateAndDuplicateCallbacks() async {
+        let gate = WebSocketCompletionGate()
+        gate.cancel()
+        gate.succeed()
+        gate.succeed()
+        gate.fail(URLError(.timedOut))
+
+        do {
+            try await gate.wait()
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 }
 
@@ -176,9 +278,18 @@ private actor MockWebSocketConnection: WebSocketConnection {
     private var receiveContinuations: [CheckedContinuation<Data, any Error>] = []
     private var closed = false
     private let receiveStarted = AsyncSignal()
+    private let pingError: (any Error)?
+    private var pingCount = 0
 
-    init(messages: [Data]) {
+    init(messages: [Data], pingError: (any Error)? = nil) {
         self.messages = messages
+        self.pingError = pingError
+    }
+
+    func ping() async throws {
+        guard closed == false else { throw CancellationError() }
+        pingCount += 1
+        if let pingError { throw pingError }
     }
 
     func receive() async throws -> Data {
@@ -199,6 +310,7 @@ private actor MockWebSocketConnection: WebSocketConnection {
     }
 
     func wasClosed() -> Bool { closed }
+    func recordedPingCount() -> Int { pingCount }
     func receiveStartedSignal() -> AsyncSignal { receiveStarted }
 }
 

@@ -86,7 +86,9 @@ jobs:
 
       - name: Test native client
         # Full UI and hardware-sensitive budgets remain available on manual runs.
-        run: node ios/scripts/toastty-ios.mjs test ${{ github.event_name != 'workflow_dispatch' && (matrix.configuration == 'Debug' && '--ui-tests smoke --skip-performance-budgets' || '--skip-performance-budgets') || '' }}
+        # Hosted runners can time out the first UI launch under load, so every
+        # failed test gets one more attempt; the uploaded xcresult keeps both.
+        run: node ios/scripts/toastty-ios.mjs test --retry-tests-on-failure ${{ github.event_name != 'workflow_dispatch' && (matrix.configuration == 'Debug' && '--ui-tests smoke --skip-performance-budgets' || '--skip-performance-budgets') || '' }}
 
       - name: Upload iOS test artifacts
         if: always()

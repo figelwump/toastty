@@ -7,17 +7,20 @@ struct PreparedAgentLaunchCommand {
     let environment: [String: String]
     let artifacts: PreparedAgentLaunchArtifacts?
     let codexSkillsInjectionResult: CodexSkillsInjectionResult
+    let allowsProgramStatusFallback: Bool
 
     init(
         argv: [String],
         environment: [String: String],
         artifacts: PreparedAgentLaunchArtifacts?,
-        codexSkillsInjectionResult: CodexSkillsInjectionResult = .notRequested
+        codexSkillsInjectionResult: CodexSkillsInjectionResult = .notRequested,
+        allowsProgramStatusFallback: Bool = false
     ) {
         self.argv = argv
         self.environment = environment
         self.artifacts = artifacts
         self.codexSkillsInjectionResult = codexSkillsInjectionResult
+        self.allowsProgramStatusFallback = allowsProgramStatusFallback
     }
 }
 
@@ -110,7 +113,7 @@ enum AgentLaunchInstrumentation {
         deliveredUserSkillsRootPath: String? = nil
     ) throws -> PreparedAgentLaunchCommand {
         if agent == .grok {
-            return try GrokLaunchInstrumentation.prepare(
+            let prepared = try GrokLaunchInstrumentation.prepare(
                 argv: argv,
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
@@ -119,6 +122,13 @@ enum AgentLaunchInstrumentation {
                 launchEnvironment: launchEnvironment,
                 skillsIntegration: stagedSkillsIntegration,
                 userSkillsRootPath: deliveredUserSkillsRootPath
+            )
+            return PreparedAgentLaunchCommand(
+                argv: prepared.argv,
+                environment: prepared.environment,
+                artifacts: prepared.artifacts,
+                codexSkillsInjectionResult: prepared.codexSkillsInjectionResult,
+                allowsProgramStatusFallback: prepared.allowsProgramStatusFallback || prepared.artifacts == nil
             )
         }
         if agent == .claude {
@@ -129,6 +139,7 @@ enum AgentLaunchInstrumentation {
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
                 artifactStore: artifactStore,
+                launchEnvironment: launchEnvironment,
                 skillsIntegration: stagedSkillsIntegration,
                 userPluginRootPath: deliveredUserSkillsRootPath
             )
@@ -193,7 +204,9 @@ enum AgentLaunchInstrumentation {
             )
         }
 
-        return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
+        return PreparedAgentLaunchCommand(
+            argv: argv, environment: [:], artifacts: nil, allowsProgramStatusFallback: true
+        )
     }
 
     /// Cursor's documented `--plugin-dir` flag is repeatable, so Toastty can
@@ -208,7 +221,9 @@ enum AgentLaunchInstrumentation {
         userPluginRootPath: String?
     ) -> PreparedAgentLaunchCommand {
         guard let insertionIndex = safeCursorPluginExecutableIndex(in: argv) else {
-            return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
+            return PreparedAgentLaunchCommand(
+                argv: argv, environment: [:], artifacts: nil, allowsProgramStatusFallback: true
+            )
         }
 
         var launchArguments: [String] = []
@@ -228,7 +243,9 @@ enum AgentLaunchInstrumentation {
                 afterIndex: insertionIndex
             ),
             environment: environment,
-            artifacts: nil
+            artifacts: nil,
+            // The shipped plugin also carries Cursor status hooks.
+            allowsProgramStatusFallback: skillsIntegration == nil
         )
     }
 
@@ -239,6 +256,7 @@ enum AgentLaunchInstrumentation {
         workingDirectory: String?,
         fileManager: FileManager,
         artifactStore: ManagedAgentLaunchArtifactStore?,
+        launchEnvironment: [String: String],
         skillsIntegration: ClaudeSkillsLaunchConfiguration?,
         userPluginRootPath: String?
     ) throws -> PreparedAgentLaunchCommand {
@@ -319,6 +337,11 @@ enum AgentLaunchInstrumentation {
                     // Claude can still invoke hooks after Toastty has already
                     // stopped tracking the managed session.
                     cleanupPolicy: .retainAfterSessionStop
+                ),
+                allowsProgramStatusFallback: claudeLaunchDisablesHooks(
+                    argv: existingSettings.argvWithoutSettings,
+                    settings: existingSettings.baseSettings,
+                    launchEnvironment: launchEnvironment
                 )
             )
         } catch {
@@ -530,7 +553,8 @@ enum AgentLaunchInstrumentation {
                     directory: artifactsDirectory,
                     codexSessionLogURL: nil,
                     cleanupPolicy: .deleteImmediately
-                )
+                ),
+                allowsProgramStatusFallback: true
             )
         }
 
@@ -708,6 +732,23 @@ private extension AgentLaunchInstrumentation {
             lifetime: lifetime,
             storage: .temporary
         )
+    }
+
+    static func claudeLaunchDisablesHooks(
+        argv: [String],
+        settings: [String: Any],
+        launchEnvironment: [String: String]
+    ) -> Bool {
+        if settings["disableAllHooks"] as? Bool == true
+            || launchEnvironment["CLAUDE_CODE_SIMPLE"] == "1"
+            || launchEnvironment["CLAUDE_CODE_SAFE_MODE"] == "1" {
+            return true
+        }
+        let commandIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .claude, argv: argv)
+        let options = argv.dropFirst(commandIndex + 1).prefix { $0 != "--" }
+        // Both modes disable settings hooks. Disabling slash commands only
+        // disables skills, so it does not allow status fallback.
+        return options.contains("--bare") || options.contains("--safe-mode")
     }
 
     static func resolveClaudeSettingsArgument(

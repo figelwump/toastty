@@ -1,0 +1,15 @@
+{
+  "aps": {
+    "alert": {
+      "title": "Toastty notification test",
+      "body": "Checking delivery to this iPhone."
+    }
+  },
+  "toastty": {
+    "version": 1,
+    "kind": "verification",
+    "registrationID": "fb7b26a7-5b77-4afd-9f30-349d90bd0970",
+    "pairingID": "c0d6d62e-dd0b-4b90-81cd-45083da827ce",
+    "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

@@ -5,6 +5,10 @@ public enum PendingSendResponse: Equatable, Sendable {
     case awaitingResponse
     case accepted
     case duplicate
+    /// Held on the Mac for the next open prompt. The record stays pending
+    /// until the transcript echoes the request ID after delivery, or the
+    /// host reports the message left the queue undelivered.
+    case queued(position: Int)
 }
 
 public enum SendDeliveryState: Equatable, Sendable {
@@ -239,6 +243,8 @@ public actor SendReconciliation {
         switch result {
         case .accepted:
             stored.record.deliveryState = .pending(.accepted)
+        case .queued(let position):
+            stored.record.deliveryState = .pending(.queued(position: position))
         case .duplicate:
             stored.record.deliveryState = .pending(.duplicate)
         case .rejected(let reason):
@@ -327,6 +333,22 @@ public actor SendReconciliation {
         currentProjectionRunID = projectionRunID
         guard markUnresolvedAsDeliveryUnconfirmed() else { return }
         await publish()
+    }
+
+    /// Forgets a send the user took out of the Mac's queue, whether the host's
+    /// drop receipt arrived first or not. Anything already typed or confirmed
+    /// is left alone.
+    @discardableResult
+    public func discardQueued(clientRequestID: String) async -> Bool {
+        guard let stored = recordsByRequestID[clientRequestID] else { return false }
+        switch stored.record.deliveryState {
+        case .pending(.queued), .deliveryUnconfirmed:
+            recordsByRequestID.removeValue(forKey: clientRequestID)
+            await publish()
+            return true
+        case .pending, .confirmed, .rejected, .uncertain, .operationFailed:
+            return false
+        }
     }
 
     /// Removes a terminal user-facing failure receipt. Confirmed operations are

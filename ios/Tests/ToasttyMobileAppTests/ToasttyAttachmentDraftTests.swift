@@ -24,7 +24,7 @@ final class ToasttyAttachmentDraftTests: XCTestCase {
         state.finishSubmission(submission, outcome: .notEnqueued(.staleComposerAuthority))
         XCTAssertEqual(state.attachments(for: conversation), [file])
         XCTAssertFalse(state.isSubmitting(conversation))
-        XCTAssertTrue(ToasttyComposerPresentation(agentDisplayName: "Codex", gate: .enabled)
+        XCTAssertTrue(ToasttyComposerPresentation(agentDisplayName: "Codex", gate: .enabled(.prompt))
             .canSubmit(draft: "", attachments: [file]))
     }
 

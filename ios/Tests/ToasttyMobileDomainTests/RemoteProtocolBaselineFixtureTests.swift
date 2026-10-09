@@ -17,7 +17,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
 
         XCTAssertEqual(
             fixtureURLs.count,
-            36,
+            51,
             "Adding or removing canonical v1 fixtures requires an intentional iOS harness update."
         )
 
@@ -63,6 +63,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
             "pair-request": decode(RemoteGatewayPairRequest.self),
             "pair-response": decode(RemoteGatewayPairResponse.self),
             "pending-interaction-preview": decode(RemotePendingInteractionPreview.self),
+            "push-registration": decode(RemoteGatewayPushRegistrationRequest.self),
             "revoke-current-device-request": decode(RemoteGatewayRevokeCurrentDeviceRequest.self),
             "revoke-current-device-response": decode(RemoteGatewayRevokeCurrentDeviceResponse.self),
             "send-request": decode(RemoteMessageSendRequest.self),
@@ -84,7 +85,9 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
             "stream-session-list": decode(RemoteGatewayStreamMessage.self),
         ]
 
-        XCTAssertEqual(decoders.count, 36)
+        // APNs session and verification fixtures have an outer aps envelope;
+        // PushPayloadFixtureTests decodes their nested strict push model.
+        XCTAssertEqual(decoders.count, 37)
         for (name, decoder) in decoders {
             try decoder(fixtureData(named: name))
         }

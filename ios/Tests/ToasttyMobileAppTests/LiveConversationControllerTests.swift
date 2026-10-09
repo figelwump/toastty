@@ -489,6 +489,35 @@ final class LiveConversationControllerTests: XCTestCase {
         )
     }
 
+    func testSendFeedbackSkipsExistingReceiptsAndCountsNewOnes() {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        let earlier = sendRecord("earlier", .operationFailed)
+        // Receipts already present when the conversation opens stay silent.
+        subject.consumeSendReconciliation(.init(records: [earlier]))
+        XCTAssertNil(subject.sendFeedback)
+
+        subject.consumeSendReconciliation(.init(records: [
+            earlier, sendRecord("a", .pending(.awaitingResponse)),
+        ]))
+        XCTAssertNil(subject.sendFeedback)
+        subject.consumeSendReconciliation(.init(records: [
+            earlier, sendRecord("a", .rejected(reason: .sessionWritesDisabled)),
+        ]))
+        XCTAssertEqual(subject.sendFeedback, ToasttyOutcomeFeedback(sequence: 1, outcome: .failure))
+
+        // The stream keeps only the newest state, so a receipt can arrive
+        // without its pending state. Dismissing a receipt stays silent.
+        subject.consumeSendReconciliation(.init(records: [
+            earlier, sendRecord("b", .deliveryUnconfirmed),
+        ]))
+        XCTAssertEqual(subject.sendFeedback, ToasttyOutcomeFeedback(sequence: 2, outcome: .warning))
+        subject.consumeSendReconciliation(.init(records: [earlier]))
+        XCTAssertEqual(subject.sendFeedback, ToasttyOutcomeFeedback(sequence: 2, outcome: .warning))
+    }
+
     func testOptimisticSendHandsOffToCanonicalUserRowWithoutMissingOrDuplicateFrame() {
         let subject = LiveConversationController(
             conversationID: conversationID.rawValue,
@@ -825,8 +854,16 @@ final class LiveConversationControllerTests: XCTestCase {
         guard case .failed = subject.interactionAnswerStates[questionInteraction.id]?.status else {
             return XCTFail("Expected retryable failure")
         }
+        XCTAssertEqual(
+            subject.interactionAnswerStates[questionInteraction.id]?.lastSubmission,
+            ToasttyOutcomeFeedback(sequence: 1, outcome: .failure)
+        )
         await subject.submitInteractionAnswer(interactionID: questionInteraction.id)
         XCTAssertEqual(subject.interactionAnswerStates[questionInteraction.id]?.status, .awaitingClaude)
+        XCTAssertEqual(
+            subject.interactionAnswerStates[questionInteraction.id]?.lastSubmission,
+            ToasttyOutcomeFeedback(sequence: 2, outcome: .success)
+        )
         let requests = await recorder.requests()
         XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(requests[0], requests[1])

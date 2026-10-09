@@ -34,12 +34,40 @@ struct RemoteProtocolGoldenTests {
             at: Self.fixtureDirectory,
             includingPropertiesForKeys: nil
         ).map(\.lastPathComponent))
-        #expect(expectedNames == Set(fixtures.map(\.name)), "Fixture files must exactly match the registered v1 contract")
+        let pushFixtureNames: Set<String> = ["push-registration.json", "push-session.json", "push-verification.json"]
+        #expect(expectedNames == Set(fixtures.map(\.name)).union(pushFixtureNames), "Fixture files must exactly match the registered v1 contract")
 
         for fixture in fixtures {
             let expected = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent(fixture.name))
             #expect(fixture.data == expected, "Wire bytes changed for \(fixture.name); regenerate explicitly and review the diff")
         }
+    }
+
+    @Test func pushFixturesMatchSharedNativeAndAPNsContracts() throws {
+        let registrationData = try Data(contentsOf: Self.fixtureDirectory.appending(path: "push-registration.json"))
+        let registration = try JSONDecoder().decode(RemoteGatewayPushRegistrationRequest.self, from: registrationData)
+        #expect(registration.protocolVersion == RemoteGatewayProtocol.version)
+        #expect(registration.registration?.relayID == RemotePushPolicy.developmentRelayID)
+        #expect(registration.registration.map { RemotePushPolicy.isValidCapabilityToken($0.sendToken) } == true)
+        for (filename, kind) in [("push-session.json", RemotePushPayloadKind.session), ("push-verification.json", .verification)] {
+            let data = try Data(contentsOf: Self.fixtureDirectory.appending(path: filename))
+            let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let payloadData = try JSONSerialization.data(withJSONObject: #require(object["toastty"]))
+            let payload = try JSONDecoder().decode(RemotePushPayload.self, from: payloadData)
+            #expect(payload.isValid && payload.kind == kind)
+            #expect(payload.registrationID == registration.registration?.registrationID)
+            var reencoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
+            // Foundation emits uppercase UUIDs; the relay emits lowercase.
+            // UUID identity and the remaining wire fields must agree.
+            for key in ["registrationID", "pairingID", "conversationID", "eventID"] {
+                if let value = reencoded[key] as? String { reencoded[key] = value.lowercased() }
+            }
+            #expect(NSDictionary(dictionary: reencoded) == object["toastty"] as? NSDictionary)
+        }
+        let clean = RemotePushPolicy.notificationTitle(String(repeating: "👩🏽‍💻", count: 100) + "\nHidden")
+        #expect(clean.utf8.count <= 512 && !clean.contains("\n"))
+        #expect(clean.allSatisfy { $0 == "👩🏽‍💻" })
+        #expect(!RemotePushPolicy.isValidCapabilityToken(String(repeating: "_", count: 43)))
     }
 
     @Test func optionalPresentationFieldsAreAdditiveToBaselineGoldenSnapshot() throws {
@@ -275,6 +303,61 @@ private extension RemoteProtocolGoldenTests {
             try fixture("send-result-accepted.json", RemoteMessageSendResult.accepted(epoch: epoch)),
             try fixture("send-result-uncertain.json", RemoteMessageSendResult.uncertain),
             try fixture("send-result-duplicate.json", RemoteMessageSendResult.duplicate),
+            try fixture(
+                "send-request-queue.json",
+                RemoteMessageSendRequest(
+                    conversationID: conversationID,
+                    clientRequestID: "ios-request-0002",
+                    expectedInputEpoch: epoch,
+                    text: "Also add a UI test for it.",
+                    deliveryMode: .queue
+                )
+            ),
+            try fixture("send-result-queued.json", RemoteMessageSendResult.queued(position: 2)),
+            try fixture(
+                "conversation-input-control.json",
+                RemoteConversationInputControl(
+                    turnEpoch: epoch,
+                    canQueue: true,
+                    canSteer: true,
+                    canInterrupt: true,
+                    queuedMessages: [
+                        RemoteQueuedMessage(
+                            clientRequestID: "ios-request-0002",
+                            text: "Also add a UI test for it.",
+                            enqueuedAt: timestamp
+                        ),
+                        RemoteQueuedMessage(
+                            clientRequestID: "ios-request-0003",
+                            text: "Then run the suite.",
+                            attachmentCount: 1,
+                            enqueuedAt: timestamp.addingTimeInterval(5)
+                        ),
+                    ],
+                    isQueuePaused: true
+                )
+            ),
+            try fixture(
+                "queue-update-request.json",
+                RemoteConversationQueueUpdateRequest(
+                    conversationID: conversationID,
+                    action: .remove,
+                    clientRequestID: "ios-request-0002"
+                )
+            ),
+            try fixture(
+                "queue-update-response.json",
+                RemoteConversationQueueUpdateResponse(result: .updated)
+            ),
+            try fixture(
+                "interrupt-request.json",
+                RemoteConversationInterruptRequest(conversationID: conversationID, expectedTurnEpoch: epoch)
+            ),
+            try fixture("interrupt-response-accepted.json", RemoteConversationInterruptResponse(result: .accepted)),
+            try fixture(
+                "interrupt-response-rejected-turn_mismatch.json",
+                RemoteConversationInterruptResponse(result: .rejected(reason: .turnMismatch))
+            ),
         ]
 
         let rejectionReasons: [RemoteMessageRejectionReason] = [
@@ -287,6 +370,10 @@ private extension RemoteProtocolGoldenTests {
             .localDraftPresent,
             .pendingInteraction,
             .emptyText,
+            .queueFull,
+            .notWorking,
+            .turnMismatch,
+            .steerUnavailable,
         ]
         fixtures += try rejectionReasons.map { reason in
             try fixture(

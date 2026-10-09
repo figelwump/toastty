@@ -153,7 +153,7 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertEqual(home.freshness, .unreachable)
     }
 
-    func testSceneLifecycleRetainsActiveConversationWhileSuspended() async throws {
+    func testSceneLifecycleRetainsActiveConversationDuringBriefBackground() async throws {
         let runtime = LiveRuntimeSpy()
         let home = HomeScreenController(
             runtimeMode: .fixture,
@@ -169,19 +169,21 @@ final class LiveSessionsControllerTests: XCTestCase {
         await subject.openConversation(conversation.id)
         let controller = try XCTUnwrap(subject.activeConversationController)
 
-        await subject.background()
+        await subject.background(lifecycleSequence: 1)
+        let backgroundSequences = await runtime.backgroundSequences()
+        XCTAssertEqual(backgroundSequences, [1])
         let didSuspend = await runtime.didSuspend()
-        XCTAssertTrue(didSuspend)
-        XCTAssertEqual(home.freshness, .stale)
+        XCTAssertFalse(didSuspend)
+        XCTAssertEqual(home.freshness, .live)
         XCTAssertTrue(subject.activeConversationController === controller)
         var conversationOpenCount = await runtime.conversationOpenCount()
         var conversationCloseCount = await runtime.conversationCloseCount()
         XCTAssertEqual(conversationOpenCount, 1)
         XCTAssertEqual(conversationCloseCount, 0)
 
-        await subject.foreground()
-        let connectCount = await runtime.connectCount()
-        XCTAssertEqual(connectCount, 1)
+        await subject.foreground(lifecycleSequence: 2)
+        let resumeSequences = await runtime.resumeSequences()
+        XCTAssertEqual(resumeSequences, [2])
         XCTAssertTrue(subject.activeConversationController === controller)
         conversationOpenCount = await runtime.conversationOpenCount()
         conversationCloseCount = await runtime.conversationCloseCount()
@@ -192,6 +194,40 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertNil(subject.activeConversationController)
         conversationCloseCount = await runtime.conversationCloseCount()
         XCTAssertEqual(conversationCloseCount, 1)
+        subject.stopObserving()
+    }
+
+    func testShortForegroundProbeKeepsPresentationStable() async throws {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(runtimeMode: .fixture, snapshot: snapshot(titles: ["Alpha"]).presentation(),
+                                        connectionState: .live)
+        let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
+        subject.consumeSessionsState(.init(connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live))
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
+        await subject.background(lifecycleSequence: 1)
+        await subject.foreground(lifecycleSequence: 2)
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .checkingConnection))
+        XCTAssertEqual(home.freshness, .live)
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
+        XCTAssertEqual(home.freshness, .live)
+        XCTAssertEqual(home.snapshot.workspaces.first?.conversations.first?.title, "Alpha")
+        subject.stopObserving()
+    }
+
+    func testSlowForegroundProbeExposesConnectionState() async throws {
+        let home = HomeScreenController(runtimeMode: .fixture, snapshot: snapshot(titles: ["Alpha"]).presentation(),
+                                        connectionState: .live)
+        let subject = LiveSessionsController(runtime: LiveRuntimeSpy(), hostName: "toastty.test.ts.net",
+                                             homeController: home, connectionPresentationDelay: .milliseconds(1))
+        subject.consumeSessionsState(.init(connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live))
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
+        await subject.background(lifecycleSequence: 1)
+        await subject.foreground(lifecycleSequence: 2)
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .checkingConnection))
+        for _ in 0..<100 where home.freshness == .live {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertEqual(home.freshness, .reconnecting)
         subject.stopObserving()
     }
 
@@ -206,7 +242,7 @@ final class LiveSessionsControllerTests: XCTestCase {
             runtime: runtime,
             hostName: "toastty.test.ts.net",
             homeController: home,
-            manualRefreshPresentationDelay: .milliseconds(1)
+            connectionPresentationDelay: .milliseconds(1)
         )
         subject.consumeSessionsState(SessionsRuntime.State(
             connectionGeneration: 7,
@@ -265,7 +301,7 @@ final class LiveSessionsControllerTests: XCTestCase {
             runtime: runtime,
             hostName: "toastty.test.ts.net",
             homeController: home,
-            manualRefreshPresentationDelay: .seconds(30)
+            connectionPresentationDelay: .seconds(30)
         )
         subject.consumeSessionsState(SessionsRuntime.State(
             connectionGeneration: 7,
@@ -320,7 +356,7 @@ final class LiveSessionsControllerTests: XCTestCase {
             runtime: runtime,
             hostName: "toastty.test.ts.net",
             homeController: home,
-            manualRefreshPresentationDelay: .seconds(30)
+            connectionPresentationDelay: .seconds(30)
         )
         subject.consumeSessionsState(SessionsRuntime.State(
             connectionGeneration: 7,
@@ -708,6 +744,8 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     private var connectionRequests = 0
     private var restartRequests = 0
     private var suspended = false
+    private var backgrounds: [UInt64] = []
+    private var resumes: [UInt64] = []
     private var conversationRuntimes: [RemoteConversationID: ConversationRuntime] = [:]
     private var shouldHoldConversationOpens = false
     private var conversationOpenContinuations: [CheckedContinuation<Void, Never>] = []
@@ -739,6 +777,11 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     func connectIfNeeded() {
         connectionRequests += 1
     }
+
+    func enterBackground(lifecycleSequence: UInt64) { backgrounds.append(lifecycleSequence) }
+    func resume(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) { resumes.append(lifecycleSequence) }
+    func backgroundSequences() -> [UInt64] { backgrounds }
+    func resumeSequences() -> [UInt64] { resumes }
 
     func restart() {
         connectionRequests += 1

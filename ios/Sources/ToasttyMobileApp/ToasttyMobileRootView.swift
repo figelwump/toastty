@@ -9,11 +9,15 @@ struct ToasttyMobileRootView: View {
     @State private var appIconBadgeController: AppIconBadgeController?
     @State private var navigationPath: [ToasttyMobileRoute] = []
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
-    @State private var showsSettings = false
+    @State private var presentedSheet: ToasttyMobileSheet?
     @State private var fixtureHasLoadedOlderTranscript = false
     @State private var composerDraftState = ToasttyComposerDraftState()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
     @State private var fixtureComposerIsReserved = false
+    @State private var fixtureQueuedMessages: [RemoteQueuedMessage] = []
+    @State private var fixtureQueueSubmissionCount = 0
+    @State private var fixtureQueuePaused = false
+    @State private var fixtureTurnStopped = false
 #if DEBUG
     @State private var controlledFixtureSubmission: ControlledFixtureSubmission?
     @State private var fixtureSentText: String?
@@ -30,11 +34,16 @@ struct ToasttyMobileRootView: View {
     private let fixtureSendEventOrder: ToasttyConversationFixture.SendEventOrder?
 #endif
     private let deepLinkParser: DeepLinkParser?
+    private let pushBridge: ToasttyPushNotificationBridge?
 
-    init(configuration: ToasttyMobileAppConfiguration) {
-        _sessionController = State(initialValue: configuration.makeSessionController())
+    init(configuration: ToasttyMobileAppConfiguration, pushBridge: ToasttyPushNotificationBridge? = nil) {
+        _sessionController = State(initialValue: configuration.makeSessionController(pushBridge: pushBridge))
+        self.pushBridge = pushBridge
         _appIconBadgeController = State(initialValue: configuration.enablesSystemAppIconBadge
-            ? AppIconBadgeController(client: SystemAppIconBadgeClient())
+            ? AppIconBadgeController(
+                client: SystemAppIconBadgeClient(),
+                requestsAuthorization: configuration.pushConfiguration == nil
+            )
             : nil)
         _fixtureSendItems = State(initialValue: Self.initialFixtureSendItems(
             for: configuration.fixtureScenario
@@ -115,7 +124,11 @@ struct ToasttyMobileRootView: View {
             AppIconBadgeSync(sessionController: sessionController, controller: appIconBadgeController)
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: loadingPhase == nil)
+        .sensoryFeedback(trigger: sessionController.state) { old, new in
+            ToasttyHapticFeedback.pairingCompleted(from: old, to: new)
+        }
         .task {
+            if let pushBridge { sessionController.pushController?.attachBridge(pushBridge) }
             sessionController.installDiagnosticEventHandler(recordDiagnostic)
             recordDiagnostic(.authStarted)
             observeSessionState(sessionController.state)
@@ -135,6 +148,7 @@ struct ToasttyMobileRootView: View {
                 }
             } else {
                 routePendingDeepLinkIfAvailable()
+                presentNotificationIntroIfNeeded()
             }
         }
         .onChange(of: sessionController.homeController.snapshot) { _, newSnapshot in
@@ -144,6 +158,8 @@ struct ToasttyMobileRootView: View {
         .onChange(of: sessionController.homeController.freshness) {
             routePendingDeepLinkIfAvailable()
         }
+        .onChange(of: sessionController.pushController?.canIntroduce) { presentNotificationIntroIfNeeded() }
+        .onChange(of: sessionController.pushController?.pendingConversationID) { handleNotificationTap() }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
@@ -187,8 +203,11 @@ struct ToasttyMobileRootView: View {
             ToasttyHomeView(
                 controller: sessionController.homeController,
                 refresh: sessionController.refreshLiveSessions,
-                onSettings: { showsSettings = true },
-                openWorkspace: openWorkspace
+                onSettings: { presentedSheet = .settings },
+                openWorkspace: openWorkspace,
+                notificationError: sessionController.pushController?.configuration == nil
+                    ? nil : sessionController.pushController?.errorMessage,
+                retryNotifications: { sessionController.pushController?.retry() }
             )
                 .navigationDestination(for: ToasttyMobileRoute.self) { route in
                     switch route {
@@ -214,11 +233,15 @@ struct ToasttyMobileRootView: View {
             // The stack can be (re)inserted while a selection already exists,
             // e.g. after a keychain-lock cycle; onChange alone would miss it.
             syncNavigationPath(with: sessionController.homeController.selectedConversationPresentation)
+            handleNotificationTap()
+            presentNotificationIntroIfNeeded()
         }
         .onChange(of: sessionController.homeController.selectedConversationPresentation) { _, selection in
             syncNavigationPath(with: selection)
         }
         .onChange(of: navigationPath) { _, newPath in
+            sessionController.pushController?.setOpenConversation(newPath.last?.conversationID)
+            presentNotificationIntroIfNeeded()
             // A back swipe or back button pops the conversation route without
             // going through the controller; mirror the pop into selection so
             // the live conversation runtime closes.
@@ -227,22 +250,31 @@ struct ToasttyMobileRootView: View {
                 sessionController.homeController.dismissConversation()
             }
         }
-        .sheet(isPresented: $showsSettings) {
-            if let settingsPresentation {
+        .sheet(item: $presentedSheet) { sheet in
+            switch sheet {
+            case .settings:
+              if let settingsPresentation {
                 ToasttySettingsView(
                     presentation: settingsPresentation,
                     diagnostics: $diagnostics,
-                    onUnpair: unpair
+                    onUnpair: unpair,
+                    pushController: sessionController.pushController
                 )
+              }
+            case .notifications:
+              if let push = sessionController.pushController {
+                ToasttyNotificationIntroduction(controller: push)
+              }
             }
         }
-        .onChange(of: showsSettings) { _, isPresented in
-            guard isPresented else { return }
+        .onChange(of: presentedSheet) { _, sheet in
+            guard sheet == .settings else { presentNotificationIntroIfNeeded(); return }
             Task {
                 await sessionController.refreshCurrentDevice()
             }
         }
         .overlay(alignment: .top) {
+          VStack(spacing: 8) {
             if let message = sessionController.homeController.removedSelectionMessage {
                 RemovedConversationBanner(
                     message: message,
@@ -250,6 +282,7 @@ struct ToasttyMobileRootView: View {
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
+          }
         }
         .animation(
             .easeInOut(duration: 0.25),
@@ -291,7 +324,7 @@ struct ToasttyMobileRootView: View {
                 return
             }
             pendingDeepLinkDestination = nil
-            showsSettings = false
+            presentedSheet = nil
         case .workspace(let workspaceID):
             guard sessionController.homeController.workspace(id: workspaceID) != nil else {
                 discardPendingDeepLinkAfterLiveSnapshot()
@@ -300,7 +333,7 @@ struct ToasttyMobileRootView: View {
             pendingDeepLinkDestination = nil
             sessionController.homeController.dismissConversation()
             navigationPath = [.workspace(workspaceID)]
-            showsSettings = false
+            presentedSheet = nil
         }
     }
 
@@ -308,6 +341,21 @@ struct ToasttyMobileRootView: View {
         if sessionController.homeController.freshness == .live {
             pendingDeepLinkDestination = nil
         }
+    }
+
+    private func handleNotificationTap() {
+        guard let push = sessionController.pushController, let id = push.pendingConversationID else { return }
+        pendingDeepLinkDestination = .conversation(id)
+        push.consumedConversationTap()
+        routePendingDeepLinkIfAvailable()
+    }
+
+    private func presentNotificationIntroIfNeeded() {
+        guard presentedSheet == nil, navigationPath.isEmpty,
+              pendingDeepLinkDestination == nil,
+              sessionController.state == .paired(.live),
+              sessionController.pushController?.canIntroduce == true else { return }
+        presentedSheet = .notifications
     }
 
     private func syncNavigationPath(with selection: SelectedConversationPresentation?) {
@@ -356,7 +404,10 @@ struct ToasttyMobileRootView: View {
             attachmentRecoveryMessage: composerDraftState.attachmentRecoveryMessages[conversationID],
             loadOlder: conversationLoadOlderAction(for: conversationID),
             submitDraft: conversationSubmitAction(for: conversationID),
+            interrupt: conversationInterruptAction(for: conversationID),
             dismissSendReceipt: conversationReceiptDismissAction(for: conversationID),
+            queuedMessageAction: conversationQueuedMessageAction(for: conversationID),
+            sendFeedback: conversationSendFeedback(for: conversationID),
             interactionAnswerStates: conversationInteractionAnswerStates(for: conversationID),
             editInteractionAnswer: conversationInteractionEditAction(for: conversationID),
             submitInteractionAnswer: conversationInteractionSubmitAction(for: conversationID),
@@ -451,6 +502,13 @@ struct ToasttyMobileRootView: View {
 #if DEBUG
         switch fixtureScenario {
         case .home, .reconnecting:
+            let hasWork = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_WORK"] == "1"
+            let hasLongHistory = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_HISTORY"] == "1"
+            if hasWork || hasLongHistory {
+                return ToasttyConversationFixture.responseEntryPresentation(
+                    for: conversationID, hasWork: hasWork, hasLongHistory: hasLongHistory
+                )
+            }
             return ToasttyConversationFixture.presentation(for: conversationID)
         case .transcriptPerformance:
             return ToasttyConversationFixture.performancePresentation(for: conversationID)
@@ -471,6 +529,16 @@ struct ToasttyMobileRootView: View {
             return ToasttyConversationFixture.tablePresentation(for: conversationID)
         case .toolActivity:
             return ToasttyConversationFixture.toolActivityPresentation(for: conversationID)
+        case .queueSteer:
+            return ToasttyConversationFixture.gatedSendPresentation(
+                for: conversationID,
+                sendItems: conversationID == Self.fixtureWorkingConversationID
+                    ? ToasttySendPresentationAdapter.makeItems(
+                        from: SendReconciliationState(),
+                        inputControl: fixtureInputControl
+                    ) + fixtureSendItems
+                    : []
+            )
         case .gatedSend, .gatedSendReceipt:
             if let order = fixtureSendEventOrder,
                conversationID == Self.fixtureOpenPromptConversationID {
@@ -503,6 +571,14 @@ struct ToasttyMobileRootView: View {
             return nil
         }
         return controller.transcriptPresentation
+    }
+
+    private func conversationSendFeedback(for conversationID: UUID) -> ToasttyOutcomeFeedback? {
+        guard let controller = sessionController.liveController?.activeConversationController,
+              controller.conversationID == conversationID else {
+            return nil
+        }
+        return controller.sendFeedback
     }
 
     private func conversationLoadOlderAction(
@@ -549,8 +625,8 @@ struct ToasttyMobileRootView: View {
         }
     }
 
-    private func conversationSubmitAction(for conversationID: UUID) -> () -> Bool {
-        {
+    private func conversationSubmitAction(for conversationID: UUID) -> (RemoteMessageDeliveryMode?) -> Bool {
+        { deliveryMode in
             guard let submission = composerDraftState.beginSubmission(
                 for: conversationID
             ) else {
@@ -559,13 +635,64 @@ struct ToasttyMobileRootView: View {
             recordDiagnostic(.sendStarted)
             guard let controller = sessionController.liveController?.activeConversationController,
                   controller.conversationID == conversationID else {
-                return fixtureSubmit(submission)
+                return fixtureSubmit(submission, deliveryMode: deliveryMode)
             }
             Task { @MainActor in
-                let outcome = await controller.send(submission.text, attachments: submission.attachments)
+                let outcome = await controller.send(
+                    submission.text,
+                    attachments: submission.attachments,
+                    deliveryMode: deliveryMode
+                )
                 finishSubmission(submission, outcome: outcome)
             }
             return true
+        }
+    }
+
+    private func conversationInterruptAction(for conversationID: UUID) -> () -> Void {
+        {
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+#if DEBUG
+                fixtureInterrupt(conversationID)
+#endif
+                return
+            }
+            Task { await controller.interrupt() }
+        }
+    }
+
+    /// Edit and Steer now first take the message out of the Mac's queue, and
+    /// act on its text only when the Mac confirms it was still waiting. A
+    /// message the Mac already typed is left alone.
+    private func conversationQueuedMessageAction(
+        for conversationID: UUID
+    ) -> (ToasttyQueuedMessageAction) -> Void {
+        { action in
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+#if DEBUG
+                fixtureQueuedMessageAction(action, conversationID: conversationID)
+#endif
+                return
+            }
+            Task { @MainActor in
+                switch action {
+                case .remove(let clientRequestID):
+                    _ = await controller.removeQueuedMessage(clientRequestID)
+                case .edit(let clientRequestID, let text):
+                    guard await controller.removeQueuedMessage(clientRequestID) else { return }
+                    composerDraftState.restoreDraft(text, for: conversationID)
+                case .steer(let clientRequestID, let text):
+                    guard await controller.removeQueuedMessage(clientRequestID) else { return }
+                    let outcome = await controller.send(text, deliveryMode: .steer)
+                    if case .notEnqueued = outcome {
+                        composerDraftState.restoreDraft(text, for: conversationID)
+                    }
+                case .resume:
+                    await controller.resumeQueue()
+                }
+            }
         }
     }
 
@@ -658,8 +785,87 @@ struct ToasttyMobileRootView: View {
         }
     }
 
+#if DEBUG
+    private static let fixtureTurnEpoch = RemoteInputEpoch(
+        bindingID: UUID(uuidString: "F1000000-0000-0000-0000-000000000002")!,
+        counter: 9
+    )
+
+    private var fixtureInputControl: RemoteConversationInputControl {
+        RemoteConversationInputControl(
+            turnEpoch: fixtureTurnStopped ? nil : Self.fixtureTurnEpoch,
+            canQueue: true,
+            canSteer: !fixtureTurnStopped,
+            canInterrupt: !fixtureTurnStopped,
+            queuedMessages: fixtureQueuedMessages,
+            isQueuePaused: fixtureQueuePaused
+        )
+    }
+
+    private func fixtureQueueSteerComposer() -> ToasttyComposerPresentation {
+        let control = fixtureInputControl
+        let authority: ConversationComposerAuthority
+        if let turnEpoch = control.turnEpoch {
+            authority = ConversationComposerAuthority(
+                stamp: ConversationComposerStamp(
+                    connectionGeneration: 1,
+                    streamSnapshotOrdinal: 1,
+                    projectionRunID: RemoteProjectionRunID(
+                        rawValue: UUID(uuidString: "F2000000-0000-0000-0000-000000000002")!
+                    ),
+                    projectionGeneration: 1,
+                    latestSequence: 13,
+                    inputEpoch: turnEpoch,
+                    deliveryMode: .queue
+                ),
+                inputAvailability: .unavailable(reason: .known(.working)),
+                inputControl: control
+            )
+        } else {
+            // After a stop the fixture host reports an interrupted turn with
+            // no prompt yet, as a real host does until stabilization opens it.
+            authority = ConversationComposerAuthority(
+                inputAvailability: .unavailable(reason: .known(.interrupted)),
+                gateFailure: .inputUnavailable,
+                inputControl: control
+            )
+        }
+        return ToasttyComposerPresentation.make(agentDisplayName: "Codex", authority: authority)
+    }
+
+    private func fixtureInterrupt(_ conversationID: UUID) {
+        guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
+        fixtureTurnStopped = true
+        fixtureQueuePaused = !fixtureQueuedMessages.isEmpty
+    }
+
+    private func fixtureQueuedMessageAction(_ action: ToasttyQueuedMessageAction, conversationID: UUID) {
+        guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
+        switch action {
+        case .remove(let clientRequestID):
+            fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
+        case .edit(let clientRequestID, let text):
+            fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
+            composerDraftState.restoreDraft(text, for: conversationID)
+        case .steer(let clientRequestID, let text):
+            fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
+            fixtureSendItems.append(ToasttySendPresentationItem(
+                clientRequestID: "fixture-steered-\(fixtureSendItems.count + 1)",
+                text: text,
+                content: .optimistic(response: .accepted)
+            ))
+        case .resume:
+            fixtureQueuePaused = false
+        }
+        if fixtureQueuedMessages.isEmpty { fixtureQueuePaused = false }
+    }
+#endif
+
     private func fixtureComposer(for conversationID: UUID) -> ToasttyComposerPresentation? {
 #if DEBUG
+        if fixtureScenario == .queueSteer {
+            return conversationID == Self.fixtureWorkingConversationID ? fixtureQueueSteerComposer() : nil
+        }
         guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
               conversationID == Self.fixtureOpenPromptConversationID else { return nil }
         let epoch = RemoteInputEpoch(
@@ -696,8 +902,36 @@ struct ToasttyMobileRootView: View {
 #endif
     }
 
-    private func fixtureSubmit(_ submission: ToasttyComposerSubmission) -> Bool {
+    private func fixtureSubmit(
+        _ submission: ToasttyComposerSubmission,
+        deliveryMode: RemoteMessageDeliveryMode?
+    ) -> Bool {
 #if DEBUG
+        if fixtureScenario == .queueSteer {
+            guard submission.conversationID == Self.fixtureWorkingConversationID,
+                  fixtureTurnStopped == false else {
+                finishSubmission(submission, outcome: .notEnqueued(.inputUnavailable))
+                return false
+            }
+            fixtureQueueSubmissionCount += 1
+            let clientRequestID = "fixture-queued-\(fixtureQueueSubmissionCount)"
+            if deliveryMode == .steer {
+                fixtureSendItems.append(ToasttySendPresentationItem(
+                    clientRequestID: clientRequestID,
+                    text: submission.text,
+                    content: .optimistic(response: .accepted)
+                ))
+            } else {
+                fixtureQueuedMessages.append(RemoteQueuedMessage(
+                    clientRequestID: clientRequestID,
+                    text: submission.text,
+                    attachmentCount: submission.attachments.count,
+                    enqueuedAt: Date()
+                ))
+            }
+            finishSubmission(submission, outcome: .enqueued(clientRequestID: clientRequestID))
+            return true
+        }
         guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
               submission.conversationID == Self.fixtureOpenPromptConversationID else {
             finishSubmission(
@@ -820,6 +1054,11 @@ struct ToasttyMobileRootView: View {
         uuidString: "B1000000-0000-0000-0000-000000000007"
     )!
 
+    /// The fixture home's working Codex session ("Sparkle updater fix").
+    private static let fixtureWorkingConversationID = UUID(
+        uuidString: "B1000000-0000-0000-0000-000000000002"
+    )!
+
     private func resetComposerPresentation() {
         composerDraftState.reset()
 #if DEBUG
@@ -827,6 +1066,9 @@ struct ToasttyMobileRootView: View {
 #endif
         fixtureSendItems.removeAll(keepingCapacity: false)
         fixtureComposerIsReserved = false
+        fixtureQueuedMessages.removeAll(keepingCapacity: false)
+        fixtureQueuePaused = false
+        fixtureTurnStopped = false
     }
 
     private func observeSessionState(_ state: AppSessionState) {
@@ -873,8 +1115,7 @@ struct ToasttyMobileRootView: View {
 
     @MainActor
     private func unpair() async {
-        await sessionController.unpairCurrentDevice()
-        showsSettings = false
+        if await sessionController.unpairCurrentDevice() { presentedSheet = nil }
     }
 }
 

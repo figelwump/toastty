@@ -82,6 +82,7 @@ enum ToastyTheme {
     static let focusModeAccent = Color(hex: 0x7EBFB2)
     static let focusModeAccentText = Color(hex: 0x0C1A17)
     static let sessionIndicatorSpinnerColor = Color(hex: 0xF5A623)
+    static let sessionProgressText = Color(hex: 0x83BBFF)
     static let sessionIdleText = Color(hex: 0xC1AA8A)
     static let sessionIdleBackground = Color(hex: 0xC1AA8A, alpha: 0.1)
     static let sessionWaitingText = Color(hex: 0xE6CFA9)
@@ -182,6 +183,13 @@ enum ToastyTheme {
     static let fontWorkspaceName = Font.system(size: sidebarWorkspaceNameFontSize, weight: .semibold, design: .default)
     static let fontWorkspaceNameInactive = Font.system(size: sidebarWorkspaceNameFontSize, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)
+    /// The Merge control in the top bar's subtitle slot. 16pt is what fits
+    /// between the title and the bar's bottom hairline.
+    static let fontWorkspaceMergeButton = Font.system(size: 10, weight: .semibold, design: .rounded)
+    static let fontWorkspaceMergeProgress = Font.system(size: 10, weight: .medium, design: .rounded)
+    static let workspaceMergeControlHeight: CGFloat = 16
+    static let workspaceMergeControlHorizontalPadding: CGFloat = 6
+    static let workspaceMergeControlCornerRadius: CGFloat = 4
     static let fontWorkspaceSessionAgent = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontWorkspaceSessionChip = Font.system(size: 10, weight: .medium, design: .default)
     static let fontWorkspaceSessionDetail = Font.system(size: 11, weight: .regular, design: .default)

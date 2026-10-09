@@ -22,8 +22,66 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         var position = TranscriptEntryScrollPosition()
         XCTAssertEqual(
             position.target(for: state, status: .ready, isSubmitting: false),
-            .transcript(ToasttyTranscriptBlockID(rowID: latestResponseID))
+            .responseStart(ToasttyTranscriptBlockID(rowID: latestResponseID))
         )
+    }
+
+    func testResponseEntryUsesVisibleFoldedWorkOrLastExpandedToolCard() throws {
+        let state = entryState([
+            .userMessage(text: "Explain the result", origin: .local),
+            .toolStarted(callID: "read", name: "Read", detail: nil),
+            .toolFinished(callID: "read", name: "Read", outcome: .succeeded, detail: nil),
+            .assistantMessage(text: "Latest response", phase: .unknown),
+        ])
+        let turn = try XCTUnwrap(state.turns.first)
+        let response = try XCTUnwrap(state.blocks.last)
+        let folded = TranscriptResponseEntryContext(responseID: response.id, items: [
+            .block(state.blocks[0], isWork: false), .workStrip(turn),
+            .block(response, isWork: false),
+        ])
+        XCTAssertEqual(folded.target, .turnWork(turn.id))
+        XCTAssertNil(folded.markerHostID)
+
+        let expanded = TranscriptResponseEntryContext(
+            responseID: response.id,
+            items: [.workStrip(turn)] + state.blocks.map { .block($0, isWork: false) }
+        )
+        XCTAssertEqual(expanded.target, .transcript(state.blocks[1].id))
+        XCTAssertNil(expanded.markerHostID)
+
+        let showingToolDetails = TranscriptResponseEntryContext(
+            responseID: response.id,
+            items: state.blocks.map { .block($0, isWork: true) },
+            expandedToolBatchIDs: [state.blocks[1].id]
+        )
+        XCTAssertEqual(showingToolDetails.target, .responseContext(response.id))
+        XCTAssertEqual(showingToolDetails.markerHostID, .transcript(state.blocks[1].id))
+    }
+
+    func testResponseEntryWithoutAdjacentWorkUsesOnlyPrecedingContent() throws {
+        let state = entryState([
+            .userMessage(text: "Earlier request", origin: .local),
+            .toolStarted(callID: "read", name: "Read", detail: nil),
+            .assistantMessage(text: "Earlier response", phase: .final),
+            .userMessage(text: "New request", origin: .local),
+            .assistantMessage(text: "Latest response", phase: .final),
+        ])
+        let response = try XCTUnwrap(state.blocks.last)
+        let context = TranscriptResponseEntryContext(
+            responseID: response.id, items: state.blocks.map { .block($0, isWork: false) }
+        )
+        XCTAssertEqual(context.target, .responseContext(response.id))
+        XCTAssertEqual(context.markerHostID, .transcript(state.blocks[3].id))
+    }
+
+    func testResponseEntryAtHistoryBoundaryUsesResponseItself() throws {
+        let state = entryState([.assistantMessage(text: "Latest response", phase: .final)])
+        let response = try XCTUnwrap(state.blocks.first)
+        let context = TranscriptResponseEntryContext(
+            responseID: response.id, items: [.block(response, isWork: false)]
+        )
+        XCTAssertEqual(context.target, .transcript(response.id))
+        XCTAssertNil(context.markerHostID)
     }
 
     func testEntryWaitsForContentAndDoesNotMoveAgainAfterStatusOrTranscriptUpdates() {
@@ -33,7 +91,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         let state = entryState([.assistantMessage(text: "Latest response", phase: .final)])
         XCTAssertEqual(
             position.target(for: state, status: .ready, isSubmitting: false),
-            .transcript(ToasttyTranscriptBlockID(rowID: rowID(sequence: 1)))
+            .responseStart(ToasttyTranscriptBlockID(rowID: rowID(sequence: 1)))
         )
         for status in [MobileSessionStatus.idle, .working, .ready] {
             XCTAssertNil(position.target(for: state, status: status, isSubmitting: false))
@@ -144,6 +202,51 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertEqual(collapsed.distanceFromBottom, 0)
         XCTAssertTrue(collapsed.hasViewportHeightChange(comparedTo: expanded))
         XCTAssertTrue(collapsed.hasLiveEdgeLayoutChange(comparedTo: expanded))
+    }
+
+    func testInsetIncreaseWithoutContainerChangeIsAViewportChangeThatHidesTheBottom() {
+        // iOS 27 keyboard dismissal while the composer grows: the keyboard
+        // inset leaves first, then the composer inset returns larger, and the
+        // container height stays put between those two callbacks.
+        let keyboardGone = TranscriptScrollMetrics(geometry: ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: 1_200),
+            contentSize: CGSize(width: 402, height: 1_898),
+            contentInsets: EdgeInsets(top: 116, leading: 0, bottom: 176, trailing: 0),
+            containerSize: CGSize(width: 402, height: 874)
+        ))
+        let composerGrew = TranscriptScrollMetrics(geometry: ScrollGeometry(
+            contentOffset: CGPoint(x: 0, y: 1_200),
+            contentSize: CGSize(width: 402, height: 1_898),
+            contentInsets: EdgeInsets(top: 116, leading: 0, bottom: 233, trailing: 0),
+            containerSize: CGSize(width: 402, height: 874)
+        ))
+
+        XCTAssertEqual(keyboardGone.distanceFromBottom, 0)
+        XCTAssertEqual(composerGrew.distanceFromBottom, 57)
+        XCTAssertFalse(composerGrew.hasReachedPhysicalLiveEdge)
+        XCTAssertTrue(composerGrew.hasViewportChange(comparedTo: keyboardGone))
+        XCTAssertFalse(
+            TranscriptScrollMetrics(geometry: ScrollGeometry(
+                contentOffset: CGPoint(x: 0, y: 1_100),
+                contentSize: CGSize(width: 402, height: 1_898),
+                contentInsets: EdgeInsets(top: 116, leading: 0, bottom: 176, trailing: 0),
+                containerSize: CGSize(width: 402, height: 874)
+            )).hasViewportChange(comparedTo: keyboardGone),
+            "An offset-only change is reader movement, not a viewport change"
+        )
+    }
+
+    func testSynchronousLiveEdgeRepairYieldsToAnimatedJumps() {
+        var coordinator = TranscriptScrollCoordinator()
+        XCTAssertTrue(coordinator.allowsSynchronousLiveEdgeRepair)
+        coordinator.requestInitialLiveEdge()
+        XCTAssertTrue(coordinator.allowsSynchronousLiveEdgeRepair)
+        coordinator.requestSend(1)
+        XCTAssertTrue(coordinator.allowsSynchronousLiveEdgeRepair)
+        coordinator.requestJump()
+        XCTAssertFalse(coordinator.allowsSynchronousLiveEdgeRepair)
+        coordinator.cancelForInteraction()
+        XCTAssertTrue(coordinator.allowsSynchronousLiveEdgeRepair)
     }
 
     func testScrollMetricsAllowOverscrollAndUseExclusiveNearBottomThreshold() {
@@ -448,6 +551,7 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         let anchor = ToasttyTranscriptBlockID(rowID: rowID(sequence: 4))
 
         XCTAssertFalse(coordinator.requestHistoryAnchor(anchor))
+        XCTAssertFalse(coordinator.requestHistoryAnchor(anchor, includesResponseContext: true))
 
         XCTAssertEqual(coordinator.command?.target, .liveEdge)
         XCTAssertEqual(coordinator.command?.motion, .immediate)

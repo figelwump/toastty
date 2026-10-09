@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import Foundation
 import Network
@@ -596,6 +597,148 @@ private actor RemoteAccessTailnetSetupSpy {
 }
 
 struct RemoteAccessServiceSafetyTests {
+    @MainActor
+    @Test func acceptedSessionEventSendsDurableConversationAndCurrentTitle() async throws {
+        let relay = RemotePushRelaySpy()
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay)
+        defer { fixture.removeRuntimeFiles() }
+        let registration = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: Data(repeating: 1, count: 32).base64EncodedString().replacingOccurrences(of: "=", with: ""), relayID: configuration.relayID)
+        try fixture.setPushRegistration(registration)
+        let title = fixture.summary.title
+        fixture.sessionRuntimeStore.updateStatus(sessionID: fixture.sessionID, status: .init(kind: .working, summary: "Working"), at: fixture.confirmedAt.addingTimeInterval(1))
+        fixture.sessionRuntimeStore.updateStatus(sessionID: fixture.sessionID, status: .init(kind: .ready, summary: "Ready", detail: "Private details"), at: fixture.confirmedAt.addingTimeInterval(2))
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.count == 1 }
+        let sent = try #require(relay.notifications.first)
+        #expect(sent.conversationID == fixture.conversationID)
+        #expect(sent.sessionTitle == title)
+        #expect(sent.status == .ready)
+        #expect(relay.registrations.first?.registrationID == registration.registrationID)
+
+        let event = ManagedSessionActionableEvent(eventID: UUID(), kind: .needsApproval, timestamp: .now, sessionID: "stale-session", agent: .codex, workspaceID: fixture.summary.placement.workspaceID!, panelID: fixture.panelID)
+        fixture.sessionRuntimeStore.onActionableEvent?(event)
+        fixture.service.setEnabled(false, persist: false)
+        fixture.sessionRuntimeStore.onActionableEvent?(.init(eventID: UUID(), kind: .needsApproval, timestamp: .now, sessionID: fixture.sessionID, agent: .codex, workspaceID: event.workspaceID, panelID: fixture.panelID))
+        await Task.yield()
+        #expect(relay.notifications.count == 1)
+    }
+
+    @MainActor
+    @Test func temporaryRelayFailureKeepsGrantButDeadGrantClearsDurablyAndRetainsCleanup() async throws {
+        let relay = RemotePushRelaySpy()
+        relay.sendOutcome = .dropped
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay)
+        defer { fixture.removeRuntimeFiles() }
+        let registration = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: Data(repeating: 2, count: 32).base64EncodedString().replacingOccurrences(of: "=", with: ""), relayID: configuration.relayID)
+        try fixture.setPushRegistration(registration)
+        func event() -> ManagedSessionActionableEvent {
+            .init(eventID: UUID(), kind: .needsApproval, timestamp: .now, sessionID: fixture.sessionID, agent: .codex, workspaceID: fixture.summary.placement.workspaceID!, panelID: fixture.panelID)
+        }
+        fixture.sessionRuntimeStore.onActionableEvent?(event())
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.count == 1 }
+        #expect(try fixture.pushConfigurationResponse().registrationID == registration.registrationID)
+        relay.sendOutcome = .registrationUnavailable
+        fixture.sessionRuntimeStore.onActionableEvent?(event())
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.count == 1 }
+        #expect(try fixture.pushConfigurationResponse().registrationID == nil)
+        let runtimePaths = ToasttyRuntimePaths.resolve(homeDirectoryPath: "/tmp", environment: [ToasttyRuntimePaths.environmentKey: fixture.runtimeHome])
+        #expect(RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL).pendingPushCleanup.map(\.registrationID) == [registration.registrationID])
+        relay.revokeSucceeds = true
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.count == 2 }
+        await Task.yield()
+        #expect(RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL).pendingPushCleanup.isEmpty)
+        #expect(relay.notifications.count == 2)
+    }
+
+    @MainActor
+    @Test func revocationBeforeQueuedSendPreventsDeliveryAndLateFailurePreservesReplacement() async throws {
+        let relay = RemotePushRelaySpy()
+        relay.holdSend = true
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay)
+        defer { fixture.removeRuntimeFiles() }
+        let first = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        try fixture.setPushRegistration(first)
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+        func event() -> ManagedSessionActionableEvent {
+            .init(eventID: UUID(), kind: .needsApproval, timestamp: .now, sessionID: fixture.sessionID, agent: .codex, workspaceID: workspaceID, panelID: fixture.panelID)
+        }
+        fixture.sessionRuntimeStore.onActionableEvent?(event())
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.sendContinuation != nil }
+        let replacement = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        try fixture.setPushRegistration(replacement)
+        relay.sendContinuation?.resume(returning: .registrationUnavailable)
+        relay.sendContinuation = nil
+        await Task.yield()
+        #expect(try fixture.pushConfigurationResponse().registrationID == replacement.registrationID)
+        relay.holdSend = false
+        fixture.sessionRuntimeStore.onActionableEvent?(event())
+        fixture.service.revokeDevice(try #require(fixture.service.devices.first { $0.authKind == .native }?.id))
+        await Task.yield()
+        #expect(relay.notifications.count == 1)
+    }
+
+    @MainActor
+    @Test func boundedCleanupRotationReachesLaterRecordsAfterOldRelayFailures() async throws {
+        let relay = RemotePushRelaySpy()
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay, pendingPushCleanupCount: 17)
+        defer { fixture.removeRuntimeFiles() }
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.count == 16 }
+        #expect(Set(relay.revoked.map(\.registrationID)).count == 16)
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.count == 32 }
+        #expect(Set(relay.revoked.map(\.registrationID)).count == 17)
+        let paths = ToasttyRuntimePaths.resolve(homeDirectoryPath: "/tmp", environment: [ToasttyRuntimePaths.environmentKey: fixture.runtimeHome])
+        #expect(RemoteDeviceStore(fileURL: paths.remoteAccessDevicesFileURL).pendingPushCleanup.count == 17)
+    }
+
+    @MainActor
+    @Test func stalledDeviceDoesNotDelayAnotherEnrolledDevice() async throws {
+        let relay = RemotePushRelaySpy()
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay)
+        defer { fixture.removeRuntimeFiles() }
+        defer {
+            relay.sendContinuation?.resume(returning: .accepted)
+            relay.sendContinuation = nil
+        }
+        let first = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        try fixture.setPushRegistration(first)
+        let secondID = try fixture.pairAnotherPushDevice(configuration: configuration)
+        relay.holdSend = true
+        relay.heldRegistrationID = first.registrationID
+        fixture.sessionRuntimeStore.onActionableEvent?(.init(eventID: UUID(), kind: .needsApproval, timestamp: .now,
+            sessionID: fixture.sessionID, agent: .codex, workspaceID: try #require(fixture.summary.placement.workspaceID), panelID: fixture.panelID))
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.count == 2 }
+        #expect(Set(relay.registrations.map(\.registrationID)) == [first.registrationID, secondID])
+        #expect(relay.sendContinuation != nil)
+    }
+
+    @MainActor
+    @Test func cleanupQueuedDuringBatchRunsWithoutAnotherForeground() async throws {
+        let relay = RemotePushRelaySpy()
+        relay.holdRevoke = true
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration, pushRelay: relay, pendingPushCleanupCount: 16)
+        defer { fixture.removeRuntimeFiles() }
+        defer {
+            relay.revokeContinuation?.resume(returning: false)
+            relay.revokeContinuation = nil
+        }
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revokeContinuation != nil }
+        let registration = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        try fixture.setPushRegistration(registration)
+        try fixture.setPushRegistration(nil)
+        relay.holdRevoke = false
+        relay.revokeContinuation?.resume(returning: false)
+        relay.revokeContinuation = nil
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.revoked.contains { $0.registrationID == registration.registrationID } }
+        #expect(relay.revoked.contains { $0.registrationID == registration.registrationID })
+    }
+
     @MainActor
     @Test func terminalOnlyTabRenameAndResetPublishPlacementWithoutActivity() async throws {
         let fixture = try RemoteBootstrapFixture()
@@ -2242,7 +2385,10 @@ private final class RemoteBootstrapFixture {
         statusKind: SessionStatusKind = .idle,
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
-        pairNativeDevice: Bool = false
+        pairNativeDevice: Bool = false,
+        pushConfiguration: RemotePushConfiguration? = nil,
+        pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
+        pendingPushCleanupCount: Int = 0
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -2289,8 +2435,15 @@ private final class RemoteBootstrapFixture {
             let devices = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
             let now = Date()
             let offer = try devices.issueNativePairingOffer(gatewayURL: URL(string: "https://test.tailnet.ts.net")!, at: now)
-            guard case .paired(_, let token) = try devices.redeemNativePairingOffer(using: .qr(offerID: offer.id, secret: offer.qrPayload.secret), deviceName: "Test phone", tailscaleLogin: "owner@example.com", at: now) else { throw CocoaError(.coderInvalidValue) }
+            guard case .paired(let device, let token) = try devices.redeemNativePairingOffer(using: .qr(offerID: offer.id, secret: offer.qrPayload.secret), deviceName: "Test phone", tailscaleLogin: "owner@example.com", at: now) else { throw CocoaError(.coderInvalidValue) }
             nativeCredential = token
+            if pendingPushCleanupCount > 0 {
+                let configuration = try #require(pushConfiguration)
+                for _ in 0..<pendingPushCleanupCount {
+                    try devices.setPushRegistration(.init(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID), forDevice: device.id, configuration: configuration)
+                    try devices.setPushRegistration(nil, forDevice: device.id, configuration: configuration)
+                }
+            }
         } else { nativeCredential = nil }
         service = RemoteAccessService(
             store: store,
@@ -2302,6 +2455,8 @@ private final class RemoteBootstrapFixture {
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,
             sendConfirmationTimeout: sendConfirmationTimeout,
+            pushConfiguration: pushConfiguration,
+            pushRelay: pushRelay,
             gatewayServerFactory: { handler in
                 capturedHandler = handler
                 return gatewayServer
@@ -2322,6 +2477,36 @@ private final class RemoteBootstrapFixture {
         service.facadeSessionList(at: confirmedAt).conversations.first {
             $0.conversationID == conversationID
         }!
+    }
+
+    func setPushRegistration(_ registration: RemoteGatewayPushRegistration?) throws {
+        let request = RemoteGatewayHTTPRequest(method: "POST", path: RemotePushPolicy.registrationPath,
+            headers: ["authorization": "Bearer \(try #require(nativeCredential))", "tailscale-user-login": "owner@example.com"],
+            body: try JSONEncoder().encode(RemoteGatewayPushRegistrationRequest(registration: registration)))
+        guard case .respond(let response) = gatewayHandler.handle(request, at: .now), response.status == 200 else { throw CocoaError(.coderInvalidValue) }
+    }
+
+    func pushConfigurationResponse() throws -> RemoteGatewayPushConfigurationResponse {
+        let request = RemoteGatewayHTTPRequest(method: "GET", path: RemotePushPolicy.configurationPath,
+            headers: ["authorization": "Bearer \(try #require(nativeCredential))", "tailscale-user-login": "owner@example.com"], body: Data())
+        guard case .respond(let response) = gatewayHandler.handle(request, at: .now) else { throw CocoaError(.coderInvalidValue) }
+        return try JSONDecoder().decode(RemoteGatewayPushConfigurationResponse.self, from: response.body)
+    }
+
+    func pairAnotherPushDevice(configuration: RemotePushConfiguration) throws -> UUID {
+        service.tailnetOrigin = "https://test.tailnet.ts.net"
+        service.issueNativePairingOffer()
+        let offer = try #require(service.currentNativePairingOffer)
+        let exchange = RemoteGatewayNativePairingExchangeRequest(deviceName: "Second phone", offerID: offer.id, secret: offer.qrPayload.secret)
+        let headers = ["tailscale-user-login": "second@example.com"]
+        guard case .respond(let paired) = gatewayHandler.handle(.init(method: "POST", path: "/v1/native-pairing/exchange", headers: headers,
+            body: try JSONEncoder().encode(exchange)), at: .now), paired.status == 200 else { throw CocoaError(.coderInvalidValue) }
+        let native = try ConversationEventCoding.makeDecoder().decode(RemoteGatewayNativePairingExchangeResponse.self, from: paired.body)
+        let registration = RemoteGatewayPushRegistration(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID)
+        guard case .respond(let saved) = gatewayHandler.handle(.init(method: "POST", path: RemotePushPolicy.registrationPath,
+            headers: ["authorization": "Bearer \(native.credential)", "tailscale-user-login": "second@example.com"],
+            body: try JSONEncoder().encode(RemoteGatewayPushRegistrationRequest(registration: registration))), at: .now), saved.status == 200 else { throw CocoaError(.coderInvalidValue) }
+        return registration.registrationID
     }
 
     func confirmCurrentLaunchBinding() -> Bool {
@@ -2578,6 +2763,35 @@ private extension RemoteBootstrapFixture {
 }
 
 @MainActor
+private final class RemotePushRelaySpy: RemotePushRelaying {
+    var notifications: [RemotePushSessionNotification] = []
+    var registrations: [RemoteDevicePushRegistration] = []
+    var revoked: [RemoteDevicePushRegistration] = []
+    var sendOutcome: RemotePushSendOutcome = .accepted
+    var revokeSucceeds = false
+    var holdSend = false
+    var heldRegistrationID: UUID?
+    var sendContinuation: CheckedContinuation<RemotePushSendOutcome, Never>?
+    var holdRevoke = false
+    var revokeContinuation: CheckedContinuation<Bool, Never>?
+
+    func send(_ notification: RemotePushSessionNotification, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome {
+        notifications.append(notification)
+        registrations.append(registration)
+        if holdSend && (heldRegistrationID == nil || heldRegistrationID == registration.registrationID) {
+            return await withCheckedContinuation { sendContinuation = $0 }
+        }
+        return sendOutcome
+    }
+
+    func revoke(_ registration: RemoteDevicePushRegistration) async -> Bool {
+        revoked.append(registration)
+        if holdRevoke { return await withCheckedContinuation { revokeContinuation = $0 } }
+        return revokeSucceeds
+    }
+}
+
+@MainActor
 private final class RemoteAccessGatewayServerSpy: RemoteAccessGatewayServing {
     var onWebSocketCountsChanged: ((RemoteAccessWebSocketCounts) -> Void)?
     var onDeviceRevoked: ((UUID) -> Void)?
@@ -2721,5 +2935,230 @@ extension RemoteAccessServiceSafetyTests {
             return
         }
         #expect(resolution.answers == request.answers)
+    }
+}
+
+// MARK: - Queue, steer, and stop
+
+extension RemoteAccessServiceSafetyTests {
+    private static func codexLine(_ payload: String, at timestamp: String) -> Data {
+        Data((#"{"timestamp":"\#(timestamp)","type":"event_msg","payload":\#(payload)}"# + "\n").utf8)
+    }
+
+    @MainActor
+    private static func waitForSummary(
+        _ fixture: RemoteBootstrapFixture,
+        _ predicate: (RemoteConversationSummary) -> Bool
+    ) async throws -> RemoteConversationSummary {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            let summary = fixture.summary
+            if predicate(summary) { return summary }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        return fixture.summary
+    }
+
+    @MainActor
+    @Test func queuedSendWaitsForTheNextPromptAndSteerTypesIntoTheRunningTurn() async throws {
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        var delivered: [String] = []
+        var interrupts = 0
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, submit, _, _ in
+            #expect(submit)
+            delivered.append(text)
+            return true
+        }
+        fixture.terminalRuntimeRegistry.setAutomationSendInterruptHandlerForTesting { _ in
+            interrupts += 1
+            return true
+        }
+        // Queued delivery re-reads the device from the store, so the paired
+        // record stands in for the phone.
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        guard case .openPrompt = fixture.summary.inputAvailability else {
+            Issue.record("Expected the bootstrapped prompt")
+            return
+        }
+        let idleControl = try #require(fixture.summary.inputControl)
+        #expect(idleControl.canQueue)
+        #expect(idleControl.turnEpoch == nil)
+        #expect(idleControl.canInterrupt == false)
+
+        // The Mac user starts a turn: the provider reports it under the
+        // consumed prompt's epoch.
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"user_message","message":"Fix the flicker","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+            at: "2026-08-07T10:00:05.000Z"
+        ))
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_started","turn_id":"turn-1","started_at":1786000805,"model_context_window":258400,"collaboration_mode_kind":"default"}"#,
+            at: "2026-08-07T10:00:05.100Z"
+        ))
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        let turnEpoch = try #require(working.inputControl?.turnEpoch)
+        #expect(working.state == .working)
+        #expect(working.inputControl?.canSteer == true)
+        #expect(working.inputControl?.canInterrupt == true)
+
+        // Queue: held, listed, not typed.
+        let queued = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "queued-1",
+            expectedInputEpoch: turnEpoch, text: "Also add a UI test", deliveryMode: .queue
+        )
+        #expect(fixture.service.performRemoteSend(queued, device: device) == .queued(position: 1))
+        #expect(fixture.service.performRemoteSend(queued, device: device) == .duplicate)
+        #expect(fixture.summary.inputControl?.queuedMessages.map(\.clientRequestID) == ["queued-1"])
+        #expect(delivered.isEmpty)
+        var stale = queued
+        stale.clientRequestID = "stale-binding"
+        stale.expectedInputEpoch = RemoteInputEpoch(bindingID: UUID(), counter: 1)
+        #expect(fixture.service.performRemoteSend(stale, device: device) == .rejected(reason: .turnMismatch))
+
+        // Steer: typed into the running turn now, prompt still closed.
+        let steer = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "steer-1",
+            expectedInputEpoch: turnEpoch, text: "Use 300 ms", deliveryMode: .steer
+        )
+        #expect(fixture.service.performRemoteSend(steer, device: device) == .accepted(epoch: turnEpoch))
+        #expect(delivered == ["Use 300 ms"])
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+        var wrongTurn = steer
+        wrongTurn.clientRequestID = "steer-2"
+        wrongTurn.expectedInputEpoch = turnEpoch.next()
+        #expect(fixture.service.performRemoteSend(wrongTurn, device: device) == .rejected(reason: .turnMismatch))
+
+        // Local typing on the Mac closes steer for this turn but not stop.
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        let touched = try await Self.waitForSummary(fixture) { $0.inputControl?.canSteer == false }
+        #expect(touched.inputControl?.canSteer == false)
+        #expect(touched.inputControl?.canInterrupt == true)
+        var steerAfterTyping = steer
+        steerAfterTyping.clientRequestID = "steer-3"
+        #expect(fixture.service.performRemoteSend(steerAfterTyping, device: device) == .rejected(reason: .steerUnavailable))
+
+        // Stop: Escape reaches the terminal and the queue holds.
+        #expect(fixture.service.performRemoteInterrupt(
+            .init(conversationID: fixture.conversationID, expectedTurnEpoch: turnEpoch.next()), device: device
+        ) == .rejected(reason: .turnMismatch))
+        #expect(fixture.service.performRemoteInterrupt(
+            .init(conversationID: fixture.conversationID, expectedTurnEpoch: turnEpoch), device: device
+        ) == .accepted)
+        #expect(interrupts == 1)
+        #expect(fixture.summary.inputControl?.isQueuePaused == true)
+        #expect(fixture.service.performQueueUpdate(
+            .init(conversationID: fixture.conversationID, action: .resume), device: device
+        ) == .updated)
+        #expect(fixture.summary.inputControl?.isQueuePaused == false)
+
+        // The Mac user submitted their typing, then the turn ends: the next
+        // prompt opens and the queued message is typed, once, as a prompt.
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"user_message","message":"typed on the mac","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+            at: "2026-08-07T10:00:06.000Z"
+        ))
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_complete","turn_id":"turn-1","last_agent_message":"Done.","started_at":1786000805,"completed_at":1786000821,"duration_ms":16000}"#,
+            at: "2026-08-07T10:00:21.000Z"
+        ))
+        let drained = try await Self.waitForSummary(fixture) { $0.inputControl?.queuedMessages.isEmpty == true }
+        #expect(drained.inputControl?.queuedMessages.isEmpty == true)
+        #expect(delivered == ["Use 300 ms", "Also add a UI test"])
+        // Delivery consumed the prompt, so nothing else can type until the
+        // provider opens the next one.
+        #expect(drained.inputAvailability.allowsRemoteSend == false)
+        #expect(fixture.service.performRemoteSend(queued, device: device) == .duplicate)
+    }
+
+    @MainActor
+    @Test func queuedMessagesAreRemovableAndExpireWithTheirBinding() async throws {
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"user_message","message":"Go","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+            at: "2026-08-07T10:00:05.000Z"
+        ))
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        let turnEpoch = try #require(working.inputControl?.turnEpoch)
+
+        for index in 1...RemoteSendQueue.capacity {
+            #expect(fixture.service.performRemoteSend(.init(
+                conversationID: fixture.conversationID, clientRequestID: "q-\(index)",
+                expectedInputEpoch: turnEpoch, text: "message \(index)", deliveryMode: .queue
+            ), device: device) == .queued(position: index))
+        }
+        #expect(fixture.service.performRemoteSend(.init(
+            conversationID: fixture.conversationID, clientRequestID: "q-overflow",
+            expectedInputEpoch: turnEpoch, text: "too many", deliveryMode: .queue
+        ), device: device) == .rejected(reason: .queueFull))
+
+        fixture.server.removeAllBroadcasts()
+        #expect(fixture.service.performQueueUpdate(
+            .init(conversationID: fixture.conversationID, action: .remove, clientRequestID: "q-2"), device: device
+        ) == .updated)
+        #expect(fixture.service.performQueueUpdate(
+            .init(conversationID: fixture.conversationID, action: .remove, clientRequestID: "q-2"), device: device
+        ) == .unchanged)
+        // The removing phone (and any other device) learns it will not be typed.
+        #expect(fixture.server.broadcasts.contains { broadcast in
+            guard case .conversationEvents(let page) = broadcast else { return false }
+            return page.events.contains { event in
+                guard case .sendDeliveryUnconfirmed(let payload) = event.payload else { return false }
+                return payload.clientRequestID == "q-2"
+            }
+        })
+        #expect(fixture.summary.inputControl?.queuedMessages.map(\.clientRequestID) == ["q-1", "q-3", "q-4", "q-5"])
+        #expect(fixture.service.performRemoteSend(.init(
+            conversationID: fixture.conversationID, clientRequestID: "q-2",
+            expectedInputEpoch: turnEpoch, text: "message 2", deliveryMode: .queue
+        ), device: device) == .duplicate)
+
+        // A relaunched runtime is a different conversation to queued text.
+        fixture.server.removeAllBroadcasts()
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_complete","turn_id":"turn-1","last_agent_message":"Done.","started_at":1786000805,"completed_at":1786000821,"duration_ms":16000}"#,
+            at: "2026-08-07T10:00:21.000Z"
+        ))
+        let afterPrompt = try await Self.waitForSummary(fixture) { $0.inputControl?.queuedMessages.count == 3 }
+        #expect(delivered == ["message 1"])
+        #expect(afterPrompt.inputControl?.queuedMessages.map(\.clientRequestID) == ["q-3", "q-4", "q-5"])
+        // Delivery consumed the prompt; the next entry waits for the turn
+        // the first one started to end.
+        #expect(afterPrompt.inputAvailability.allowsRemoteSend == false)
+
+        // The runtime moves to another provider file: a new binding. The
+        // remaining entries expire and the phone hears each one was dropped.
+        fixture.server.removeAllBroadcasts()
+        var rebound = fixture.resumeRecord
+        rebound.sessionFilePath = fixture.resumeRecord.sessionFilePath + ".resumed"
+        try Data().write(to: URL(filePath: rebound.sessionFilePath))
+        defer { try? FileManager.default.removeItem(atPath: rebound.sessionFilePath) }
+        #expect(fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: rebound)))
+        let expired = try await Self.waitForSummary(fixture) { $0.inputControl?.queuedMessages.isEmpty == true }
+        #expect(expired.inputControl?.queuedMessages.isEmpty == true)
+        #expect(delivered == ["message 1"])
+        let droppedIDs = fixture.server.broadcasts.flatMap { broadcast -> [String] in
+            guard case .conversationEvents(let page) = broadcast else { return [] }
+            return page.events.compactMap { event in
+                guard case .sendDeliveryUnconfirmed(let payload) = event.payload else { return nil }
+                return payload.clientRequestID
+            }
+        }
+        #expect(Set(droppedIDs) == ["q-3", "q-4", "q-5"])
     }
 }

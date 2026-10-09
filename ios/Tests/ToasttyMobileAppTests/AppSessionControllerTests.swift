@@ -56,6 +56,24 @@ final class AppSessionControllerTests: XCTestCase {
         XCTAssertTrue(controller.state.isPaired)
     }
 
+    func testUnpairCompletionCannotDeleteAPairingInstalledDuringRevoke() async throws {
+        let first = try Self.credential(deviceName: "First iPhone")
+        let replacement = try Self.credential(deviceName: "Replacement iPhone",
+            id: UUID(uuidString: "D1000000-0000-0000-0000-000000000002")!)
+        let vault = TestAppCredentialVault(initialCredential: first)
+        _ = await vault.restore()
+        let controller = makeController(vault: vault, credential: first)
+
+        let unpaired = await controller.unpair {
+            _ = try? await vault.install(replacement)
+        }
+
+        XCTAssertFalse(unpaired)
+        let retainedCredential = await vault.currentCredential()
+        XCTAssertEqual(retainedCredential, replacement)
+        XCTAssertTrue(controller.state.isPaired)
+    }
+
     func testCurrentUnauthorizedCallbackDeletesCredentialAndReturnsToPairingGate() async throws {
         let credential = try Self.credential(deviceName: "Current iPhone")
         let vault = TestAppCredentialVault(initialCredential: credential)
@@ -269,6 +287,25 @@ final class AppSessionControllerTests: XCTestCase {
 
         try XCTUnwrap(onFreshness)(.reconnecting)
         XCTAssertEqual(controller.state, .paired(.reconnecting))
+    }
+
+    func testRapidSceneChangesDeliverOnlyTheNewestLifecycleIntent() async throws {
+        let spy = AppLiveSessionsSpy()
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: TestAppCredentialVault(initialCredential: try Self.credential(deviceName: "Test iPhone")),
+            pairingClient: TestAppPairingClient(), scanner: TestAppPairingScanner(), deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home, initialConnectionState: .offline,
+            liveSessionsFactory: { _, _, _, _, _ in spy }
+        )
+        await controller.restoreIfNeeded()
+        controller.sceneEnteredBackground()
+        controller.sceneBecameActive()
+        controller.sceneEnteredBackground()
+        controller.sceneBecameActive()
+        await waitUntil { spy.foregroundSequences == [4] }
+        XCTAssertTrue(spy.backgroundSequences.isEmpty)
+        XCTAssertNotNil(spy.foregroundBackgroundTimes.first ?? nil)
     }
 
     func testInitialConnectTimeoutFallsThroughToUnreachable() async throws {
@@ -551,11 +588,17 @@ private final class AppLiveSessionsSpy: AppLiveSessionsControlling {
     private(set) var scopeUpdates: [[RemoteDeviceScope]] = []
     private(set) var startCount = 0
     private(set) var refreshCount = 0
+    private(set) var foregroundSequences: [UInt64] = []
+    private(set) var foregroundBackgroundTimes: [ContinuousClock.Instant?] = []
+    private(set) var backgroundSequences: [UInt64] = []
 
     func start() async { startCount += 1 }
-    func foreground() async {}
+    func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async {
+        foregroundSequences.append(lifecycleSequence)
+        foregroundBackgroundTimes.append(backgroundedAt)
+    }
     func refresh() async { refreshCount += 1 }
-    func background() async {}
+    func background(lifecycleSequence: UInt64) async { backgroundSequences.append(lifecycleSequence) }
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
         scopeUpdates.append(scopes)
     }

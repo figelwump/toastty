@@ -851,6 +851,32 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         #endif
     }
 
+    /// Delivers a real Escape key press, the interrupt key for Claude Code and
+    /// Codex. Escape has no paste form, so this never goes through
+    /// `ghostty_surface_text`.
+    func automationSendInterruptResult(
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else {
+            logAutomationInputUnavailable(reason: "no_surface")
+            return .unavailable
+        }
+        guard isReadyForAutomationInput() else {
+            logAutomationInputUnavailable(reason: automationInputUnavailableReason())
+            return .unavailable
+        }
+        if focusPolicy == .focusTarget, focusHostViewIfNeeded() == false {
+            logAutomationInputUnavailable(reason: "focus_host_failed")
+            return .unavailable
+        }
+        return sendSurfaceEscape(to: ghosttySurface) ? .delivered : .unavailable
+        #else
+        _ = focusPolicy
+        return .unavailable
+        #endif
+    }
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     private func automationInputUnavailableReason(now: Date = Date()) -> String {
         guard lifecycleState.isReadyForFocus else {
@@ -1062,6 +1088,22 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 keycode: 0x24,
                 text: pointer,
                 unshifted_codepoint: 13,
+                composing: false
+            )
+            return ghostty_surface_key(surface, keyEvent)
+        }
+    }
+
+    private func sendSurfaceEscape(to surface: ghostty_surface_t) -> Bool {
+        let escapeText = "\u{1B}"
+        return escapeText.withCString { pointer in
+            let keyEvent = ghostty_input_key_s(
+                action: GHOSTTY_ACTION_PRESS,
+                mods: ghostty_input_mods_e(0),
+                consumed_mods: ghostty_input_mods_e(0),
+                keycode: 0x35,
+                text: pointer,
+                unshifted_codepoint: 27,
                 composing: false
             )
             return ghostty_surface_key(surface, keyEvent)

@@ -66,6 +66,25 @@ public struct ConversationProjector: Sendable {
         nextSequence - 1
     }
 
+    /// The runtime binding every epoch of this projector currently carries.
+    public var bindingID: UUID {
+        currentEpoch.bindingID
+    }
+
+    /// Identity of the turn the provider is working on: the prompt epoch that
+    /// was consumed to start it. Nil whenever no turn is running for the bound
+    /// runtime, including while a modal interaction waits (typing there would
+    /// answer the dialog, not steer the turn) and during Claude's post-turn
+    /// stabilization window. Each turn end and each rebinding advances the
+    /// epoch, so a value never names two turns.
+    public var turnEpoch: RemoteInputEpoch? {
+        guard isRuntimeBound, state == .working,
+              case .unavailable(reason: .working) = inputAvailability else {
+            return nil
+        }
+        return currentEpoch
+    }
+
     public init(
         conversationID: RemoteConversationID,
         provider: AgentKind,
@@ -181,6 +200,11 @@ public struct ConversationProjector: Sendable {
             if authorizesCurrentRuntime {
                 pendingPromptStabilizationToken = nil
                 supersedePendingInteractions(at: observation.timestamp, emitting: &emitted)
+                // Every turn end retires the turn's epoch, even when the next
+                // prompt opens only after stabilization: a turn the provider
+                // starts next from its own queue must never share identity
+                // with the one that just ended.
+                currentEpoch = currentEpoch.next()
                 switch reason {
                 case .completed:
                     if provider == .claude {
@@ -194,13 +218,18 @@ public struct ConversationProjector: Sendable {
                             emitting: &emitted
                         )
                     } else {
-                        currentEpoch = currentEpoch.next()
                         transition(to: .awaitingInput, availability: .openPrompt(epoch: currentEpoch), at: observation.timestamp, emitting: &emitted)
                     }
                 case .aborted:
-                    // Conservative: an aborted turn usually returns to the
-                    // composer, but that is inferred, not authoritative. Unknown
-                    // means read-only until the next provider transition.
+                    // An aborted turn returns to the composer, but that is
+                    // inferred, not authoritative. Keep the prompt closed
+                    // through the same short stabilization window Claude's
+                    // completion uses; local input or any other provider
+                    // transition cancels it, otherwise the prompt opens so a
+                    // remote stop has a way forward.
+                    pendingPromptStabilizationToken = ConversationPromptStabilizationToken(
+                        observationFingerprint: observation.fingerprint
+                    )
                     transition(to: .interrupted, availability: .unavailable(reason: .interrupted), at: observation.timestamp, emitting: &emitted)
                 }
             }
@@ -324,24 +353,30 @@ public struct ConversationProjector: Sendable {
         return emitted
     }
 
-    /// Opens a Claude prompt only if no prompt-invalidating provider activity,
-    /// binding change, or local input invalidated the exact completion being
-    /// stabilized. Passive transcript facts may arrive during this window.
+    /// Opens the prompt after a Claude completion or any provider's aborted
+    /// turn, only if no prompt-invalidating provider activity, binding change,
+    /// or local input invalidated the exact turn end being stabilized. Passive
+    /// transcript facts may arrive during this window. The epoch was already
+    /// advanced when the turn ended.
     @discardableResult
     public mutating func completePromptStabilization(
         token: ConversationPromptStabilizationToken,
         at date: Date
     ) -> [ConversationEvent] {
-        guard provider == .claude,
-              isRuntimeBound,
-              pendingPromptStabilizationToken == token,
-              state == .awaitingInput,
-              inputAvailability == .unavailable(reason: .unknownProviderState) else {
+        guard isRuntimeBound,
+              pendingPromptStabilizationToken == token else {
+            return []
+        }
+        let isStabilizingCompletion = provider == .claude
+            && state == .awaitingInput
+            && inputAvailability == .unavailable(reason: .unknownProviderState)
+        let isStabilizingAbort = state == .interrupted
+            && inputAvailability == .unavailable(reason: .interrupted)
+        guard isStabilizingCompletion || isStabilizingAbort else {
             return []
         }
 
         pendingPromptStabilizationToken = nil
-        currentEpoch = currentEpoch.next()
         var emitted: [ConversationEvent] = []
         transition(
             to: .awaitingInput,

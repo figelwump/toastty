@@ -5,6 +5,7 @@ struct ToasttySettingsView: View {
     let presentation: ToasttySettingsPresentation
     @Binding var diagnostics: ToasttyDiagnosticsState
     let onUnpair: @MainActor () async -> Void
+    var pushController: ToasttyPushController? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var confirmsUnpair = false
@@ -14,6 +15,9 @@ struct ToasttySettingsView: View {
         NavigationStack {
             List {
                 connectionSection
+                if let pushController, pushController.configuration != nil {
+                    ToasttyNotificationSettingsSection(controller: pushController)
+                }
                 deviceSection
                 diagnosticsSection
                 aboutSection
@@ -98,6 +102,11 @@ struct ToasttySettingsView: View {
 
     private var diagnosticsSection: some View {
         Section("Diagnostics") {
+            #if DEBUG
+            if let trace = ToasttyComposerTrace.shared {
+                ToasttyComposerTraceExport(trace: trace)
+            }
+            #endif
             settingsRow(
                 "Projection run",
                 value: presentation.projectionRunID ?? "Waiting for snapshot",

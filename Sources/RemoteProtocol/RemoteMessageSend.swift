@@ -11,6 +11,11 @@ public struct RemoteMessageSendRequest: Codable, Equatable, Sendable {
     public var expectedInputEpoch: RemoteInputEpoch
     public var text: String
     public var attachments: [RemoteMessageAttachment]
+    /// Absent on the wire for `prompt`, so older hosts and clients keep the
+    /// original request shape. For `queue` and `steer`, `expectedInputEpoch`
+    /// carries the turn epoch from `RemoteConversationInputControl` instead
+    /// of an open-prompt epoch.
+    public var deliveryMode: RemoteMessageDeliveryMode
 
     public var maximumEncodedBodyBytes: Int { attachments.isEmpty ? RemoteGatewayProtocol.maximumRequestBodyBytes : RemoteAttachmentPolicy.maximumEncodedBodyBytes }
     public var displayText: String {
@@ -22,16 +27,18 @@ public struct RemoteMessageSendRequest: Codable, Equatable, Sendable {
         clientRequestID: String,
         expectedInputEpoch: RemoteInputEpoch,
         text: String,
-        attachments: [RemoteMessageAttachment] = []
+        attachments: [RemoteMessageAttachment] = [],
+        deliveryMode: RemoteMessageDeliveryMode = .prompt
     ) {
         self.conversationID = conversationID
         self.clientRequestID = clientRequestID
         self.expectedInputEpoch = expectedInputEpoch
         self.text = text
         self.attachments = attachments
+        self.deliveryMode = deliveryMode
     }
     private enum CodingKeys: String, CodingKey {
-        case conversationID, clientRequestID, expectedInputEpoch, text, attachments
+        case conversationID, clientRequestID, expectedInputEpoch, text, attachments, deliveryMode
     }
 
     public init(from decoder: any Decoder) throws {
@@ -41,6 +48,7 @@ public struct RemoteMessageSendRequest: Codable, Equatable, Sendable {
         expectedInputEpoch = try values.decode(RemoteInputEpoch.self, forKey: .expectedInputEpoch)
         text = try values.decode(String.self, forKey: .text)
         attachments = try values.decodeIfPresent([RemoteMessageAttachment].self, forKey: .attachments) ?? []
+        deliveryMode = try values.decodeIfPresent(RemoteMessageDeliveryMode.self, forKey: .deliveryMode) ?? .prompt
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -50,6 +58,7 @@ public struct RemoteMessageSendRequest: Codable, Equatable, Sendable {
         try values.encode(expectedInputEpoch, forKey: .expectedInputEpoch)
         try values.encode(text, forKey: .text)
         if !attachments.isEmpty { try values.encode(attachments, forKey: .attachments) }
+        if deliveryMode != .prompt { try values.encode(deliveryMode, forKey: .deliveryMode) }
     }
 
 }
@@ -77,6 +86,16 @@ public enum RemoteMessageRejectionReason: String, Codable, Equatable, Sendable {
     case emptyText = "empty_text"
     case invalidAttachments = "invalid_attachments"
     case attachmentStorageUnavailable = "attachment_storage_unavailable"
+    /// The Mac-side queue already holds its maximum for this conversation.
+    case queueFull = "queue_full"
+    /// A steer or queue send arrived while no turn was running. The client
+    /// should re-read state; the prompt may be open for an ordinary send.
+    case notWorking = "not_working"
+    /// The running turn is not the one the client's request names.
+    case turnMismatch = "turn_mismatch"
+    /// Local keyboard input touched the running turn, so a steer could land
+    /// inside the Mac user's draft.
+    case steerUnavailable = "steer_unavailable"
 }
 
 /// The immediate response to a send request. Never a claim that the agent
@@ -86,6 +105,10 @@ public enum RemoteMessageRejectionReason: String, Codable, Equatable, Sendable {
 public enum RemoteMessageSendResult: Equatable, Sendable {
     /// Accepted for delivery under the given epoch.
     case accepted(epoch: RemoteInputEpoch)
+    /// Held on the Mac for the next open prompt; `position` is 1-based in
+    /// delivery order. Confirmation still arrives through the transcript once
+    /// the message is actually typed.
+    case queued(position: Int)
     /// Rejected; the client must not retry without re-reading state.
     case rejected(reason: RemoteMessageRejectionReason)
     /// Text may have reached the terminal, but submission could not be
@@ -107,10 +130,12 @@ extension RemoteMessageSendResult: Codable {
         case status
         case epoch
         case reason
+        case position
     }
 
     private enum Status: String, Codable {
         case accepted
+        case queued
         case rejected
         case uncertain
         case duplicate
@@ -121,6 +146,8 @@ extension RemoteMessageSendResult: Codable {
         switch try container.decode(Status.self, forKey: .status) {
         case .accepted:
             self = .accepted(epoch: try container.decode(RemoteInputEpoch.self, forKey: .epoch))
+        case .queued:
+            self = .queued(position: try container.decode(Int.self, forKey: .position))
         case .rejected:
             self = .rejected(reason: try container.decode(RemoteMessageRejectionReason.self, forKey: .reason))
         case .uncertain:
@@ -136,6 +163,9 @@ extension RemoteMessageSendResult: Codable {
         case .accepted(let epoch):
             try container.encode(Status.accepted, forKey: .status)
             try container.encode(epoch, forKey: .epoch)
+        case .queued(let position):
+            try container.encode(Status.queued, forKey: .status)
+            try container.encode(position, forKey: .position)
         case .rejected(let reason):
             try container.encode(Status.rejected, forKey: .status)
             try container.encode(reason, forKey: .reason)

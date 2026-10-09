@@ -860,31 +860,34 @@ public actor ConversationRuntime {
         guard source.coordinatorIsLive else {
             state.composerAuthority = ConversationComposerAuthority(
                 inputAvailability: source.inputAvailability,
-                gateFailure: .coordinatorNotLive
+                gateFailure: .coordinatorNotLive,
+                inputControl: source.inputControl
             )
             return
         }
         guard source.hasDeviceSendScope else {
             state.composerAuthority = ConversationComposerAuthority(
                 inputAvailability: source.inputAvailability,
-                gateFailure: .deviceSendScopeDenied
+                gateFailure: .deviceSendScopeDenied,
+                inputControl: source.inputControl
             )
             return
         }
         if let gateFailure = source.gateFailure {
             state.composerAuthority = ConversationComposerAuthority(
                 inputAvailability: source.inputAvailability,
-                gateFailure: gateFailure
+                gateFailure: gateFailure,
+                inputControl: source.inputControl
             )
             return
         }
         guard let stamp = source.stamp,
               let inputAvailability = source.inputAvailability,
-              case .openPrompt(let epoch) = inputAvailability,
-              epoch == stamp.inputEpoch else {
+              Self.stampIsCurrent(stamp, availability: inputAvailability, inputControl: source.inputControl) else {
             state.composerAuthority = ConversationComposerAuthority(
                 inputAvailability: source.inputAvailability,
-                gateFailure: .inputUnavailable
+                gateFailure: .inputUnavailable,
+                inputControl: source.inputControl
             )
             return
         }
@@ -892,7 +895,8 @@ public actor ConversationRuntime {
             state.composerAuthority = ConversationComposerAuthority(
                 stamp: stamp,
                 inputAvailability: inputAvailability,
-                gateFailure: .conversationNotLive
+                gateFailure: .conversationNotLive,
+                inputControl: source.inputControl
             )
             return
         }
@@ -903,13 +907,33 @@ public actor ConversationRuntime {
             state.composerAuthority = ConversationComposerAuthority(
                 stamp: stamp,
                 inputAvailability: inputAvailability,
-                gateFailure: .transcriptNotCaughtUp
+                gateFailure: .transcriptNotCaughtUp,
+                inputControl: source.inputControl
             )
             return
         }
         state.composerAuthority = ConversationComposerAuthority(
             stamp: stamp,
-            inputAvailability: inputAvailability
+            inputAvailability: inputAvailability,
+            inputControl: source.inputControl
         )
+    }
+
+    /// A prompt stamp must name the open prompt; a working-turn stamp must
+    /// name the running turn the host still accepts queued input for.
+    static func stampIsCurrent(
+        _ stamp: ConversationComposerStamp,
+        availability: CompatibleInputAvailability,
+        inputControl: RemoteConversationInputControl?
+    ) -> Bool {
+        switch stamp.deliveryMode {
+        case .prompt:
+            guard case .openPrompt(let epoch) = availability else { return false }
+            return epoch == stamp.inputEpoch
+        case .queue, .steer:
+            guard let inputControl, inputControl.canQueue,
+                  let turnEpoch = inputControl.turnEpoch else { return false }
+            return turnEpoch == stamp.inputEpoch
+        }
     }
 }

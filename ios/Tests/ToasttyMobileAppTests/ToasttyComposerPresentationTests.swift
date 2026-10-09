@@ -6,7 +6,7 @@ import XCTest
 
 final class ToasttyComposerPresentationTests: XCTestCase {
     func testComposerEnablesOnlyForDomainAuthorizedStampedOpenPrompt() {
-        XCTAssertEqual(presentation(enabledAuthority).gate, .enabled)
+        XCTAssertEqual(presentation(enabledAuthority).gate, .enabled(.prompt))
 
         XCTAssertEqual(
             presentation(authority(failure: .coordinatorNotLive)).gate,
@@ -44,10 +44,10 @@ final class ToasttyComposerPresentationTests: XCTestCase {
 
     func testEveryDomainGateFailureMapsToAStableLocalPresentation() {
         let cases: [(ConversationSendGateFailure, ToasttyComposerGate)] = [
-            (.emptyText, .enabled),
-            (.messageTooLarge, .enabled),
-            (.requestEncodingFailed, .enabled),
-            (.cancelled, .enabled),
+            (.emptyText, .enabled(.prompt)),
+            (.messageTooLarge, .enabled(.prompt)),
+            (.requestEncodingFailed, .enabled(.prompt)),
+            (.cancelled, .enabled(.prompt)),
             (.coordinatorNotLive, .disabled(.connection(.reconnecting))),
             (.deviceSendScopeDenied, .disabled(.deviceScope)),
             (.conversationNotOpen, .disabled(.prompt(.offline))),
@@ -162,12 +162,12 @@ final class ToasttyComposerPresentationTests: XCTestCase {
         let cancelled = presentation(authority(failure: .cancelled))
         let empty = presentation(authority(failure: .emptyText))
 
-        XCTAssertEqual(cancelled.gate, .enabled)
+        XCTAssertEqual(cancelled.gate, .enabled(.prompt))
         XCTAssertTrue(cancelled.inlineFeedback?.contains("draft is still here") == true)
-        XCTAssertEqual(empty.gate, .enabled)
+        XCTAssertEqual(empty.gate, .enabled(.prompt))
         XCTAssertTrue(empty.inlineFeedback?.contains("draft was not changed") == true)
         let oversized = presentation(authority(failure: .messageTooLarge))
-        XCTAssertEqual(oversized.gate, .enabled)
+        XCTAssertEqual(oversized.gate, .enabled(.prompt))
         XCTAssertTrue(oversized.inlineFeedback?.contains("Shorten it") == true)
     }
 
@@ -419,5 +419,126 @@ private extension ToasttyComposerPresentation {
     var gateMessage: String {
         guard case .disabled(let reason) = gate else { return "" }
         return reason.message
+    }
+}
+
+// MARK: - Queue, steer, and stop
+
+extension ToasttyComposerPresentationTests {
+    private var turnEpoch: RemoteInputEpoch {
+        RemoteInputEpoch(bindingID: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!, counter: 9)
+    }
+
+    private func workingStamp(_ mode: RemoteMessageDeliveryMode = .queue) -> ConversationComposerStamp {
+        ConversationComposerStamp(
+            connectionGeneration: 4, streamSnapshotOrdinal: 8,
+            projectionRunID: RemoteProjectionRunID(rawValue: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!),
+            projectionGeneration: 2, latestSequence: 10, inputEpoch: turnEpoch, deliveryMode: mode
+        )
+    }
+
+    private func control(canSteer: Bool, canInterrupt: Bool = true, turnRunning: Bool = true) -> RemoteConversationInputControl {
+        RemoteConversationInputControl(
+            turnEpoch: turnRunning ? turnEpoch : nil, canQueue: true, canSteer: canSteer, canInterrupt: canInterrupt
+        )
+    }
+
+    func testWorkingTurnOpensTheComposerInQueueModeWithStopAndOptionalSteer() {
+        let steerable = ConversationComposerAuthority(
+            stamp: workingStamp(), inputAvailability: .unavailable(reason: .known(.working)),
+            inputControl: control(canSteer: true)
+        )
+        let steerablePresentation = presentation(steerable)
+        XCTAssertEqual(steerablePresentation.gate, .enabled(.working(canSteer: true)))
+        XCTAssertTrue(steerablePresentation.gate.isWorking)
+        XCTAssertTrue(steerablePresentation.canInterrupt)
+        XCTAssertTrue(steerable.canSteer)
+        XCTAssertTrue(steerablePresentation.canSubmit(draft: "queue me"))
+
+        let localDraftOnMac = ConversationComposerAuthority(
+            stamp: workingStamp(), inputAvailability: .unavailable(reason: .known(.working)),
+            inputControl: control(canSteer: false)
+        )
+        XCTAssertEqual(presentation(localDraftOnMac).gate, .enabled(.working(canSteer: false)))
+        XCTAssertFalse(localDraftOnMac.canSteer)
+
+        // An older host sends no controls: the composer stays locked as before.
+        let legacy = ConversationComposerAuthority(
+            inputAvailability: .unavailable(reason: .known(.working)), gateFailure: .inputUnavailable
+        )
+        XCTAssertEqual(presentation(legacy).gate, .disabled(.prompt(.working)))
+        XCTAssertFalse(presentation(legacy).canInterrupt)
+    }
+
+    func testStopStaysAvailableWhileASendIsReservedButNotWhenTheTurnEnded() {
+        let reserved = ConversationComposerAuthority(
+            stamp: nil, inputAvailability: .unavailable(reason: .known(.working)),
+            gateFailure: .sendAlreadyReserved, inputControl: control(canSteer: true)
+        )
+        XCTAssertTrue(reserved.canInterrupt)
+        let ended = ConversationComposerAuthority(
+            stamp: nil, inputAvailability: .unavailable(reason: .known(.interrupted)),
+            gateFailure: .inputUnavailable, inputControl: control(canSteer: false, canInterrupt: false, turnRunning: false)
+        )
+        XCTAssertFalse(ended.canInterrupt)
+        let offline = ConversationComposerAuthority(
+            inputAvailability: .unavailable(reason: .known(.working)),
+            gateFailure: .coordinatorNotLive, inputControl: control(canSteer: true)
+        )
+        XCTAssertFalse(offline.canInterrupt)
+    }
+
+    func testStampChangesModeOnlyForAWorkingTurn() {
+        XCTAssertEqual(workingStamp().withDeliveryMode(.steer).deliveryMode, .steer)
+        XCTAssertEqual(workingStamp(.steer).withDeliveryMode(.queue).deliveryMode, .queue)
+        XCTAssertEqual(workingStamp().withDeliveryMode(.prompt).deliveryMode, .queue)
+        XCTAssertEqual(stamp.withDeliveryMode(.steer).deliveryMode, .prompt)
+    }
+
+    func testQueuedMessagesRenderFromTheHostListAndHideTheirOwnPendingRecord() {
+        let state = SendReconciliationState(records: [
+            record("queued-1", text: "first", .pending(.queued(position: 1))),
+            record("steered", text: "now", .pending(.accepted)),
+            record("dispatched", text: "typed", .pending(.queued(position: 1))),
+        ])
+        let control = RemoteConversationInputControl(
+            turnEpoch: turnEpoch, canQueue: true, canSteer: true, canInterrupt: true,
+            queuedMessages: [
+                RemoteQueuedMessage(clientRequestID: "queued-1", text: "first", enqueuedAt: Date()),
+                RemoteQueuedMessage(clientRequestID: "other-phone", text: "second", attachmentCount: 2, enqueuedAt: Date()),
+            ],
+            isQueuePaused: true
+        )
+
+        let items = ToasttySendPresentationAdapter.makeItems(from: state, inputControl: control)
+
+        XCTAssertEqual(items.map(\.id), ["steered", "dispatched", "queued-1", "other-phone"])
+        XCTAssertEqual(items[0].content, .optimistic(response: .accepted))
+        // Left the Mac's queue: it is being typed, so it shows as sending.
+        XCTAssertEqual(items[1].content, .optimistic(response: .queued(position: 1)))
+        XCTAssertEqual(items[2].content, .queued(.init(position: 1, attachmentCount: 0, isPaused: true, canSteer: true)))
+        // Attachments cannot be typed into a running turn, so the row offers no Steer.
+        XCTAssertEqual(items[3].content, .queued(.init(position: 2, attachmentCount: 2, isPaused: true, canSteer: false)))
+        XCTAssertEqual(items[3].text, "second")
+    }
+
+    func testQueueRejectionReceiptsExplainTheQueue() {
+        for reason in [RemoteMessageRejectionReason.queueFull, .notWorking, .turnMismatch, .steerUnavailable] {
+            let receipt = ToasttySendReceiptPresentation(kind: .rejected(reason))
+            XCTAssertFalse(receipt.title.isEmpty)
+            XCTAssertFalse(receipt.detail.isEmpty)
+        }
+        XCTAssertTrue(ToasttySendReceiptPresentation(kind: .rejected(.queueFull)).title.contains("queue"))
+        XCTAssertTrue(ToasttySendReceiptPresentation(kind: .rejected(.steerUnavailable)).title.contains("typing on the Mac"))
+    }
+
+    func testRestoringAQueuedMessageKeepsAnExistingDraftAhead() {
+        var state = ToasttyComposerDraftState()
+        let conversationID = UUID()
+        state.restoreDraft("queued text", for: conversationID)
+        XCTAssertEqual(state.replacements[conversationID]?.text, "queued text")
+        state.updateDraft("typed", for: conversationID)
+        state.restoreDraft("queued text", for: conversationID)
+        XCTAssertEqual(state.replacements[conversationID]?.text, "typed\n\nqueued text")
     }
 }

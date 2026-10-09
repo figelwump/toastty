@@ -213,6 +213,9 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let turnElapsed: MobileActivityAge?
     /// Length of the last finished turn, in seconds.
     public let lastTurnDuration: TimeInterval?
+    /// Queue, steer, and stop controls while the agent works; nil from a
+    /// host that predates them.
+    public let inputControl: RemoteConversationInputControl?
 
     public var age: String {
         activityAge?.label(atMonotonicTime: ProcessInfo.processInfo.systemUptime) ?? fixedAge
@@ -262,13 +265,15 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         workspaceTabTitle: String? = nil,
         isFlaggedForLater: Bool = false,
         turnElapsed: MobileActivityAge? = nil,
-        lastTurnDuration: TimeInterval? = nil
+        lastTurnDuration: TimeInterval? = nil,
+        inputControl: RemoteConversationInputControl? = nil
     ) {
         self.id = id
         self.workspaceID = workspaceID
         self.workspaceTitle = workspaceTitle
         self.cwd = Self.nonemptyTrimmed(cwd)
         self.isFlaggedForLater = isFlaggedForLater
+        self.inputControl = inputControl
         self.turnElapsed = turnElapsed
         self.lastTurnDuration = lastTurnDuration.flatMap {
             $0.isFinite && $0 >= 0 ? min($0, Self.maximumDurationSeconds) : nil
@@ -306,7 +311,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         workspaceTabTitle: String? = nil,
         isFlaggedForLater: Bool = false,
         turnElapsed: MobileActivityAge? = nil,
-        lastTurnDuration: TimeInterval? = nil
+        lastTurnDuration: TimeInterval? = nil,
+        inputControl: RemoteConversationInputControl? = nil
     ) {
         self.init(
             id: id,
@@ -326,7 +332,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             workspaceTabTitle: workspaceTabTitle,
             isFlaggedForLater: isFlaggedForLater,
             turnElapsed: turnElapsed,
-            lastTurnDuration: lastTurnDuration
+            lastTurnDuration: lastTurnDuration,
+            inputControl: inputControl
         )
     }
 
@@ -339,7 +346,20 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             activityAge: activityAge, stateEnteredAge: stateEnteredAge, lastActivity: lastActivity,
             executionProfile: executionProfile, workspaceTabID: workspaceTabID,
             workspaceTabTitle: workspaceTabTitle, isFlaggedForLater: isFlaggedForLater,
-            turnElapsed: turnElapsed, lastTurnDuration: lastTurnDuration
+            turnElapsed: turnElapsed, lastTurnDuration: lastTurnDuration, inputControl: inputControl
+        )
+    }
+
+    /// The same conversation with different queue/steer/stop controls, for a
+    /// change shown before the Mac confirms it.
+    public func withInputControl(_ inputControl: RemoteConversationInputControl?) -> MobileConversation {
+        MobileConversation(
+            id: id, workspaceID: workspaceID, workspaceTitle: workspaceTitle, cwd: cwd, agent: agent,
+            title: title, state: state, inputAvailability: inputAvailability, age: fixedAge,
+            activityAge: activityAge, stateEnteredAge: stateEnteredAge, lastActivity: lastActivity,
+            executionProfile: executionProfile, workspaceTabID: workspaceTabID,
+            workspaceTabTitle: workspaceTabTitle, isFlaggedForLater: isFlaggedForLater,
+            turnElapsed: turnElapsed, lastTurnDuration: lastTurnDuration, inputControl: inputControl
         )
     }
 

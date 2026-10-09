@@ -17,7 +17,7 @@ final class NativeTransportSecurityTests: XCTestCase {
     }
 
     func testWebSocketDelegateRejectsRedirect() throws {
-        let delegate = URLSessionWebSocketOpenDelegate(openGate: WebSocketOpenGate())
+        let delegate = URLSessionWebSocketOpenDelegate(openGate: WebSocketCompletionGate())
         try assertRedirectIsRejected { response, request, completion in
             delegate.urlSession(
                 .shared,

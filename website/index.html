@@ -387,12 +387,13 @@
         <li><b>Subspaces</b><span>Task workspaces nest under the session that started them, each with its own status and PR chip.</span></li>
         <li><b>Jump to what's next</b><span><kbd>⌘⇧A</kbd> cycles through unread, approval, and active sessions.</span></li>
         <li><b>Mark for later</b><span><kbd>⌘⇧L</kbd> flags a session; the flag clears when it moves forward.</span></li>
-        <li><b>Watch any command</b><span><kbd>⌘⇧M</kbd> turns a long build or test run into a row that notifies you when it exits.</span></li>
+        <li><b>OSC 7501 support</b><span>Programs that report <a href="https://mitchellh.com/writing/program-status-osc7501">OSC 7501</a> status appear in the sidebar with progress and approval, input, or login labels.</span><small class="watch-note">You can also watch any command with <kbd>⌘⇧M</kbd> and get notified when it exits.</small></li>
         <li><b>Notifications</b><span>Native macOS notifications and unread badges, so you can look away.</span></li>
       </ul>
-      <p class="agents-line">Live status for Claude Code, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi. Any other CLI runs in a normal pane.</p>
+      <p class="agents-line">Rich status for Claude Code, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi. Any process or agent CLI that supports <a href="https://mitchellh.com/writing/program-status-osc7501">OSC 7501</a> will provide basic status updates as well.</p>
     </div>
-    <div class="sbdemo" aria-hidden="true">
+    <figure class="sidebar-figure">
+      <div class="sbdemo" role="img" aria-label="Toastty sidebar with agent sessions, subspaces, and a deploy command reporting 65 percent progress through OSC 7501.">
       <div class="card sel">
         <div class="wsn"><span>lumen</span><span class="pill"><span class="spin"></span>2/6</span></div>
         <span class="branch">main</span>
@@ -409,10 +410,13 @@
         <div class="row"><span class="ic"></span><div class="t">Update API reference</div><div class="s">Waiting for your input</div><span class="flag">⚑</span></div>
       </div>
       <div class="card">
-        <div class="wsn"><span>infra</span><span class="pill quiet">0/1</span></div>
+        <div class="wsn"><span>OSC 7501 example</span><span class="pill"><span class="spin"></span>1/2</span></div>
+        <div class="row working osc-example"><span class="ic"><span class="spin"></span></span><div class="t">Deploy v2.4.1</div><div class="s">Uploading images to 3 regions…</div><span class="program-progress">65%</span></div>
         <div class="row error has-chip"><span class="ic"><span class="mk dot errd"></span></span><div class="t">Rotate staging keys</div><div class="s">terraform plan failed</div><span class="chip errc">error</span></div>
       </div>
     </div>
+      <figcaption class="demo-caption">The deploy command reports its title, message, and progress through OSC 7501.</figcaption>
+    </figure>
   </div>
 </section>
 
@@ -619,8 +623,8 @@ Read the guide, narrate each step, dry-run every setup installer first (pass --d
   <h2>A real terminal underneath.</h2>
   <div class="found">
     <div><b>Ghostty rendering</b><span>GPU-accelerated, and your existing <a href="https://ghostty.org">Ghostty</a> config just works.</span></div>
-    <div><b>Keyboard first</b><span><kbd>⌘⇧P</kbd> command palette, <kbd>⌘D</kbd> to split, <kbd>⌥1</kbd>–<kbd>9</kbd> to switch workspaces.</span></div>
-    <div><b>Terminal profiles</b><span>One-key launchers for tmux, zmx, SSH, or any startup command.</span></div>
+    <div><b>Keyboard first</b><span><kbd>⌘⇧P</kbd> command palette, <kbd>⌘D</kbd> to split, <kbd>⌥1</kbd>–<kbd>9</kbd> to switch workspaces. <a class="reference" href="https://github.com/figelwump/toastty/blob/main/docs/keyboard-shortcuts.md">Full keyboard reference <span aria-hidden="true">↗</span></a></span></div>
+    <div><b>Terminal profiles</b><span>One-key launchers for tmux, herdr, SSH, or any startup command.</span></div>
     <div><b>Layouts that persist</b><span>Workspaces, tabs, and splits come back after a restart, and with shell integration, so does each pane's history.</span></div>
     <div><b>Local first</b><span>No usage analytics or telemetry. Beyond update checks, Toastty only connects out for features you use, such as Remote Access or a diagnostics report you choose to send.</span></div>
     <div><b>Toastty Mobile <em class="beta">TestFlight beta</em></b><span>Check on sessions and reply from your iPhone over your private tailnet. <a href="#mobile">See it in action</a>, or read <a href="https://github.com/figelwump/toastty/blob/main/docs/remote-access.md">Remote Access</a> to set it up.</span></div>

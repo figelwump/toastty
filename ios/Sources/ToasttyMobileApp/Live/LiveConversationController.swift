@@ -59,9 +59,16 @@ final class LiveConversationController {
     private(set) var composerAuthority = ConversationComposerAuthority()
     private(set) var sendReconciliation = SendReconciliationState()
     private(set) var lastSendGateFailure: ConversationSendGateFailure?
+    /// Set when a send from this phone becomes a failure receipt.
+    private(set) var sendFeedback: ToasttyOutcomeFeedback?
+    /// The first reconciliation state is a baseline: its receipts are from
+    /// earlier sends, so they must not play a haptic.
+    private var hasSendReconciliationBaseline = false
     private(set) var interactionAnswerStates: [
         RemotePendingInteraction.ID: ToasttyInteractionAnswerState
     ] = [:]
+    /// Queue, steer, and stop controls from the latest session snapshot.
+    private(set) var inputControl: RemoteConversationInputControl?
 
     private let runtime: any LiveConversationRuntime
     private let loadOlderAction: @Sendable () async -> Void
@@ -74,6 +81,12 @@ final class LiveConversationController {
     private let acknowledgeReadAction: @Sendable (
         RemoteConversationReadAcknowledgementRequest
     ) async throws -> RemoteConversationReadAcknowledgementResponse?
+    private let updateQueueAction: @Sendable (
+        RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse?
+    private let interruptAction: @Sendable (
+        RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse?
     private var stateTask: Task<Void, Never>?
     private var sendReconciliationTask: Task<Void, Never>?
     private var readAcknowledgementTask: Task<Void, Never>?
@@ -104,7 +117,13 @@ final class LiveConversationController {
         dismissSendReceipt: @escaping @Sendable (String) async -> Void = { _ in },
         acknowledgeRead: @escaping @Sendable (
             RemoteConversationReadAcknowledgementRequest
-        ) async throws -> RemoteConversationReadAcknowledgementResponse? = { _ in nil }
+        ) async throws -> RemoteConversationReadAcknowledgementResponse? = { _ in nil },
+        updateQueue: @escaping @Sendable (
+            RemoteConversationQueueUpdateRequest
+        ) async throws -> RemoteConversationQueueUpdateResponse? = { _ in nil },
+        interrupt: @escaping @Sendable (
+            RemoteConversationInterruptRequest
+        ) async throws -> RemoteConversationInterruptResponse? = { _ in nil }
     ) {
         self.conversationID = conversationID
         self.runtime = runtime
@@ -114,6 +133,8 @@ final class LiveConversationController {
         answerQuestionAction = answerQuestion
         dismissSendReceiptAction = dismissSendReceipt
         acknowledgeReadAction = acknowledgeRead
+        updateQueueAction = updateQueue
+        interruptAction = interrupt
     }
 
     func start() async {
@@ -150,11 +171,24 @@ final class LiveConversationController {
         await loadOlderAction()
     }
 
-    func send(_ text: String, attachments: [RemoteMessageAttachment] = []) async -> ConversationSendOutcome {
-        guard let stamp = composerAuthority.stamp else {
+    /// `deliveryMode` chooses between queue and steer while the agent works;
+    /// it is ignored at an open prompt, which always sends now.
+    func send(
+        _ text: String,
+        attachments: [RemoteMessageAttachment] = [],
+        deliveryMode: RemoteMessageDeliveryMode? = nil
+    ) async -> ConversationSendOutcome {
+        guard var stamp = composerAuthority.stamp else {
             let failure = composerAuthority.gateFailure ?? .staleComposerAuthority
             lastSendGateFailure = failure
             return .notEnqueued(failure)
+        }
+        if let deliveryMode, stamp.deliveryMode != .prompt {
+            if deliveryMode == .steer, composerAuthority.canSteer == false {
+                lastSendGateFailure = .inputUnavailable
+                return .notEnqueued(.inputUnavailable)
+            }
+            stamp = stamp.withDeliveryMode(deliveryMode)
         }
         let submittedAtRuntimeRevision = runtimeRevision
         let outcome: ConversationSendOutcome
@@ -168,11 +202,55 @@ final class LiveConversationController {
         guard runtimeRevision == submittedAtRuntimeRevision else { return outcome }
         switch outcome {
         case .enqueued:
-            lastSendGateFailure = .sendAlreadyReserved
+            // An open prompt takes one send; a running turn takes more, so
+            // the composer stays open for the next queued message.
+            if stamp.deliveryMode == .prompt {
+                lastSendGateFailure = .sendAlreadyReserved
+            }
         case .notEnqueued(let failure):
             lastSendGateFailure = failure
         }
         return outcome
+    }
+
+    /// Asks the Mac to drop one queued message. True only when the Mac
+    /// confirmed it was still queued; a message already typed or gone
+    /// returns false so the caller does not act on stale text.
+    func removeQueuedMessage(_ clientRequestID: String) async -> Bool {
+        let request = RemoteConversationQueueUpdateRequest(
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            action: .remove,
+            clientRequestID: clientRequestID
+        )
+        guard let response = try? await updateQueueAction(request) else { return false }
+        return response.result == .updated
+    }
+
+    func resumeQueue() async {
+        let request = RemoteConversationQueueUpdateRequest(
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            action: .resume
+        )
+        _ = try? await updateQueueAction(request)
+    }
+
+    /// Stops the turn the composer currently shows as running.
+    @discardableResult
+    func interrupt() async -> RemoteConversationInterruptResult? {
+        guard composerAuthority.canInterrupt,
+              let turnEpoch = composerAuthority.inputControl?.turnEpoch else { return nil }
+        let request = RemoteConversationInterruptRequest(
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            expectedTurnEpoch: turnEpoch
+        )
+        return try? await interruptAction(request)?.result
+    }
+
+    func consumeInputControl(_ control: RemoteConversationInputControl?) {
+        guard inputControl != control else { return }
+        inputControl = control
+        change = .metadataOnly
+        refreshTranscriptPresentation()
     }
 
     func dismissSendReceipt(_ clientRequestID: String) async {
@@ -263,11 +341,14 @@ final class LiveConversationController {
         switch result {
         case .success(.submitted), .success(.duplicate):
             current.status = .awaitingClaude
+            current.lastSubmission = .next(after: current.lastSubmission, .success)
         case .success(.rejected(let reason)):
             current.retryRequest = nil
             current.status = questionRejectionStatus(reason)
+            current.lastSubmission = .next(after: current.lastSubmission, .failure)
         case .failure:
             current.status = .failed("Answer could not be sent. Try again.")
+            current.lastSubmission = .next(after: current.lastSubmission, .failure)
         }
         interactionAnswerStates[interactionID] = current
     }
@@ -353,6 +434,11 @@ final class LiveConversationController {
     }
 
     func consumeSendReconciliation(_ state: SendReconciliationState) {
+        if hasSendReconciliationBaseline,
+           let outcome = ToasttyHapticFeedback.sendOutcome(from: sendReconciliation, to: state) {
+            sendFeedback = .next(after: sendFeedback, outcome)
+        }
+        hasSendReconciliationBaseline = true
         for event in ToasttyAppDiagnosticProjection.events(from: sendReconciliation, to: state) {
             onDiagnosticEvent(event)
         }
@@ -425,7 +511,7 @@ final class LiveConversationController {
         case .reconnecting, .suspended:
             phase = .stale
             return
-        case .idle, .connecting, .awaitingFreshSessionSnapshot, .live:
+        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection, .live:
             break
         }
 
@@ -446,7 +532,10 @@ final class LiveConversationController {
     private func refreshTranscriptPresentation(contentChanged: Bool = false) {
         guard contentChanged else {
             transcriptPresentation = transcriptPresentation.updatingMetadata(
-                sendItems: ToasttySendPresentationAdapter.makeItems(from: sendReconciliationForPresentation),
+                sendItems: ToasttySendPresentationAdapter.makeItems(
+                    from: sendReconciliationForPresentation,
+                    inputControl: inputControl
+                ),
                 phase: transcriptPhase,
                 revision: transcriptRevision,
                 historyTruncated: historyTruncated,
@@ -464,7 +553,8 @@ final class LiveConversationController {
             revision: transcriptRevision,
             historyTruncated: historyTruncated,
             sendItems: ToasttySendPresentationAdapter.makeItems(
-                from: sendReconciliationForPresentation
+                from: sendReconciliationForPresentation,
+                inputControl: inputControl
             ),
             hasOlder: hasOlder,
             isLoadingOlder: isLoadingOlder,

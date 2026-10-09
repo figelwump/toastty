@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 enum TerminalLocalInterruptKind: Equatable, Sendable {
@@ -39,6 +40,7 @@ enum ManagedSessionStopReason: Equatable, Sendable {
 
 @MainActor
 protocol TerminalSessionLifecycleTracking: AnyObject {
+    func handleProgramStatusEvent(_ event: TerminalProgramStatusEvent, panelID: UUID)
     func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool
     func noteLocalInputForActiveSession(panelID: UUID)
     @discardableResult
@@ -61,4 +63,8 @@ protocol TerminalSessionLifecycleTracking: AnyObject {
         reason: ManagedSessionStopReason,
         at now: Date
     ) -> Bool
+}
+
+extension TerminalSessionLifecycleTracking {
+    func handleProgramStatusEvent(_ event: TerminalProgramStatusEvent, panelID: UUID) {}
 }

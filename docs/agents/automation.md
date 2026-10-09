@@ -144,7 +144,7 @@ sv exec -- scripts/remote/test.sh \
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
-The `Toastty CI` workflow runs secret-free dispatcher and release-script tests, then separate Debug and Release simulator jobs. Automatic PR and `main` Debug runs use `node ios/scripts/toastty-ios.mjs test --ui-tests smoke --skip-performance-budgets`. This retains app/domain functional tests and two UI methods: `ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction` covers fixture navigation, and `testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble` covers composing and enqueueing a message. Automatic Release runs use `--skip-performance-budgets` with the app/domain suites.
+The `Toastty CI` workflow runs secret-free dispatcher and release-script tests, then separate Debug and Release simulator jobs. Automatic PR and `main` Debug runs use `node ios/scripts/toastty-ios.mjs test --ui-tests smoke --skip-performance-budgets`. This retains app/domain functional tests and two UI methods: `ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction` covers fixture navigation, and `testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble` covers composing and enqueueing a message. Automatic Release runs use `--skip-performance-budgets` with the app/domain suites. Every CI invocation also passes `--retry-tests-on-failure`, which maps to `xcodebuild -retry-tests-on-failure -test-iterations 2`: a hosted runner under load can time out the first UI test launch or lose the target app's background assertion, and the same tests pass moments later, so each failed test gets one more attempt. The uploaded xcresult records both attempts; a test that needed the retry is still worth a look. Local dispatcher runs and the remote wrapper keep single attempts so flaky and deterministic failures stay distinguishable during triage.
 
 `--skip-performance-budgets` excludes only the provisional 5,000-event numeric budget test. Its separate event/cursor correctness test still runs. The full UI suite has timing-sensitive fixture failures, and hosted simulator load makes the one-second benchmark threshold unreliable; automatic CI no longer enforces those checks. This does not establish that every full-UI failure is harmless. Investigate failures when running that coverage before a release or a change to the affected flow.
 
@@ -207,6 +207,51 @@ a live iOS owner, or a state change during the recheck is retained for manual
 review.
 
 For changes under `Sources/RemoteProtocol/` or `Tests/RemoteProtocol/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
+
+### Temporary Composer Typing Trace
+
+The fast-typing underline investigation has an opt-in trace in Debug builds.
+Normal Debug builds leave it off. Release excludes the trace and the export UI.
+This is diagnostic instrumentation, not an underline fix. Remove it after a
+captured reproduction establishes the cause and the fix is verified.
+
+Generate a separate worktree app with the flag below. This mutates only its
+generated iOS graph; it does not install an app or contact a production host:
+
+```bash
+TUIST_TOASTTY_MOBILE_COMPOSER_TRACE=1 sv exec -- node ios/scripts/toastty-ios.mjs generate
+```
+
+The app is named **Toastty Trace** and retains the worktree's unique Debug bundle
+ID. For a timing-sensitive physical reproduction, build this Debug app with
+`SWIFT_OPTIMIZATION_LEVEL=-O`. Keep the optimization override on the build
+invocation; do not change the normal scheme. Do not use `native-device` for this
+separate app, because that command selects the fixed development bundle ID.
+The flag is baked into the app and works on home-screen launches. UI tests can
+enable it with `TOASTTY_MOBILE_COMPOSER_TRACE=1` in `launchEnvironment`; `0`
+overrides a baked flag. Generate with `TUIST_TOASTTY_MOBILE_COMPOSER_TRACE=0` to
+restore the normal graph.
+
+Start a fresh app run and use filler text to reproduce the issue with fast onscreen key taps. When it
+appears, take a screenshot before leaving the composer. Then open
+**Settings → Diagnostics → Save typing trace** and save the JSON in Files.
+The screenshot notification records an event after the screenshot is taken;
+the app never captures the image. Review the screenshot before sharing it.
+Record the keyboard language and correction/prediction settings in the repro
+notes. A separate app starts with separate state; note whether the repro used
+the fixture or a newly paired host.
+
+The trace retains the latest 32,768 events in memory until the app exits.
+It records millisecond timing, per-launch composer IDs, text lengths,
+selection/marked ranges, TextKit mode, replacement revisions, and existing
+layout measurements. At creation, screenshot, and teardown, it also records
+bounded underline ranges/styles and keyboard traits. It excludes draft text,
+text hashes, attribute dictionaries, images, titles, paths, and credentials.
+Export copies the buffer on demand. No system logging or automatic upload is
+added. Typing cadence and text lengths are still diagnostic data, so use filler
+text and save soon after the reproduction.
+Empty storage underline runs do not establish that system correction or
+prediction decorations are absent. The screenshot provides the visual evidence.
 
 ## Local Helpers
 

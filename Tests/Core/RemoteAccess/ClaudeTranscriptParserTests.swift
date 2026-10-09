@@ -99,6 +99,40 @@ struct ClaudeTranscriptParserTests {
         #expect(completedTurnEnds == false)
     }
 
+    @Test func skipsCompactionSummariesUsingOnlyStructuredFlag() {
+        let result = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.compactionSummaryVariants)
+        #expect(result.malformedLineCount == 0)
+
+        let userMessages = result.observations.compactMap { observation -> String? in
+            guard case .transcript(.userMessage(let payload)) = observation.payload else { return nil }
+            return payload.text
+        }
+        #expect(userMessages == [
+            "This session is being continued from a previous conversation.",
+            "Transcript visibility alone is not a compaction flag",
+            "A normal message with a false flag",
+            "A normal message with a malformed flag",
+        ])
+    }
+
+    @Test func compactionAtTranscriptStartPreservesSessionIdentityAndFollowingOutput() throws {
+        var parser = ClaudeTranscriptParser()
+        let summaryLine = try #require(ClaudeTranscriptFixtures.compactionSummaryVariants.split(separator: "\n").first)
+        let summary = parser.parseLine(String(summaryLine))
+        #expect(summary.map(Self.describe) == ["providerSession"])
+        guard case .providerSessionObserved(let sessionID) = summary.first?.payload else {
+            Issue.record("The compaction summary did not preserve session identity")
+            return
+        }
+        #expect(sessionID == ClaudeTranscriptFixtures.sessionID)
+
+        let assistant = #"{"type":"assistant","sessionId":"\#(ClaudeTranscriptFixtures.sessionID)","uuid":"after-initial-compaction","timestamp":"2026-08-07T09:02:01.000Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"The saved result remains available."}]}}"#
+        let output = parser.parseLine(assistant)
+        #expect(output.map(Self.describe) == ["assistant(final):The saved result remains available."])
+        #expect(output.first?.turnID == nil)
+        #expect(parser.malformedLineCount == 0)
+    }
+
     @Test func repeatedIdenticalUserMessagesFingerprintDistinctly() {
         let contents = ClaudeTranscriptFixtures.basicSession + ClaudeTranscriptFixtures.resumeContinuation
         let result = ClaudeTranscriptParser.parseContents(contents)
@@ -172,6 +206,109 @@ struct ClaudeProjectionFidelityTests {
     static let conversationID = RemoteConversationID(rawValue: UUID(uuidString: "cccccccc-0000-4000-8000-00000000c1a0")!)
     static let bindingID = UUID(uuidString: "cccccccc-0000-4000-8000-00000000b1d0")!
     static let date = Date(timeIntervalSince1970: 1_786_000_000)
+
+    @Test func idleCompactionPreservesFinalReplyAndOpenPromptUntilRealInput() throws {
+        var parser = ClaudeTranscriptParser()
+        var projector = ConversationProjector(
+            conversationID: Self.conversationID,
+            provider: .claude,
+            bindingID: Self.bindingID,
+            at: Self.date
+        )
+        for line in ClaudeTranscriptFixtures.basicSession.split(separator: "\n") {
+            for observation in parser.parseLine(String(line)) {
+                projector.ingest(observation)
+            }
+        }
+        let completionDate = try #require(projector.events.last?.timestamp).addingTimeInterval(1)
+        projector.ingest(ProviderTranscriptObservation(
+            timestamp: completionDate,
+            turnID: "prompt-2",
+            fingerprint: "claude:completed-before-idle-compaction",
+            payload: .turnEnded(turnID: "prompt-2", reason: .completed)
+        ))
+        let token = try #require(projector.pendingPromptStabilizationToken)
+        projector.completePromptStabilization(token: token, at: completionDate.addingTimeInterval(1))
+        #expect(projector.state == .awaitingInput)
+        #expect(projector.inputAvailability.allowsRemoteSend)
+        let eventsBeforeCompaction = projector.events
+        let availabilityBeforeCompaction = projector.inputAvailability
+
+        for line in ClaudeTranscriptFixtures.idleCompaction.split(separator: "\n") {
+            for observation in parser.parseLine(String(line)) {
+                projector.ingest(observation)
+            }
+        }
+
+        #expect(projector.events == eventsBeforeCompaction)
+        #expect(projector.state == .awaitingInput)
+        #expect(projector.inputAvailability == availabilityBeforeCompaction)
+        let finalReply = projector.events.last { event in
+            if case .assistantMessage = event.payload { return true }
+            return false
+        }
+        guard case .assistantMessage(let reply) = finalReply?.payload else {
+            Issue.record("The final assistant reply is missing")
+            return
+        }
+        #expect(reply.text == "Retries now log through the sync logger.")
+        #expect(reply.phase == .final)
+
+        let passiveAssistant = #"{"type":"assistant","sessionId":"\#(ClaudeTranscriptFixtures.sessionID)","uuid":"idle-update-after-compaction","timestamp":"2026-08-07T09:02:01.000Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"The saved result remains available."}]}}"#
+        let passiveEvents = parser.parseLine(passiveAssistant).flatMap { projector.ingest($0) }
+        let passiveMessage = passiveEvents.first { event in
+            if case .assistantMessage = event.payload { return true }
+            return false
+        }
+        #expect(passiveMessage?.turnID == "prompt-2")
+        #expect(projector.state == .awaitingInput)
+        #expect(projector.inputAvailability == availabilityBeforeCompaction)
+
+        let realPrompt = #"{"type":"user","sessionId":"\#(ClaudeTranscriptFixtures.sessionID)","uuid":"after-idle-compaction","timestamp":"2026-08-07T09:03:00.000Z","promptId":"prompt-3","message":{"role":"user","content":"Also add a timeout."}}"#
+        let emitted = parser.parseLine(realPrompt).flatMap { projector.ingest($0) }
+        #expect(emitted.contains { event in
+            if case .userMessage(let message) = event.payload { return message.text == "Also add a timeout." }
+            return false
+        })
+        #expect(projector.state == .working)
+        #expect(projector.inputAvailability == .unavailable(reason: .working))
+        #expect(parser.malformedLineCount == 0)
+    }
+
+    @Test func activeCompactionPreservesCurrentTurnAndWorkingState() {
+        var parser = ClaudeTranscriptParser()
+        var projector = ConversationProjector(
+            conversationID: Self.conversationID,
+            provider: .claude,
+            bindingID: Self.bindingID,
+            at: Self.date
+        )
+        for line in ClaudeTranscriptFixtures.basicSession.split(separator: "\n") {
+            for observation in parser.parseLine(String(line)) {
+                projector.ingest(observation)
+            }
+        }
+        #expect(projector.state == .working)
+        let eventsBeforeCompaction = projector.events
+        for line in ClaudeTranscriptFixtures.idleCompaction.split(separator: "\n") {
+            for observation in parser.parseLine(String(line)) {
+                projector.ingest(observation)
+            }
+        }
+        #expect(projector.events == eventsBeforeCompaction)
+        #expect(projector.state == .working)
+        #expect(projector.inputAvailability == .unavailable(reason: .working))
+
+        let continuation = #"{"type":"assistant","sessionId":"\#(ClaudeTranscriptFixtures.sessionID)","uuid":"after-active-compaction","timestamp":"2026-08-07T09:02:01.000Z","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"Continuing the current task."}]}}"#
+        let emitted = parser.parseLine(continuation).flatMap { projector.ingest($0) }
+        let message = emitted.first { event in
+            if case .assistantMessage = event.payload { return true }
+            return false
+        }
+        #expect(message?.turnID == "prompt-2")
+        #expect(projector.state == .working)
+        #expect(parser.malformedLineCount == 0)
+    }
 
     @Test func claudeConversationRendersFullTranscriptButStaysReadOnly() {
         var projector = ConversationProjector(

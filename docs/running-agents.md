@@ -545,14 +545,120 @@ and marks the workspace done with `workspace.set-done`, which shows as a check
 on its subspace row. New work in the workspace clears the check; new commits
 need the user's review and a new `worktree-done` request.
 
-Run `worktree-cleanup` from an outside project workspace. Its status script lists
+### Merging a task's pull request
+
+A subspace with a `github-pr` annotation shows a **Merge PR #N** button under
+its title in the top bar. The arrow beside it picks what the button does. The
+button label does not change; the menu marks the selected mode.
+
+- **Merge and Clean Workspace**, the default: after the pull request merges, Toastty
+  closes the workspace, removes its worktree, and deletes its branches.
+- **Merge Only** merges the pull request and leaves the workspace in place.
+
+The choice applies to every workspace and is kept across launches.
+`Option+Shift+M` runs the selected subspace's button in the mode its menu
+marks. In a
+workspace without a Merge button, the key goes to the terminal as usual. The
+subspace's sidebar context menu offers both actions, as **Merge PR #N and Clean
+Workspace** and **Merge PR #N Only**.
+
+Toastty merges the pull request itself, with no agent and no skills
+installed. It needs `gh`, `git`, and `python3` on your login shell's `PATH`, and
+`gh` must be signed in. The `github-pr` annotation must link to the pull
+request on GitHub; the button's label, its tooltip, and the Close Without
+Merging confirmation name the pull request from that link, not from the
+annotation's text. Clicking the button is your acceptance of the version in the
+worktree, so Toastty checks that the merge is that version before it changes
+anything:
+
+- The workspace's checkout must be the pull request's worktree, and the
+  worktree must be clean and at exactly the pull request's head commit. The
+  pull request must target the repository's default branch.
+- Toastty refuses a pull request with merge conflicts, failing checks, or a
+  branch that GitHub requires to be updated first. It also refuses one whose
+  description lists merge prerequisites: an "Activation order", "Merge order",
+  "Rollout", or "Depends on" section, or a link to a pull request in another
+  repository. Merge that pull request yourself once its prerequisites are done.
+- Toastty also refuses a pull request that already has auto-merge on, because
+  GitHub would merge commits pushed later too. Turn auto-merge off on GitHub
+  first. Branches that require a merge queue are not supported.
+- A draft is marked ready first. The merge method is the first one the
+  repository allows: a merge commit, then squash, then rebase.
+
+While Toastty checks, the button reads **Merging PR #N…**. If any check is
+still running, or GitHub is waiting on a required review, Toastty waits and
+tries again every 30 seconds. It never turns on GitHub auto-merge, because
+GitHub would then also merge commits pushed after your click. Toastty merges
+only the commit you accepted, and GitHub refuses that merge if the branch has
+moved. Toastty marks the workspace done when you click, so a Merge Only shows
+**Done · PR #N** while it waits.
+
+- A waiting merge needs Toastty to be running. It is kept across launches and
+  resumes after a relaunch.
+- To cancel a waiting merge, clear the workspace's done mark in the sidebar.
+  New agent work in the workspace clears it too.
+- If the merge can no longer happen, for example because new commits were
+  pushed, a check failed, or `gh` failed three times in a row, Toastty stops
+  waiting, clears the done mark so the Merge button comes back, and a
+  notification gives the reason. A refusal at the click shows an alert and
+  changes nothing.
+- Top-level workspaces do not show the button, because only a subspace holds a
+  done mark.
+
+After a Merge and Clean, the button reads **Merging PR #N…** until the merge is
+done, and **Cleaning Up PR #N…** while Toastty cleans up. Toastty confirms with `gh pr view` that the pull request
+merged, then closes the workspace, removes the worktree, and deletes the local
+and remote branch, and a notification reports the result.
+
+- Toastty checks again before it cleans up. It skips the cleanup when the
+  worktree has uncommitted changes or is not at the PR head, when the
+  workspace has unsaved documents or a terminal in another worktree, or when
+  the workspace is no longer marked done. Closing the workspace ends its agent
+  sessions and running commands.
+- A detached release worktree can also be cleaned up at the PR head or its
+  merge commit. Its workspace must have one unambiguous `github-pr` URL for
+  that PR. Toastty checks the URL and exact worktree commit again before
+  cleanup. Branches are deleted only at the PR head, and a branch checked out
+  in another worktree is kept. Detached cleanup also keeps the default branch
+  and branches used by another open PR. This exception applies only after a merge.
+- A cleanup that stops before it closes the workspace leaves the workspace
+  open, and the button reads **Cleanup Stopped · PR #N**. Its tooltip gives the
+  reason. Its menu offers **Retry Clean Up** and **Don't Clean Up**. A cleanup
+  that closes the workspace and then cannot remove the worktree or a branch
+  reports what it kept in a notification. A pull request that closes without
+  merging, or three failed `gh` checks in a row, also stops the cleanup.
+- New work in the workspace clears its done mark and drops the cleanup, because
+  the merge is no longer the version you accepted.
+- A pending cleanup is kept across launches.
+
+To abandon a task instead, choose **Close Without Merging…** from the arrow
+menu or the subspace's sidebar context menu. It is a one-time action, not a
+mode, so the button and `Option+Shift+M` never close a pull request. After you
+confirm, Toastty closes the pull request on GitHub, closes the workspace,
+removes the worktree, and deletes the local branch. The branch stays on GitHub,
+so you can reopen the pull request. The button reads **Closing PR #N…**
+meanwhile.
+
+- Toastty checks everything before its first change. The worktree must be
+  clean and at exactly the pull request's head commit, and the branch on GitHub
+  must be at that commit too, so no work exists only locally. The workspace must
+  pass the same checks as a cleanup, except that it need not be done. If any
+  check fails, the pull request stays open and an alert gives the reason. The
+  workspace is checked again after the pull request closes; if it changed, for
+  example with new unsaved edits, it stays open.
+- A pull request that is already closed is cleaned up the same way. A merged
+  pull request is refused.
+
+For pull requests merged another way, run `worktree-cleanup` from an outside
+project workspace. Its status script lists
 each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It
 merges only PRs the user names. With `--cleanup-merged`, it closes the task
 workspace, removes the worktree and deletes the branches for merged PRs, using the
 `workspace.list` query to find each workspace. Closing a workspace ends its agent
 sessions and running terminal commands, and the cleanup report names what it
-ended; a workspace with unsaved documents is skipped. Releases and deployments are outside this
-workflow.
+ended; a workspace with unsaved documents is skipped. The same detached-worktree
+checks apply here. This cleans up release worktrees; it does not perform a release
+or deployment.
 
 ## User-created skills
 
@@ -964,6 +1070,62 @@ Use `Cmd+Shift+L` to flag or clear the focused managed session for later follow-
 Later flags are intentionally a lower-priority reminder, not a pin. When you use `Cmd+Shift+A`, Toastty first targets unread panels, then sessions that need approval or show errors, then forward working sessions. Later-flagged sessions only surface after those higher-priority cases are exhausted.
 
 Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
+
+### Automatic program status
+
+Programs can report [OSC 7501 program status](https://www.superlogical.com/rex/docs/build/program-status)
+to Toastty. Each terminal gets one row in the existing sidebar list. Programs
+use a command marker; manually watched commands keep their bell. Known agent
+app IDs use the agent row style. Click the row to open its terminal. Approval,
+input, and login stay in that terminal.
+
+Toastty groups all task IDs from a terminal into that row. A blocked task takes
+priority, followed by error, working, done, and idle. The root record wins ties;
+otherwise the most recently updated task wins. The row keeps the root title
+when present and shows the selected task's message and explicit percentage.
+Toastty does not average task percentages. Each terminal keeps at most 256
+records and evicts the least recently updated record when full.
+
+Managed agent status remains primary. OSC fallback is enabled when launch
+preparation explicitly fails or skips status integration, or when a supported
+launch option disables hooks. A later accepted managed status takes priority
+again. A quiet agent does not cause a switch. Hook settings outside the supplied
+launch settings are not inspected. A manual process watch also keeps priority.
+
+The sidebar expands to its session width when the first program row appears
+in a window. Wider widths and later manual resizing are preserved. Explicit
+progress percentages use blue text.
+
+A shell prompt or terminal process exit clears working, blocked, and idle
+records. Programs should send `state=done` or `state=error` before exiting.
+Toastty shows these as Ready or Error and keeps the result until you view that
+terminal in the active app or send terminal input. Viewing a blocked or running
+row does not acknowledge completion records hidden behind that row. A terminal
+reset or close removes all records. Toastty does not infer success when a
+program exits without a completion report.
+
+A new completion result marks an unfocused terminal unread and uses the same
+desktop notification route as a watched command. A focused terminal also
+notifies while Toastty is inactive. Repeated reports do not repeat the
+notification. Notifications are limited to one per terminal every five seconds;
+a first error can notify immediately after success, with subsequent errors
+subject to the same interval. The row and unread state still update when a
+notification is limited. macOS notification permissions and Focus settings apply.
+
+Background jobs and multiplexed panes share the enclosing terminal's row and
+prompt lifecycle. This status does not create managed sessions, mobile session
+state, or agent hooks.
+
+To check the protocol and sidebar in an isolated dev terminal, run
+`python3 scripts/automation/program-status-fixture.py --scenario permission`.
+The fixture sends terminal output only and holds its status for 120 seconds.
+Working and blocked scenarios then report simulated completion. Use
+`--hold-seconds 5` and switch to another terminal to test the Ready result and
+notification. View the original terminal to dismiss the result. Ctrl+C clears
+the simulated status without reporting success.
+Other scenarios include `working`, `question`, `auth`, `done`, `error`, `agent`,
+`lifecycle`, and `flood`. See [Ghostty Integration](ghostty-integration.md) for
+the required matching header and library.
 
 ### Watch running commands
 

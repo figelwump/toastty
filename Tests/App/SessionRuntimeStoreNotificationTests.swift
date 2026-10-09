@@ -121,10 +121,12 @@ extension SessionRuntimeStoreTests {
         #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .working)
     }
 
-    @Test
-    func resumeGraceTimerRepublishesRawReadyAfterExpiry() async throws {
+    @Test(arguments: [true, false])
+    func resumeGraceTimerRepublishesRawReadyAfterExpiry(readyBeforeChild: Bool) async throws {
         let sessionStore = SessionRuntimeStore()
         defer { sessionStore.reset() }
+        var actionableEvents: [ManagedSessionActionableEvent] = []
+        sessionStore.onActionableEvent = { actionableEvents.append($0) }
         var publishCount = 0
         let cancellable = sessionStore.$sessionRegistry.sink { _ in
             publishCount += 1
@@ -148,11 +150,13 @@ extension SessionRuntimeStoreTests {
             repoRoot: "/repo",
             at: startedAt
         )
-        sessionStore.updateStatus(
-            sessionID: "sess-resume-timer",
-            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root complete"),
-            at: finishAt.addingTimeInterval(-2)
-        )
+        if readyBeforeChild {
+            sessionStore.updateStatus(
+                sessionID: "sess-resume-timer",
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root complete"),
+                at: finishAt.addingTimeInterval(-2)
+            )
+        }
         #expect(sessionStore.updateBackgroundActivity(
             sessionID: "sess-resume-timer",
             activity: SessionBackgroundActivity(
@@ -163,6 +167,14 @@ extension SessionRuntimeStoreTests {
             ),
             at: finishAt.addingTimeInterval(-1)
         ))
+        if readyBeforeChild == false {
+            sessionStore.updateStatus(
+                sessionID: "sess-resume-timer",
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root complete"),
+                at: finishAt.addingTimeInterval(-0.5)
+            )
+        }
+        #expect(actionableEvents.count == (readyBeforeChild ? 1 : 0))
 
         #expect(sessionStore.finishBackgroundActivity(
             sessionID: "sess-resume-timer",
@@ -172,6 +184,7 @@ extension SessionRuntimeStoreTests {
         let publishCountAfterFinish = publishCount
 
         #expect(sessionStore.panelStatus(for: panelID)?.projection == .resuming)
+        #expect(actionableEvents.count == (readyBeforeChild ? 1 : 0))
         await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 1_000_000_000) {
             publishCount > publishCountAfterFinish &&
                 sessionStore.panelStatus(for: panelID)?.projection == SessionStatusProjection.none
@@ -181,6 +194,7 @@ extension SessionRuntimeStoreTests {
         #expect(status.status.kind == .ready)
         #expect(status.status.detail == "Root complete")
         #expect(status.projection == .none)
+        #expect(actionableEvents.map(\.kind) == [.turnComplete])
     }
 
     @Test

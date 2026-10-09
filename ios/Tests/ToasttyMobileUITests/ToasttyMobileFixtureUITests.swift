@@ -30,6 +30,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let bottomInset: CGFloat
         let containerHeight: CGFloat
         let hasSendItems: Bool
+        let layoutPasses: Int
+        let intermediateDistances: [CGFloat]
         var distanceFromBottom: CGFloat { contentHeight - visibleMaxY }
     }
 
@@ -193,6 +195,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertEqual(status.label, "Agent working. Composer locked.")
         XCTAssertEqual(status.value as? String, "In progress")
         XCTAssertEqual(composerInput(in: app).value as? String, "Agent working…")
+        // The locked composer already shows the working state; the
+        // transcript does not repeat it.
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-transcript-working"].exists)
         attachScreenshot(named: "fixture-conversation-working", of: app)
 
         // A conversation pushed from a workspace pops back to that workspace,
@@ -961,7 +966,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         let title = app.staticTexts["toastty-mobile-conversation-title"]
         XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
-        assertReadyMessageStartsAtTop(in: app)
+        assertReadyMessageStartsWithContext(in: app)
         attachScreenshot(named: "fixture-ready-message-start-from-home", of: app)
         let scratchpad = app.buttons["toastty-conversation-scratchpad"]
         let next = app.buttons["toastty-conversation-next"]
@@ -983,12 +988,16 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
         // Touch and hold lists the queue to choose from.
         next.press(forDuration: 1.2)
-        let choice = app.buttons["toastty-conversation-next-\(openPromptConversationID)"]
+        // Native menu actions expose their visible title on iOS 27, but do
+        // not retain the SwiftUI accessibility identifier.
+        let choice = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Changelog + tag")
+        ).firstMatch
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
         attachScreenshot(named: "fixture-conversation-next-menu", of: app)
         choice.tap()
         XCTAssertTrue(waitForLabel(title, "Changelog + tag"))
-        assertReadyMessageStartsAtTop(in: app)
+        assertReadyMessageStartsWithContext(in: app)
         attachScreenshot(named: "fixture-ready-message-start-from-next", of: app)
 
         // Next replaced the conversation instead of pushing, so Back
@@ -996,6 +1005,52 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 5))
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+    }
+
+    func testReadyResponseOpensWithItsCollapsedWorkCardAboveIt() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_READY_WORK": "1"])
+        let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.tap()
+
+        let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-15"]
+        let work = app.buttons["toastty-mobile-transcript-turn-12"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertTrue(work.waitForExistence(timeout: 5))
+        let showsWorkContext = waitUntil(timeout: 5) {
+            let top = max(
+                app.scrollViews["toastty-mobile-transcript"].frame.minY,
+                app.navigationBars.firstMatch.frame.maxY
+            )
+            return work.isHittable && work.frame.minY >= top - 2
+                && work.frame.minY <= top + 16
+                // The work button's touch bounds include its vertical padding.
+                && message.frame.minY >= work.frame.maxY - 8
+                && message.frame.minY <= top + 100
+        }
+        print("ENTRY_WORK_FRAMES work=\(work.frame) response=\(message.frame) transcript=\(app.scrollViews["toastty-mobile-transcript"].frame) navigation=\(app.navigationBars.firstMatch.frame)")
+        attachScreenshot(named: "fixture-ready-response-with-work-card", of: app)
+        XCTAssertTrue(showsWorkContext, "The unread response should open below its visible work card")
+        XCTAssertEqual(work.value as? String, "Collapsed")
+
+        // Expanding and collapsing the card must not restart entry scrolling.
+        work.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { work.value as? String == "Expanded" })
+        work.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { work.value as? String == "Collapsed" })
+        let latest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        latest.tap()
+        XCTAssertTrue(latest.waitForNonExistence(timeout: 5))
+    }
+
+    func testReadyResponseInLongHistoryShowsPrecedingContext() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_READY_HISTORY": "1"])
+        let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.tap()
+        assertReadyMessageStartsWithContext(in: app, sequence: 213)
+        attachScreenshot(named: "fixture-ready-response-long-history", of: app)
     }
 
     func testWorkingSessionStillOpensAtLiveEdge() {
@@ -1470,6 +1525,131 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "Composer locked. A message is already being sent at this prompt"
         )
         attachScreenshot(named: "fixture-gated-send-optimistic", of: app)
+    }
+
+    func testWorkingTurnQueuesByDefaultStopsAndOffersSteer() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "queue-steer"]
+        )
+        let workingCard = app.buttons["toastty-mobile-grouped-card-\(workingConversationID)"]
+        XCTAssertTrue(scrollHomeTo(workingCard, in: app))
+        workingCard.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+
+        // Collapsed while working: the field is open and Stop is the only
+        // button next to it. The composer no longer repeats "Agent working".
+        let input = composerInput(in: app)
+        let stop = app.buttons["toastty-mobile-composer-stop"]
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(input.isEnabled)
+        XCTAssertTrue(stop.exists)
+        XCTAssertFalse(send.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
+        assertComposerCollapsed(input: input, stop: stop)
+
+        // The transcript's tail says the agent is working, with the turn's
+        // running time, above anything still waiting in the queue.
+        let working = app.descendants(matching: .any)["toastty-mobile-transcript-working"]
+        XCTAssertTrue(working.waitForExistence(timeout: 5))
+        XCTAssertEqual(working.label, "Agent working")
+        XCTAssertNotNil(
+            (working.value as? String)?.range(of: #"^\d+m \d{2}s$"#, options: .regularExpression),
+            "Unexpected elapsed time: \(String(describing: working.value))"
+        )
+
+        // Typing expands the card: attach, then the Queue chip next to Send.
+        // Send replaces Stop while the field is open.
+        input.tap()
+        input.typeText("Also add a UI test")
+        let mode = app.buttons["toastty-mobile-composer-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(mode.label, "Queue selected")
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertEqual(send.label, "Queue message")
+        XCTAssertFalse(stop.exists)
+        XCTAssertLessThan(mode.frame.maxX, send.frame.minX)
+        XCTAssertLessThan(send.frame.minX - mode.frame.maxX, 16)
+        attachScreenshot(named: "fixture-queue-steer-expanded", of: app)
+
+        send.tap()
+        let queued = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-1"]
+        XCTAssertTrue(queued.waitForExistence(timeout: 5))
+        XCTAssertTrue(queued.label.contains("Also add a UI test"))
+        XCTAssertTrue(queued.label.contains("Queued"))
+        XCTAssertLessThan(working.frame.maxY, queued.frame.minY)
+        // Queueing never locks the composer the way a prompt send does, but
+        // the send still ends the edit: the keyboard leaves and the card
+        // folds back to the one-line field.
+        XCTAssertTrue(input.isEnabled)
+        XCTAssertEqual(input.value as? String, "Message Codex…")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(mode.waitForNonExistence(timeout: 5))
+        assertComposerCollapsed(input: input, stop: stop)
+        attachScreenshot(named: "fixture-queue-steer-collapsed-after-send", of: app)
+
+        // The chip offers Steer; choosing it changes what Send does and the
+        // choice resets to Queue after the send.
+        input.tap()
+        input.typeText("Use 300 ms, not 400")
+        mode.tap()
+        let steerChoice = app.buttons["toastty-mobile-composer-mode-steer"]
+        XCTAssertTrue(steerChoice.waitForExistence(timeout: 5))
+        steerChoice.tap()
+        XCTAssertEqual(mode.label, "Steer selected")
+        XCTAssertEqual(send.label, "Steer message")
+        send.tap()
+        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-2"]
+        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("x")
+        XCTAssertEqual(mode.label, "Queue selected")
+        app.buttons["toastty-mobile-queued-remove-fixture-queued-1"].tap()
+        XCTAssertFalse(queued.waitForExistence(timeout: 2))
+
+        // Edit puts the queued text back into the field.
+        app.keys["delete"].tap()
+        input.typeText("Then run the suite")
+        send.tap()
+        let second = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-3"]
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        app.buttons["toastty-mobile-queued-edit-fixture-queued-3"].tap()
+        XCTAssertFalse(second.waitForExistence(timeout: 2))
+        XCTAssertEqual(input.value as? String, "Then run the suite")
+        // Edit opens the keyboard again so the text can change right away.
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        send.tap()
+        let third = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-4"]
+        XCTAssertTrue(third.waitForExistence(timeout: 5))
+
+        // Back to the one-line field: Stop is back and Send is gone.
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        XCTAssertFalse(send.exists)
+        assertComposerCollapsed(input: input, stop: stop)
+
+        // Stop holds the queue; the paused row offers to send it next.
+        stop.tap()
+        XCTAssertFalse(stop.waitForExistence(timeout: 2))
+        XCTAssertTrue(third.label.contains("Paused"))
+        let resume = app.buttons["toastty-mobile-queued-resume-fixture-queued-4"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-queue-steer-stopped", of: app)
+        resume.tap()
+        XCTAssertFalse(resume.waitForExistence(timeout: 2))
+        XCTAssertTrue(third.label.contains("Queued"))
+    }
+
+    /// The collapsed composer keeps Stop beside the one-line field; the
+    /// expanded card moves it into the button bar under the text.
+    private func assertComposerCollapsed(
+        input: XCUIElement,
+        stop: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(stop.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertGreaterThanOrEqual(stop.frame.minX, input.frame.maxX, file: file, line: line)
+        XCTAssertLessThan(stop.frame.minY, input.frame.maxY, file: file, line: line)
     }
 
     func testGatedSendWithChangingComposerHeightJumpsToLiveEdgeAndFollowsAppendedTail() {
@@ -2326,16 +2506,21 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         return top
     }
 
-    private func assertReadyMessageStartsAtTop(in app: XCUIApplication) {
-        let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-13"]
+    private func assertReadyMessageStartsWithContext(in app: XCUIApplication, sequence: UInt64 = 13) {
+        let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-\(sequence)"]
         XCTAssertTrue(message.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitUntil(timeout: 5) {
+        let showsResponseContext = waitUntil(timeout: 5) {
             let top = max(
                 app.scrollViews["toastty-mobile-transcript"].frame.minY,
                 app.navigationBars.firstMatch.frame.maxY
             )
-            return message.frame.minY >= top - 2 && message.frame.minY <= top + 32
-        }, "The ready session should show the start of its latest response", file: #filePath, line: #line)
+            // The navigation bar extends below the scroll content's top
+            // inset. Require visible context, not an exact inset measurement.
+            return message.frame.minY >= top + 12 && message.frame.minY <= top + 44
+        }
+        print("ENTRY_RESPONSE_FRAMES response=\(message.frame) transcript=\(app.scrollViews["toastty-mobile-transcript"].frame) navigation=\(app.navigationBars.firstMatch.frame)")
+        attachScreenshot(named: "fixture-ready-response-context-\(sequence)", of: app)
+        XCTAssertTrue(showsResponseContext, "The ready session should show some context above its latest response", file: #filePath, line: #line)
         XCTAssertTrue(app.buttons["toastty-mobile-transcript-jump-latest"].waitForExistence(timeout: 5))
     }
 

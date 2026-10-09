@@ -119,6 +119,32 @@ Browser profiles paired by earlier Toastty builds may continue to connect and
 appear in the paired-device list, but the current UI does not issue new browser
 pairing codes.
 
+## iPhone notifications
+
+Notification-enabled builds offer session alerts after the first connection to a
+compatible Mac. Continue requests alerts, sound, and app icon badges together
+through Apple's permission prompt. After Allow, Toastty returns to Home and
+finishes setup automatically. Not now defers all three permissions. Not now and
+Don't Allow are remembered. You can change the choice in Settings.
+Existing iOS permission choices stay in effect. Use iOS Settings to change them.
+
+Badge permission alone does not enable session alerts. If all alert delivery
+locations are off, Toastty links to iOS Settings. Delivery to Notification Center
+or the Lock Screen remains supported when banners or sound are off.
+
+Alerts include the session title and Ready or Needs approval. The title passes
+through Toastty's notification service and Apple. There is no title-hiding option.
+Tapping an alert opens its conversation if it still belongs to the current Mac
+pairing. The Mac must remain running with Remote Access enabled to send new
+alerts. The phone does not need an open connection to receive Apple's alert, but
+opening the conversation still requires access to the Mac through Tailscale.
+
+Interrupted setup resumes when the app returns to the foreground. A failure shows
+a small Retry message. Off and unpairing retain pending notification revocation
+until the service accepts it. Settings shows when turning off is still pending;
+alerts already sent can still arrive. Unconfigured builds hide these controls.
+See [development setup](../workers/push/README.md) for the current opt-in relay.
+
 ## Reading and replying
 
 A newly paired device can read managed Codex, Claude Code, OpenCode, MiMo Code,
@@ -205,11 +231,13 @@ badge when the Mac sends the new state. Opening the app alone does not clear it.
 Reading an error does not dismiss it; it counts until the session leaves its
 error state or is removed on the Mac.
 
-Toastty asks for badge permission when attention first appears while the app is
-active. It requests badges only. You can change this permission in iOS Settings.
+Notification-enabled builds request badge permission with alerts and sound when
+you choose Continue. They do not show a separate badge prompt. Builds without
+push configuration ask for badge permission only when attention first appears
+while the app is active. You can change this permission in iOS Settings.
 The badge keeps its last count during a connection loss or while the app is
-suspended. This version has no push delivery, so new activity cannot update the
-badge until the app reconnects. Unpairing, losing access, or a pairing that
+suspended. Session push alerts do not carry a badge count, so new activity cannot
+update the badge until the app reconnects. Unpairing, losing access, or a pairing that
 needs repair because it is corrupt or incompatible clears the badge.
 
 Remote replies are enabled by default for active sessions. For every supported
@@ -224,6 +252,59 @@ a newer prompt, a modal interaction, an offline session, or an unavailable
 terminal rejects the send. An accepted send means Toastty handed it to the
 terminal; the transcript event carrying the same request ID is the later
 confirmation.
+
+### Queue, steer, and stop while the agent works
+
+On a host that advertises `conversation_input_control`, the composer stays
+open while the agent works. While the field is a single line, a **Stop**
+button sits next to it. Once the field has focus or text it grows into a card
+with a button bar: attach on the left and Stop on the right. As soon as there
+is something to send, Stop gives way to **Send**, with a **Queue**/**Steer**
+chip directly left of it; Send uses the same arrow for every mode, and Stop and
+Send are never shown together. The agent's working state is shown in the
+transcript, not under the field.
+
+- **Queue** is the default. Send holds the message on the Mac, and the Mac
+  types it as the next prompt once the turn ends and the prompt opens, through
+  the same open-prompt gate as a live send. One queued message is delivered per
+  open prompt, in order; messages are never merged. The queue holds at most 5
+  messages per conversation and belongs to the current runtime binding: a
+  resumed or relaunched agent drops it, and the phone shows those messages as
+  not delivered. Queued messages appear at the end of the transcript as dashed
+  bubbles with **Edit**, **Steer now**, and **Remove**. Edit and Steer now first
+  remove the message on the Mac and act only when the Mac confirms it was still
+  waiting. A queued message with attachments keeps them on the Mac; editing it
+  restores only the text.
+- **Steer** types the message into the running turn. It is offered only for
+  Codex, which injects input into the current turn, and only while nobody has
+  typed in that turn's terminal on the Mac. Claude Code holds such input in its
+  own queue until the turn ends, which Toastty's queue already covers, so the
+  chip stays on Queue for Claude. The chip returns to Queue after each send.
+- **Stop** sends the agent's interrupt key (Escape) for the turn the phone saw.
+  A stop names that turn, so a late tap cannot stop a later one. After a stop
+  the queue pauses until the user taps **Send next** on a queued message,
+  removes the last queued message, or queues a new one. The prompt reopens a
+  short moment after the provider reports the aborted turn, unless local input
+  or another provider transition happens first.
+
+Typing on the Mac still wins. Local keyboard input during a turn blocks steer
+for that turn and, unless the provider logs the Mac user's own message, opens
+the next prompt as a local draft so neither a live send nor a queued delivery
+types into it. The transcript marks a confirmed remote message as **from queue**
+or **steered** when it did not arrive at an open prompt.
+
+Protocol: `RemoteMessageSendRequest.deliveryMode` is `prompt` (absent on the
+wire), `queue`, or `steer`; for `queue` and `steer`, `expectedInputEpoch`
+carries the turn epoch from the summary's `inputControl`. The send result adds
+`queued` with a 1-based `position`, and the rejection reasons `queue_full`,
+`not_working`, `turn_mismatch`, and `steer_unavailable`. Each conversation
+summary carries an optional `inputControl` object with `turnEpoch`, `canQueue`,
+`canSteer`, `canInterrupt`, `queuedMessages`, and `isQueuePaused`.
+`POST /api/conversation.queue.update` removes a queued message or resumes the
+queue, and `POST /api/conversation.interrupt` stops a turn; both need native
+Bearer authentication and send scope. Older hosts omit the capability, and the
+phone keeps today's locked composer while the agent works. Older clients ignore
+the new fields.
 
 ### Photos and files from iOS
 

@@ -36,7 +36,7 @@ final class TerminalActionRouter {
                 panelID: resolution.panelID
             )
 
-        case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
+        case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished, .programStatus:
             return registry.handleRuntimeMetadataAction(
                 action.intent,
                 workspaceID: resolution.workspaceID,
@@ -101,7 +101,7 @@ final class TerminalActionRouter {
         case .startSearch, .endSearch, .searchTotal, .searchSelected:
             handled = false
 
-        case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
+        case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished, .programStatus:
             handled = false
 
         case .desktopNotification:

@@ -111,8 +111,10 @@ test('main pushes and manual runs require every job to pass', () => {
 test('automatic iOS runs keep functional coverage; manual runs include full UI and budgets', () => {
   const iosJob = workflow.jobs.ios;
   const command = iosJob.steps.find((step) => step.name === 'Test native client').run;
-  const prefix = 'node ios/scripts/toastty-ios.mjs test ';
-  assert.ok(command.startsWith(prefix));
+  // Every CI invocation gives a failed test one more attempt; hosted runners
+  // can time out the job's first UI launch under load.
+  const prefix = 'node ios/scripts/toastty-ios.mjs test --retry-tests-on-failure ';
+  assert.ok(command.startsWith(prefix), command);
 
   const evaluate = (expression, eventName, configuration) => {
     const match = expression.match(/^\$\{\{ (.+) \}\}$/);
@@ -134,7 +136,7 @@ test('automatic iOS runs keep functional coverage; manual runs include full UI a
     assert.equal(evaluate(iosJob['timeout-minutes'], eventName, configuration), timeout);
     const result = spawnSync(process.execPath, [
       new URL('ios/scripts/toastty-ios.mjs', root).pathname,
-      'test', ...selector.split(' ').filter(Boolean), '--dry-run',
+      'test', '--retry-tests-on-failure', ...selector.split(' ').filter(Boolean), '--dry-run',
     ], {
       env: { ...process.env, TOASTTY_IOS_CONFIGURATION: configuration },
       encoding: 'utf8',
@@ -146,6 +148,7 @@ test('automatic iOS runs keep functional coverage; manual runs include full UI a
       configuration === 'Debug' && eventName !== 'workflow_dispatch');
     assert.ok(!args.includes('-skip-testing:ToasttyMobileAppTests'));
     assert.ok(!args.includes('-skip-testing:ToasttyMobileDomainTests'));
+    assert.deepEqual(args.slice(-4), ['-retry-tests-on-failure', '-test-iterations', '2', 'test']);
   }
 });
 

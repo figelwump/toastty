@@ -10,6 +10,88 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testInstalledStatusIntegrationsKeepProgramStatusSecondary() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        for agent in [AgentKind.claude, .codex, .opencode, .mimocode, .pi] {
+            let prepared = try AgentLaunchInstrumentation.prepare(
+                agent: agent,
+                argv: [agent.rawValue],
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default
+            )
+            defer { cleanup([prepared]) }
+            XCTAssertFalse(prepared.allowsProgramStatusFallback, agent.rawValue)
+        }
+    }
+
+    func testLaunchesWithoutStatusIntegrationAllowProgramStatusFallback() throws {
+        for agent in [AgentKind.cursor, .grok, try XCTUnwrap(AgentKind(rawValue: "custom-agent"))] {
+            let prepared = try AgentLaunchInstrumentation.prepare(
+                agent: agent,
+                argv: [agent.rawValue],
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default
+            )
+            defer { cleanup([prepared]) }
+            XCTAssertTrue(prepared.allowsProgramStatusFallback, agent.rawValue)
+        }
+    }
+
+    func testCursorStatusPluginKeepsProgramStatusSecondaryOnlyWhenInjected() throws {
+        let configuration = stagedSkillsConfiguration()
+        for argv in [["cursor-agent"], ["opaque-cursor-wrapper"]] {
+            let prepared = try AgentLaunchInstrumentation.prepare(
+                agent: .cursor,
+                argv: argv,
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default,
+                stagedSkillsIntegration: configuration
+            )
+            XCTAssertEqual(prepared.allowsProgramStatusFallback, argv.first != "cursor-agent")
+            XCTAssertEqual(prepared.argv.contains(configuration.pluginRootPath), argv.first == "cursor-agent")
+        }
+    }
+
+    func testClaudeHookOptOutsAllowProgramStatusFallbackWithoutChangingHookInstallation() throws {
+        let cases: [(argv: [String], environment: [String: String], allowsFallback: Bool)] = [
+            (["claude", "--bare"], [:], true),
+            (["agent-safehouse", "--cwd", "/tmp/repo", "claude", "--safe-mode"], [:], true),
+            (["claude", "--settings", #"{"disableAllHooks":true}"#], [:], true),
+            (["claude", "--settings", #"{"disableAllHooks":false}"#], [:], false),
+            (["claude"], ["CLAUDE_CODE_SIMPLE": "1"], true),
+            (["claude"], ["CLAUDE_CODE_SAFE_MODE": "1"], true),
+            (["claude", "--disable-slash-commands"], [:], false),
+            (["claude", "--restricted"], [:], false),
+            (["claude", "--", "--bare"], [:], false),
+        ]
+        for testCase in cases {
+            let prepared = try AgentLaunchInstrumentation.prepare(
+                agent: .claude,
+                argv: testCase.argv,
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default,
+                launchEnvironment: testCase.environment
+            )
+            defer { cleanup([prepared]) }
+            XCTAssertEqual(prepared.allowsProgramStatusFallback, testCase.allowsFallback, "\(testCase.argv)")
+            let settingsIndex = try XCTUnwrap(prepared.argv.firstIndex(of: "--settings"))
+            let settingsPath = try XCTUnwrap(prepared.argv[safe: settingsIndex + 1])
+            let settings = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: settingsPath)))
+                    as? [String: Any]
+            )
+            XCTAssertNotNil((settings["hooks"] as? [String: Any])?["Stop"])
+        }
+    }
+
     func testPrepareClaudeLaunchMergesInlineSettingsArgument() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"
@@ -2097,6 +2179,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
         XCTAssertEqual(preparedLaunch.argv, ["pi", "--no-extensions", "--extension", "/user/ext.js"])
         XCTAssertNotNil(preparedLaunch.environment["TOASTTY_PI_TELEMETRY_LOG_PATH"])
+        XCTAssertTrue(preparedLaunch.allowsProgramStatusFallback)
     }
 
     func testPreparePiLaunchTreatsShortNoExtensionFlagAsOptOutBeforeTerminatorOnly() throws {
@@ -2127,6 +2210,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
         XCTAssertEqual(optedOutLaunch.argv, ["pi", "-ne"])
         XCTAssertEqual(terminatorLaunch.argv, ["pi", "--extension", "/toastty/pi-extension.js", "--", "--no-extensions"])
+        XCTAssertTrue(optedOutLaunch.allowsProgramStatusFallback)
+        XCTAssertFalse(terminatorLaunch.allowsProgramStatusFallback)
     }
 
     func testPreparePiLaunchInjectsStagedAndUserSkillTreesAfterExtension() throws {

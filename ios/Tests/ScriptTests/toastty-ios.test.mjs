@@ -35,6 +35,16 @@ function runDispatcher(args, environment = {}) {
     "TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX",
     "TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM",
     "TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE",
+    "TUIST_TOASTTY_MOBILE_PUSH_PROBE",
+    "TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL",
+    "TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT",
+    "TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL",
+    "TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID",
+    "TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT",
+    "TUIST_TOASTTY_MOBILE_PROD_TEST",
+    "TUIST_TOASTTY_MOBILE_BUNDLE_ID",
+    "TOASTTY_MOBILE_BUNDLE_ID",
+    "TOASTTY_NATIVE_DEVICE_BUILD_CONFIGURATION",
   ]) {
     delete childEnvironment[key];
   }
@@ -262,6 +272,86 @@ test("native-device rejects conflicting or incomplete options before spawning", 
   assert.match(missingDevice.stderr, /--device requires a value/);
 });
 
+test("push probe dry-run uses the fixed development identity and preserves explicit opt-in", () => {
+  const result = runDispatcher(["native-device", "--build-only", "--dry-run"], {
+    PATH: "",
+    TUIST_TOASTTY_MOBILE_PUSH_PROBE: "1",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const plan = JSON.parse(result.stdout);
+  assert.equal(plan.pushProbe, true);
+  assert.equal(plan.buildOnly, true);
+  assert.equal(plan.bundleID, "com.giantthings.toastty.mobile.dev");
+  assert.equal(plan.environment.TUIST_TOASTTY_MOBILE_PUSH_PROBE, "1");
+
+  const normal = runDispatcher(["native-device", "--dry-run"], { PATH: "" });
+  assert.equal(normal.status, 0, normal.stderr);
+  assert.equal(JSON.parse(normal.stdout).pushProbe, false);
+});
+
+test("push probe rejects Release, prod-test, custom identity, and simulator commands before tools run", () => {
+  for (const [command, environment, message] of [
+    ["native-device", { TOASTTY_IOS_CONFIGURATION: "Release" }, /requires Debug/],
+    ["native-device", { TOASTTY_NATIVE_DEVICE_BUILD_CONFIGURATION: "Release" }, /requires Debug/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PROD_TEST: "1" }, /cannot use prod-test/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_BUNDLE_ID: "com.example.other" }, /fixed physical-device/],
+    ["native-device", { TOASTTY_MOBILE_BUNDLE_ID: "com.example.other" }, /fixed physical-device/],
+    ["generate", {}, /requires native-device/],
+    ["build", {}, /requires native-device/],
+    ["test", {}, /requires native-device/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PUSH_PROBE: "maybe" }, /must be a boolean/],
+  ]) {
+    const result = runDispatcher([command, "--dry-run"], {
+      PATH: "",
+      TUIST_TOASTTY_MOBILE_PUSH_PROBE: "1",
+      ...environment,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, message);
+  }
+  const generation = runDispatcher(["generate", "--dry-run"], {
+    PATH: "",
+    TUIST_TOASTTY_MOBILE_PUSH_PROBE: "1",
+    TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE: "1",
+  });
+  assert.equal(generation.status, 0, generation.stderr);
+});
+
+test("normal notification relay requires explicit environment and fixed development identity", () => {
+  const base = { PATH: "", TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL: "https://push.example.com",
+    TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT: "development" };
+  const result = runDispatcher(["native-device", "--build-only", "--dry-run"], base);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).pushNotifications, true);
+  assert.equal(JSON.parse(result.stdout).pushProbe, false);
+  for (const [command, environment, message] of [
+    ["generate", {}, /fixed physical-device/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PUSH_ENVIRONMENT: "production" }, /explicit development/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_BUNDLE_ID: "com.example.worktree" }, /fixed physical-device/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PROD_TEST: "1" }, /prod-test/],
+    ["native-device", { TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL: "https://push.example.com/path" }, /HTTPS origin/],
+  ]) {
+    const rejected = runDispatcher([command, "--dry-run"], { ...base, ...environment });
+    assert.equal(rejected.status, 1, rejected.stdout);
+    assert.match(rejected.stderr, message);
+  }
+});
+
+test("production notifications require separate explicit configuration", () => {
+  const base = { PATH: "", TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL: "https://production.example.com",
+    TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID: "toastty-push-production-v1",
+    TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT: "production" };
+  const result = runDispatcher(["generate", "--dry-run"], base);
+  assert.equal(result.status, 0, result.stderr);
+  for (const environment of [
+    { TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID: "toastty-push-dev-v1" },
+    { TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT: "development" },
+    { TUIST_TOASTTY_MOBILE_PROD_TEST: "1" },
+  ]) {
+    assert.equal(runDispatcher(["generate", "--dry-run"], { ...base, ...environment }).status, 1);
+  }
+});
+
 test("a booted iOS 17 device is rejected in favor of creating on the newest compatible runtime", () => {
   const ios17 = "com.apple.CoreSimulator.SimRuntime.iOS-17-5";
   const ios18 = "com.apple.CoreSimulator.SimRuntime.iOS-18-4";
@@ -484,6 +574,34 @@ test("performance budget exclusion preserves functional suites in Debug and Rele
   }
 });
 
+test("retry on failure gives each failed test one more attempt in Debug and Release", () => {
+  const retryArgs = ["-retry-tests-on-failure", "-test-iterations", "2"];
+  for (const configuration of ["Debug", "Release"]) {
+    const toolchain = createStubToolchain();
+    const environment = {
+      ...toolchain.environment,
+      TOASTTY_IOS_CONFIGURATION: configuration,
+      TOASTTY_IOS_DESTINATION: "platform=iOS Simulator,id=EXPLICIT-UDID",
+    };
+    const result = runDispatcher(["test", "--retry-tests-on-failure", "--skip-performance-budgets"], environment);
+    assert.equal(result.status, 0, result.stderr);
+    const args = readLog(toolchain.logPath).find(({ tool }) => tool === "xcodebuild").args;
+    // Retry flags follow every selector and precede only the action.
+    assert.deepEqual(args.slice(-4), [...retryArgs, "test"]);
+    assert.equal(args.filter((arg) => arg === "-retry-tests-on-failure").length, 1);
+
+    const plan = runDispatcher(["test", "--retry-tests-on-failure", "--skip-performance-budgets", "--dry-run"], environment);
+    assert.equal(plan.status, 0, plan.stderr);
+    assert.deepEqual(JSON.parse(plan.stdout).steps.at(-1).args, args);
+
+    const singleAttempt = runDispatcher(["test", "--dry-run"], environment);
+    assert.equal(singleAttempt.status, 0, singleAttempt.stderr);
+    const singleAttemptArgs = JSON.parse(singleAttempt.stdout).steps.at(-1).args;
+    assert.ok(!singleAttemptArgs.includes("-retry-tests-on-failure"));
+    assert.ok(!singleAttemptArgs.includes("-test-iterations"));
+  }
+});
+
 test("Debug smoke runs app/domain tests and exactly two fixture UI methods", () => {
   const toolchain = createStubToolchain();
   const result = runDispatcher(["test", "--ui-tests", "smoke"], {
@@ -538,6 +656,8 @@ test("invalid test selectors fail before starting Tuist or a simulator", () => {
     [["test", "--ui-tests", "all"], { TOASTTY_IOS_CONFIGURATION: "Release" }, /--ui-tests requires Debug configuration/],
     [["test", "--skip-performance-budgets", "--skip-performance-budgets"], {}, /unexpected test argument: --skip-performance-budgets/],
     [["build", "--skip-performance-budgets"], {}, /unexpected build argument: --skip-performance-budgets/],
+    [["test", "--retry-tests-on-failure", "--retry-tests-on-failure"], {}, /unexpected test argument: --retry-tests-on-failure/],
+    [["build", "--retry-tests-on-failure"], {}, /unexpected build argument: --retry-tests-on-failure/],
   ]) {
     const toolchain = createStubToolchain();
     const result = runDispatcher(args, { ...toolchain.environment, ...environment });

@@ -124,6 +124,79 @@ final class AppWindowViewTests: XCTestCase {
         )
     }
 
+    func testFirstProgramStatusExpandsCompactSidebarAndRecordsEligibility() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        var hasHandledAppearance = false
+
+        AppWindowView.expandSidebarForProgramStatusIfNeeded(
+            store: store,
+            windowID: windowID,
+            hasHandledAppearance: &hasHandledAppearance
+        )
+
+        XCTAssertTrue(hasHandledAppearance)
+        XCTAssertTrue(store.hasEverLaunchedAgent)
+        XCTAssertNil(store.window(id: windowID)?.sidebarWidthPointsOverride)
+        XCTAssertEqual(
+            AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: store.hasEverLaunchedAgent),
+            280
+        )
+    }
+
+    func testFirstProgramStatusExpandsNarrowOverrideToExpandedDefault() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(store.send(.setSidebarWidth(windowID: windowID, width: 220, defaultWidth: 180)))
+        var hasHandledAppearance = false
+
+        AppWindowView.expandSidebarForProgramStatusIfNeeded(
+            store: store,
+            windowID: windowID,
+            hasHandledAppearance: &hasHandledAppearance
+        )
+
+        XCTAssertTrue(store.hasEverLaunchedAgent)
+        XCTAssertNil(store.window(id: windowID)?.sidebarWidthPointsOverride)
+    }
+
+    func testFirstProgramStatusPreservesWiderOverride() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(store.send(.setSidebarWidth(windowID: windowID, width: 360, defaultWidth: 180)))
+        var hasHandledAppearance = false
+
+        AppWindowView.expandSidebarForProgramStatusIfNeeded(
+            store: store,
+            windowID: windowID,
+            hasHandledAppearance: &hasHandledAppearance
+        )
+
+        XCTAssertTrue(hasHandledAppearance)
+        XCTAssertTrue(store.hasEverLaunchedAgent)
+        XCTAssertEqual(store.window(id: windowID)?.sidebarWidthPointsOverride, 360)
+    }
+
+    func testLaterProgramStatusAppearancePreservesManualNarrowing() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        var hasHandledAppearance = false
+        AppWindowView.expandSidebarForProgramStatusIfNeeded(
+            store: store,
+            windowID: windowID,
+            hasHandledAppearance: &hasHandledAppearance
+        )
+        XCTAssertTrue(store.send(.setSidebarWidth(windowID: windowID, width: 200, defaultWidth: 280)))
+
+        AppWindowView.expandSidebarForProgramStatusIfNeeded(
+            store: store,
+            windowID: windowID,
+            hasHandledAppearance: &hasHandledAppearance
+        )
+
+        XCTAssertEqual(store.window(id: windowID)?.sidebarWidthPointsOverride, 200)
+    }
+
     func testFirstRunAutoOpenGatingAllowsOneFreshPersistentLaunchPresentation() {
         XCTAssertTrue(
             AppWindowSceneView.shouldAutoOpenGettingStartedPanel(

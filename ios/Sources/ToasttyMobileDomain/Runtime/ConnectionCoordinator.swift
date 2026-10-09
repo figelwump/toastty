@@ -5,6 +5,7 @@ public enum ConnectionCoordinatorPhase: Equatable, Sendable {
     case idle
     case connecting
     case awaitingFreshSessionSnapshot
+    case checkingConnection
     case live
     case reconnecting(failureCount: Int, showsBanner: Bool)
     case suspended
@@ -21,6 +22,7 @@ public enum ConnectionCoordinatorPhase: Equatable, Sendable {
 public actor ConnectionCoordinator {
     private enum LifecycleIntent {
         case active
+        case background
         case suspended
     }
 
@@ -54,6 +56,14 @@ public actor ConnectionCoordinator {
     private let retryPolicy: ConnectionRetryPolicy
     private let firstSnapshotSleeper: any ConnectionSleeping
     private let firstSnapshotTimeout: Duration
+    private let backgroundGracePeriod: Duration
+    private let foregroundProbeTimeout: Duration
+    private let foregroundProbeSleeper: any ConnectionSleeping
+    private let lifecycleNow: @Sendable () -> ContinuousClock.Instant
+    private var latestLifecycleSequence: UInt64 = 0
+    private var backgroundStartedAt: ContinuousClock.Instant?
+    private var foregroundProbeID: UUID?
+    private var foregroundProbeTask: Task<Void, Never>?
     private let eventsPageLimit: Int
     private let requestIDFactory: any SendRequestIDFactory
     private let stateStream: RuntimeStateStream<State>
@@ -126,7 +136,11 @@ public actor ConnectionCoordinator {
         deviceScopes: [RemoteDeviceScope] = [],
         requestIDFactory: any SendRequestIDFactory = UUIDSendRequestIDFactory(),
         firstSnapshotSleeper: any ConnectionSleeping = ContinuousConnectionSleeper(),
-        firstSnapshotTimeout: Duration = .seconds(15)
+        firstSnapshotTimeout: Duration = .seconds(15),
+        backgroundGracePeriod: Duration = .seconds(10),
+        foregroundProbeTimeout: Duration = .seconds(3),
+        foregroundProbeSleeper: any ConnectionSleeping = ContinuousConnectionSleeper(),
+        lifecycleNow: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.gateway = gateway
         self.eventStream = eventStream
@@ -136,6 +150,10 @@ public actor ConnectionCoordinator {
         self.retryPolicy = retryPolicy
         self.firstSnapshotSleeper = firstSnapshotSleeper
         self.firstSnapshotTimeout = firstSnapshotTimeout
+        self.backgroundGracePeriod = backgroundGracePeriod
+        self.foregroundProbeTimeout = foregroundProbeTimeout
+        self.foregroundProbeSleeper = foregroundProbeSleeper
+        self.lifecycleNow = lifecycleNow
         self.eventsPageLimit = min(max(eventsPageLimit, 1), 200)
         self.deviceScopes = deviceScopes
         self.requestIDFactory = requestIDFactory
@@ -182,7 +200,8 @@ public actor ConnectionCoordinator {
 
     /// Starts the coordinator unless it already owns a connection loop.
     public func connectIfNeeded() async {
-        guard lifecycleTransitionsInFlight == 0,
+        guard lifecycleIntent != .background,
+              lifecycleTransitionsInFlight == 0,
               connectionTask == nil,
               connectionRetirementTask == nil else { return }
         switch state.phase {
@@ -191,7 +210,7 @@ public actor ConnectionCoordinator {
             // Terminal admission/authorization failures require an explicit
             // user action (pairing or manual reset), not a scene-driven loop.
             return
-        case .idle, .connecting, .awaitingFreshSessionSnapshot, .live,
+        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection, .live,
              .reconnecting, .suspended:
             break
         }
@@ -201,9 +220,14 @@ public actor ConnectionCoordinator {
 
     /// Cancels all network work while retaining the last readable projection.
     public func suspend() async {
+        await suspend(intent: .suspended)
+    }
+
+    private func suspend(intent: LifecycleIntent) async {
+        clearBackgroundState()
         let requestID = UUID()
         connectionLifecycleRequestID = requestID
-        lifecycleIntent = .suspended
+        lifecycleIntent = intent
         lifecycleTransitionsInFlight += 1
         defer { lifecycleTransitionsInFlight -= 1 }
         await cancelSendsForSuspension()
@@ -224,7 +248,7 @@ public actor ConnectionCoordinator {
         await closeAttemptResources()
         await previousTask?.value
         guard connectionLifecycleRequestID == requestID,
-              lifecycleIntent == .suspended else { return }
+              lifecycleIntent == intent else { return }
         connectionRetirementTask = nil
         state.phase = .suspended
         state.consecutiveFailureCount = 0
@@ -239,18 +263,142 @@ public actor ConnectionCoordinator {
         await publish()
     }
 
-    /// Foregrounding reconnects suspended/nonterminal state, but never revives
-    /// a terminal admission or authorization failure.
-    public func resume() async {
+    /// Keeps a live stream available for a brief app switch. This requests no
+    /// background execution time: iOS remains free to suspend the process.
+    /// Sequence numbers originate synchronously at the scene event, before
+    /// MainActor tasks or actor hops can reorder those events.
+    public func enterBackground(lifecycleSequence: UInt64) async {
+        guard acceptLifecycleSequence(lifecycleSequence) else { return }
+        lifecycleIntent = .background
+        guard !hasTerminalFailure else { return }
+        let canRetain = activeSubscription != nil && connectionTask != nil
+            && lifecycleTransitionsInFlight == 0 && connectionRetirementTask == nil
+        if canRetain, state.phase == .checkingConnection, foregroundProbeID != nil {
+            // A second switch must not extend the original, unverified grace.
+            cancelForegroundProbe()
+            state.phase = .live
+        }
+        guard canRetain, state.phase == .live, backgroundGracePeriod > .zero else {
+            await suspend(intent: .background)
+            return
+        }
+        if backgroundStartedAt == nil { backgroundStartedAt = lifecycleNow() }
+        await publishComposerAuthorities()
+        await publish()
+    }
+
+    /// Reuses a retained stream only after a bounded ping succeeds. A longer
+    /// absence or a failed probe takes the normal fresh-snapshot path.
+    public func resume(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant? = nil) async {
+        guard acceptLifecycleSequence(lifecycleSequence) else { return }
         lifecycleIntent = .active
+        guard !hasTerminalFailure else { return }
+        if let backgroundedAt {
+            // Scene delivery can be delayed until the process wakes. Keep the
+            // event's original time, including when its background task never ran.
+            backgroundStartedAt = min(backgroundStartedAt ?? backgroundedAt, backgroundedAt)
+        }
         if lifecycleTransitionsInFlight > 0 || connectionRetirementTask != nil {
             await restart()
+            return
+        }
+        if foregroundProbeID != nil { return }
+        if let backgroundStartedAt, state.phase == .live, let activeSubscription {
+            if backgroundStartedAt.duration(to: lifecycleNow()) < backgroundGracePeriod {
+                await startForegroundProbe(subscription: activeSubscription)
+            } else {
+                await restart()
+            }
         } else {
+            self.backgroundStartedAt = nil
             await connectIfNeeded()
         }
     }
 
+    private var hasTerminalFailure: Bool {
+        switch state.phase {
+        case .requiresAuthentication, .authorizationDenied, .incompatibleProtocol, .failed:
+            true
+        default:
+            false
+        }
+    }
+
+    private func acceptLifecycleSequence(_ sequence: UInt64) -> Bool {
+        guard sequence > latestLifecycleSequence else { return false }
+        latestLifecycleSequence = sequence
+        return true
+    }
+
+    private func startForegroundProbe(subscription: any EventStreamSubscriptionProtocol) async {
+        let probeID = UUID()
+        let generation = state.connectionGeneration
+        foregroundProbeID = probeID
+        state.phase = .checkingConnection
+        foregroundProbeTask = Task { [weak self] in
+            await self?.runForegroundProbe(subscription: subscription, id: probeID, generation: generation)
+        }
+        await publishComposerAuthorities()
+        await publish()
+    }
+
+    private func runForegroundProbe(
+        subscription: any EventStreamSubscriptionProtocol,
+        id: UUID,
+        generation: UInt64
+    ) async {
+        let failure: GatewayFailure?
+        do {
+            let sleeper = foregroundProbeSleeper
+            let timeout = foregroundProbeTimeout
+            // Both waits honor cancellation. In particular ping cancellation
+            // releases its callback waiter without closing the shared socket.
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                defer { group.cancelAll() }
+                group.addTask { try await subscription.ping() }
+                group.addTask {
+                    try await sleeper.sleep(for: timeout)
+                    throw GatewayFailure.network(reason: .timedOut)
+                }
+                _ = try await group.next()
+            }
+            failure = nil
+        } catch {
+            failure = (error as? GatewayFailure) ?? .network(reason: .other)
+        }
+        guard foregroundProbeID == id, state.connectionGeneration == generation,
+              lifecycleIntent == .active, state.phase == .checkingConnection else { return }
+        foregroundProbeID = nil
+        foregroundProbeTask = nil
+        backgroundStartedAt = nil
+        if let failure {
+            state.latestTransportFailure = failure.transportFailure
+            await restart()
+        } else {
+            state.phase = .live
+            await publishComposerAuthorities()
+            await publish()
+        }
+    }
+
+    private func cancelForegroundProbe() {
+        foregroundProbeID = nil
+        foregroundProbeTask?.cancel()
+        foregroundProbeTask = nil
+    }
+
+    private func clearBackgroundState() {
+        backgroundStartedAt = nil
+        cancelForegroundProbe()
+    }
+
+    private func suspendIfStillBackgrounded(lifecycleSequence: UInt64) async {
+        guard lifecycleIntent == .background, latestLifecycleSequence == lifecycleSequence else { return }
+        await suspend(intent: .background)
+    }
+
     public func restart() async {
+        clearBackgroundState()
         let requestID = UUID()
         connectionLifecycleRequestID = requestID
         lifecycleIntent = .active
@@ -355,6 +503,12 @@ public actor ConnectionCoordinator {
         }
         guard RemoteAttachmentPolicy.validationError(for: attachments) == nil else {
             return .notEnqueued(.invalidAttachments)
+        }
+        // Queue and steer exist only on a host that advertises them; an older
+        // host would treat the request as a prompt send against a turn epoch.
+        guard composerStamp.deliveryMode == .prompt
+                || activeCapabilities.contains(.conversationInputControl) else {
+            return .notEnqueued(.inputUnavailable)
         }
         guard Task.isCancelled == false else { return .notEnqueued(.cancelled) }
 
@@ -466,7 +620,7 @@ public actor ConnectionCoordinator {
         } else if let operation = sendOperations[clientRequestID],
                   operation.runtime === runtime,
                   operation.authorityInvalidatedBeforeDispatch == false,
-                  reservations[operation.reservationKey] == clientRequestID {
+                  holdsReservation(operation, clientRequestID: clientRequestID) {
             postPublicationFailure = currentCoordinatorGateFailure(
                 conversationID: conversationID,
                 composerStamp: composerStamp,
@@ -487,7 +641,7 @@ public actor ConnectionCoordinator {
 
         guard var operation = sendOperations[clientRequestID],
               operation.runtime === runtime,
-              reservations[operation.reservationKey] == clientRequestID else {
+              holdsReservation(operation, clientRequestID: clientRequestID) else {
             rollbackAdmittedClaim(clientRequestID: clientRequestID)
             _ = await runtime.sendReconciliation.discardBeforeDispatch(
                 clientRequestID: clientRequestID
@@ -639,6 +793,46 @@ public actor ConnectionCoordinator {
         return try await gateway.setConversationFlag(request)
     }
 
+    /// Removes a queued message or resumes a paused queue on the Mac. `nil`
+    /// means the host does not offer queue controls or the connection is not
+    /// live, not a transport failure. A confirmed removal also forgets this
+    /// device's own pending record for the message.
+    public func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.conversationInputControl),
+              deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return nil
+        }
+        let response = try await gateway.updateQueue(request)
+        if request.action == .remove, response.result == .updated, let clientRequestID = request.clientRequestID,
+           let runtime = conversationRuntimes[request.conversationID]
+               ?? retainedConversationRuntimes[request.conversationID] {
+            if await runtime.sendReconciliation.discardQueued(clientRequestID: clientRequestID) {
+                retireRequestID(clientRequestID)
+            }
+        }
+        return response
+    }
+
+    /// Stops the running turn the request names.
+    public func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.conversationInputControl),
+              deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return nil
+        }
+        let response = try await gateway.interrupt(request)
+        if response.result == .rejected(reason: .sendScopeDenied) {
+            sendScopeDeniedByHost = true
+            await publishComposerAuthorities()
+        }
+        return response
+    }
+
     /// Asks what this device can start in a workspace, only while live
     /// against a host that advertises session starts. `nil` is a
     /// capability/lifecycle refusal, not a transport failure.
@@ -708,8 +902,12 @@ public actor ConnectionCoordinator {
 
     private func runConnectionLoop(loopID: UUID) async {
         var failureCount = 0
+        var stoppedForBackground = false
 
         while !Task.isCancelled, connectionLoopID == loopID {
+            // A fresh connection must not inherit the retained stream's
+            // background deadline when its receive loop failed during a probe.
+            clearBackgroundState()
             state.connectionGeneration &+= 1
             let generation = state.connectionGeneration
             authoritativeSessionSnapshot = nil
@@ -746,10 +944,21 @@ public actor ConnectionCoordinator {
                     break
                 }
 
+                if lifecycleIntent == .background {
+                    stoppedForBackground = true
+                    let sequence = latestLifecycleSequence
+                    // Teardown waits for this receive task. Schedule it outside
+                    // the loop so it never awaits its own completion.
+                    Task { [weak self] in
+                        await self?.suspendIfStillBackgrounded(lifecycleSequence: sequence)
+                    }
+                    break
+                }
+
                 // Once a fresh stream snapshot made this attempt live, a
                 // later disconnect begins a new failure streak. Only failures
                 // that occur before reaching live accumulate across attempts.
-                if state.phase == .live {
+                if state.phase == .live || state.phase == .checkingConnection {
                     failureCount = 0
                 }
                 failureCount += 1
@@ -782,6 +991,11 @@ public actor ConnectionCoordinator {
         if connectionLoopID == loopID {
             connectionTask = nil
             connectionLoopID = nil
+            // Foreground may arrive while the failed background loop retires.
+            // Its resume call could not start another loop until this point.
+            if stoppedForBackground, lifecycleIntent == .active {
+                startConnectionLoop()
+            }
         }
     }
 
@@ -883,7 +1097,9 @@ public actor ConnectionCoordinator {
             authoritativeSessionSnapshot = snapshot
             state.consecutiveFailureCount = 0
             state.latestTransportFailure = nil
-            state.phase = .live
+            // A buffered frame can precede the foreground ping. Keep send
+            // admission closed until that probe confirms the retained socket.
+            state.phase = foregroundProbeID == nil ? .live : .checkingConnection
             await reconcileAuthoritativeSnapshot(snapshot)
             await resolvePendingLegacyConversationNotFound(generation: generation)
             await publishComposerAuthorities()
@@ -1473,10 +1689,14 @@ public actor ConnectionCoordinator {
         }) else {
             return .conversationMissing
         }
-        guard invalidatedComposerOrdinals[conversationID] != streamSnapshotOrdinal else {
+        // A dispatched prompt send retires its snapshot ordinal so the same
+        // open prompt cannot take a second send. A running turn takes more
+        // than one queued or steered message, so it keeps no such mark.
+        guard composerStamp.deliveryMode != .prompt
+                || invalidatedComposerOrdinals[conversationID] != streamSnapshotOrdinal else {
             return .staleComposerAuthority
         }
-        guard case .openPrompt(let epoch) = summary.inputAvailability else {
+        guard let epoch = Self.currentInputEpoch(for: composerStamp.deliveryMode, in: summary) else {
             return .inputUnavailable
         }
         let currentStamp = ConversationComposerStamp(
@@ -1485,9 +1705,57 @@ public actor ConnectionCoordinator {
             projectionRunID: snapshot.projectionRunID,
             projectionGeneration: summary.projectionGeneration,
             latestSequence: summary.latestSequence,
-            inputEpoch: epoch
+            inputEpoch: epoch,
+            deliveryMode: composerStamp.deliveryMode
         )
-        return composerStamp == currentStamp ? nil : .staleComposerAuthority
+        switch composerStamp.deliveryMode {
+        case .prompt:
+            return composerStamp == currentStamp ? nil : .staleComposerAuthority
+        case .queue, .steer:
+            // Snapshots that leave the turn running (the host's own queue
+            // acknowledgement, status detail, timers) must not stale a
+            // working-turn stamp: the turn epoch is its identity.
+            let sameTurn = composerStamp.connectionGeneration == currentStamp.connectionGeneration
+                && composerStamp.projectionRunID == currentStamp.projectionRunID
+                && composerStamp.projectionGeneration == currentStamp.projectionGeneration
+                && composerStamp.inputEpoch == currentStamp.inputEpoch
+            return sameTurn ? nil : .staleComposerAuthority
+        }
+    }
+
+    /// The epoch a send in `mode` must present right now: the open prompt
+    /// for a prompt send, the running turn (while the host accepts queued
+    /// input, and steer for a steer) otherwise. Nil means no such send is
+    /// possible against this summary.
+    private static func currentInputEpoch(
+        for mode: RemoteMessageDeliveryMode,
+        in summary: CompatibleConversationSummary
+    ) -> RemoteInputEpoch? {
+        switch mode {
+        case .prompt:
+            guard case .openPrompt(let epoch) = summary.inputAvailability else { return nil }
+            return epoch
+        case .queue:
+            guard let control = summary.inputControl, control.canQueue else { return nil }
+            return control.turnEpoch
+        case .steer:
+            guard let control = summary.inputControl, control.canQueue, control.canSteer else { return nil }
+            return control.turnEpoch
+        }
+    }
+
+    /// Whether a committed working-turn send still targets the running turn
+    /// after a new session snapshot. Prompt sends are re-validated against
+    /// their exact snapshot ordinal instead.
+    private static func turnIsStillRunning(
+        for request: RemoteMessageSendRequest,
+        in snapshot: CompatibleSessionListSnapshot
+    ) -> Bool {
+        guard request.deliveryMode != .prompt,
+              let summary = snapshot.conversations.first(where: { $0.conversationID == request.conversationID }) else {
+            return false
+        }
+        return currentInputEpoch(for: request.deliveryMode, in: summary) == request.expectedInputEpoch
     }
 
     private func claimSend(
@@ -1509,8 +1777,13 @@ public actor ConnectionCoordinator {
             projectionRunID: composerStamp.projectionRunID,
             inputEpoch: composerStamp.inputEpoch
         )
-        guard reservations[reservationKey] == nil else {
-            return .denied(.sendAlreadyReserved)
+        // An open prompt takes exactly one send. A running turn takes any
+        // number of queued or steered messages, so those never reserve.
+        let reservesPrompt = composerStamp.deliveryMode == .prompt
+        if reservesPrompt {
+            guard reservations[reservationKey] == nil else {
+                return .denied(.sendAlreadyReserved)
+            }
         }
         guard let clientRequestID = mintRequestID() else {
             return .denied(.tooManyUnresolvedSends)
@@ -1520,9 +1793,12 @@ public actor ConnectionCoordinator {
             clientRequestID: clientRequestID,
             expectedInputEpoch: composerStamp.inputEpoch,
             text: text,
-            attachments: attachments
+            attachments: attachments,
+            deliveryMode: composerStamp.deliveryMode
         )
-        reservations[reservationKey] = clientRequestID
+        if reservesPrompt {
+            reservations[reservationKey] = clientRequestID
+        }
         sendOperations[clientRequestID] = SendOperation(
             request: request,
             reservationKey: reservationKey,
@@ -1588,7 +1864,7 @@ public actor ConnectionCoordinator {
             gateFailure = .cancelled
         } else if operation.authorityInvalidatedBeforeDispatch {
             gateFailure = .staleComposerAuthority
-        } else if reservations[operation.reservationKey] != clientRequestID {
+        } else if holdsReservation(operation, clientRequestID: clientRequestID) == false {
             gateFailure = .staleComposerAuthority
         } else {
             gateFailure = currentCoordinatorGateFailure(
@@ -1668,7 +1944,7 @@ public actor ConnectionCoordinator {
                 .uncertain,
                 clientRequestID: clientRequestID
             )
-        case .accepted, .duplicate, .uncertain:
+        case .accepted, .duplicate, .uncertain, .queued:
             await operation.runtime.sendReconciliation.apply(
                 result,
                 clientRequestID: clientRequestID
@@ -1758,6 +2034,13 @@ public actor ConnectionCoordinator {
         )
     }
 
+    /// Only a prompt send holds a reservation; a queue or steer send into a
+    /// running turn never did, so its claim is never "lost".
+    private func holdsReservation(_ operation: SendOperation, clientRequestID: String) -> Bool {
+        operation.request.deliveryMode != .prompt
+            || reservations[operation.reservationKey] == clientRequestID
+    }
+
     private func releaseReservation(
         _ key: ConversationSendReservationKey,
         clientRequestID: String
@@ -1767,6 +2050,8 @@ public actor ConnectionCoordinator {
     }
 
     private func invalidateComposerAuthority(for operation: SendOperation) {
+        // Only a prompt send consumes its snapshot's composer authority.
+        guard operation.request.deliveryMode == .prompt else { return }
         let stamp = operation.composerStamp
         guard stamp.connectionGeneration == state.connectionGeneration,
               stamp.streamSnapshotOrdinal == streamSnapshotOrdinal else {
@@ -1796,6 +2081,9 @@ public actor ConnectionCoordinator {
         }
         for requestID in preDispatchRequestIDs {
             guard let operation = sendOperations[requestID] else { continue }
+            // A queued or steered send survives snapshots that leave its turn
+            // running; the host's own queue acknowledgement is one of them.
+            if Self.turnIsStillRunning(for: operation.request, in: snapshot) { continue }
             if operation.callerObservedEnqueue {
                 await settleCommittedBeforeDispatch(
                     clientRequestID: requestID,
@@ -1884,7 +2172,8 @@ public actor ConnectionCoordinator {
                     inputAvailability: summary.inputAvailability,
                     hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
                     coordinatorIsLive: true,
-                    gateFailure: .sendAlreadyReserved
+                    gateFailure: .sendAlreadyReserved,
+                    inputControl: summary.inputControl
                 ))
                 return
             }
@@ -1895,7 +2184,8 @@ public actor ConnectionCoordinator {
                 inputAvailability: summary.inputAvailability,
                 hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
                 coordinatorIsLive: true,
-                gateFailure: .staleComposerAuthority
+                gateFailure: .staleComposerAuthority,
+                inputControl: summary.inputControl
             ))
             return
         }
@@ -1910,6 +2200,19 @@ public actor ConnectionCoordinator {
                 latestSequence: summary.latestSequence,
                 inputEpoch: epoch
             )
+        } else if activeCapabilities.contains(.conversationInputControl),
+                  let turnEpoch = Self.currentInputEpoch(for: .queue, in: summary) {
+            // The agent is working and the Mac will hold messages for its
+            // next prompt. Steer is a per-send choice on the same stamp.
+            stamp = ConversationComposerStamp(
+                connectionGeneration: state.connectionGeneration,
+                streamSnapshotOrdinal: streamSnapshotOrdinal,
+                projectionRunID: snapshot.projectionRunID,
+                projectionGeneration: summary.projectionGeneration,
+                latestSequence: summary.latestSequence,
+                inputEpoch: turnEpoch,
+                deliveryMode: .queue
+            )
         } else {
             stamp = nil
         }
@@ -1918,7 +2221,8 @@ public actor ConnectionCoordinator {
             inputAvailability: summary.inputAvailability,
             hasDeviceSendScope: deviceScopes.contains(.send) && !sendScopeDeniedByHost,
             coordinatorIsLive: true,
-            gateFailure: nil
+            gateFailure: nil,
+            inputControl: activeCapabilities.contains(.conversationInputControl) ? summary.inputControl : nil
         ))
     }
 
@@ -2012,6 +2316,7 @@ public actor ConnectionCoordinator {
     }
 
     private func closeAttemptResources() async {
+        cancelForegroundProbe()
         firstSnapshotTimeoutTask?.cancel()
         firstSnapshotTimeoutTask = nil
         for task in conversationCatchUpTasks.values {

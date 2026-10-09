@@ -26,6 +26,8 @@ struct AppWindowView: View {
     @State private var codexSkillsUnavailableNotice: ManagedCodexSkillsUnavailableNotice?
     @State private var lastCodexSkillsUnavailableReasonCode: String?
     @State private var appIsActive = true
+    // Handle only the first appearance so later runs keep the user's resize.
+    @State private var hasHandledProgramStatusSidebarExpansion = false
     @Environment(\.openWindow) private var openWindow
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -33,6 +35,18 @@ struct AppWindowView: View {
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
+    }
+
+    private func requestWorkspaceMerge(workspaceID: UUID, mode: WorkspaceMergeMode) {
+        workspaceMergeController.requestMerge(workspaceID: workspaceID, mode: mode)
+    }
+
+    private func requestWorkspaceClose(workspaceID: UUID) {
+        workspaceMergeController.requestClose(workspaceID: workspaceID)
+    }
+
+    private var workspaceMergeController: WorkspaceMergeController {
+        WorkspaceMergeController.live(store: store, sessionRuntimeStore: sessionRuntimeStore)
     }
 
     private var sidebarToggleHasUnreadBadge: Bool {
@@ -52,7 +66,9 @@ struct AppWindowView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         sessionRuntimeStore: sessionRuntimeStore,
                         annotationStyleStore: annotationStyleStore,
-                        terminalRuntimeContext: terminalRuntimeContext
+                        terminalRuntimeContext: terminalRuntimeContext,
+                        requestWorkspaceMerge: requestWorkspaceMerge,
+                        requestWorkspaceClose: requestWorkspaceClose
                     )
                     .frame(width: effectiveSidebarWidth)
 
@@ -80,7 +96,9 @@ struct AppWindowView: View {
                     toggleCommandPalette: toggleCommandPalette,
                     presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
-                    sidebarVisible: sidebarVisible
+                    sidebarVisible: sidebarVisible,
+                    requestWorkspaceMerge: requestWorkspaceMerge,
+                    requestWorkspaceClose: requestWorkspaceClose
                 )
             }
             .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
@@ -189,6 +207,14 @@ struct AppWindowView: View {
         .onChange(of: slotFocusSignature) { _, _ in
             handleSlotFocusSignatureChange()
         }
+        .onChange(of: windowHasProgramStatusRows, initial: true) { _, hasRows in
+            guard hasRows else { return }
+            Self.expandSidebarForProgramStatusIfNeeded(
+                store: store,
+                windowID: windowID,
+                hasHandledAppearance: &hasHandledProgramStatusSidebarExpansion
+            )
+        }
         .onChange(of: store.state.workspacesByID) { _, _ in
             if let pendingWorkspaceClose,
                store.state.workspacesByID[pendingWorkspaceClose.workspaceID] == nil {
@@ -274,6 +300,9 @@ struct AppWindowView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
+            if store.state.selectedWindowID == windowID {
+                sessionRuntimeStore.acknowledgeViewedProgramStatusResults()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             appIsActive = false
@@ -311,6 +340,26 @@ struct AppWindowView: View {
 
     static func defaultSidebarWidth(hasEverLaunchedAgent: Bool) -> CGFloat {
         hasEverLaunchedAgent ? ToastyTheme.sidebarWidth : ToastyTheme.sidebarWidthBeforeAgentLaunch
+    }
+
+    static func expandSidebarForProgramStatusIfNeeded(
+        store: AppStore,
+        windowID: UUID,
+        hasHandledAppearance: inout Bool
+    ) {
+        guard !hasHandledAppearance, let window = store.window(id: windowID) else { return }
+        hasHandledAppearance = true
+        let currentWidth = effectiveSidebarWidth(
+            hasEverLaunchedAgent: store.hasEverLaunchedAgent,
+            sidebarWidthPointsOverride: window.sidebarWidthPointsOverride
+        )
+        store.recordSessionStatusSidebarExpansionEligibility()
+        guard currentWidth < ToastyTheme.sidebarWidth else { return }
+        _ = store.send(.setSidebarWidth(
+            windowID: windowID,
+            width: Double(ToastyTheme.sidebarWidth),
+            defaultWidth: Double(ToastyTheme.sidebarWidth)
+        ))
     }
 
     static func sidebarResizeHandleFrame(
@@ -433,6 +482,14 @@ struct AppWindowView: View {
 
     private var defaultSidebarWidth: CGFloat {
         Self.defaultSidebarWidth(hasEverLaunchedAgent: store.hasEverLaunchedAgent)
+    }
+
+    private var windowHasProgramStatusRows: Bool {
+        let workspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
+        return workspaceIDs.contains { workspaceID in
+            guard let workspace = store.state.workspacesByID[workspaceID] else { return false }
+            return !sessionRuntimeStore.programStatusRows(in: workspace).isEmpty
+        }
     }
 
     @MainActor

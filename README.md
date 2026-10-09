@@ -62,6 +62,7 @@ A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toas
 <img src="docs/assets/readme/sidebar.png" alt="Toastty sidebar: a lumen workspace with idle and working sessions and a Subspaces group holding a ready checkout-redesign row with a PR #128 chip, a working subspace, and a done one; below, a docs-site session with an unread reply and an infra session waiting for approval" width="300" align="right">
 
 - **Live status** for Claude Code, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi. Type `claude`, `codex`, `cursor-agent`, `grok`, `opencode`, `mimo`, or `pi` as usual, or launch from the `Agent` menu, top bar, or command palette. Any other CLI runs in a normal pane.
+- **Automatic program status:** programs that report OSC 7501 get one sidebar row per terminal, with progress and specific approval, input, or login labels. Managed agent hooks remain primary.
 - **Rows that need you are tinted:** green when ready, amber when waiting for approval, red on an error.
 - **Subspaces** nest task workspaces under the session that started them, each with its own status and chips such as `PR #128`.
 - Sessions that start their own subagents or background work show them as expandable rows.

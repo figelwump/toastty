@@ -14,6 +14,8 @@ protocol LiveConnectionRuntime: Sendable {
     func coordinatorStates() async -> AsyncStream<ConnectionCoordinator.State>
     func sessionsStates() async -> AsyncStream<SessionsRuntime.State>
     func connectIfNeeded() async
+    func resume(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async
+    func enterBackground(lifecycleSequence: UInt64) async
     func restart() async
     func suspend() async
     func openConversation(_ conversationID: RemoteConversationID) async -> ConversationRuntime
@@ -47,6 +49,12 @@ protocol LiveConnectionRuntime: Sendable {
     func setConversationFlag(
         _ request: RemoteConversationFlagRequest
     ) async throws -> RemoteConversationFlagResponse?
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse?
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse?
     func sessionStartOptions(
         _ request: RemoteSessionStartOptionsRequest
     ) async throws -> RemoteSessionStartOptionsResponse?
@@ -56,6 +64,18 @@ protocol LiveConnectionRuntime: Sendable {
 }
 
 extension LiveConnectionRuntime {
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse? {
+        nil
+    }
+
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse? {
+        nil
+    }
+
     func setWorkspaceDone(
         _ request: RemoteWorkspaceDoneRequest
     ) async throws -> RemoteWorkspaceDoneResponse? {
@@ -115,6 +135,14 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
 
     func connectIfNeeded() async {
         await coordinator.connectIfNeeded()
+    }
+
+    func resume(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async {
+        await coordinator.resume(lifecycleSequence: lifecycleSequence, backgroundedAt: backgroundedAt)
+    }
+
+    func enterBackground(lifecycleSequence: UInt64) async {
+        await coordinator.enterBackground(lifecycleSequence: lifecycleSequence)
     }
 
     func restart() async {
@@ -197,6 +225,18 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
         try await coordinator.setConversationFlag(request)
     }
 
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse? {
+        try await coordinator.updateQueue(request)
+    }
+
+    func interrupt(
+        _ request: RemoteConversationInterruptRequest
+    ) async throws -> RemoteConversationInterruptResponse? {
+        try await coordinator.interrupt(request)
+    }
+
     func sessionStartOptions(
         _ request: RemoteSessionStartOptionsRequest
     ) async throws -> RemoteSessionStartOptionsResponse? {
@@ -228,13 +268,17 @@ final class LiveSessionsController {
         activeConversationController?.cursor?.afterSequence
     }
 
+    var supportsPushNotifications: Bool {
+        coordinatorState.capabilities.contains(.pushNotifications) && deviceScopes.contains(.read)
+    }
+
     var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in }
 
     private let runtime: any LiveConnectionRuntime
     private let hostName: String
     private let onFreshness: @MainActor (LiveProjectionFreshness) -> Void
     private let onTerminal: @MainActor (LiveConnectionTerminal) -> Void
-    private let manualRefreshPresentationDelay: Duration
+    private let connectionPresentationDelay: Duration
     private var coordinatorTask: Task<Void, Never>?
     private var sessionsTask: Task<Void, Never>?
     private var coordinatorState = ConnectionCoordinator.State()
@@ -243,8 +287,9 @@ final class LiveSessionsController {
     /// Carries per-session bucket-entry anchors across snapshots so home
     /// lists reorder only on status transitions, not on streamed activity.
     private var stateTransitions = MobileStateTransitionTracker()
-    private var manualRefreshPresentationTask: Task<Void, Never>?
-    private var suppressesManualRefreshDowngrade = false
+    private var connectionPresentationTask: Task<Void, Never>?
+    private var suppressesConnectionDowngrade = false
+    private var wasBackgrounded = false
     private var desiredConversationID: UUID?
     private var conversationRequestID = UUID()
     private var conversationOpenOperations: [UUID: ConversationOpenOperation] = [:]
@@ -256,14 +301,14 @@ final class LiveSessionsController {
         homeController: HomeScreenController,
         onTerminal: @escaping @MainActor (LiveConnectionTerminal) -> Void = { _ in },
         onFreshness: @escaping @MainActor (LiveProjectionFreshness) -> Void = { _ in },
-        manualRefreshPresentationDelay: Duration = .milliseconds(750)
+        connectionPresentationDelay: Duration = .milliseconds(750)
     ) {
         self.runtime = runtime
         self.hostName = hostName
         self.homeController = homeController
         self.onFreshness = onFreshness
         self.onTerminal = onTerminal
-        self.manualRefreshPresentationDelay = manualRefreshPresentationDelay
+        self.connectionPresentationDelay = connectionPresentationDelay
         homeController.installSubspaceDone { [runtime] workspaceID, isDone in
             do {
                 let response = try await runtime.setWorkspaceDone(
@@ -353,11 +398,15 @@ final class LiveSessionsController {
         await runtime.connectIfNeeded()
     }
 
-    /// Foregrounding a suspended runtime creates a new connection generation,
-    /// which requires a new full stream snapshot before presentation is live.
-    func foreground() async {
+    /// A short return probes the retained stream; a disconnected or expired
+    /// stream takes the coordinator's normal fresh-snapshot path.
+    func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant? = nil) async {
         startObservingIfNeeded()
-        await runtime.connectIfNeeded()
+        if (wasBackgrounded || backgroundedAt != nil), homeController.freshness == .live {
+            beginConnectionPresentationGracePeriod()
+        }
+        wasBackgrounded = false
+        await runtime.resume(lifecycleSequence: lifecycleSequence, backgroundedAt: backgroundedAt)
         if let desiredConversationID {
             await openConversation(desiredConversationID)
         }
@@ -366,21 +415,19 @@ final class LiveSessionsController {
     func refresh() async {
         startObservingIfNeeded()
         if homeController.freshness == .live {
-            beginManualRefreshPresentationGracePeriod()
+            beginConnectionPresentationGracePeriod()
         } else {
-            endManualRefreshPresentationGracePeriod()
+            endConnectionPresentationGracePeriod()
         }
         await runtime.restart()
     }
 
-    func background() async {
-        endManualRefreshPresentationGracePeriod()
-        // The coordinator suspends the existing conversation runtime in place.
-        // Keep its presentation controller alive so foreground catch-up appends
-        // new events without rebuilding the transcript. Explicit navigation
-        // away from the conversation remains the owner of teardown.
-        await runtime.suspend()
-        applyPresentation(freshnessOverride: .stale)
+    func background(lifecycleSequence: UInt64) async {
+        wasBackgrounded = true
+        endConnectionPresentationGracePeriod()
+        // Keep the conversation controller and readable projection. The
+        // coordinator chooses stream reuse or suspension and owns all cleanup.
+        await runtime.enterBackground(lifecycleSequence: lifecycleSequence)
     }
 
     func openConversation(_ conversationID: UUID) async {
@@ -461,10 +508,17 @@ final class LiveSessionsController {
             },
             acknowledgeRead: { [runtime] request in
                 try await runtime.acknowledgeConversationRead(request)
+            },
+            updateQueue: { [runtime] request in
+                try await runtime.updateQueue(request)
+            },
+            interrupt: { [runtime] request in
+                try await runtime.interrupt(request)
             }
         )
         controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }
         controller.consumeConnectionState(coordinatorState)
+        controller.consumeInputControl(inputControl(for: conversationID))
         activeConversationController = controller
         await controller.start()
 
@@ -513,7 +567,7 @@ final class LiveSessionsController {
     }
 
     func stopObserving() {
-        endManualRefreshPresentationGracePeriod()
+        endConnectionPresentationGracePeriod()
         coordinatorTask?.cancel()
         sessionsTask?.cancel()
         coordinatorTask = nil
@@ -560,7 +614,7 @@ final class LiveSessionsController {
 
     func consumeCoordinatorState(_ state: ConnectionCoordinator.State) {
         coordinatorState = state
-        finishManualRefreshIfNeeded(for: state.phase)
+        finishConnectionPresentationGraceIfNeeded(for: state.phase)
         activeConversationController?.consumeConnectionState(state)
         applyPresentation()
         // Terminal admission/authorization state must be the final callback.
@@ -577,7 +631,19 @@ final class LiveSessionsController {
                 .map(\.projectionGeneration)
                 .max()
         }
+        if let controller = activeConversationController {
+            controller.consumeInputControl(inputControl(for: controller.conversationID))
+        }
         applyPresentation()
+    }
+
+    /// The host's queue, steer, and stop controls for a conversation from
+    /// the latest session snapshot, only when the host advertises them.
+    private func inputControl(for conversationID: UUID) -> RemoteConversationInputControl? {
+        guard coordinatorState.capabilities.contains(.conversationInputControl) else { return nil }
+        return sessionsState.snapshot?.conversations
+            .first { $0.conversationID.rawValue == conversationID }?
+            .inputControl
     }
 
     private func handleTerminal(_ phase: ConnectionCoordinatorPhase) {
@@ -588,7 +654,7 @@ final class LiveSessionsController {
             onTerminal(.authorizationDenied)
         case .incompatibleProtocol(let version):
             onTerminal(.incompatibleProtocol(version: version))
-        case .idle, .connecting, .awaitingFreshSessionSnapshot, .live,
+        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection, .live,
              .reconnecting, .suspended, .failed:
             break
         }
@@ -597,7 +663,7 @@ final class LiveSessionsController {
     private func applyPresentation(freshnessOverride: LiveProjectionFreshness? = nil) {
         let freshness = freshnessOverride ?? resolvedFreshness
         if freshnessOverride == nil,
-           suppressesManualRefreshDowngrade,
+           suppressesConnectionDowngrade,
            homeController.freshness == .live,
            freshness != .live {
             return
@@ -625,38 +691,38 @@ final class LiveSessionsController {
         onFreshness(freshness)
     }
 
-    private func finishManualRefreshIfNeeded(for phase: ConnectionCoordinatorPhase) {
-        guard suppressesManualRefreshDowngrade else { return }
+    private func finishConnectionPresentationGraceIfNeeded(for phase: ConnectionCoordinatorPhase) {
+        guard suppressesConnectionDowngrade else { return }
         switch phase {
-        case .idle, .connecting, .awaitingFreshSessionSnapshot:
+        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection:
             break
         case .live, .reconnecting, .suspended, .requiresAuthentication,
              .authorizationDenied, .incompatibleProtocol, .failed:
-            endManualRefreshPresentationGracePeriod()
+            endConnectionPresentationGracePeriod()
         }
     }
 
-    private func beginManualRefreshPresentationGracePeriod() {
-        manualRefreshPresentationTask?.cancel()
-        suppressesManualRefreshDowngrade = true
-        manualRefreshPresentationTask = Task { @MainActor [weak self] in
+    private func beginConnectionPresentationGracePeriod() {
+        connectionPresentationTask?.cancel()
+        suppressesConnectionDowngrade = true
+        connectionPresentationTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await Task.sleep(for: manualRefreshPresentationDelay)
+                try await Task.sleep(for: connectionPresentationDelay)
             } catch {
                 return
             }
             guard Task.isCancelled == false else { return }
-            suppressesManualRefreshDowngrade = false
-            manualRefreshPresentationTask = nil
+            suppressesConnectionDowngrade = false
+            connectionPresentationTask = nil
             applyPresentation()
         }
     }
 
-    private func endManualRefreshPresentationGracePeriod() {
-        suppressesManualRefreshDowngrade = false
-        manualRefreshPresentationTask?.cancel()
-        manualRefreshPresentationTask = nil
+    private func endConnectionPresentationGracePeriod() {
+        suppressesConnectionDowngrade = false
+        connectionPresentationTask?.cancel()
+        connectionPresentationTask = nil
     }
 
     private func tearDownActiveConversation(
@@ -692,7 +758,7 @@ final class LiveSessionsController {
         switch coordinatorState.phase {
         case .live:
             sessionsState.phase == .live ? .live : .stale
-        case .reconnecting:
+        case .reconnecting, .checkingConnection:
             .reconnecting
         case .suspended:
             .stale

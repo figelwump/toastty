@@ -5,17 +5,23 @@ import Testing
 
 @MainActor
 struct SessionRuntimeStoreAgentHookTests {
+    private final class ActionableEventRecorder {
+        var events: [ManagedSessionActionableEvent] = []
+    }
+
     private struct Fixture {
         let runner: ControlledHookRunner
         let dispatcher: AgentHookDispatcher
         let sessionStore: SessionRuntimeStore
         let scriptPath: String
+        let actionableEvents: ActionableEventRecorder
     }
 
     private static func makeFixture(
         socketPath: String = "/tmp/toastty-hook-tests.sock",
         cliExecutablePath: String? = "/tmp/toastty-hook-tests-cli",
-        isApplicationActive: @escaping @MainActor () -> Bool = { false }
+        isApplicationActive: @escaping @MainActor () -> Bool = { false },
+        configureShellHook: Bool = true
     ) throws -> Fixture {
         let runner = ControlledHookRunner()
         let scriptURL = try AgentHookTestSupport.makeTemporaryExecutableScript()
@@ -28,13 +34,16 @@ struct SessionRuntimeStoreAgentHookTests {
         let sessionStore = SessionRuntimeStore(
             sendSessionStatusNotification: { _, _, _, _, _ in },
             isApplicationActive: isApplicationActive,
-            agentHookDispatcher: dispatcher
+            agentHookDispatcher: configureShellHook ? dispatcher : nil
         )
+        let actionableEvents = ActionableEventRecorder()
+        sessionStore.onActionableEvent = { actionableEvents.events.append($0) }
         return Fixture(
             runner: runner,
             dispatcher: dispatcher,
             sessionStore: sessionStore,
-            scriptPath: scriptURL.path
+            scriptPath: scriptURL.path,
+            actionableEvents: actionableEvents
         )
     }
 
@@ -198,6 +207,7 @@ struct SessionRuntimeStoreAgentHookTests {
         let events = try await Self.recordedEvents(fixture.runner)
         #expect(events.map(\.event) == ["session-start", "session-error", "session-stop"])
         #expect(fixture.sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .ready)
+        #expect(fixture.actionableEvents.events.isEmpty)
     }
 
     @Test
@@ -254,9 +264,9 @@ struct SessionRuntimeStoreAgentHookTests {
 
     // MARK: - Status transitions
 
-    @Test
-    func statusTransitionsEmitActionableEventsAndDeduplicateByAcceptedKind() async throws {
-        let fixture = try Self.makeFixture()
+    @Test(arguments: [true, false])
+    func statusTransitionsEmitActionableEventsAndDeduplicateByAcceptedKind(configureShellHook: Bool) async throws {
+        let fixture = try Self.makeFixture(configureShellHook: configureShellHook)
         let sessionID = "sess-transitions"
         var now = Self.baseDate
         fixture.sessionStore.startSession(
@@ -291,18 +301,27 @@ struct SessionRuntimeStoreAgentHookTests {
         advance(.working)
         advance(.working)        // duplicate: nothing
 
-        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 6)
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: configureShellHook ? 6 : 0)
         await settleNotificationTasks()
 
         let events = try await Self.recordedEvents(fixture.runner)
-        #expect(events.map(\.event) == [
+        #expect(events.map(\.event) == (configureShellHook ? [
             "session-start",
             "turn-complete",
             "needs-approval",
             "turn-complete",
             "session-error",
             "turn-complete",
-        ])
+        ] : []))
+        let actionableEvents = fixture.actionableEvents.events
+        #expect(actionableEvents.map(\.kind) == [.turnComplete, .needsApproval, .turnComplete, .turnComplete])
+        #expect(Set(actionableEvents.map(\.eventID)).count == 4)
+        #expect(actionableEvents.map(\.timestamp) == [3, 5, 7, 9].map { Self.baseDate.addingTimeInterval(Double($0)) })
+        let record = try #require(fixture.sessionStore.sessionRegistry.sessionsByID[sessionID])
+        #expect(actionableEvents.allSatisfy {
+            $0.sessionID == sessionID && $0.agent == .codex &&
+                $0.panelID == record.panelID && $0.workspaceID == record.workspaceID
+        })
     }
 
     @Test
@@ -340,8 +359,8 @@ struct SessionRuntimeStoreAgentHookTests {
         #expect(payload["launchReason"] is NSNull)
     }
 
-    @Test
-    func focusedPanelReadyCollapseStillEmitsTurnComplete() async throws {
+    @Test(arguments: [true, false])
+    func focusedPanelReadyCollapseStillEmitsTurnComplete(configureShellHook: Bool) async throws {
         let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let focusedPanelID = try #require(selection.workspace.focusedPanelID)
@@ -356,8 +375,10 @@ struct SessionRuntimeStoreAgentHookTests {
         let sessionStore = SessionRuntimeStore(
             sendSessionStatusNotification: { _, _, _, _, _ in },
             isApplicationActive: { true },
-            agentHookDispatcher: dispatcher
+            agentHookDispatcher: configureShellHook ? dispatcher : nil
         )
+        var actionableEvents: [ManagedSessionActionableEvent] = []
+        sessionStore.onActionableEvent = { actionableEvents.append($0) }
         sessionStore.bind(store: appStore)
         let sessionID = "sess-focused"
         sessionStore.startSession(
@@ -385,14 +406,20 @@ struct SessionRuntimeStoreAgentHookTests {
         // Stored status collapsed to idle for the focused panel, but the hook
         // still observes the requested reconciled `ready`.
         #expect(sessionStore.sessionRegistry.sessionsByID[sessionID]?.status?.kind == .idle)
-        await AgentHookTestSupport.waitForRequestCount(runner, expected: 2)
+        await AgentHookTestSupport.waitForRequestCount(runner, expected: configureShellHook ? 2 : 0)
         let events = try await Self.recordedEvents(runner)
-        #expect(events.map(\.event) == ["session-start", "turn-complete"])
+        #expect(events.map(\.event) == (configureShellHook ? ["session-start", "turn-complete"] : []))
+        #expect(actionableEvents.map(\.kind) == [.turnComplete])
+        #expect(actionableEvents.first?.panelID == focusedPanelID)
     }
 
-    @Test
-    func waitingOnChildrenDefersTurnCompleteUntilProjectionClearsThenFiresOnce() async throws {
-        let fixture = try Self.makeFixture()
+    @Test(arguments: [true, false])
+    func waitingOnChildrenDefersTurnCompleteUntilProjectionClearsThenFiresOnce(configureShellHook: Bool) async throws {
+        let fixture = try Self.makeFixture(configureShellHook: configureShellHook)
+        defer { fixture.sessionStore.reset() }
+        // Keep the explicit event timeline ahead of the live timer. This test
+        // advances event time itself, so real expiry must not race its assertions.
+        let baseDate = Date().addingTimeInterval(60)
         let sessionID = "sess-children"
         fixture.sessionStore.startSession(
             sessionID: sessionID,
@@ -402,7 +429,7 @@ struct SessionRuntimeStoreAgentHookTests {
             workspaceID: UUID(),
             cwd: "/repo",
             repoRoot: "/repo",
-            at: Self.baseDate
+            at: baseDate
         )
         #expect(fixture.sessionStore.updateBackgroundActivity(
             sessionID: sessionID,
@@ -410,33 +437,35 @@ struct SessionRuntimeStoreAgentHookTests {
                 id: "child-1",
                 kind: .childAgent,
                 displayName: "child agent",
-                startedAt: Self.baseDate.addingTimeInterval(1),
-                lastUpdatedAt: Self.baseDate.addingTimeInterval(1)
+                startedAt: baseDate.addingTimeInterval(1),
+                lastUpdatedAt: baseDate.addingTimeInterval(1)
             ),
-            at: Self.baseDate.addingTimeInterval(1)
+            at: baseDate.addingTimeInterval(1)
         ))
         fixture.sessionStore.updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .ready, summary: "Ready"),
-            at: Self.baseDate.addingTimeInterval(2)
+            at: baseDate.addingTimeInterval(2)
         )
-        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 1)
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: configureShellHook ? 1 : 0)
         await settleNotificationTasks()
 
         // Held: the session still projects as waiting on children.
         var events = try await Self.recordedEvents(fixture.runner)
-        #expect(events.map(\.event) == ["session-start"])
+        #expect(events.map(\.event) == (configureShellHook ? ["session-start"] : []))
+        #expect(fixture.actionableEvents.events.isEmpty)
 
         #expect(fixture.sessionStore.finishBackgroundActivity(
             sessionID: sessionID,
             activityID: "child-1",
-            at: Self.baseDate.addingTimeInterval(3)
+            at: baseDate.addingTimeInterval(3)
         ))
         await settleNotificationTasks()
 
         // Still held: the resume-grace projection has not cleared yet.
         events = try await Self.recordedEvents(fixture.runner)
-        #expect(events.map(\.event) == ["session-start"])
+        #expect(events.map(\.event) == (configureShellHook ? ["session-start"] : []))
+        #expect(fixture.actionableEvents.events.isEmpty)
 
         // Any registry publication after the grace expires releases the held
         // event exactly once.
@@ -445,28 +474,30 @@ struct SessionRuntimeStoreAgentHookTests {
             files: ["README.md"],
             cwd: nil,
             repoRoot: nil,
-            at: Self.baseDate.addingTimeInterval(3 + SessionRegistry.resumeProjectionGraceInterval + 1)
+            at: baseDate.addingTimeInterval(3 + SessionRegistry.resumeProjectionGraceInterval + 1)
         )
-        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 2)
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: configureShellHook ? 2 : 0)
         await settleNotificationTasks()
 
         events = try await Self.recordedEvents(fixture.runner)
-        #expect(events.map(\.event) == ["session-start", "turn-complete"])
+        #expect(events.map(\.event) == (configureShellHook ? ["session-start", "turn-complete"] : []))
+        #expect(fixture.actionableEvents.events.map(\.kind) == [.turnComplete])
 
         // A duplicate ready afterwards does not emit again.
         fixture.sessionStore.updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .ready, summary: "Ready"),
-            at: Self.baseDate.addingTimeInterval(30)
+            at: baseDate.addingTimeInterval(30)
         )
         await settleNotificationTasks()
         events = try await Self.recordedEvents(fixture.runner)
-        #expect(events.map(\.event) == ["session-start", "turn-complete"])
+        #expect(events.map(\.event) == (configureShellHook ? ["session-start", "turn-complete"] : []))
+        #expect(fixture.actionableEvents.events.map(\.kind) == [.turnComplete])
     }
 
-    @Test
-    func heldReadyIsCancelledByLaterNonReadyTransition() async throws {
-        let fixture = try Self.makeFixture()
+    @Test(arguments: [true, false])
+    func heldReadyIsCancelledByLaterNonReadyTransition(configureShellHook: Bool) async throws {
+        let fixture = try Self.makeFixture(configureShellHook: configureShellHook)
         let sessionID = "sess-cancel"
         fixture.sessionStore.startSession(
             sessionID: sessionID,
@@ -512,18 +543,96 @@ struct SessionRuntimeStoreAgentHookTests {
             repoRoot: nil,
             at: Self.baseDate.addingTimeInterval(4 + SessionRegistry.resumeProjectionGraceInterval + 1)
         )
-        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 1)
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: configureShellHook ? 1 : 0)
         await settleNotificationTasks()
 
         let events = try await Self.recordedEvents(fixture.runner)
-        #expect(events.map(\.event) == ["session-start"])
+        #expect(events.map(\.event) == (configureShellHook ? ["session-start"] : []))
+        #expect(fixture.actionableEvents.events.isEmpty)
+    }
+
+    @Test
+    func reentrantActionableCallbackPreservesShellOrderAndReleasesEachHeldSessionOnce() async throws {
+        let fixture = try Self.makeFixture()
+        let sessionStore = fixture.sessionStore
+        defer { sessionStore.reset() }
+        let sessionIDs = ["sess-reentrant-one", "sess-reentrant-two"]
+        for sessionID in sessionIDs {
+            sessionStore.startSession(
+                sessionID: sessionID,
+                agent: .claude,
+                panelID: UUID(),
+                windowID: UUID(),
+                workspaceID: UUID(),
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: Self.baseDate
+            )
+            #expect(sessionStore.updateBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: "child",
+                    kind: .childAgent,
+                    startedAt: Self.baseDate.addingTimeInterval(1),
+                    lastUpdatedAt: Self.baseDate.addingTimeInterval(1)
+                ),
+                at: Self.baseDate.addingTimeInterval(1)
+            ))
+            sessionStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .ready, summary: "Ready"),
+                at: Self.baseDate.addingTimeInterval(2)
+            )
+            #expect(sessionStore.finishBackgroundActivity(
+                sessionID: sessionID,
+                activityID: "child",
+                at: Self.baseDate.addingTimeInterval(3)
+            ))
+        }
+        let releasedAt = Self.baseDate.addingTimeInterval(3 + SessionRegistry.resumeProjectionGraceInterval + 1)
+        var actionableEvents: [ManagedSessionActionableEvent] = []
+        var didReenter = false
+        sessionStore.onActionableEvent = { [weak sessionStore] event in
+            actionableEvents.append(event)
+            guard didReenter == false else { return }
+            didReenter = true
+            // Publishing this nested transition releases the other held session
+            // while the outer release still has its original pending snapshot.
+            sessionStore?.updateStatus(
+                sessionID: event.sessionID,
+                status: SessionStatus(kind: .needsApproval, summary: "Approval"),
+                at: releasedAt
+            )
+        }
+        sessionStore.updateFiles(
+            sessionID: sessionIDs[0],
+            files: ["README.md"],
+            cwd: nil,
+            repoRoot: nil,
+            at: releasedAt
+        )
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 5)
+        await settleNotificationTasks()
+
+        let completedEvents = actionableEvents.filter { $0.kind == .turnComplete }
+        #expect(completedEvents.map(\.sessionID).sorted() == sessionIDs)
+        #expect(completedEvents.allSatisfy { $0.timestamp == releasedAt })
+        #expect(actionableEvents.filter { $0.kind == .needsApproval }.count == 1)
+        let reenteredSessionID = try #require(actionableEvents.first?.sessionID)
+        let hookEvents = try await Self.recordedEvents(fixture.runner)
+        for sessionID in sessionIDs {
+            let expected = sessionID == reenteredSessionID
+                ? ["session-start", "turn-complete", "needs-approval"]
+                : ["session-start", "turn-complete"]
+            #expect(hookEvents.filter { $0.sessionID == sessionID }.map(\.event) == expected)
+        }
     }
 
     // MARK: - Teardown
 
-    @Test
-    func explicitStopEmitsExactlyOneSessionStopAndNothingAfter() async throws {
-        let fixture = try Self.makeFixture()
+    @Test(arguments: [true, false])
+    func explicitStopEmitsExactlyOneSessionStopAndNothingAfter(configureShellHook: Bool) async throws {
+        let fixture = try Self.makeFixture(configureShellHook: configureShellHook)
         let sessionID = "sess-stop"
         fixture.sessionStore.startSession(
             sessionID: sessionID,
@@ -544,11 +653,12 @@ struct SessionRuntimeStoreAgentHookTests {
             at: Self.baseDate.addingTimeInterval(3)
         )
 
-        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 2)
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: configureShellHook ? 2 : 0)
         await settleNotificationTasks()
 
         let events = try await Self.recordedEvents(fixture.runner)
-        #expect(events.map(\.event) == ["session-start", "session-stop"])
+        #expect(events.map(\.event) == (configureShellHook ? ["session-start", "session-stop"] : []))
+        #expect(fixture.actionableEvents.events.isEmpty)
     }
 
     @Test
@@ -653,6 +763,7 @@ struct SessionRuntimeStoreAgentHookTests {
 
         let events = try await Self.recordedEvents(fixture.runner)
         #expect(events.map(\.event) == ["session-start", "session-stop"])
+        #expect(fixture.actionableEvents.events.isEmpty)
     }
 
     @Test

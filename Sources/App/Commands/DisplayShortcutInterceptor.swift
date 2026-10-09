@@ -12,6 +12,7 @@ final class DisplayShortcutInterceptor {
     private let processWatchCommandController: ProcessWatchCommandController
     private let isCommandPalettePresented: @MainActor () -> Bool
     private let toggleCommandPalette: @MainActor (UUID?) -> Bool
+    private let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
     nonisolated(unsafe) private var eventMonitor: Any?
 
     enum ShortcutAction: Equatable {
@@ -36,6 +37,7 @@ final class DisplayShortcutInterceptor {
         case saveLocalDocument
         case focusNextUnreadOrActivePanel
         case toggleLaterFlag
+        case mergeWorkspacePullRequest
         case toggleRightPanel
         case toggleFocusedPanelMode
         case renameSelectedTab
@@ -62,6 +64,7 @@ final class DisplayShortcutInterceptor {
         processWatchCommandController: ProcessWatchCommandController? = nil,
         isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
         toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
+        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         installEventMonitor: Bool = true
     ) {
         self.store = store
@@ -76,6 +79,7 @@ final class DisplayShortcutInterceptor {
         )
         self.isCommandPalettePresented = isCommandPalettePresented
         self.toggleCommandPalette = toggleCommandPalette
+        self.requestWorkspaceMerge = requestWorkspaceMerge
         if installEventMonitor {
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
@@ -229,6 +233,11 @@ final class DisplayShortcutInterceptor {
             return .toggleFocusedPanelMode
         }
 
+        if Self.isMergeWorkspacePullRequestShortcut(event),
+           appOwnedWindowID != nil {
+            return .mergeWorkspacePullRequest
+        }
+
         if Self.isRenameTabShortcut(event),
            appOwnedWindowID != nil {
             return .renameSelectedTab
@@ -326,6 +335,8 @@ final class DisplayShortcutInterceptor {
             focusNextUnreadOrActivePanel(preferredWindowID: appOwnedWindowID)
         case .toggleLaterFlag:
             toggleLaterFlag(preferredWindowID: appOwnedWindowID)
+        case .mergeWorkspacePullRequest:
+            mergeWorkspacePullRequest(preferredWindowID: appOwnedWindowID)
         case .toggleRightPanel:
             toggleRightPanel(preferredWindowID: appOwnedWindowID)
         case .toggleFocusedPanelMode:
@@ -656,6 +667,13 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command, .shift]
+    }
+
+    static func isMergeWorkspacePullRequestShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.isARepeat == false else { return false }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.option, .shift] else { return false }
+        return Int(event.keyCode) == Int(kVK_ANSI_M)
     }
 
     static func isToggleLaterFlagShortcut(_ event: NSEvent) -> Bool {
@@ -1007,6 +1025,27 @@ final class DisplayShortcutInterceptor {
         // Cmd+Shift+L is app-owned for normal workspace windows. If the
         // focused panel does not currently host a managed session, keep the
         // shortcut as a no-op rather than forwarding raw input.
+        return true
+    }
+
+    /// Runs the selected workspace's Merge button in the mode it shows. The
+    /// key stays with the terminal in a workspace without a merge control.
+    private func mergeWorkspacePullRequest(preferredWindowID: UUID?) -> Bool {
+        guard let store,
+              let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID(),
+              let workspace = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace,
+              let presentation = WorkspaceMergePresentation.make(
+                workspace: workspace,
+                request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
+                mode: store.workspaceMergeMode
+              ) else {
+            return false
+        }
+        // While a merge or cleanup is under way the shortcut does nothing,
+        // like the button, and is not passed to the terminal.
+        if case .ready(_, let mode) = presentation {
+            requestWorkspaceMerge(workspace.id, mode)
+        }
         return true
     }
 

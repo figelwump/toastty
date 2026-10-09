@@ -20,11 +20,12 @@ protocol AppLiveSessionsControlling: AnyObject {
     var projectionGeneration: UInt64? { get }
     var activeConversationCursor: UInt64? { get }
     var activeConversationController: LiveConversationController? { get }
+    var supportsPushNotifications: Bool { get }
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void)
     func start() async
-    func foreground() async
+    func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async
     func refresh() async
-    func background() async
+    func background(lifecycleSequence: UInt64) async
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async
     func stopObserving()
 }
@@ -38,6 +39,7 @@ extension LiveSessionsController: AppLiveSessionsControlling {
 extension AppLiveSessionsControlling {
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void) {}
     var activeConversationController: LiveConversationController? { nil }
+    var supportsPushNotifications: Bool { false }
 }
 
 typealias AppLiveSessionsFactory = @MainActor (
@@ -56,6 +58,7 @@ final class AppSessionController {
     private(set) var pairingController: PairingController?
     private(set) var liveController: (any AppLiveSessionsControlling)?
     let homeController: HomeScreenController
+    let pushController: ToasttyPushController?
 
     private let runtimeMode: ToasttyMobileRuntimeMode
     private let usesFixtureHarness: Bool
@@ -70,6 +73,9 @@ final class AppSessionController {
     private var liveSessionID: UUID?
     private var deviceRefreshRequestID: UUID?
     private var initialConnectTimeoutTask: Task<Void, Never>?
+    private var sceneLifecycleSequence: UInt64 = 0
+    private var isSceneBackgrounded = false
+    private var sceneBackgroundedAt: ContinuousClock.Instant?
 
     var credentialProvider: any GatewayCredentialProvider { credentialVault }
 
@@ -125,6 +131,7 @@ final class AppSessionController {
         initialPairedDevice: PairedDevicePresentation? = nil,
         initialSnapshot: MobileHomeSnapshot,
         initialConnectionState: MobileConnectionState,
+        pushController: ToasttyPushController? = nil,
         initialConnectTimeout: Duration = .seconds(10),
         onDiagnosticEvent: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in },
         liveSessionsFactory: @escaping AppLiveSessionsFactory = AppSessionController.makeLiveSessionsController
@@ -138,6 +145,7 @@ final class AppSessionController {
         self.liveSessionsFactory = liveSessionsFactory
         self.initialConnectTimeout = initialConnectTimeout
         self.onDiagnosticEvent = onDiagnosticEvent
+        self.pushController = pushController
         state = initialState
         pairedDevice = initialPairedDevice
         homeController = HomeScreenController(
@@ -150,8 +158,12 @@ final class AppSessionController {
     func restoreIfNeeded() async {
         guard !hasRestored else { return }
         hasRestored = true
+        await pushController?.restore()
 
         if usesFixtureHarness, state != .restoring {
+            // Fixture screens already have their presentation, but guarded
+            // device actions still need the fixture's stored credential.
+            _ = await credentialVault.restore()
             return
         }
 
@@ -252,30 +264,42 @@ final class AppSessionController {
         case .offline:
             state = .paired(.unreachable)
         }
+        updatePushConnection()
     }
 
     func markReconnecting() {
         guard state.isPaired else { return }
         homeController.connectionState = .reconnecting
         state = .paired(.reconnecting)
+        updatePushConnection()
     }
 
     func markUnreachable() {
         guard state.isPaired else { return }
         homeController.connectionState = .offline
         state = .paired(.unreachable)
+        updatePushConnection()
     }
 
     func markAuthorizationDenied() {
         guard state.isPaired else { return }
         state = .paired(.authorizationDenied)
+        updatePushConnection()
     }
 
     /// A 401 is allowed to remove only the credential generation that made
     /// the failed request. A newer successful pairing must survive a stale
     /// callback from older network work.
     func handleUnauthorized(credentialGeneration: MobileCredentialGeneration) async {
+        let revokedPairingID = pairedDevice?.device.id
         do {
+            if await credentialVault.currentGeneration() == credentialGeneration {
+                if let pushController, !(await pushController.prepareForUnpair(pairingID: revokedPairingID)) {
+                    state = .repairNeeded(.unavailable)
+                    updatePushConnection()
+                    return
+                }
+            }
             if try await credentialVault.delete(ifCurrent: credentialGeneration) {
                 transitionToUnpaired()
             }
@@ -290,22 +314,40 @@ final class AppSessionController {
 
     /// Unpair first asks the Mac to revoke this device. The caller supplies
     /// that best-effort operation so Settings can own its live client without
-    /// creating a dependency cycle here. Local removal always follows.
-    func unpair(revoke: @escaping @Sendable () async -> Void) async {
+    /// creating a dependency cycle here. Durable push cleanup must be saved
+    /// first, and only the original pairing generation can be removed.
+    @discardableResult
+    func unpair(expectedGeneration: MobileCredentialGeneration? = nil, expectedPairingID: UUID? = nil,
+                revoke: @escaping @Sendable () async -> Void) async -> Bool {
+        let pairing = pairedDevice
+        let generation = await credentialVault.currentGeneration()
+        guard expectedGeneration.map({ $0 == generation }) ?? true,
+              expectedPairingID.map({ $0 == pairing?.device.id }) ?? true else { return false }
+        if let pairing {
+            guard let credential = await credentialVault.currentCredential(),
+                  credential.gatewayURL == pairing.gatewayURL, credential.device.id == pairing.device.id,
+                  await credentialVault.currentGeneration() == generation else { return false }
+        }
+        if let pushController, !(await pushController.prepareForUnpair(pairingID: pairing?.device.id)) { return false }
         await revoke()
         do {
-            try await credentialVault.delete()
+            guard try await credentialVault.delete(ifCurrent: generation) else { return false }
             transitionToUnpaired()
+            return true
         } catch {
             state = .repairNeeded(.unavailable)
+            return false
         }
     }
 
-    func unpairCurrentDevice() async {
-        guard let pairedDevice else { return }
-        let credentialProvider = credentialVault
+    @discardableResult
+    func unpairCurrentDevice() async -> Bool {
+        guard let pairedDevice else { return false }
+        let generation = await credentialVault.currentGeneration()
+        let credentialProvider = ToasttyPushCredentialProvider(vault: credentialVault,
+            gatewayURL: pairedDevice.gatewayURL, pairingID: pairedDevice.device.id, generation: generation)
         let shouldRevoke = !usesFixtureHarness
-        await unpair {
+        return await unpair(expectedGeneration: generation, expectedPairingID: pairedDevice.device.id) {
             guard shouldRevoke else { return }
             let client = NativeDeviceClient(
                 baseURL: pairedDevice.gatewayURL,
@@ -382,13 +424,31 @@ final class AppSessionController {
     }
 
     func sceneEnteredBackground() {
-        Task { await liveController?.background() }
+        pushController?.enteredBackground()
+        isSceneBackgrounded = true
+        sceneBackgroundedAt = .now
+        sceneLifecycleSequence &+= 1
+        let sequence = sceneLifecycleSequence
+        let sessionID = liveSessionID
+        Task {
+            guard sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
+            await liveController?.background(lifecycleSequence: sequence)
+        }
     }
 
     func sceneBecameActive() {
+        pushController?.enteredForeground()
         pairingController?.sceneBecameActive()
+        isSceneBackgrounded = false
+        let backgroundedAt = sceneBackgroundedAt
+        sceneLifecycleSequence &+= 1
+        let sequence = sceneLifecycleSequence
+        let sessionID = liveSessionID
         Task {
-            await liveController?.foreground()
+            guard sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
+            await liveController?.foreground(lifecycleSequence: sequence, backgroundedAt: backgroundedAt)
+            guard sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
+            sceneBackgroundedAt = nil
             await refreshCurrentDevice()
         }
     }
@@ -409,6 +469,7 @@ final class AppSessionController {
             freshness: .unreachable
         )
         state = .unpaired
+        pushController?.updateConnection(gatewayURL: nil, pairingID: nil, connected: false, supported: false)
     }
 
     private func configureAndStartLive(for credential: StoredMobileCredential) async {
@@ -455,6 +516,7 @@ final class AppSessionController {
                 case .unreachable:
                     self.state = .paired(.unreachable)
                 }
+                self.updatePushConnection()
             }
         )
         liveController?.stopObserving()
@@ -463,6 +525,16 @@ final class AppSessionController {
         await controller.updateDeviceScopes(credential.device.scopes)
         beginInitialConnectTimeout(sessionID: sessionID)
         await controller.start()
+        if isSceneBackgrounded, liveSessionID == sessionID {
+            await controller.background(lifecycleSequence: sceneLifecycleSequence)
+        }
+        updatePushConnection()
+    }
+
+    private func updatePushConnection() {
+        pushController?.updateConnection(gatewayURL: pairedDevice?.gatewayURL,
+            pairingID: pairedDevice?.device.id, connected: state == .paired(.live),
+            supported: liveController?.supportsPushNotifications == true)
     }
 
     /// The fixture harness has no live runtime to advance freshness, so it

@@ -5,23 +5,33 @@ extension RemoteDeviceStore {
         public var devices: [RemoteDeviceRecord]
         public var credentials: [RemoteDeviceCredentialRecord]
         public var nativePairingFailures: [RemoteNativePairingFailureRecord]
+        public var pushRegistrations: [RemoteDevicePushRegistration]
+        public var pendingPushCleanup: [RemoteDevicePushRegistration]
 
         private var quarantinedDevices: [StoredJSONValue]
         private var quarantinedCredentials: [StoredJSONValue]
         private var quarantinedNativePairingFailures: [StoredJSONValue]
+        private var quarantinedPushRegistrations: [StoredJSONValue]
+        private var quarantinedPendingPushCleanup: [StoredJSONValue]
         private var unknownFields: [String: StoredJSONValue]
 
         public init(
             devices: [RemoteDeviceRecord] = [],
             credentials: [RemoteDeviceCredentialRecord] = [],
-            nativePairingFailures: [RemoteNativePairingFailureRecord] = []
+            nativePairingFailures: [RemoteNativePairingFailureRecord] = [],
+            pushRegistrations: [RemoteDevicePushRegistration] = [],
+            pendingPushCleanup: [RemoteDevicePushRegistration] = []
         ) {
             self.devices = Array(devices.prefix(RemoteDeviceStore.maximumDeviceCount))
             self.credentials = Array(credentials.prefix(RemoteDeviceStore.maximumCredentialCount))
             self.nativePairingFailures = Array(nativePairingFailures.prefix(RemoteDeviceStore.maximumNativeFailureIdentityCount))
+            self.pushRegistrations = Array(pushRegistrations.prefix(RemoteDeviceStore.maximumDeviceCount))
+            self.pendingPushCleanup = Array(pendingPushCleanup.prefix(RemoteDeviceStore.maximumPushRegistrationCount))
             quarantinedDevices = []
             quarantinedCredentials = []
             quarantinedNativePairingFailures = []
+            quarantinedPushRegistrations = []
+            quarantinedPendingPushCleanup = []
             unknownFields = [:]
         }
 
@@ -29,6 +39,8 @@ extension RemoteDeviceStore {
             case devices
             case credentials
             case nativePairingFailures
+            case pushRegistrations
+            case pendingPushCleanup
         }
 
         public init(from decoder: any Decoder) throws {
@@ -67,6 +79,17 @@ extension RemoteDeviceStore {
                 }
             }
 
+            let pushResult: StoredDecodedArray<RemoteDevicePushRegistration> = try Self.decodeBoundedArray(
+                from: container, forKey: .pushRegistrations, maximumValidCount: RemoteDeviceStore.maximumDeviceCount
+            )
+            pushRegistrations = pushResult.values
+            quarantinedPushRegistrations = pushResult.quarantined
+            let cleanupResult: StoredDecodedArray<RemoteDevicePushRegistration> = try Self.decodeBoundedArray(
+                from: container, forKey: .pendingPushCleanup, maximumValidCount: RemoteDeviceStore.maximumPushRegistrationCount
+            )
+            pendingPushCleanup = cleanupResult.values
+            quarantinedPendingPushCleanup = cleanupResult.quarantined
+
             let dynamicContainer = try decoder.container(keyedBy: StoredDynamicCodingKey.self)
             let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
             unknownFields = try Dictionary(uniqueKeysWithValues: dynamicContainer.allKeys.compactMap { key in
@@ -85,6 +108,8 @@ extension RemoteDeviceStore {
                 to: &container,
                 forKey: .nativePairingFailures
             )
+            try Self.encode(values: pushRegistrations, quarantined: quarantinedPushRegistrations, to: &container, forKey: .pushRegistrations)
+            try Self.encode(values: pendingPushCleanup, quarantined: quarantinedPendingPushCleanup, to: &container, forKey: .pendingPushCleanup)
             var dynamicContainer = encoder.container(keyedBy: StoredDynamicCodingKey.self)
             for (key, value) in unknownFields {
                 try dynamicContainer.encode(value, forKey: StoredDynamicCodingKey(key))
@@ -95,6 +120,8 @@ extension RemoteDeviceStore {
             lhs.devices == rhs.devices
                 && lhs.credentials == rhs.credentials
                 && lhs.nativePairingFailures == rhs.nativePairingFailures
+                && lhs.pushRegistrations == rhs.pushRegistrations
+                && lhs.pendingPushCleanup == rhs.pendingPushCleanup
         }
 
         private static func decodeBoundedArray<Value: Codable>(

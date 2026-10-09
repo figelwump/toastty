@@ -13,7 +13,7 @@ struct ToasttyTranscriptRowID: Hashable, Sendable {
 
 struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
     enum Content: Equatable, Sendable {
-        case userMessage(text: String, origin: ConversationMessageOrigin)
+        case userMessage(text: String, origin: ConversationMessageOrigin, deliveryMode: RemoteMessageDeliveryMode? = nil)
         case assistantMessage(text: String, phase: ConversationAssistantMessagePhase)
         case toolStarted(callID: String, name: String, detail: String?)
         case toolFinished(callID: String, name: String, outcome: ConversationToolOutcome, detail: String?)
@@ -377,7 +377,7 @@ enum ToasttyConversationPresentationAdapter {
                 let content: ToasttyTranscriptRow.Content
                 switch value.payload {
                 case .userMessage(let payload):
-                    content = .userMessage(text: payload.text, origin: payload.origin)
+                    content = .userMessage(text: payload.text, origin: payload.origin, deliveryMode: payload.deliveryMode)
                 case .assistantMessage(let payload):
                     content = .assistantMessage(text: payload.text, phase: payload.phase)
                 case .toolStarted(let payload):

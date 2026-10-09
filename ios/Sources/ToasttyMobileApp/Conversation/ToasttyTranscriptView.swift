@@ -11,10 +11,12 @@ struct ToasttyTranscriptView: View {
     let isSubmitting: Bool
     let loadOlder: () -> Void
     let dismissSendReceipt: (String) -> Void
+    let queuedMessageAction: (ToasttyQueuedMessageAction) -> Void
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let readAcknowledgementEpoch: MobileSessionStatus?
+    let workingIndicator: ToasttyTranscriptWorkingIndicator?
     let onVisibleLiveEdge: () -> Void
     @Binding private var jumpToLiveEdgeRequest: UInt64
 
@@ -39,6 +41,7 @@ struct ToasttyTranscriptView: View {
         isSubmitting: Bool,
         loadOlder: @escaping () -> Void = {},
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        queuedMessageAction: @escaping (ToasttyQueuedMessageAction) -> Void = { _ in },
         interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
         editInteractionAnswer: @escaping (
             RemotePendingInteraction.ID,
@@ -46,6 +49,7 @@ struct ToasttyTranscriptView: View {
         ) -> Void = { _, _ in },
         submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
         readAcknowledgementEpoch: MobileSessionStatus? = nil,
+        workingIndicator: ToasttyTranscriptWorkingIndicator? = nil,
         jumpToLiveEdgeRequest: Binding<UInt64>,
         onVisibleLiveEdge: @escaping () -> Void = {}
     ) {
@@ -53,10 +57,12 @@ struct ToasttyTranscriptView: View {
         self.isSubmitting = isSubmitting
         self.loadOlder = loadOlder
         self.dismissSendReceipt = dismissSendReceipt
+        self.queuedMessageAction = queuedMessageAction
         self.interactionAnswerStates = interactionAnswerStates
         self.editInteractionAnswer = editInteractionAnswer
         self.submitInteractionAnswer = submitInteractionAnswer
         self.readAcknowledgementEpoch = readAcknowledgementEpoch
+        self.workingIndicator = workingIndicator
         self.onVisibleLiveEdge = onVisibleLiveEdge
         _followsLiveEdge = State(initialValue: readAcknowledgementEpoch?.bucket != .ready)
         _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
@@ -84,11 +90,11 @@ struct ToasttyTranscriptView: View {
                     // sizes in the regime its estimation handles well.
                     Group {
                         if state.blocks.count <= Self.eagerLayoutBlockLimit {
-                            VStack(alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: Self.transcriptStackSpacing) {
                                 transcriptStackContent
                             }
                         } else {
-                            LazyVStack(alignment: .leading, spacing: 12) {
+                            LazyVStack(alignment: .leading, spacing: Self.transcriptStackSpacing) {
                                 transcriptStackContent
                             }
                         }
@@ -113,6 +119,7 @@ struct ToasttyTranscriptView: View {
                     if TranscriptFixtureScrollTrace.isEnabled {
                         Color.clear
                             .frame(width: 1, height: 1)
+                            .background(TranscriptFixtureScrollTraceAnchor(trace: fixtureScrollTrace))
                             .accessibilityElement()
                             .accessibilityLabel("Transcript scroll trace")
                             .accessibilityValue(fixtureScrollTrace.encodedSamples)
@@ -150,6 +157,27 @@ struct ToasttyTranscriptView: View {
                         // the same serialized command path as transcript
                         // changes; they never race a separate scroll writer.
                         scrollCoordinator.reinforceLiveEdge()
+                    }
+                    if hadMeasuredScrollGeometry,
+                       new.hasViewportChange(comparedTo: old),
+                       reachedPhysicalLiveEdge == false,
+                       lastScrollTarget != nil,
+                       followsLiveEdge || scrollCoordinator.ownsLiveEdge,
+                       scrollCoordinator.allowsSynchronousLiveEdgeRepair {
+                        // The size-change anchor compensates container and
+                        // content growth, but not every inset change: when the
+                        // keyboard leaves while the composer grows, iOS 27
+                        // applies the inset decrease and then the increase in
+                        // one pass and leaves the live edge under the composer.
+                        // Repairing here keeps that state off screen: the
+                        // committed-frame traces show only the repaired
+                        // position. The reinforced command above still owns
+                        // any later settling.
+                        scrollWithoutAnimation(
+                            to: ToasttyConversationScrollTarget.liveEdge,
+                            anchor: .bottom,
+                            using: proxy
+                        )
                     }
                     if reachedPhysicalLiveEdge {
                         if case .send(let request)? = scrollCoordinator.liveEdgeOwner,
@@ -271,6 +299,19 @@ struct ToasttyTranscriptView: View {
                         else { return }
                     }
                     guard scrollCoordinator.command == command else { return }
+                    if case .responseStart(let blockID) = command.target,
+                       state.blocks.count > Self.eagerLayoutBlockLimit {
+                        let context = responseEntryContext(for: blockID, items: displayItems)
+                        if let host = context.markerHostID {
+                            // A lazy row must exist before its background target
+                            // can be resolved. Both moves keep the same owner.
+                            scrollWithoutAnimation(to: host, anchor: .top, using: proxy)
+                            try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
+                            guard Task.isCancelled == false,
+                                  scrollCoordinator.command == command
+                            else { return }
+                        }
+                    }
                     execute(command, using: proxy)
 
                     guard command.target == .liveEdge else {
@@ -359,25 +400,47 @@ struct ToasttyTranscriptView: View {
 
     /// Above this block count the transcript falls back to lazy layout.
     private static let eagerLayoutBlockLimit = 150
+    private static let transcriptStackSpacing: CGFloat = 12
+    private static let responseEntryContextHeight: CGFloat = 32
 
     @ViewBuilder
     private var transcriptStackContent: some View {
         olderHistoryControl
 
-        ForEach(displayItems) { item in
+        let items = displayItems
+        let entryContext: TranscriptResponseEntryContext? = entryScrollPosition.selectedTarget.flatMap { target in
+            guard case .responseStart(let blockID) = target else { return nil }
+            return responseEntryContext(for: blockID, items: items)
+        }
+        ForEach(items) { item in
             displayItemView(item)
+                .background(alignment: .bottom) {
+                    if let entryContext, entryContext.markerHostID == item.id {
+                        // This target includes 20 points of the preceding row
+                        // plus the 12-point stack gap, without changing layout.
+                        Color.clear
+                            .frame(height: Self.responseEntryContextHeight - Self.transcriptStackSpacing)
+                            .id(entryContext.target)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .id(item.id)
         }
 
-        ForEach(state.sendItems) { item in
-            ToasttySendTailItemView(
-                item: item,
-                dismiss: { dismissSendReceipt(item.clientRequestID) }
-            )
-            .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
+        // The working row sits between what reached the agent and what waits
+        // for the next prompt, so queued messages read as coming after it.
+        sendTailItems(state.sendItems.filter { $0.isQueued == false })
+
+        let showsWorkingRow = workingIndicator != nil && state.phase == .live
+        if let workingIndicator, showsWorkingRow {
+            ToasttyTranscriptWorkingRow(indicator: workingIndicator)
         }
 
-        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading {
+        sendTailItems(state.sendItems.filter(\.isQueued))
+
+        // A session started from the phone has no rows yet; its working row
+        // already says what is happening.
+        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading, showsWorkingRow == false {
             ContentUnavailableView(
                 "No transcript yet",
                 systemImage: "text.bubble",
@@ -394,6 +457,17 @@ struct ToasttyTranscriptView: View {
         Color.clear
             .frame(height: 2)
             .id(ToasttyConversationScrollTarget.liveEdge)
+    }
+
+    private func sendTailItems(_ items: [ToasttySendPresentationItem]) -> some View {
+        ForEach(items) { item in
+            ToasttySendTailItemView(
+                item: item,
+                dismiss: { dismissSendReceipt(item.clientRequestID) },
+                queuedMessageAction: queuedMessageAction
+            )
+            .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
+        }
     }
 
     /// Blocks interleaved with per-turn work strips; a folded turn's work
@@ -598,6 +672,15 @@ struct ToasttyTranscriptView: View {
         )
     }
 
+    private func responseEntryContext(
+        for blockID: ToasttyTranscriptBlockID,
+        items: [ToasttyTranscriptDisplayItem]
+    ) -> TranscriptResponseEntryContext {
+        TranscriptResponseEntryContext(
+            responseID: blockID, items: items, expandedToolBatchIDs: toolBatchDisclosure.expandedIDs
+        )
+    }
+
     private func reconcileScrollChange() {
         if let target = entryScrollPosition.target(
             for: state,
@@ -614,6 +697,10 @@ struct ToasttyTranscriptView: View {
                 }
             case .transcript(let blockID):
                 followsLiveEdge = !scrollCoordinator.requestHistoryAnchor(blockID)
+            case .responseStart(let blockID):
+                followsLiveEdge = !scrollCoordinator.requestHistoryAnchor(
+                    blockID, includesResponseContext: true
+                )
             }
             return
         }
@@ -656,6 +743,9 @@ struct ToasttyTranscriptView: View {
             anchor = .bottom
         case .transcript(let blockID):
             target = .transcript(blockID)
+            anchor = .top
+        case .responseStart(let blockID):
+            target = responseEntryContext(for: blockID, items: displayItems).target
             anchor = .top
         }
 
@@ -746,7 +836,7 @@ struct TranscriptEntryScrollPosition {
               })
         else { return .liveEdge }
 
-        let target = TranscriptScrollCoordinator.Target.transcript(
+        let target = TranscriptScrollCoordinator.Target.responseStart(
             ToasttyTranscriptBlockID(rowID: response.id)
         )
         selectedTarget = target
@@ -803,6 +893,14 @@ struct TranscriptScrollMetrics: Equatable {
             || abs(contentHeight - other.contentHeight) >= Self.viewportResizeThreshold
     }
 
+    /// The usable viewport moved or resized through the keyboard or composer.
+    /// An inset change can arrive before the container catches up, so the
+    /// height alone can look unchanged while the bottom is no longer visible.
+    func hasViewportChange(comparedTo other: Self) -> Bool {
+        hasViewportHeightChange(comparedTo: other)
+            || abs(bottomInset - other.bottomInset) >= Self.viewportResizeThreshold
+    }
+
     var distanceFromBottom: CGFloat {
         contentHeight - visibleMaxY
     }
@@ -824,10 +922,16 @@ struct TranscriptScrollMetrics: Equatable {
 }
 
 #if DEBUG
-/// UI tests collect one coherent geometry sample per layout change. Reading
-/// separate accessibility frames can straddle the keyboard animation and report
-/// movement that never appeared in a single frame.
-private struct TranscriptFixtureScrollTrace {
+/// UI tests collect one coherent geometry sample per committed UI update.
+/// `onScrollGeometryChange` can run several times inside a single update while
+/// the keyboard inset, the container size, and the composer inset settle one
+/// after another; those intermediate states never reach the screen. Callbacks
+/// are folded until `UIUpdateLink` reports `afterCATransactionCommit`, so each
+/// sample is a state that Core Animation actually committed for display.
+/// Reading separate accessibility frames would likewise straddle the keyboard
+/// animation and report movement that never appeared.
+@MainActor @Observable
+private final class TranscriptFixtureScrollTrace {
     static let isEnabled = ProcessInfo.processInfo.environment[
         "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE"
     ] == "1"
@@ -841,43 +945,137 @@ private struct TranscriptFixtureScrollTrace {
         let bottomInset: CGFloat
         let containerHeight: CGFloat
         let hasSendItems: Bool
+        /// Geometry callbacks folded into this committed sample.
+        let layoutPasses: Int
+        /// `distanceFromBottom` of every folded callback, for failure triage.
+        let intermediateDistances: [CGFloat]
+    }
+
+    private struct Pending {
+        var metrics: TranscriptScrollMetrics
+        var hasSendItems: Bool
+        var elapsed: Double
+        var intermediateDistances: [CGFloat]
     }
 
     private var latest: TranscriptScrollMetrics?
     private var startedAt: TimeInterval?
+    private var pending: Pending?
     private var samples: [Sample] = []
+    @ObservationIgnored private var updateLink: UIUpdateLink?
 
     var encodedSamples: String {
         guard let data = try? JSONEncoder().encode(samples) else { return "[]" }
         return String(decoding: data, as: UTF8.self)
     }
 
-    mutating func begin() {
+    func begin() {
         guard Self.isEnabled else { return }
         samples = []
+        pending = nil
         startedAt = ProcessInfo.processInfo.systemUptime
-        if let latest { record(latest, hasSendItems: false) }
+        // The geometry before the send is already on screen; keep it as the
+        // baseline without waiting for a commit.
+        if let latest {
+            append(metrics: latest, hasSendItems: false, elapsed: 0, intermediateDistances: [])
+        }
     }
 
-    mutating func stop() {
+    func stop() {
         startedAt = nil
+        pending = nil
     }
 
-    mutating func record(_ metrics: TranscriptScrollMetrics, hasSendItems: Bool) {
+    /// Flushes folded callbacks once per committed UI update of `view`'s
+    /// window. The link only fires for updates (continuous updates stay off),
+    /// so an idle screen adds no samples.
+    func attach(to view: UIView) {
+        guard Self.isEnabled, updateLink == nil, view.window != nil else { return }
+        let link = UIUpdateLink(view: view)
+        link.addAction(to: .afterCATransactionCommit) { [weak self] _, _ in
+            self?.commitPending()
+        }
+        link.isEnabled = true
+        updateLink = link
+    }
+
+    func record(_ metrics: TranscriptScrollMetrics, hasSendItems: Bool) {
         guard Self.isEnabled else { return }
         latest = metrics
-        guard let startedAt, samples.count < 512 else { return }
+        guard let startedAt else { return }
+        let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+        if var pending {
+            pending.metrics = metrics
+            pending.hasSendItems = hasSendItems
+            pending.elapsed = elapsed
+            pending.intermediateDistances.append(metrics.distanceFromBottom)
+            self.pending = pending
+            return
+        }
+        pending = Pending(
+            metrics: metrics,
+            hasSendItems: hasSendItems,
+            elapsed: elapsed,
+            intermediateDistances: [metrics.distanceFromBottom]
+        )
+    }
+
+    private func commitPending() {
+        guard let pending else { return }
+        self.pending = nil
+        guard startedAt != nil else { return }
+        append(
+            metrics: pending.metrics,
+            hasSendItems: pending.hasSendItems,
+            elapsed: pending.elapsed,
+            intermediateDistances: pending.intermediateDistances
+        )
+    }
+
+    private func append(
+        metrics: TranscriptScrollMetrics,
+        hasSendItems: Bool,
+        elapsed: Double,
+        intermediateDistances: [CGFloat]
+    ) {
+        guard samples.count < 512 else { return }
         samples.append(Sample(
-            elapsed: ProcessInfo.processInfo.systemUptime - startedAt,
+            elapsed: elapsed,
             contentHeight: metrics.contentHeight,
             visibleMaxY: metrics.visibleMaxY,
             visibleHeight: metrics.visibleHeight,
             topInset: metrics.topInset,
             bottomInset: metrics.bottomInset,
             containerHeight: metrics.containerHeight,
-            hasSendItems: hasSendItems
+            hasSendItems: hasSendItems,
+            layoutPasses: max(1, intermediateDistances.count),
+            intermediateDistances: intermediateDistances
         ))
     }
+}
+
+/// Hosts the `UIUpdateLink` that flushes the fixture trace after each commit.
+/// The link needs a view inside a window, so it attaches from `didMoveToWindow`.
+private struct TranscriptFixtureScrollTraceAnchor: UIViewRepresentable {
+    let trace: TranscriptFixtureScrollTrace
+
+    final class AnchorView: UIView {
+        var onMoveToWindow: (() -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            onMoveToWindow?()
+        }
+    }
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.isUserInteractionEnabled = false
+        view.onMoveToWindow = { [trace] in trace.attach(to: view) }
+        return view
+    }
+
+    func updateUIView(_ uiView: AnchorView, context: Context) {}
 }
 #endif
 
@@ -900,6 +1098,7 @@ struct TranscriptScrollCoordinator: Equatable {
     enum Target: Equatable {
         case liveEdge
         case transcript(ToasttyTranscriptBlockID)
+        case responseStart(ToasttyTranscriptBlockID)
     }
 
     struct Command: Equatable {
@@ -930,6 +1129,13 @@ struct TranscriptScrollCoordinator: Equatable {
         case .send?, .jump?: true
         case .automatic?, nil: false
         }
+    }
+
+    /// A viewport change may snap the live edge back in the same layout pass
+    /// unless an animated jump is still travelling toward it.
+    var allowsSynchronousLiveEdgeRepair: Bool {
+        if case .jump? = liveEdgeOwner { return false }
+        return true
     }
 
     static func shouldResolveFollowing(
@@ -986,13 +1192,20 @@ struct TranscriptScrollCoordinator: Equatable {
     /// Returns false when an explicit send or jump still owns the live edge;
     /// a late pagination result must not steal that user-requested movement.
     @discardableResult
-    mutating func requestHistoryAnchor(_ blockID: ToasttyTranscriptBlockID) -> Bool {
+    mutating func requestHistoryAnchor(
+        _ blockID: ToasttyTranscriptBlockID,
+        includesResponseContext: Bool = false
+    ) -> Bool {
         guard hasExplicitLiveEdgeOwner == false else {
             reinforceLiveEdge()
             return false
         }
         liveEdgeOwner = nil
-        issue(target: .transcript(blockID), motion: .stable, liveEdgeOwner: nil)
+        issue(
+            target: includesResponseContext ? .responseStart(blockID) : .transcript(blockID),
+            motion: .stable,
+            liveEdgeOwner: nil
+        )
         return true
     }
 
@@ -1099,14 +1312,15 @@ struct TranscriptLiveEdgeVisibilityKey: Equatable {
     }
 }
 
-private enum ToasttyConversationScrollTarget: Hashable {
+enum ToasttyConversationScrollTarget: Hashable {
     case transcript(ToasttyTranscriptBlockID)
+    case responseContext(ToasttyTranscriptBlockID)
     case turnWork(ToasttyTranscriptRowID)
     case send(String)
     case liveEdge
 }
 
-private enum ToasttyTranscriptDisplayItem: Identifiable {
+enum ToasttyTranscriptDisplayItem: Identifiable {
     case block(ToasttyTranscriptBlock, isWork: Bool)
     case workStrip(ToasttyTranscriptTurn)
 
@@ -1114,6 +1328,48 @@ private enum ToasttyTranscriptDisplayItem: Identifiable {
         switch self {
         case .block(let block, _): .transcript(block.id)
         case .workStrip(let turn): .turnWork(turn.id)
+        }
+    }
+}
+
+/// Entry anchors use the rendered timeline, so folded work never supplies a
+/// hidden tool target and an earlier turn's work cannot replace the response.
+struct TranscriptResponseEntryContext: Equatable {
+    let target: ToasttyConversationScrollTarget
+    let markerHostID: ToasttyConversationScrollTarget?
+
+    init(
+        responseID: ToasttyTranscriptBlockID,
+        items: [ToasttyTranscriptDisplayItem],
+        expandedToolBatchIDs: Set<ToasttyTranscriptBlockID> = []
+    ) {
+        guard let index = items.firstIndex(where: { $0.id == .transcript(responseID) }),
+              index > items.startIndex
+        else {
+            target = .transcript(responseID)
+            markerHostID = nil
+            return
+        }
+        let preceding = items[index - 1]
+        let isCard: Bool
+        switch preceding {
+        case .workStrip:
+            isCard = true
+        case .block(let block, _):
+            if case .toolBatch = block.content {
+                // Expanded tool output can fill the viewport. Keep the answer
+                // visible instead of opening at the top of those details.
+                isCard = !expandedToolBatchIDs.contains(block.id)
+            } else {
+                isCard = false
+            }
+        }
+        if isCard {
+            target = preceding.id
+            markerHostID = nil
+        } else {
+            target = .responseContext(responseID)
+            markerHostID = preceding.id
         }
     }
 }
@@ -1137,6 +1393,7 @@ private struct ToasttySendScrollItem: Equatable {
     enum ContentKind: Equatable {
         case optimistic
         case receipt
+        case queued
     }
 
     let clientRequestID: String
@@ -1147,6 +1404,7 @@ private struct ToasttySendScrollItem: Equatable {
         contentKind = switch item.content {
         case .optimistic: .optimistic
         case .receipt: .receipt
+        case .queued: .queued
         }
     }
 }
@@ -1154,6 +1412,7 @@ private struct ToasttySendScrollItem: Equatable {
 private struct ToasttySendTailItemView: View {
     let item: ToasttySendPresentationItem
     let dismiss: () -> Void
+    var queuedMessageAction: (ToasttyQueuedMessageAction) -> Void = { _ in }
 
     @ViewBuilder
     var body: some View {
@@ -1162,7 +1421,68 @@ private struct ToasttySendTailItemView: View {
             optimisticBubble
         case .receipt(let receipt):
             receiptCard(receipt)
+        case .queued(let queued):
+            queuedBubble(queued)
         }
+    }
+
+    /// A message waiting on the Mac. Dashed, because nothing has reached the
+    /// agent yet; the actions change the queue, not the transcript.
+    private func queuedBubble(_ queued: ToasttyQueuedSendPresentation) -> some View {
+        VStack(alignment: .trailing, spacing: 7) {
+            Text(queued.isPaused
+                ? "Paused · queued \(queued.position)"
+                : "Queued \(queued.position) · sends after this turn")
+                .font(.caption2.monospaced().weight(.semibold))
+                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .textCase(.uppercase)
+            Text(item.text)
+                .font(.body)
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if queued.attachmentCount > 0 {
+                Text(queued.attachmentCount == 1 ? "+1 file" : "+\(queued.attachmentCount) files")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+            }
+            HStack(spacing: 16) {
+                if queued.isPaused {
+                    queuedAction("Send next", "resume") { queuedMessageAction(.resume) }
+                }
+                queuedAction("Edit", "edit") {
+                    queuedMessageAction(.edit(clientRequestID: item.clientRequestID, text: item.text))
+                }
+                if queued.canSteer {
+                    queuedAction("Steer now", "steer") {
+                        queuedMessageAction(.steer(clientRequestID: item.clientRequestID, text: item.text))
+                    }
+                }
+                queuedAction("Remove", "remove") {
+                    queuedMessageAction(.remove(clientRequestID: item.clientRequestID))
+                }
+            }
+            .padding(.top, 2)
+        }
+        .padding(12)
+        .overlay {
+            ToasttyDesignTokens.userBubbleShape
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                .foregroundStyle(ToasttyDesignTokens.userBubbleBorder)
+        }
+        .clipShape(ToasttyDesignTokens.userBubbleShape)
+        .padding(.leading, 48)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(item.text), \(queued.isPaused ? "Paused in queue" : "Queued, sends after this turn")")
+        .accessibilityIdentifier("toastty-mobile-send-queued-\(item.clientRequestID)")
+    }
+
+    private func queuedAction(_ title: String, _ key: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(ToasttyDesignTokens.mutedText)
+            .frame(minHeight: 32)
+            .accessibilityIdentifier("toastty-mobile-queued-\(key)-\(item.clientRequestID)")
     }
 
     private var optimisticBubble: some View {
@@ -1303,11 +1623,11 @@ private struct ToasttyTranscriptRowView: View {
     @ViewBuilder
     private var rowContent: some View {
         switch row.content {
-        case .userMessage(let text, let origin):
+        case .userMessage(let text, let origin, let deliveryMode):
             message(
                 text: text,
                 isUser: true,
-                metadata: origin == .remote ? "sent remotely" : nil
+                metadata: Self.userMessageMetadata(origin: origin, deliveryMode: deliveryMode)
             )
         case .assistantMessage(let text, let phase):
             // A chunked message renders this row's slice; the metadata caption
@@ -1333,6 +1653,19 @@ private struct ToasttyTranscriptRowView: View {
             marker(icon: "link", text: bindingLabel(reason))
         case .toolStarted, .toolFinished:
             EmptyView()
+        }
+    }
+
+    /// A remote message says how it reached the agent: typed at the prompt,
+    /// held in the Mac's queue first, or steered into a running turn.
+    static func userMessageMetadata(
+        origin: ConversationMessageOrigin,
+        deliveryMode: RemoteMessageDeliveryMode?
+    ) -> String? {
+        switch deliveryMode {
+        case .queue: "from queue"
+        case .steer: "steered"
+        case .prompt, nil: origin == .remote ? "sent remotely" : nil
         }
     }
 
