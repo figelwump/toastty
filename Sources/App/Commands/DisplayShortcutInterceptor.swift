@@ -1032,6 +1032,7 @@ final class DisplayShortcutInterceptor {
     /// key stays with the terminal in a workspace without a merge control.
     private func mergeWorkspacePullRequest(preferredWindowID: UUID?) -> Bool {
         guard let store,
+              store.isWorkspaceMergeEnabled,
               let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID(),
               let workspace = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace,
               let presentation = WorkspaceMergePresentation.make(

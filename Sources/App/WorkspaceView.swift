@@ -710,7 +710,8 @@ struct WorkspaceView: View {
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        if let mergePresentation = WorkspaceMergePresentation.make(
+        if store.isWorkspaceMergeEnabled,
+           let mergePresentation = WorkspaceMergePresentation.make(
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
             mode: store.workspaceMergeMode

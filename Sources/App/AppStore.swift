@@ -88,6 +88,9 @@ final class AppStore: ObservableObject {
     /// What a subspace's Merge button and shortcut do; the user picks it from
     /// the button's menu, and it applies to every workspace.
     @Published private(set) var workspaceMergeMode: WorkspaceMergeMode
+    /// Whether the subspace Merge button, its menu items, and its shortcut
+    /// show at all. Read once at launch from a hidden defaults key.
+    let isWorkspaceMergeEnabled: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
     @Published private(set) var recentRightPanelItems: [RecentRightPanelItem]
@@ -131,6 +134,7 @@ final class AppStore: ObservableObject {
         initialHasEverLaunchedAgent: Bool = false,
         initialAskBeforeQuitting: Bool = true,
         initialWorkspaceMergeMode: WorkspaceMergeMode = .mergeAndCleanUp,
+        isWorkspaceMergeEnabled: Bool = false,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit,
         appIsActiveProvider: @escaping AppIsActiveProvider = { NSApplication.shared.isActive },
@@ -140,6 +144,7 @@ final class AppStore: ObservableObject {
         hasEverLaunchedAgent = initialHasEverLaunchedAgent
         askBeforeQuitting = initialAskBeforeQuitting
         workspaceMergeMode = initialWorkspaceMergeMode
+        self.isWorkspaceMergeEnabled = isWorkspaceMergeEnabled
         self.recentRightPanelItems = recentRightPanelItemsStore.items
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference

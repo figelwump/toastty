@@ -215,7 +215,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
     }
 
     func testMergeWorkspacePullRequestRunsTheSelectedSubspacesButtonMode() throws {
-        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false, isWorkspaceMergeEnabled: true)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let parentWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -264,6 +264,42 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         ])
         XCTAssertTrue(interceptor.handle(.mergeWorkspacePullRequest, appOwnedWindowID: windowID))
         XCTAssertEqual(merges.count, 2)
+    }
+
+    /// The Merge button is behind a hidden flag that is off by default; while
+    /// it is off, the key goes on to the terminal even in a pull request subspace.
+    func testMergeWorkspacePullRequestShortcutPassesThroughWhenMergeIsDisabled() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let parentWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        var merges: [(UUID, WorkspaceMergeMode)] = []
+        let interceptor = DisplayShortcutInterceptor(
+            store: store,
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            webPanelRuntimeRegistry: WebPanelRuntimeRegistry(),
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: TerminalRuntimeRegistry(),
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            ),
+            requestWorkspaceMerge: { merges.append(($0, $1)) },
+            installEventMonitor: false
+        )
+        let existingWorkspaceIDs = Set(store.state.workspacesByID.keys)
+        store.send(.createWorkspace(windowID: windowID, title: "task", activate: true))
+        let taskWorkspaceID = try XCTUnwrap(Set(store.state.workspacesByID.keys).subtracting(existingWorkspaceIDs).first)
+        store.send(.setWorkspaceParent(workspaceID: taskWorkspaceID, parentWorkspaceID: parentWorkspaceID, spawningSessionID: nil))
+        store.send(.setWorkspaceAnnotation(
+            workspaceID: taskWorkspaceID,
+            key: "github-pr",
+            annotation: try XCTUnwrap(WorkspaceAnnotation.validated(text: "PR #59", url: "https://github.com/example/toastty/pull/59"))
+        ))
+
+        XCTAssertFalse(interceptor.handle(.mergeWorkspacePullRequest, appOwnedWindowID: windowID))
+        XCTAssertTrue(merges.isEmpty)
     }
 
     func testToggleFocusedPanelShortcutMatchesCommandShiftFOnly() throws {

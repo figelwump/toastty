@@ -3872,7 +3872,8 @@ struct SidebarView: View {
     private func subspaceMergeMenuPresentation(
         _ row: SidebarSubspacePresentation.Row
     ) -> WorkspaceMergePresentation? {
-        guard let workspace = store.state.workspacesByID[row.id],
+        guard store.isWorkspaceMergeEnabled,
+              let workspace = store.state.workspacesByID[row.id],
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[row.id],
