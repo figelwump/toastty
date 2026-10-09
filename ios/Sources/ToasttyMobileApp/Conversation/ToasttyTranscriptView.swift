@@ -16,6 +16,7 @@ struct ToasttyTranscriptView: View {
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let readAcknowledgementEpoch: MobileSessionStatus?
+    let workingIndicator: ToasttyTranscriptWorkingIndicator?
     let onVisibleLiveEdge: () -> Void
     @Binding private var jumpToLiveEdgeRequest: UInt64
 
@@ -48,6 +49,7 @@ struct ToasttyTranscriptView: View {
         ) -> Void = { _, _ in },
         submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
         readAcknowledgementEpoch: MobileSessionStatus? = nil,
+        workingIndicator: ToasttyTranscriptWorkingIndicator? = nil,
         jumpToLiveEdgeRequest: Binding<UInt64>,
         onVisibleLiveEdge: @escaping () -> Void = {}
     ) {
@@ -60,6 +62,7 @@ struct ToasttyTranscriptView: View {
         self.editInteractionAnswer = editInteractionAnswer
         self.submitInteractionAnswer = submitInteractionAnswer
         self.readAcknowledgementEpoch = readAcknowledgementEpoch
+        self.workingIndicator = workingIndicator
         self.onVisibleLiveEdge = onVisibleLiveEdge
         _followsLiveEdge = State(initialValue: readAcknowledgementEpoch?.bucket != .ready)
         _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
@@ -424,16 +427,20 @@ struct ToasttyTranscriptView: View {
                 .id(item.id)
         }
 
-        ForEach(state.sendItems) { item in
-            ToasttySendTailItemView(
-                item: item,
-                dismiss: { dismissSendReceipt(item.clientRequestID) },
-                queuedMessageAction: queuedMessageAction
-            )
-            .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
+        // The working row sits between what reached the agent and what waits
+        // for the next prompt, so queued messages read as coming after it.
+        sendTailItems(state.sendItems.filter { $0.isQueued == false })
+
+        let showsWorkingRow = workingIndicator != nil && state.phase == .live
+        if let workingIndicator, showsWorkingRow {
+            ToasttyTranscriptWorkingRow(indicator: workingIndicator)
         }
 
-        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading {
+        sendTailItems(state.sendItems.filter(\.isQueued))
+
+        // A session started from the phone has no rows yet; its working row
+        // already says what is happening.
+        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading, showsWorkingRow == false {
             ContentUnavailableView(
                 "No transcript yet",
                 systemImage: "text.bubble",
@@ -450,6 +457,17 @@ struct ToasttyTranscriptView: View {
         Color.clear
             .frame(height: 2)
             .id(ToasttyConversationScrollTarget.liveEdge)
+    }
+
+    private func sendTailItems(_ items: [ToasttySendPresentationItem]) -> some View {
+        ForEach(items) { item in
+            ToasttySendTailItemView(
+                item: item,
+                dismiss: { dismissSendReceipt(item.clientRequestID) },
+                queuedMessageAction: queuedMessageAction
+            )
+            .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
+        }
     }
 
     /// Blocks interleaved with per-turn work strips; a folded turn's work

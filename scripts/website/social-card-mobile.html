@@ -1,0 +1,50 @@
+<!doctype html>
+<!-- 1200x630 social card for Toastty Mobile, rendered by render-hero-video.mjs --target mobile
+     --social. It reuses the site's stylesheet and places the phone poster (or the image passed
+     with --social-image) beside the tagline. The ?crop parameter is accepted and ignored. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&display=swap">
+<link rel="stylesheet" href="../../website/styles.css">
+<style>
+  body { width: 1200px; height: 630px; overflow: hidden; margin: 0; }
+  .card { position: relative; height: 630px; padding: 64px 0 0 64px; }
+  .card .brand { font-size: 22px; gap: 12px; }
+  .card .brand svg { width: 40px; height: 40px; }
+  .card .eyebrow { margin-top: 64px; font-size: 14px; }
+  .card .eyebrow .beta { font-size: 12px; vertical-align: 1px; }
+  .card h1 { text-align: left; margin: 16px 0 0; font-size: 76px; max-width: none; }
+  .card .meta { margin-top: 22px; font-size: 16px; max-width: 520px; }
+  /* The phone, cropped out of the poster's padding (stage 440x900 at 2x plus 32px, phone at
+     13,16 sized 414x868) and large enough that the session rows stay readable when the card is
+     shown about 500px wide. Its bottom runs off the card. */
+  .card .shot { position: absolute; right: 88px; top: 36px; width: 372px; height: 620px; overflow: hidden; border-radius: 52px; box-shadow: 0 30px 70px -24px rgba(60, 35, 5, 0.55); }
+  .card .shot img { width: calc(372px * 504 / 414); display: block; margin: calc(-48px * 372 / 414) 0 0 calc(-45px * 372 / 414); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="ic-crust" x1="512" y1="184" x2="512" y2="804" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffbf54"/><stop offset="0.42" stop-color="#f4a62d"/><stop offset="1" stop-color="#8a4a08"/></linearGradient>
+    <linearGradient id="ic-bread" x1="512" y1="274" x2="512" y2="732" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff8e9"/><stop offset="0.58" stop-color="#f7e6bd"/><stop offset="1" stop-color="#e6cc93"/></linearGradient>
+  </defs>
+  <symbol id="icon-toast" viewBox="170 190 684 660">
+    <path d="M226 746V472C190 442 180 379 203 328C235 254 322 218 512 218C702 218 789 254 821 328C844 379 834 442 798 472V746C798 790 758 813 512 813C266 813 226 790 226 746Z" fill="url(#ic-crust)"/>
+    <path d="M305 704V469C276 446 268 397 286 359C311 306 379 281 512 281C645 281 713 306 738 359C756 397 748 446 719 469V704C719 734 692 749 512 749C332 749 305 734 305 704Z" fill="url(#ic-bread)"/>
+    <g stroke="#2a1408" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M372 435L496 522L372 609" stroke-width="50"/><path d="M556 614H664" stroke-width="46"/></g>
+  </symbol>
+</svg>
+<div class="card">
+  <div class="brand"><svg aria-hidden="true"><use href="#icon-toast"/></svg><span>Toastty</span></div>
+  <div class="eyebrow">Toastty Mobile <em class="beta">TestFlight beta</em></div>
+  <h1>Your agents,<em>in your pocket.</em></h1>
+  <div class="meta">See which sessions need you, answer their questions, and reply from your iPhone over your private tailnet.</div>
+  <div class="shot"><img alt=""></div>
+</div>
+<script>
+  const params = new URLSearchParams(location.search);
+  document.querySelector('.shot img').src = params.get('poster');
+</script>
+</body>
+</html>

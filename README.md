@@ -108,7 +108,19 @@ See [Right Panel](docs/right-panel.md) for shortcuts, Recently Opened, and link 
 
 ### Toastty Mobile (TestFlight)
 
-Check on sessions, reply, and start new sessions from your iPhone over your private tailnet. It is available through TestFlight for now; see [Remote Access](docs/remote-access.md).
+<img src="docs/assets/readme/mobile.png" alt="Toastty Mobile on an iPhone: the Home screen lists the lumen workspace's sessions with live status, a Subspaces group with the checkout-redesign subspace ready for review and its PR #128 chip, and a docs-site session" width="260" align="right">
+
+The same sidebar, on your iPhone, over your private tailnet.
+
+- **Every session, live:** workspaces and subspaces with the same green, amber, and red tints as on the Mac.
+- **Answer your agents' questions:** pick an option or type a custom answer. It lands in the terminal on your Mac as if you were there.
+- **Reply from anywhere** with photos and files attached. While the agent works, queue a follow-up for the next turn, steer a Codex turn, or stop it.
+- **Scratchpads and files:** open the pages, documents, and previews your agents published, and tap a PR chip to read the pull request.
+- **Private by design:** Toastty listens only on your Mac, and Tailscale Serve carries the connection over your own tailnet. No Toastty account, no hosted relay.
+
+It is available through TestFlight for now. See it in motion at [toastty.dev/#mobile](https://toastty.dev/#mobile); [Remote Access](docs/remote-access.md) covers pairing and the tailnet setup.
+
+<br clear="right">
 
 ## Automate it
 
