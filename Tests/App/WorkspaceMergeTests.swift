@@ -95,7 +95,7 @@ struct WorkspaceMergeTests {
     func mergeHandsThePullRequestAndCheckoutToTheCoordinatorInTheChosenMode() throws {
         let fixture = try WorkspaceMergeFixture()
         #expect(fixture.presentation == .ready(pullRequest: "PR #59", mode: .mergeAndCleanUp))
-        #expect(fixture.presentation?.title == "Merge & Clean PR #59")
+        #expect(fixture.presentation?.title == "Merge PR #59")
         // An agent's repository root wins over a terminal's directory.
         fixture.sessionRuntimeStore.startSession(
             sessionID: "task-agent",
@@ -109,6 +109,7 @@ struct WorkspaceMergeTests {
         )
 
         fixture.merge()
+        // The mode changes what the button does, not its label.
         fixture.store.setWorkspaceMergeMode(.mergeOnly)
         #expect(fixture.presentation?.title == "Merge PR #59")
         fixture.merge()
@@ -145,7 +146,7 @@ struct WorkspaceMergeTests {
             pullRequestText: "PR #65",
             pullRequestURL: "https://github.com/other/repo/pull/7/files"
         )
-        #expect(mislabeled.presentation?.title == "Merge & Clean PR #7")
+        #expect(mislabeled.presentation?.title == "Merge PR #7")
         mislabeled.controller.requestClose(workspaceID: mislabeled.taskWorkspaceID)
         #expect(mislabeled.closeConfirmations == ["other/repo#7"])
 
@@ -169,11 +170,11 @@ struct WorkspaceMergeTests {
         #expect(fixture.merges.isEmpty)
 
         fixture.store.send(.setWorkspaceDone(workspaceID: fixture.taskWorkspaceID, doneAt: fixture.start))
+        // A Merge and Clean shows as merging until its cleanup starts.
         try fixture.setRequest(.awaitingMerge)
-        #expect(fixture.presentation?.title == "Cleans Up When PR #59 Merges")
-        // Waiting for checks shows as the merge the user accepted.
+        #expect(fixture.presentation?.title == "Merging PR #59…")
         try fixture.setRequest(.awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: true))
-        #expect(fixture.presentation?.title == "Cleans Up When PR #59 Merges")
+        #expect(fixture.presentation?.title == "Merging PR #59…")
         try fixture.setRequest(.awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: false))
         #expect(fixture.presentation?.title == "Done · PR #59")
         try fixture.setRequest(.cleaningUp)

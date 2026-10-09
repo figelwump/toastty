@@ -21,16 +21,17 @@ enum WorkspaceMergeMode: String, CaseIterable, Sendable {
 }
 
 /// What a subspace with a pull request shows for merging it: the Merge
-/// button in the user's chosen mode, its in-progress form, the cleanup that
-/// follows a Merge and Clean, or the done label. Top-level workspaces and
+/// button, its in-progress form, the cleanup that follows a Merge and Clean,
+/// or the done label. The button reads the same in both modes; its menu shows
+/// the mode. Top-level workspaces and
 /// subspaces whose `github-pr` annotation has no GitHub pull request URL show
 /// nothing. The label comes from that URL, never from the annotation's text,
 /// so it always names the pull request the button acts on.
 enum WorkspaceMergePresentation: Equatable {
     case ready(pullRequest: String, mode: WorkspaceMergeMode)
+    /// The merge runs, or a Merge and Clean waits for the pull request to
+    /// merge before its cleanup starts.
     case merging(pullRequest: String)
-    /// Done, with a cleanup waiting for the pull request to merge.
-    case awaitingMerge(pullRequest: String)
     case cleaningUp(pullRequest: String)
     case cleanupFailed(pullRequest: String, reason: String)
     case done(pullRequest: String)
@@ -50,7 +51,9 @@ enum WorkspaceMergePresentation: Equatable {
         }
         let pullRequest = "PR #\(link.number)"
         switch request?.phase {
-        case .merging:
+        case .merging,
+             .awaitingMerge where workspace.doneAt != nil,
+             .awaitingChecks(_, thenCleanUp: true) where workspace.doneAt != nil:
             return .merging(pullRequest: pullRequest)
         case .closing:
             return .closing(pullRequest: pullRequest)
@@ -58,9 +61,6 @@ enum WorkspaceMergePresentation: Equatable {
             return .cleaningUp(pullRequest: pullRequest)
         case .failed(let reason):
             return .cleanupFailed(pullRequest: pullRequest, reason: reason)
-        case .awaitingMerge where workspace.doneAt != nil,
-             .awaitingChecks(_, thenCleanUp: true) where workspace.doneAt != nil:
-            return .awaitingMerge(pullRequest: pullRequest)
         case .awaitingMerge, .awaitingChecks, nil:
             // A Merge Only that waits for checks shows as done: the user has
             // accepted the version, and Toastty merges it when it can.
@@ -74,12 +74,10 @@ enum WorkspaceMergePresentation: Equatable {
 
     var title: String {
         switch self {
-        case .ready(let pullRequest, let mode):
-            return Self.actionTitle(mode: mode, pullRequest: pullRequest)
+        case .ready(let pullRequest, _):
+            return "Merge \(pullRequest)"
         case .merging(let pullRequest):
             return "Merging \(pullRequest)…"
-        case .awaitingMerge(let pullRequest):
-            return "Cleans Up When \(pullRequest) Merges"
         case .cleaningUp(let pullRequest):
             return "Cleaning Up \(pullRequest)…"
         case .cleanupFailed(let pullRequest, _):
@@ -100,12 +98,14 @@ enum WorkspaceMergePresentation: Equatable {
         )
     }
 
+    /// A context menu item that merges in `mode`, which the menu cannot show
+    /// as a separate choice the way the top bar's button menu does.
     static func actionTitle(mode: WorkspaceMergeMode, pullRequest: String) -> String {
         switch mode {
         case .mergeAndCleanUp:
-            return "Merge & Clean \(pullRequest)"
+            return "Merge \(pullRequest) and Clean Up"
         case .mergeOnly:
-            return "Merge \(pullRequest)"
+            return "Merge \(pullRequest) Only"
         }
     }
 
@@ -118,7 +118,6 @@ enum WorkspaceMergePresentation: Equatable {
         switch self {
         case .ready(let pullRequest, _),
              .merging(let pullRequest),
-             .awaitingMerge(let pullRequest),
              .cleaningUp(let pullRequest),
              .cleanupFailed(let pullRequest, _),
              .done(let pullRequest),
