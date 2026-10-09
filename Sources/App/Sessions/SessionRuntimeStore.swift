@@ -69,6 +69,9 @@ final class SessionRuntimeStore: ObservableObject {
     typealias ApplicationActiveHandler = @MainActor () -> Bool
 
     @Published private(set) var sessionRegistry = SessionRegistry()
+    @Published var programStatusRevision: UInt64 = 0
+    var programStatusRuntime = TerminalProgramStatusRuntime()
+    var programStatusPublicationTask: Task<Void, Never>?
     @Published private(set) var providerConversationRevision: UInt64 = 0
     /// What each subspace's Merge button is doing, by workspace, published
     /// for the button. `WorkspaceMergeCoordinator` owns and updates them.
@@ -278,6 +281,7 @@ final class SessionRuntimeStore: ObservableObject {
 
         guard storeActionObserverToken == nil else { return }
         storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
+            self?.acknowledgeProgramStatusAfterRead(action: action, previousState: previousState, state: nextState)
             self?.collapseReadyStatusAfterReadIfNeeded(
                 action: action,
                 previousState: previousState,
@@ -300,6 +304,10 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     func reset() {
+        programStatusPublicationTask?.cancel()
+        programStatusPublicationTask = nil
+        programStatusRuntime = .init()
+        programStatusRevision &+= 1
         claudeQuestionBroker.clear()
         claudeQuestionWatchdog?.cancel()
         claudeQuestionWatchdog = nil
@@ -442,8 +450,74 @@ final class SessionRuntimeStore: ObservableObject {
     /// projection sync cannot accidentally move the input before its safety
     /// baseline.
     func noteLocalInputForActiveSession(panelID: UUID) {
+        acknowledgePresentedProgramStatusResults(panelID: panelID)
         guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
         nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
+    }
+
+    private func acknowledgeProgramStatusAfterRead(action: AppAction, previousState: AppState, state: AppState) {
+        let panelID: UUID
+        switch action {
+        case .focusPanel(_, let panel), .markPanelNotificationsRead(_, let panel):
+            panelID = panel
+        default:
+            guard let focusedPanel = state.selectedWorkspaceSelection()?.workspace.focusedPanelID,
+                  previousState.selectedWorkspaceSelection()?.workspace.focusedPanelID != focusedPanel else { return }
+            panelID = focusedPanel
+        }
+        guard isApplicationActive(), isPanelCurrentlyFocused(panelID, state: state) else { return }
+        acknowledgePresentedProgramStatusResults(panelID: panelID)
+    }
+
+    /// Activation can follow a notification click that already cleared unread
+    /// while the app was inactive. Acknowledge the visible result in that case too.
+    func acknowledgeViewedProgramStatusResults() {
+        guard let store, isApplicationActive(),
+              let panelID = store.state.selectedWorkspaceSelection()?.workspace.focusedPanelID else { return }
+        acknowledgePresentedProgramStatusResults(panelID: panelID)
+    }
+
+    func handleProgramStatusCompletion(
+        panelID: UUID,
+        previousRecord: TerminalProgramStatusReport?,
+        at now: Date
+    ) {
+        guard let store,
+              let selection = store.state.workspaceSelection(containingPanelID: panelID),
+              let row = programStatusRows(in: selection.workspace).first(where: { $0.panelID == panelID }),
+              row.presentation.record.state == .done || row.presentation.record.state == .error,
+              previousRecord != row.presentation.record,
+              !(isApplicationActive() && isPanelCurrentlyFocused(panelID, state: store.state)) else { return }
+
+        _ = store.send(.recordDesktopNotification(workspaceID: selection.workspaceID, panelID: panelID))
+        let isError = row.presentation.record.state == .error
+
+        Task { @MainActor [weak self] in
+            guard let self, let store = self.store,
+                  let currentSelection = store.state.workspaceSelection(containingPanelID: panelID),
+                  let currentRow = self.programStatusRows(in: currentSelection.workspace).first(where: { $0.panelID == panelID }),
+                  currentRow.presentation.record.state == row.presentation.record.state,
+                  !(self.isApplicationActive() && self.isPanelCurrentlyFocused(panelID, state: store.state)) else { return }
+            // Check and consume the limit only when the result is still
+            // eligible to send. A cancelled queued send must not hide a later run.
+            let lastSent = isError
+                ? self.programStatusRuntime.lastErrorNotificationAtByPanel[panelID]
+                : self.programStatusRuntime.lastNotificationAtByPanel[panelID]
+            guard lastSent.map({ now.timeIntervalSince($0) >= 5 }) ?? true else { return }
+            self.programStatusRuntime.lastNotificationAtByPanel[panelID] = now
+            if isError { self.programStatusRuntime.lastErrorNotificationAtByPanel[panelID] = now }
+            let body = currentRow.summary.map { currentRow.title + ": " + $0 } ?? currentRow.title
+            await self.sendSessionStatusNotification(
+                isError ? "Command failed" : "Command finished",
+                body,
+                currentSelection.workspaceID,
+                panelID,
+                DesktopNotificationContext(
+                    workspaceTitle: currentSelection.workspace.title,
+                    panelLabel: currentSelection.workspace.panelState(for: panelID)?.notificationLabel
+                )
+            )
+        }
     }
 
     func isNativeSessionBindingInputClean(
@@ -625,6 +699,9 @@ final class SessionRuntimeStore: ObservableObject {
             codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
             codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         }
+        let previousProgramRecords = programStatusRuntime.recordsByPanel
+        programStatusRuntime.start(panelID: panelID, sessionID: sessionID)
+        scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         nextRegistry.startSession(
             sessionID: sessionID,
             agent: agent,
@@ -734,11 +811,26 @@ final class SessionRuntimeStore: ObservableObject {
         updateStatus(
             sessionID: sessionID,
             status: status,
+            origin: .provider,
             isUIOnlyReadyCollapse: false,
             statusUpdateSource: "direct",
             codexHookEvent: nil,
             at: now
         )
+    }
+
+    private enum StatusUpdateOrigin {
+        case provider
+        case synthesized
+    }
+
+    /// Local terminal observations update the managed display without proving
+    /// that provider status instrumentation has become available.
+    private func updateSynthesizedStatus(sessionID: String, status: SessionStatus, at now: Date) {
+        claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
+        updateStatus(sessionID: sessionID, status: status, origin: .synthesized,
+                     isUIOnlyReadyCollapse: false, statusUpdateSource: "local",
+                     codexHookEvent: nil, at: now)
     }
 
     /// `isUIOnlyReadyCollapse` marks the synthetic focused/read `ready -> idle`
@@ -748,6 +840,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func updateStatus(
         sessionID: String,
         status: SessionStatus,
+        origin: StatusUpdateOrigin,
         isUIOnlyReadyCollapse: Bool,
         statusUpdateSource: String,
         codexHookEvent: CodexHookEvent?,
@@ -811,6 +904,11 @@ final class SessionRuntimeStore: ObservableObject {
                 baseMetadata: transitionMetadata,
                 now: now
             )
+        }
+        if origin == .provider, let accepted = nextRegistry.activeSession(sessionID: sessionID) {
+            let previousProgramRecords = programStatusRuntime.recordsByPanel
+            programStatusRuntime.claim(accepted)
+            scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         }
         publish(nextRegistry, reason: "update_status", at: now)
         // Read the status the registry accepted: it ignores updates for a
@@ -2139,6 +2237,7 @@ final class SessionRuntimeStore: ObservableObject {
         updateStatus(
             sessionID: sessionID,
             status: status,
+            origin: .provider,
             isUIOnlyReadyCollapse: false,
             statusUpdateSource: "hook",
             codexHookEvent: event,
@@ -2268,6 +2367,7 @@ final class SessionRuntimeStore: ObservableObject {
         updateStatus(
             sessionID: sessionID,
             status: status,
+            origin: .provider,
             isUIOnlyReadyCollapse: false,
             statusUpdateSource: "claude_teammate",
             codexHookEvent: nil,
@@ -2905,6 +3005,9 @@ final class SessionRuntimeStore: ObservableObject {
         registry: inout SessionRegistry,
         at now: Date
     ) {
+        let previousProgramRecords = programStatusRuntime.recordsByPanel
+        programStatusRuntime.stop(record)
+        scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         logSessionStop(record, reason: reason, at: now)
         clearSessionRuntimeState(sessionID: record.sessionID)
         removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
@@ -3098,6 +3201,7 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func synchronize(with state: AppState, now: Date = Date()) {
+        let previousProgramRecords = programStatusRuntime.recordsByPanel
         var nextRegistry = sessionRegistry
 
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
@@ -3120,6 +3224,11 @@ final class SessionRuntimeStore: ObservableObject {
             }
         }
 
+        programStatusRuntime.synchronize(
+            livePanelIDs: Set(state.workspacesByID.values.flatMap { $0.allTerminalPanelIDs }),
+            activeSessionIDs: Set(nextRegistry.sessionsByID.values.filter(\.isActive).map(\.sessionID))
+        )
+        scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         publish(nextRegistry, reason: "synchronize_app_state", at: now)
     }
 
@@ -4255,11 +4364,16 @@ final class SessionRuntimeStore: ObservableObject {
             currentRegistryKind: codexRootProgressRegistryKind(for: record.status?.kind),
             observation: observation
         )
+        let origin: StatusUpdateOrigin = switch observation {
+        case .localInterrupt, .visibleTextWorking: .synthesized
+        case .hookWorking, .sessionLogWorking, .sessionLogTurnAborted: .provider
+        }
         switch decision {
         case .projectWorking(let summary, let detail):
             updateStatus(
                 sessionID: sessionID,
                 status: SessionStatus(kind: .working, summary: summary, detail: detail),
+                origin: origin,
                 isUIOnlyReadyCollapse: false,
                 statusUpdateSource: Self.codexRootProgressLogSource(observation),
                 codexHookEvent: codexHookEvent,
@@ -4271,6 +4385,7 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(
                 sessionID: sessionID,
                 status: SessionStatus(kind: .idle, summary: "Waiting", detail: detail),
+                origin: origin,
                 isUIOnlyReadyCollapse: false,
                 statusUpdateSource: Self.codexRootProgressLogSource(observation),
                 codexHookEvent: codexHookEvent,
@@ -4668,7 +4783,7 @@ final class SessionRuntimeStore: ObservableObject {
               let status = pending.statusBeforeDeferral else {
             return
         }
-        updateStatus(sessionID: sessionID, status: status, at: Date())
+        updateSynthesizedStatus(sessionID: sessionID, status: status, at: Date())
     }
 
     private func removePendingCodexHookApprovalIfSuperseded(
@@ -5077,6 +5192,7 @@ final class SessionRuntimeStore: ObservableObject {
         updateStatus(
             sessionID: record.sessionID,
             status: collapsedReadyStatus(from: status),
+            origin: .synthesized,
             isUIOnlyReadyCollapse: true,
             statusUpdateSource: "ui_ready_collapse",
             codexHookEvent: nil,
@@ -5507,6 +5623,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         at now: Date
     ) -> Bool {
         guard let record = sessionRegistry.activeSession(for: panelID),
+              !programStatusRuntime.fallbackSessionIDs.contains(record.sessionID),
               record.agent == .codex,
               record.usesSessionStatusNotifications,
               let currentStatus = record.status else {
@@ -5520,7 +5637,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
                 return false
             }
 
-            updateStatus(sessionID: record.sessionID, status: nextStatus, at: now)
+            updateSynthesizedStatus(sessionID: record.sessionID, status: nextStatus, at: now)
             return true
         }
 
@@ -5553,7 +5670,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             )
         }
 
-        updateStatus(sessionID: record.sessionID, status: nextStatus, at: now)
+        updateSynthesizedStatus(sessionID: record.sessionID, status: nextStatus, at: now)
         return true
     }
 
@@ -5611,7 +5728,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
-        updateStatus(
+        updateSynthesizedStatus(
             sessionID: record.sessionID,
             status: Self.interruptedIdleStatus,
             at: now

@@ -503,6 +503,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
             at: launchStart
         )
+        if preparedLaunch.allowsProgramStatusFallback {
+            sessionRuntimeStore.allowProgramStatusFallback(sessionID: sessionID)
+        }
         logCodexStatusTrackingSourceIfNeeded(
             agent: request.agent,
             source: codexStatusTrackingSource,
@@ -738,7 +741,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     artifacts: fallback.artifacts,
                     codexSkillsInjectionResult: .refused(
                         reason: "instrumentation_preparation_failed"
-                    )
+                    ),
+                    allowsProgramStatusFallback: fallback.allowsProgramStatusFallback
                 )
             }
             return PreparedAgentLaunchCommand(
@@ -747,7 +751,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 artifacts: nil,
                 codexSkillsInjectionResult: agent == .codex
                     ? .refused(reason: "instrumentation_preparation_failed")
-                    : .notRequested
+                    : .notRequested,
+                allowsProgramStatusFallback: true
             )
         }
     }

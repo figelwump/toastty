@@ -1071,6 +1071,62 @@ Later flags are intentionally a lower-priority reminder, not a pin. When you use
 
 Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
 
+### Automatic program status
+
+Programs can report [OSC 7501 program status](https://www.superlogical.com/rex/docs/build/program-status)
+to Toastty. Each terminal gets one row in the existing sidebar list. Programs
+use a command marker; manually watched commands keep their bell. Known agent
+app IDs use the agent row style. Click the row to open its terminal. Approval,
+input, and login stay in that terminal.
+
+Toastty groups all task IDs from a terminal into that row. A blocked task takes
+priority, followed by error, working, done, and idle. The root record wins ties;
+otherwise the most recently updated task wins. The row keeps the root title
+when present and shows the selected task's message and explicit percentage.
+Toastty does not average task percentages. Each terminal keeps at most 256
+records and evicts the least recently updated record when full.
+
+Managed agent status remains primary. OSC fallback is enabled when launch
+preparation explicitly fails or skips status integration, or when a supported
+launch option disables hooks. A later accepted managed status takes priority
+again. A quiet agent does not cause a switch. Hook settings outside the supplied
+launch settings are not inspected. A manual process watch also keeps priority.
+
+The sidebar expands to its session width when the first program row appears
+in a window. Wider widths and later manual resizing are preserved. Explicit
+progress percentages use blue text.
+
+A shell prompt or terminal process exit clears working, blocked, and idle
+records. Programs should send `state=done` or `state=error` before exiting.
+Toastty shows these as Ready or Error and keeps the result until you view that
+terminal in the active app or send terminal input. Viewing a blocked or running
+row does not acknowledge completion records hidden behind that row. A terminal
+reset or close removes all records. Toastty does not infer success when a
+program exits without a completion report.
+
+A new completion result marks an unfocused terminal unread and uses the same
+desktop notification route as a watched command. A focused terminal also
+notifies while Toastty is inactive. Repeated reports do not repeat the
+notification. Notifications are limited to one per terminal every five seconds;
+a first error can notify immediately after success, with subsequent errors
+subject to the same interval. The row and unread state still update when a
+notification is limited. macOS notification permissions and Focus settings apply.
+
+Background jobs and multiplexed panes share the enclosing terminal's row and
+prompt lifecycle. This status does not create managed sessions, mobile session
+state, or agent hooks.
+
+To check the protocol and sidebar in an isolated dev terminal, run
+`python3 scripts/automation/program-status-fixture.py --scenario permission`.
+The fixture sends terminal output only and holds its status for 120 seconds.
+Working and blocked scenarios then report simulated completion. Use
+`--hold-seconds 5` and switch to another terminal to test the Ready result and
+notification. View the original terminal to dismiss the result. Ctrl+C clears
+the simulated status without reporting success.
+Other scenarios include `working`, `question`, `auth`, `done`, `error`, `agent`,
+`lifecycle`, and `flood`. See [Ghostty Integration](ghostty-integration.md) for
+the required matching header and library.
+
 ### Watch running commands
 
 Use `Cmd+Shift+M` while the focused terminal is running a foreground command to watch that command as a temporary session-style row in the sidebar.

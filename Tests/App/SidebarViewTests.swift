@@ -44,6 +44,40 @@ private struct SidebarProposedWidthRecordingLayout: Layout {
 
 @MainActor
 final class SidebarViewTests: XCTestCase {
+    func testProgramRowAppearsWithoutManagedSessionsAndUpdatesWaitingReason() throws {
+        let harness = try makeSidebarHarnessWithoutSessionRow()
+        defer {
+            harness.sessionRuntimeStore.reset()
+            harness.window.orderOut(nil)
+        }
+        harness.sessionRuntimeStore.handleProgramStatusEvent(.report(.init(
+            state: .working, app: "deploy", title: "Deploy v2.4.1", message: "Uploading images", progress: 65
+        )), panelID: harness.panelID)
+        pumpMainRunLoop(duration: 0.15)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(harness.sessionRuntimeStore.programStatusRows(
+            in: try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
+        ).count, 1)
+        try writeSidebarEvidence(harness.hostingView, name: "program-working")
+        var text = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(text.contains(where: { $0.contains("Deploy v2.4.1") }), "\(text)")
+        XCTAssertTrue(text.contains(where: { $0.contains("65%") || $0.contains("65 percent") }), "\(text)")
+        harness.sessionRuntimeStore.handleProgramStatusEvent(.report(.init(
+            state: .blocked, app: "deploy", title: "Deploy v2.4.1", message: "Choose a region", kind: .question
+        )), panelID: harness.panelID)
+        pumpMainRunLoop(duration: 0.15)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        try writeSidebarEvidence(harness.hostingView, name: "program-input")
+        text = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(text.contains(where: { $0.contains("input") }), "\(text)")
+        XCTAssertTrue(text.contains(where: { $0.contains("Choose a region") }), "\(text)")
+        XCTAssertTrue(harness.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty)
+        harness.sessionRuntimeStore.handleProgramStatusEvent(.report(.init(state: .clear)), panelID: harness.panelID)
+        pumpMainRunLoop(duration: 0.15)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertFalse(renderedTextValues(in: harness.hostingView).contains(where: { $0.contains("Deploy v2.4.1") }))
+    }
+
     private enum SessionPanelPlacement {
         case focused
         case backgroundUnread
