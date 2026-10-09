@@ -5,6 +5,42 @@ import XCTest
 
 @MainActor
 final class ManagedAgentLaunchPlannerTests: XCTestCase {
+    func testProgramStatusFallbackRequiresExplicitLaunchOptOutOrInstrumentationFailure() throws {
+        let cases: [(agent: AgentKind, argv: [String], failsInstrumentation: Bool, allowsFallback: Bool)] = [
+            (.claude, ["claude"], false, false),
+            (.claude, ["claude", "--bare"], false, true),
+            (.claude, ["claude"], true, true),
+            (.cursor, ["cursor-agent"], false, true),
+        ]
+        for testCase in cases {
+            let fixture = try makePlannerFixture(
+                fileManager: testCase.failsInstrumentation ? ThrowingCreateDirectoryFileManager() : .default
+            )
+            let plan = try fixture.planner.prepareManagedLaunch(ManagedAgentLaunchRequest(
+                agent: testCase.agent,
+                panelID: fixture.panelID,
+                argv: testCase.argv,
+                cwd: "/tmp/repo"
+            ))
+            defer {
+                fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+                fixture.planner.discardManagedLaunch(sessionID: plan.sessionID)
+            }
+            fixture.sessionRuntimeStore.handleProgramStatusEvent(
+                .report(.init(state: .working, message: "Working")),
+                panelID: fixture.panelID
+            )
+            let workspace = try XCTUnwrap(
+                fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspace
+            )
+            XCTAssertEqual(
+                fixture.sessionRuntimeStore.programStatusRows(in: workspace).count,
+                testCase.allowsFallback ? 1 : 0,
+                "\(testCase.argv), instrumentation failure: \(testCase.failsInstrumentation)"
+            )
+        }
+    }
+
     func testFreshLaunchClearsPriorRemoteConversationContinuation() throws {
         let nativeSessionID = "01900000-aaaa-7000-8000-000000000001"
         let remoteConversationID = RemoteConversationID()

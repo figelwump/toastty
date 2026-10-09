@@ -27,6 +27,7 @@ struct GhosttyRuntimeAction: Sendable {
         case setTerminalCWD(String)
         case showChildExited(exitCode: Int)
         case commandFinished(exitCode: Int?)
+        case programStatus(TerminalProgramStatusEvent)
         case desktopNotification(title: String, body: String)
     }
 
@@ -61,6 +62,8 @@ struct GhosttyRuntimeAction: Sendable {
             return "show_child_exited"
         case .commandFinished:
             return "command_finished"
+        case .programStatus:
+            return "program_status"
         case .desktopNotification:
             return "desktop_notification"
         }
@@ -171,6 +174,10 @@ private func ghosttyActionName(_ action: ghostty_action_s) -> String {
         return "mouse_over_link"
     case GHOSTTY_ACTION_COMMAND_FINISHED:
         return "command_finished"
+    case GHOSTTY_ACTION_PROGRAM_STATUS:
+        return "program_status"
+    case GHOSTTY_ACTION_PROGRAM_STATUS_RESET:
+        return "program_status_reset"
     case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
         return "desktop_notification"
     default:
@@ -250,6 +257,45 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         let rawExitCode = Int(action.action.command_finished.exit_code)
         let exitCode = rawExitCode >= 0 ? rawExitCode : nil
         intent = .commandFinished(exitCode: exitCode)
+
+    case GHOSTTY_ACTION_PROGRAM_STATUS:
+        guard let pointer = action.action.program_status else { return nil }
+        let report = pointer.pointee
+        let state: TerminalProgramStatusReport.State
+        switch report.state {
+        case GHOSTTY_PROGRAM_STATUS_STATE_IDLE: state = .idle
+        case GHOSTTY_PROGRAM_STATUS_STATE_WORKING: state = .working
+        case GHOSTTY_PROGRAM_STATUS_STATE_DONE: state = .done
+        case GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED: state = .blocked
+        case GHOSTTY_PROGRAM_STATUS_STATE_ERROR: state = .error
+        case GHOSTTY_PROGRAM_STATUS_STATE_CLEAR: state = .clear
+        default: return nil
+        }
+        let kind: TerminalProgramStatusReport.Kind?
+        switch report.kind {
+        case GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION: kind = .permission
+        case GHOSTTY_PROGRAM_STATUS_KIND_QUESTION: kind = .question
+        case GHOSTTY_PROGRAM_STATUS_KIND_AUTH: kind = .auth
+        default: kind = nil
+        }
+        // Copy every borrowed field before returning from the native callback.
+        intent = .programStatus(.report(.init(
+            state: state,
+            id: ghosttyString(pointer: report.id, length: Int(report.id_len)),
+            app: ghosttyString(pointer: report.app, length: Int(report.app_len)),
+            title: ghosttyString(pointer: report.title, length: Int(report.title_len)),
+            message: ghosttyString(pointer: report.msg, length: Int(report.msg_len)),
+            kind: kind,
+            progress: report.progress >= 0 ? Int(report.progress) : nil
+        )))
+
+    case GHOSTTY_ACTION_PROGRAM_STATUS_RESET:
+        switch action.action.program_status_reset {
+        case GHOSTTY_PROGRAM_STATUS_RESET_TERMINAL: intent = .programStatus(.reset)
+        case GHOSTTY_PROGRAM_STATUS_RESET_PROMPT: intent = .programStatus(.prompt)
+        case GHOSTTY_PROGRAM_STATUS_RESET_CHILD_EXIT: intent = .programStatus(.exit)
+        default: return nil
+        }
 
     case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
         let notification = action.action.desktop_notification
@@ -756,7 +802,8 @@ private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer?) -> gho
         },
         close_surface_cb: { userdata, confirmed in
             ghosttyCloseSurfaceCallback(userdata: userdata, confirmed: confirmed)
-        }
+        },
+        supports_program_status: true
     )
 }
 

@@ -2364,6 +2364,10 @@ extension TerminalRuntimeRegistry {
         store: AppStore
     ) -> Bool {
         _ = store
+        if case .programStatus(let event) = intent {
+            sessionLifecycleTracker?.handleProgramStatusEvent(event, panelID: panelID)
+            return true
+        }
         if case .showChildExited(let exitCode) = intent {
             exitedTerminalPanelIDs.insert(panelID)
             ToasttyLog.debug(

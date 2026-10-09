@@ -1070,6 +1070,41 @@ Later flags are intentionally a lower-priority reminder, not a pin. When you use
 
 Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
 
+### Automatic program status
+
+Programs can report [OSC 7501 program status](https://www.superlogical.com/rex/docs/build/program-status)
+to Toastty. Each terminal gets one row in the existing sidebar list. Programs
+use a command marker; manually watched commands keep their bell. Known agent
+app IDs use the agent row style. Click the row to open its terminal. Approval,
+input, and login stay in that terminal.
+
+Toastty groups all task IDs from a terminal into that row. A blocked task takes
+priority, followed by error, working, done, and idle. The root record wins ties;
+otherwise the most recently updated task wins. The row keeps the root title
+when present and shows the selected task's message and explicit percentage.
+Toastty does not average task percentages. Each terminal keeps at most 256
+records and evicts the least recently updated record when full.
+
+Managed agent status remains primary. OSC fallback is enabled when launch
+preparation explicitly fails or skips status integration, or when a supported
+launch option disables hooks. A later accepted managed status takes priority
+again. A quiet agent does not cause a switch. Hook settings outside the supplied
+launch settings are not inspected. A manual process watch also keeps priority.
+
+A shell prompt or terminal process exit clears working, blocked, and idle
+records. Done and error results remain until terminal input acknowledges them;
+a terminal reset or close removes all records. Background jobs and multiplexed
+panes share the enclosing terminal's row and prompt lifecycle. This status is
+local to the macOS sidebar. It does not create managed sessions, mobile session
+state, agent hooks, or desktop notifications.
+
+To check the protocol and sidebar in an isolated dev terminal, run
+`python3 scripts/automation/program-status-fixture.py --scenario permission`.
+The fixture sends terminal output only and holds its status for 120 seconds.
+Other scenarios include `working`, `question`, `auth`, `done`, `error`, `agent`,
+`lifecycle`, and `flood`. See [Ghostty Integration](ghostty-integration.md) for
+the required matching header and library.
+
 ### Watch running commands
 
 Use `Cmd+Shift+M` while the focused terminal is running a foreground command to watch that command as a temporary session-style row in the sidebar.

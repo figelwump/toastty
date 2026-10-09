@@ -485,9 +485,10 @@ private struct SubspaceRailStatusIcon: View {
 /// show their state through the tint and weight instead.
 struct SessionStatusBadge: View {
     let kind: SessionStatusKind
+    var label: String? = nil
 
     var body: some View {
-        Text(SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
+        Text(label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
             .font(ToastyTheme.fontWorkspaceSessionChip)
             .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: kind))
             .lineLimit(1)
@@ -1167,7 +1168,7 @@ struct SidebarView: View {
                 // from the title region while link chips stay real buttons.
                 workspaceAnnotationChipsRow(workspace: workspace)
 
-                if !sessionStatuses.isEmpty {
+                if !sessionStatuses.isEmpty || !sessionRuntimeStore.programStatusRows(in: workspace).isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
                         .padding(.horizontal, 10)
                         .padding(.bottom, Self.sessionListBottomPadding(followedBySubspaces: subspaceRows.isEmpty == false))
@@ -1222,7 +1223,7 @@ struct SidebarView: View {
                     }
                 }
                 workspaceAnnotationChipsRow(workspace: workspace)
-                if !sessionStatuses.isEmpty {
+                if !sessionStatuses.isEmpty || !sessionRuntimeStore.programStatusRows(in: workspace).isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
                         .padding(.horizontal, 10)
                         .padding(.bottom, Self.sessionListBottomPadding(followedBySubspaces: subspaceRows.isEmpty == false))
@@ -1460,6 +1461,58 @@ struct SidebarView: View {
             .accessibilityIdentifier("sidebar.workspace.newBadge")
     }
 
+    private enum TerminalStatusRow: Identifiable {
+        case session(WorkspaceSessionStatus)
+        case program(SidebarProgramStatusRow)
+        var panelID: UUID {
+            switch self { case .session(let row): row.panelID; case .program(let row): row.panelID }
+        }
+        var id: String {
+            switch self { case .session(let row): row.sessionID; case .program(let row): "program-" + row.id.uuidString }
+        }
+    }
+
+    private func terminalStatusRows(_ sessions: [WorkspaceSessionStatus], workspace: WorkspaceState) -> [TerminalStatusRow] {
+        let programs = sessionRuntimeStore.programStatusRows(in: workspace)
+        let programPanelIDs = Set(programs.map(\.panelID))
+        let rows = sessions.filter { !programPanelIDs.contains($0.panelID) }.map(TerminalStatusRow.session)
+            + programs.map(TerminalStatusRow.program)
+        let order = workspace.sidebarSessionPanelOrder
+        return rows.enumerated().sorted {
+            let left = order.firstIndex(of: $0.element.panelID) ?? Int.max
+            let right = order.firstIndex(of: $1.element.panelID) ?? Int.max
+            return left == right ? $0.offset < $1.offset : left < right
+        }.map(\.element)
+    }
+
+    private func programStatusContent(_ row: SidebarProgramStatusRow, workspace: WorkspaceState) -> some View {
+        Button {
+            focusSessionPanel(workspaceID: workspace.id, panelID: row.panelID)
+        } label: {
+            sessionStatusLabel(
+                status: row.status, projection: .none, turnStartedAt: nil,
+                marker: row.isAgent ? nil : .program,
+                badgeLabel: row.badge, progress: row.presentation.record.progress,
+                title: row.title, summary: row.summary, isLaterFlagged: false,
+                showsUnreadSessionAccent: row.presentation.record.state == .done,
+                isActivePanel: workspace.focusedPanelID == row.panelID,
+                isHovered: hoveredPanelID == row.panelID, isFlashing: false,
+                childCount: 0, childRowsExpanded: false, collapsedChildNeedsAttention: false,
+                parentSessionName: nil, onToggleChildRows: {}
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredPanelID = $0 ? row.panelID : nil }
+        .help("Terminal: \(row.terminalLabel)")
+        .accessibilityLabel(row.accessibilityLabel)
+        .accessibilityIdentifier("sidebar.programStatus.\(row.panelID.uuidString)")
+        .background {
+            SidebarSemanticTextBridge(text: row.accessibilityLabel)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+
     @ViewBuilder
     private func sessionStatusesContent(
         _ workspaceSessionStatuses: [WorkspaceSessionStatus],
@@ -1471,32 +1524,37 @@ struct SidebarView: View {
             sessionStatuses: workspaceSessionStatuses
         )
         VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
-            ForEach(workspaceSessionStatuses, id: \.sessionID) { workspaceSessionStatus in
-                let sessionID = workspaceSessionStatus.sessionID
-                let ownChip = SidebarSubspacePresentation.spawnerChip(
-                    sessionID: sessionID,
-                    rows: subspaceRows,
-                    activeFilterSessionID: subspaceFilterSessionIDByParentID[workspace.id]
-                )
-                // The card's own group wins; a session that nested its
-                // subspaces only under other cards points at that card's group.
-                let otherCardSpawn = ownChip == nil ? otherCardSpawns[sessionID] : nil
-                let hiddenChildWorkspaceIDs = Set(subspaceRows.map(\.id))
-                    .union(otherCardSpawn?.spawnedRows.map(\.id) ?? [])
-                sessionStatusContent(
-                    hidingSubspaceChildren(workspaceSessionStatus, subspaceIDs: hiddenChildWorkspaceIDs),
-                    workspace: workspace,
-                    isHovered: hoveredPanelID == workspaceSessionStatus.panelID,
-                    spawnerChip: ownChip ?? otherCardSpawn.flatMap { spawn in
-                        SidebarSubspacePresentation.spawnerChip(
-                            sessionID: sessionID,
-                            rows: spawn.spawnedRows,
-                            activeFilterSessionID: subspaceFilterSessionIDByParentID[spawn.parentWorkspaceID],
-                            targetWorkspaceTitle: spawn.parentWorkspaceTitle
-                        )
-                    },
-                    spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id
-                )
+            ForEach(terminalStatusRows(workspaceSessionStatuses, workspace: workspace)) { row in
+                switch row {
+                case .program(let program):
+                    programStatusContent(program, workspace: workspace)
+                case .session(let workspaceSessionStatus):
+                    let sessionID = workspaceSessionStatus.sessionID
+                    let ownChip = SidebarSubspacePresentation.spawnerChip(
+                        sessionID: sessionID,
+                        rows: subspaceRows,
+                        activeFilterSessionID: subspaceFilterSessionIDByParentID[workspace.id]
+                    )
+                    // The card's own group wins; a session that nested its
+                    // subspaces only under other cards points at that card's group.
+                    let otherCardSpawn = ownChip == nil ? otherCardSpawns[sessionID] : nil
+                    let hiddenChildWorkspaceIDs = Set(subspaceRows.map(\.id))
+                        .union(otherCardSpawn?.spawnedRows.map(\.id) ?? [])
+                    sessionStatusContent(
+                        hidingSubspaceChildren(workspaceSessionStatus, subspaceIDs: hiddenChildWorkspaceIDs),
+                        workspace: workspace,
+                        isHovered: hoveredPanelID == workspaceSessionStatus.panelID,
+                        spawnerChip: ownChip ?? otherCardSpawn.flatMap { spawn in
+                            SidebarSubspacePresentation.spawnerChip(
+                                sessionID: sessionID,
+                                rows: spawn.spawnedRows,
+                                activeFilterSessionID: subspaceFilterSessionIDByParentID[spawn.parentWorkspaceID],
+                                targetWorkspaceTitle: spawn.parentWorkspaceTitle
+                            )
+                        },
+                        spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id
+                    )
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1626,9 +1684,10 @@ struct SidebarView: View {
         )
 
         let row = sessionStatusLabel(
-            workspaceSessionStatus,
             status: status,
             projection: workspaceSessionStatus.projection,
+            turnStartedAt: workspaceSessionStatus.turnStartedAt,
+            marker: workspaceSessionStatus.agent == .processWatch ? .processWatch : nil,
             title: rowTitle,
             summary: rowSummary,
             isLaterFlagged: isLaterFlagged,
@@ -1826,9 +1885,12 @@ struct SidebarView: View {
     }
 
     private func sessionStatusLabel(
-        _ workspaceSessionStatus: WorkspaceSessionStatus,
         status: SessionStatus,
         projection: SessionStatusProjection,
+        turnStartedAt: Date?,
+        marker: SessionRailMarker?,
+        badgeLabel: String? = nil,
+        progress: Int? = nil,
         title: String,
         summary: String?,
         isLaterFlagged: Bool,
@@ -1861,23 +1923,23 @@ struct SidebarView: View {
 
         let railMarker: SessionRailMarker? = if isLaterFlagged {
             .laterFlag
-        } else if workspaceSessionStatus.agent == .processWatch {
-            .processWatch
         } else {
-            nil
+            marker
         }
         let accessories = SessionRowAccessoryModel(
             // Ready gets the tint and the heavy name but no badge; approval
             // and error keep a word so the state does not rest on color.
             badgeKind: attentionKind == .ready ? nil : attentionKind,
             waitingChipLabel: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: projection),
-            turnStartedAt: workspaceSessionStatus.turnStartedAt,
+            turnStartedAt: turnStartedAt,
             parentTagLabel: parentSessionName.map(
                 SidebarSessionPresentation.parentSessionTagLabel(parentName:)
             ),
             childCount: childCount,
             childRowsExpanded: childRowsExpanded,
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
+            badgeLabel: badgeLabel,
+            progress: progress,
             spawnerChip: spawnerChip,
             onToggleSpawnerFilter: onToggleSpawnerFilter,
             onHoverSpawnerChip: onHoverSpawnerChip
@@ -1945,6 +2007,8 @@ struct SidebarView: View {
         let childCount: Int
         let childRowsExpanded: Bool
         let collapsedChildNeedsAttention: Bool
+        var badgeLabel: String? = nil
+        var progress: Int? = nil
         var spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil
         var onToggleSpawnerFilter: () -> Void = {}
         var onHoverSpawnerChip: (Bool) -> Void = { _ in }
@@ -1956,6 +2020,7 @@ struct SidebarView: View {
     private enum SessionRailMarker: Equatable {
         case laterFlag
         case processWatch
+        case program
     }
 
     /// Reserved left gutter, and the column for what is true about a session:
@@ -1991,6 +2056,10 @@ struct SidebarView: View {
                 Image(systemName: "flag.fill")
                     .font(.system(size: Self.sessionRailFlagFontSize, weight: .semibold))
                     .foregroundStyle(ToastyTheme.sidebarSessionLaterFlag)
+            case .program:
+                Image(systemName: "terminal")
+                    .font(.system(size: Self.sessionRailWatchFontSize, weight: .medium))
+                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
             case .processWatch:
                 Image(systemName: "bell.fill")
                     .font(.system(size: Self.sessionRailWatchFontSize, weight: .semibold))
@@ -2048,7 +2117,14 @@ struct SidebarView: View {
     ) -> some View {
         HStack(spacing: 6) {
             if let badgeKind = model.badgeKind {
-                sessionStatusChip(kind: badgeKind)
+                sessionStatusChip(kind: badgeKind, label: model.badgeLabel)
+            }
+            if let progress = model.progress {
+                Text("\(progress)%")
+                    .font(ToastyTheme.fontWorkspaceSessionElapsed)
+                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                    .monospacedDigit()
+                    .fixedSize()
             }
 
             if model.waitingChipLabel != nil, showsWaitingChip {
@@ -2718,13 +2794,13 @@ struct SidebarView: View {
         ]
     }
 
-    private func sessionStatusChip(kind: SessionStatusKind) -> some View {
-        SessionStatusBadge(kind: kind)
+    private func sessionStatusChip(kind: SessionStatusKind, label: String? = nil) -> some View {
+        SessionStatusBadge(kind: kind, label: label)
             .background {
                 // The row is one accessibility element and carries the spoken
                 // wording, so the badge's shortened text is otherwise
                 // invisible to AppKit inspectors and host-based tests.
-                SidebarSemanticTextBridge(text: SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
+                SidebarSemanticTextBridge(text: label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
                     .frame(width: 0, height: 0)
                     .allowsHitTesting(false)
             }
