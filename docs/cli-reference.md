@@ -382,6 +382,8 @@ with it, and returns the `sessionID` and `panelID` that received it.
 session inside the workspace being cleaned may not call it.
 `workspace.task.cleanup-finished` runs the script of every done subspace with
 a cleanup hook under a workspace, one at a time, and returns one result each.
+The CLI waits up to 30 minutes for these three actions, instead of its usual
+10 seconds, because each cleanup script may run for up to 5 minutes.
 
 `workspace.select` accepts a `workspaceID` selector or a 1-based `index`
 argument. The index counts every workspace in the window's order, including
