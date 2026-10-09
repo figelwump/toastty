@@ -2383,6 +2383,7 @@ private final class RemoteBootstrapFixture {
     init(
         agent: AgentKind = .codex,
         statusKind: SessionStatusKind = .idle,
+        codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
         pairNativeDevice: Bool = false,
@@ -2413,6 +2414,8 @@ private final class RemoteBootstrapFixture {
             panelID: panelID,
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: codexStatusTrackingSource != nil,
+            codexStatusTrackingSource: codexStatusTrackingSource,
             cwd: "/repo",
             repoRoot: "/repo",
             at: confirmedAt
@@ -2957,6 +2960,100 @@ extension RemoteAccessServiceSafetyTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         return fixture.summary
+    }
+
+    @MainActor
+    @Test func remoteStopUpdatesHookTrackedStatusOnlyAfterSuccessfulDelivery() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            statusKind: .working,
+            codexStatusTrackingSource: .hooks,
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var canDeliver = false
+        var interrupts = 0
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+        let targetPanelID = fixture.panelID
+        fixture.terminalRuntimeRegistry.setAutomationSendInterruptHandlerForTesting { panelID in
+            #expect(panelID == targetPanelID)
+            interrupts += 1
+            return canDeliver
+        }
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_started","turn_id":"turn-1"}"#,
+            at: "2026-08-07T10:00:05.000Z"
+        ))
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        let turnEpoch = try #require(working.inputControl?.turnEpoch)
+        #expect(working.presentationStatus == .working)
+        let queued = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID,
+            clientRequestID: "after-stop",
+            expectedInputEpoch: turnEpoch,
+            text: "Continue after review",
+            deliveryMode: .queue
+        )
+        #expect(fixture.service.performRemoteSend(queued, device: device) == .queued(position: 1))
+
+        // A stale request and an unavailable terminal must keep both sidebars working.
+        #expect(fixture.service.performRemoteInterrupt(
+            .init(conversationID: fixture.conversationID, expectedTurnEpoch: turnEpoch.next()), device: device
+        ) == .rejected(reason: .turnMismatch))
+        #expect(interrupts == 0)
+        let request = RemoteConversationInterruptRequest(
+            conversationID: fixture.conversationID, expectedTurnEpoch: turnEpoch
+        )
+        #expect(fixture.service.performRemoteInterrupt(request, device: device) == .rejected(reason: .surfaceUnavailable))
+        #expect(fixture.sessionRuntimeStore.panelStatus(for: fixture.panelID)?.status.kind == .working)
+        #expect(fixture.summary.presentationStatus == .working)
+        #expect(fixture.summary.inputControl?.isQueuePaused == false)
+
+        // Successful Escape delivery uses the same status update as a local interrupt.
+        canDeliver = true
+        fixture.server.removeAllBroadcasts()
+        #expect(fixture.service.performRemoteInterrupt(request, device: device) == .accepted)
+        #expect(interrupts == 2)
+        #expect(fixture.sessionRuntimeStore.panelStatus(for: fixture.panelID)?.status.kind == .idle)
+        #expect(fixture.summary.presentationStatus == .idle)
+        #expect(fixture.summary.statusDetail == "Ready for prompt")
+        #expect(fixture.summary.inputControl?.isQueuePaused == true)
+        #expect(delivered.isEmpty)
+        let broadcast = try #require(fixture.server.sessionListSnapshots.last?.conversations.first {
+            $0.conversationID == fixture.conversationID
+        })
+        #expect(broadcast.presentationStatus == .idle)
+        #expect(broadcast.inputControl?.isQueuePaused == true)
+
+        // The provider confirms the abort and opens the prompt. Stop must still
+        // hold the queued message, even when the shared session is already idle.
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"turn_aborted","turn_id":"turn-1"}"#,
+            at: "2026-08-07T10:00:06.000Z"
+        ))
+        let stopped = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        #expect(stopped.inputAvailability.allowsRemoteSend)
+        #expect(stopped.presentationStatus == .idle)
+        #expect(stopped.inputControl?.isQueuePaused == true)
+        #expect(stopped.inputControl?.queuedMessages.map(\.clientRequestID) == ["after-stop"])
+        #expect(delivered.isEmpty)
+
+        // Provider status remains authoritative when the agent starts work again.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: fixture.sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "New prompt"),
+            at: .now
+        )
+        #expect(fixture.sessionRuntimeStore.panelStatus(for: fixture.panelID)?.status.kind == .working)
+        #expect(fixture.summary.presentationStatus == .working)
     }
 
     @MainActor
