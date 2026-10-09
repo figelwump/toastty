@@ -3016,6 +3016,13 @@ final class RemoteAccessService: ObservableObject {
             )
             if delivery == .delivered {
                 sendQueue.pause(conversationID)
+                // Direct surface input bypasses the local key callback. Pause
+                // queued sends before the shared status can become idle.
+                _ = sessionRuntimeStore.handleLocalInterruptForPanelIfActive(
+                    panelID: panelID,
+                    kind: .escape,
+                    at: Date()
+                )
                 result = .accepted
             } else {
                 result = .rejected(reason: .surfaceUnavailable)
