@@ -199,7 +199,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
             XCTAssertEqual(helloCallCount, 1)
             XCTAssertEqual(requestedDurations, [])
 
-            await coordinator.resume()
+            await coordinator.resume(lifecycleSequence: 1)
             await coordinator.connectIfNeeded()
             helloCallCount = await gateway.helloCallCount()
             requestedDurations = await sleeper.requestedDurations()
@@ -239,7 +239,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
         let subscriptionClosed = await subscription.isClosed()
         XCTAssertEqual(retryDurations, [])
         XCTAssertTrue(subscriptionClosed)
-        await coordinator.resume()
+        await coordinator.resume(lifecycleSequence: 1)
         let helloCallCount = await gateway.helloCallCount()
         XCTAssertEqual(helloCallCount, 1)
     }
@@ -598,6 +598,244 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
+    func testShortBackgroundReturnKeepsSocketGenerationAndTranscriptAfterPong() async throws {
+        let pingGate = CancellationAwareGate()
+        let subscription = ScriptedSubscription(pingGate: pingGate)
+        let fixture = try await makeBackgroundFixture(subscription: subscription)
+        let before = await fixture.coordinator.currentState()
+        let transcriptBefore = await fixture.conversation.currentState()
+        let stamp = try XCTUnwrap(transcriptBefore.composerAuthority.stamp)
+
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await subscription.waitForPingCount(1) }
+        await fixture.coordinator.resume(lifecycleSequence: 3)
+        await fixture.coordinator.connectIfNeeded()
+        let checking = await fixture.coordinator.currentState()
+        XCTAssertEqual(checking.phase, .checkingConnection)
+        let refused = await fixture.coordinator.sendMessage(
+            conversationID: conversationID, text: "wait for verification", composerStamp: stamp
+        )
+        XCTAssertEqual(refused, .notEnqueued(.coordinatorNotLive))
+
+        // A buffered snapshot must not unlock sends before the pong arrives.
+        let updated = snapshot(runID: runID(1), title: "Updated during background")
+        await subscription.send(.sessionList(updated))
+        try await withTimeout { try await subscription.waitForReceiveCount(3) }
+        let stillChecking = await fixture.coordinator.currentState()
+        XCTAssertEqual(stillChecking.phase, .checkingConnection)
+        await pingGate.open()
+        let after = try await coordinatorState(matching: { $0.phase == .live }, fixture.coordinator)
+        XCTAssertEqual(after.connectionGeneration, before.connectionGeneration)
+        let transcriptAfter = await fixture.conversation.currentState()
+        XCTAssertEqual(transcriptAfter.events, transcriptBefore.events)
+        XCTAssertEqual(transcriptAfter.cursor, transcriptBefore.cursor)
+        let sessions = await fixture.coordinator.sessionProjection()
+        let sessionState = await sessions.currentState()
+        XCTAssertEqual(sessionState.snapshot, updated)
+        let operations = await fixture.operations.values()
+        XCTAssertEqual(operations.filter { $0 == "connect" }.count, 1)
+        XCTAssertEqual(operations.filter { $0 == "sessions" }.count, 1)
+        let pingCount = await subscription.pingCount()
+        XCTAssertEqual(pingCount, 1)
+        await fixture.coordinator.suspend()
+    }
+
+    func testLongBackgroundReturnReconnectsWithoutProbingOldSocket() async throws {
+        let clock = LifecycleTestClock()
+        let fixture = try await makeBackgroundFixture(clock: clock)
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        clock.advance(by: .seconds(11))
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        let pingCount = await fixture.subscription.pingCount()
+        XCTAssertEqual(pingCount, 0)
+        let closed = await fixture.subscription.isClosed()
+        XCTAssertTrue(closed)
+        let state = await fixture.coordinator.currentState()
+        XCTAssertEqual(state.phase, .awaitingFreshSessionSnapshot)
+        await fixture.coordinator.suspend()
+    }
+
+    func testMissedBackgroundCallbackStillUsesSceneTimeOnReturn() async throws {
+        let clock = LifecycleTestClock()
+        let fixture = try await makeBackgroundFixture(clock: clock)
+        let sceneTime = clock.now()
+        clock.advance(by: .seconds(11))
+        await fixture.coordinator.resume(lifecycleSequence: 2, backgroundedAt: sceneTime)
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        let pingCount = await fixture.subscription.pingCount()
+        XCTAssertEqual(pingCount, 0)
+        await fixture.coordinator.suspend()
+    }
+
+    func testBackgroundDuringExpiredStreamTeardownStopsReplacementUntilForeground() async throws {
+        let clock = LifecycleTestClock()
+        let closeGate = CancellationAwareGate()
+        let fixture = try await makeBackgroundFixture(
+            subscription: ScriptedSubscription(closeGate: closeGate), clock: clock
+        )
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        clock.advance(by: .seconds(11))
+        let resume = Task { await fixture.coordinator.resume(lifecycleSequence: 2) }
+        try await withTimeout { try await fixture.subscription.waitForCloseCount(1) }
+        let background = Task { await fixture.coordinator.enterBackground(lifecycleSequence: 3) }
+        try await withTimeout {
+            while await fixture.coordinator.currentState().connectionGeneration < 3 {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
+        }
+        await closeGate.open()
+        await resume.value
+        await background.value
+        await fixture.coordinator.connectIfNeeded()
+        let state = await fixture.coordinator.currentState()
+        XCTAssertEqual(state.phase, .suspended)
+        let operations = await fixture.operations.values()
+        XCTAssertEqual(operations.filter { $0 == "connect" }.count, 1)
+        await fixture.coordinator.resume(lifecycleSequence: 4)
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        await fixture.coordinator.suspend()
+    }
+
+    func testForegroundProbeTimeoutReconnectsAndIgnoresLatePong() async throws {
+        let pingGate = CancellationAwareGate()
+        let deadline = ControlledSleeper()
+        let fixture = try await makeBackgroundFixture(
+            subscription: ScriptedSubscription(pingGate: pingGate), probeSleeper: deadline
+        )
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await deadline.waitForRequestCount(1) }
+        await deadline.advance()
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        await pingGate.open()
+        let state = await fixture.coordinator.currentState()
+        XCTAssertEqual(state.phase, .awaitingFreshSessionSnapshot)
+        let operations = await fixture.operations.values()
+        XCTAssertEqual(operations.filter { $0 == "connect" }.count, 2)
+        await fixture.coordinator.suspend()
+    }
+
+    func testFailedForegroundProbeReconnectsOnce() async throws {
+        let fixture = try await makeBackgroundFixture(
+            subscription: ScriptedSubscription(pingFailure: GatewayFailure.network(reason: .connectionLost))
+        )
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        let operations = await fixture.operations.values()
+        XCTAssertEqual(operations.filter { $0 == "connect" }.count, 2)
+        await fixture.coordinator.suspend()
+    }
+
+    func testUncancelledProbeReportingCancellationReconnects() async throws {
+        let fixture = try await makeBackgroundFixture(
+            subscription: ScriptedSubscription(pingFailure: CancellationError())
+        )
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        await fixture.coordinator.suspend()
+    }
+
+    func testDisconnectWhileBackgroundedWaitsForForegroundBeforeReconnect() async throws {
+        let fixture = try await makeBackgroundFixture()
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        await fixture.subscription.close()
+        _ = try await coordinatorState(matching: { $0.phase == .suspended }, fixture.coordinator)
+        let operations = await fixture.operations.values()
+        XCTAssertEqual(operations.filter { $0 == "connect" }.count, 1)
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        await fixture.coordinator.suspend()
+    }
+
+    func testReceiveFailureDuringProbeGivesReplacementStreamNewBackgroundGrace() async throws {
+        let clock = LifecycleTestClock()
+        let pingGate = CancellationAwareGate()
+        let fixture = try await makeBackgroundFixture(
+            subscription: ScriptedSubscription(pingGate: pingGate), clock: clock
+        )
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await fixture.subscription.waitForPingCount(1) }
+        await fixture.subscription.close()
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        await fixture.replacement.send(.sessionList(snapshot(runID: runID(1), title: "Reconnected")))
+        let reconnected = try await coordinatorState(matching: { $0.phase == .live }, fixture.coordinator)
+
+        clock.advance(by: .seconds(11))
+        await fixture.coordinator.enterBackground(lifecycleSequence: 3)
+        await fixture.coordinator.resume(lifecycleSequence: 4)
+        try await withTimeout { try await fixture.replacement.waitForPingCount(1) }
+        let resumed = try await coordinatorState(matching: { $0.phase == .live }, fixture.coordinator)
+        XCTAssertEqual(resumed.connectionGeneration, reconnected.connectionGeneration)
+        let operations = await fixture.operations.values()
+        XCTAssertEqual(operations.filter { $0 == "connect" }.count, 2)
+        await fixture.coordinator.suspend()
+    }
+
+    func testOlderSceneCallbacksCannotBackgroundAnActiveConnection() async throws {
+        let fixture = try await makeBackgroundFixture()
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        await fixture.coordinator.resume(lifecycleSequence: 3)
+        let state = await fixture.coordinator.currentState()
+        XCTAssertEqual(state.phase, .live)
+        let pingCount = await fixture.subscription.pingCount()
+        XCTAssertEqual(pingCount, 0)
+        await fixture.coordinator.suspend()
+    }
+
+    func testBackgroundDuringProbeCancelsItWithoutExtendingUnverifiedGrace() async throws {
+        let clock = LifecycleTestClock()
+        let pingGate = CancellationAwareGate()
+        let fixture = try await makeBackgroundFixture(
+            subscription: ScriptedSubscription(pingGate: pingGate), clock: clock
+        )
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await fixture.subscription.waitForPingCount(1) }
+        await fixture.coordinator.enterBackground(lifecycleSequence: 3)
+        await pingGate.open()
+        clock.advance(by: .seconds(11))
+        await fixture.coordinator.resume(lifecycleSequence: 4)
+        try await withTimeout { try await fixture.replacement.waitForReceiveCount(1) }
+        let pingCount = await fixture.subscription.pingCount()
+        XCTAssertEqual(pingCount, 1)
+        let state = await fixture.coordinator.currentState()
+        XCTAssertEqual(state.phase, .awaitingFreshSessionSnapshot)
+        await fixture.coordinator.suspend()
+    }
+
+    func testZeroBackgroundGraceSuspendsImmediately() async throws {
+        let fixture = try await makeBackgroundFixture(grace: .zero)
+        await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        let state = await fixture.coordinator.currentState()
+        XCTAssertEqual(state.phase, .suspended)
+        let closed = await fixture.subscription.isClosed()
+        XCTAssertTrue(closed)
+    }
+
+    func testSceneTransitionsDoNotReviveTerminalAuthorizationFailure() async throws {
+        let operations = OperationLog()
+        let coordinator = ConnectionCoordinator(
+            gateway: ScriptedGateway(operations: operations, hello: [.failure(.unauthenticated(code: .unauthorized, message: nil))]),
+            eventStream: ScriptedEventStream(operations: operations, connections: [])
+        )
+        await coordinator.connectIfNeeded()
+        let terminal = try await coordinatorState(matching: { $0.phase == .requiresAuthentication }, coordinator)
+        await coordinator.enterBackground(lifecycleSequence: 1)
+        await coordinator.resume(lifecycleSequence: 2)
+        let after = await coordinator.currentState()
+        XCTAssertEqual(after.phase, terminal.phase)
+        let calls = await operations.values()
+        XCTAssertEqual(calls, ["hello"])
+        await coordinator.suspend()
+    }
+
     func testSuspendClosesStreamAndKeepsReadableSessionSnapshot() async throws {
         let operations = OperationLog()
         let seed = snapshot(runID: runID(1), title: "Seed")
@@ -730,7 +968,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
 
         let suspend = Task { await coordinator.suspend() }
         try await withTimeout { try await firstSubscription.waitForCloseCount(1) }
-        let resume = Task { await coordinator.resume() }
+        let resume = Task { await coordinator.resume(lifecycleSequence: 1) }
         await closeGate.open()
         await suspend.value
         await resume.value
@@ -1944,6 +2182,50 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
+    private struct BackgroundFixture {
+        let coordinator: ConnectionCoordinator
+        let conversation: ConversationRuntime
+        let subscription: ScriptedSubscription
+        let replacement: ScriptedSubscription
+        let operations: OperationLog
+    }
+
+    private func makeBackgroundFixture(
+        subscription: ScriptedSubscription = ScriptedSubscription(),
+        clock: LifecycleTestClock = LifecycleTestClock(),
+        grace: Duration = .seconds(10),
+        probeSleeper: any ConnectionSleeping = ContinuousConnectionSleeper()
+    ) async throws -> BackgroundFixture {
+        let operations = OperationLog()
+        let epoch = RemoteInputEpoch(bindingID: UUID(), counter: 1)
+        let seed = snapshot(runID: runID(1), title: "Ready", inputAvailability: .openPrompt(epoch: epoch), latestSequence: 1)
+        let replacement = ScriptedSubscription()
+        let coordinator = ConnectionCoordinator(
+            gateway: ScriptedGateway(
+                operations: operations,
+                hello: Array(repeating: .success(RemoteGatewayHelloResponse()), count: 3),
+                sessions: Array(repeating: .success(seed), count: 3),
+                events: Array(repeating: ScriptedCall(result: .success(.page(
+                    page(runID: runID(1), events: [event(1)], latestSequence: 1)
+                ))), count: 3)
+            ),
+            eventStream: ScriptedEventStream(operations: operations, connections: [
+                .success(subscription), .success(replacement), .success(ScriptedSubscription()),
+            ]),
+            deviceScopes: [.read, .send],
+            backgroundGracePeriod: grace,
+            foregroundProbeSleeper: probeSleeper,
+            lifecycleNow: { clock.now() }
+        )
+        let conversation = await coordinator.openConversation(conversationID)
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await subscription.waitForReceiveCount(1) }
+        await subscription.send(.sessionList(seed))
+        _ = try await conversationState(matching: { $0.composerAuthority.canSend }, conversation)
+        return BackgroundFixture(coordinator: coordinator, conversation: conversation,
+                                 subscription: subscription, replacement: replacement, operations: operations)
+    }
+
     private func coordinatorState(
         matching predicate: @escaping @Sendable (ConnectionCoordinator.State) -> Bool,
         _ coordinator: ConnectionCoordinator
@@ -2285,14 +2567,34 @@ private actor ScriptedSubscription: EventStreamSubscriptionProtocol {
     private let closeCalls = CallCounter()
     private let closeFailure: GatewayFailure?
     private let closeGate: CancellationAwareGate?
+    private let pingGate: CancellationAwareGate?
+    private let pingFailure: (any Error)?
+    private let pingCalls = CallCounter()
+    private var pings = 0
 
     init(
         closeFailure: GatewayFailure? = nil,
-        closeGate: CancellationAwareGate? = nil
+        closeGate: CancellationAwareGate? = nil,
+        pingGate: CancellationAwareGate? = nil,
+        pingFailure: (any Error)? = nil
     ) {
         self.closeFailure = closeFailure
         self.closeGate = closeGate
+        self.pingGate = pingGate
+        self.pingFailure = pingFailure
     }
+
+    func ping() async throws {
+        pings += 1
+        await pingCalls.increment()
+        if let pingGate { try await pingGate.wait() }
+        try Task.checkCancellation()
+        guard !closed else { throw GatewayFailure.network(reason: .connectionLost) }
+        if let pingFailure { throw pingFailure }
+    }
+
+    func pingCount() -> Int { pings }
+    func waitForPingCount(_ count: Int) async throws { try await pingCalls.wait(for: count) }
 
     func nextMessage() async throws -> CompatibleGatewayStreamMessage {
         await receiveCalls.increment()
@@ -2538,4 +2840,12 @@ private actor CancellationAwareGate {
 private enum TestFailure: Error {
     case streamFinished
     case timedOut
+}
+
+private final class LifecycleTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant = ContinuousClock.now
+
+    func now() -> ContinuousClock.Instant { lock.withLock { instant } }
+    func advance(by duration: Duration) { lock.withLock { instant = instant.advanced(by: duration) } }
 }

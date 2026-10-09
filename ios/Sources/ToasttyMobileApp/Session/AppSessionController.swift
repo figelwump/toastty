@@ -23,9 +23,9 @@ protocol AppLiveSessionsControlling: AnyObject {
     var supportsPushNotifications: Bool { get }
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void)
     func start() async
-    func foreground() async
+    func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async
     func refresh() async
-    func background() async
+    func background(lifecycleSequence: UInt64) async
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async
     func stopObserving()
 }
@@ -73,6 +73,9 @@ final class AppSessionController {
     private var liveSessionID: UUID?
     private var deviceRefreshRequestID: UUID?
     private var initialConnectTimeoutTask: Task<Void, Never>?
+    private var sceneLifecycleSequence: UInt64 = 0
+    private var isSceneBackgrounded = false
+    private var sceneBackgroundedAt: ContinuousClock.Instant?
 
     var credentialProvider: any GatewayCredentialProvider { credentialVault }
 
@@ -422,14 +425,30 @@ final class AppSessionController {
 
     func sceneEnteredBackground() {
         pushController?.enteredBackground()
-        Task { await liveController?.background() }
+        isSceneBackgrounded = true
+        sceneBackgroundedAt = .now
+        sceneLifecycleSequence &+= 1
+        let sequence = sceneLifecycleSequence
+        let sessionID = liveSessionID
+        Task {
+            guard sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
+            await liveController?.background(lifecycleSequence: sequence)
+        }
     }
 
     func sceneBecameActive() {
         pushController?.enteredForeground()
         pairingController?.sceneBecameActive()
+        isSceneBackgrounded = false
+        let backgroundedAt = sceneBackgroundedAt
+        sceneLifecycleSequence &+= 1
+        let sequence = sceneLifecycleSequence
+        let sessionID = liveSessionID
         Task {
-            await liveController?.foreground()
+            guard sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
+            await liveController?.foreground(lifecycleSequence: sequence, backgroundedAt: backgroundedAt)
+            guard sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
+            sceneBackgroundedAt = nil
             await refreshCurrentDevice()
         }
     }
@@ -506,6 +525,9 @@ final class AppSessionController {
         await controller.updateDeviceScopes(credential.device.scopes)
         beginInitialConnectTimeout(sessionID: sessionID)
         await controller.start()
+        if isSceneBackgrounded, liveSessionID == sessionID {
+            await controller.background(lifecycleSequence: sceneLifecycleSequence)
+        }
         updatePushConnection()
     }
 
