@@ -15,7 +15,6 @@ struct ToasttyMarkdownText: View {
         }
         .foregroundStyle(textColor)
         .lineSpacing(6)
-        .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -23,20 +22,19 @@ struct ToasttyMarkdownText: View {
     private func blockView(_ block: ToasttyMarkdownBlock) -> some View {
         switch block.style {
         case .paragraph:
-            Text(block.content)
-                .font(.body)
+            ToasttySelectableText(block.content, textColor: textColor)
         case .heading(let level):
-            Text(block.content)
-                .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+            ToasttySelectableText(block.content,
+                                  textStyle: level <= 2 ? .headline : .subheadline,
+                                  weight: .semibold, textColor: textColor)
                 .padding(.top, block.id == 0 ? 0 : 2)
         case .list(let marker, let depth):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Text(block.isContinuation ? "" : marker.label)
                     .font(.body.monospaced())
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
                     .frame(minWidth: 16, alignment: .trailing)
-                Text(block.content)
-                    .font(.body)
+                ToasttySelectableText(block.content, textColor: textColor)
             }
             .padding(.leading, CGFloat(max(0, depth - 1)) * 16)
         case .blockQuote:
@@ -44,9 +42,7 @@ struct ToasttyMarkdownText: View {
                 RoundedRectangle(cornerRadius: 1)
                     .fill(ToasttyDesignTokens.border)
                     .frame(width: 3)
-                Text(block.content)
-                    .font(.body)
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                ToasttySelectableText(block.content, textColor: ToasttyDesignTokens.secondaryText)
             }
         case .table(let table):
             ToasttyMarkdownTableView(table: table)
@@ -63,9 +59,8 @@ struct ToasttyMarkdownText: View {
                     Divider()
                         .overlay(ToasttyDesignTokens.border)
                 }
-                Text(block.content)
-                    .font(.body.monospaced())
-                    .lineSpacing(4)
+                ToasttySelectableText(block.content, monospaced: true,
+                                      textColor: textColor, lineSpacing: 4)
                     .padding(12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

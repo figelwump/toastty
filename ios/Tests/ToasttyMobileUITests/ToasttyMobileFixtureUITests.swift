@@ -1115,6 +1115,78 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         }
     }
 
+    func testTranscriptUserMessageSupportsSelectionAndCopy() {
+        assertTranscriptSelectionAndCopy(sequence: 12, isUser: true)
+    }
+
+    func testTranscriptAssistantMessageSupportsSelectionAndCopy() {
+        assertTranscriptSelectionAndCopy(sequence: 11, isUser: false)
+    }
+
+    func testTranscriptSelectionAndCopyWhileComposerIsFocused() {
+        assertTranscriptSelectionAndCopy(sequence: 12, isUser: true, focusComposer: true)
+    }
+
+    private func assertTranscriptSelectionAndCopy(sequence: Int, isUser: Bool, focusComposer: Bool = false) {
+        UIPasteboard.general.string = ""
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
+        )
+        openGatedSendConversation(in: app)
+        let row = app.descendants(matching: .any)["toastty-mobile-transcript-row-\(sequence)"]
+        XCTAssertTrue(scrollToOlder(row, in: app))
+        let text = row.textViews.firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertFalse(text.otherElements.matching(NSPredicate(format: "label CONTAINS 'scroll bar'")).firstMatch.exists,
+                       "Non-scrolling transcript text must not expose its own scroll controls")
+        // A row can be hittable under an overlay. Put its first line near the
+        // top before opening the keyboard, which makes the viewport smaller.
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        let targetY = app.navigationBars.firstMatch.frame.maxY + 80
+        for _ in 0..<6 {
+            let delta = text.frame.minY + 11 - targetY
+            if abs(delta) < 30 { break }
+            let start = transcript.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 5, dy: 350))
+            let end = start.withOffset(CGVector(dx: 0, dy: max(-200, min(200, -delta))))
+            // Hold at the endpoint to stop momentum from carrying the text
+            // behind navigation after the drag ends.
+            start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.5)
+        }
+        if focusComposer {
+            composerInput(in: app).tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        }
+        let selectionY = text.frame.minY + 11
+        XCTAssertGreaterThan(selectionY, app.navigationBars.firstMatch.frame.maxY)
+        XCTAssertLessThan(selectionY, composerInput(in: app).frame.minY, "The selected line must be above the composer")
+        let point = text.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: text.frame.width * 0.25, dy: 11)
+        )
+        point.press(forDuration: 1.2)
+        let copy = app.menuItems["Copy"]
+        guard copy.waitForExistence(timeout: 5) else {
+            return XCTFail("Copy menu did not open: \(app.debugDescription)")
+        }
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "Selecting transcript text must not edit it")
+        attachScreenshot(named: "transcript-\(isUser ? "user" : "assistant")-selection", of: app)
+        copy.tap()
+
+        let input = composerInput(in: app)
+        input.tap()
+        input.press(forDuration: 1.2)
+        let paste = app.menuItems["Paste"]
+        guard paste.waitForExistence(timeout: 5) else {
+            return XCTFail("Paste menu did not open: \(app.debugDescription)")
+        }
+        paste.tap()
+        let copied = input.value as? String ?? ""
+        let source = isUser ? "This message came from a paired mobile device." : "Transcript ready"
+        XCTAssertFalse(copied.isEmpty)
+        XCTAssertTrue(source.contains(copied), "Copy must preserve the selected transcript text: \(copied)")
+        XCTAssertLessThan(copied.count, source.count, "A long press must select part of the message")
+        attachScreenshot(named: "transcript-\(isUser ? "user" : "assistant")-copied", of: app)
+    }
+
     func testFixtureTranscriptPreservesContentWithoutHistoricalStatusRows() {
         let app = launchFixtureConversation()
         let transcript = app.descendants(matching: .any)["toastty-mobile-transcript"]
