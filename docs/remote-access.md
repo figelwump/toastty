@@ -225,7 +225,7 @@ Mac has the same effect on the phone.
 
 The iOS app icon badge counts sessions with an unread completion, a pending
 approval, or an error. Each session counts once. Quiet unread sessions in a
-subspace marked done do not count, matching the conversation screen's **Next**
+task space marked done do not count, matching the conversation screen's **Next**
 action. Reading a completion or resolving an approval or error updates the
 badge when the Mac sends the new state. Opening the app alone does not clear it.
 Reading an error does not dismiss it; it counts until the session leaves its
@@ -381,36 +381,36 @@ While a session is working, its row shows the running turn's time, ticking,
 in place of its age. Touch and hold the row for the elapsed time and the
 length of its last turn.
 
-### Subspaces
+### Task Spaces
 
-Subspaces, the workspaces an agent spawned from another workspace, appear
-under their parent in a collapsible **Subspaces** group, on Home and on the
+Task spaces, the workspaces an agent spawned from another workspace, appear
+under their parent in a collapsible **Task Spaces** group, on Home and on the
 parent's workspace screen. Rows sort as in the desktop sidebar: unread results
 first, then approvals, errors, working, idle, and done. Each row shows the
-subspace's status, its primary annotation or pull request chip, and the
-summary of the session that sets the status. Tap a row to open the subspace,
+task space's status, its primary annotation or pull request chip, and the
+summary of the session that sets the status. Tap a row to open the task space,
 which names its parent above its sessions. Touch and hold a row for its
 annotations, sessions, path, and spawner.
 
-A session that spawned subspaces shows a ⑂ chip with their count. Tap it to
-show only that session's subspaces in the group, and again to show them all.
-The filter gives way while it would hide a subspace that needs approval or has
+A session that spawned task spaces shows a ⑂ chip with their count. Tap it to
+show only that session's task spaces in the group, and again to show them all.
+The filter gives way while it would hide a task space that needs approval or has
 an error. A collapsed group stays open under the same condition.
 
-While a subspace is idle, has an unread result, or is done, its status box is a
+While a task space is idle, has an unread result, or is done, its status box is a
 checkbox. Tap it, swipe the row right, or choose **Mark as Done** from the
-row's menu, to mark the subspace done without opening it; **Undo** appears for a few seconds. The
+row's menu, to mark the task space done without opening it; **Undo** appears for a few seconds. The
 change applies on the Mac through the same rule as the sidebar checkbox and
-reaches every connected device. When an agent in the subspace starts new work,
-the Mac clears the mark. The Mac also refuses to mark a subspace done while
+reaches every connected device. When an agent in the task space starts new work,
+the Mac clears the mark. The Mac also refuses to mark a task space done while
 one of its sessions is working, waiting on approval, or failed, so a request
 delayed past the start of new work cannot restore the mark. The checkbox is
 read-only while the phone is disconnected.
 
-**Active** leaves out idle and done subspaces. A workspace whose only activity
-is in a subspace still appears under Active, listing that subspace.
+**Active** leaves out idle and done task spaces. A workspace whose only activity
+is in a task space still appears under Active, listing that task space.
 
-Subspaces, the done mark, the flag and turn times need updates on both sides.
+Task spaces, the done mark, the flag and turn times need updates on both sides.
 The host sends optional `parentWorkspaceID`, `spawningConversationID`,
 `primaryAnnotationKey`, and `doneAt` fields on each workspace summary, and
 optional `isFlaggedForLater`, `turnStartedAt`, and `lastTurnDuration` fields on
@@ -446,7 +446,7 @@ and opens. If it has not appeared after 10 seconds, the sheet closes with a
 notice, and you open the session from the list when it arrives.
 
 - **Workspace.** The menu lists every top-level workspace in Home order. From
-  a workspace screen it starts on that workspace, and a subspace stays in the
+  a workspace screen it starts on that workspace, and a task space stays in the
   list under its parent. From Home it starts on the workspace of the last
   session started from this phone, or on Home's first workspace when the Mac no
   longer lists that one. Changing the workspace keeps your message and reloads
@@ -497,7 +497,7 @@ stopped local gateway.
 ## Workspace panels and file previews
 
 Open a workspace in Toastty Mobile to see its sessions first, followed by
-**Subspaces** when present, then **Open Panels**.
+**Task Spaces** when present, then **Open Panels**.
 The list includes the right-side panels from every desktop tab in that
 workspace, including tabs that are not selected and panels in a hidden
 sidebar. Each row identifies its owning desktop tab. Panels are ordered by
@@ -610,7 +610,7 @@ support conversations; update Toastty on the Mac to enable previews.
   answer text; the Mac applies them only to the exact pending question through
   Claude's hook response. This does not grant tool permissions or change
   Claude's permission settings.
-- Marking a subspace done or flagging a session needs a native paired device
+- Marking a task space done or flagging a session needs a native paired device
   with send access. Each changes only that one mark, and each change is
   recorded in the audit log with the device that made it.
 - Starting a session needs a native paired device with send access and the

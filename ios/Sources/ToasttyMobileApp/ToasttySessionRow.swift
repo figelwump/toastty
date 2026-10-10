@@ -46,7 +46,7 @@ struct ToasttySessionRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(spawnerChip.accessibilityLabel)
-                .accessibilityHint(isSpawnerFilterActive ? "Shows all subspaces" : "Shows only its subspaces")
+                .accessibilityHint(isSpawnerFilterActive ? "Shows all task spaces" : "Shows only its task spaces")
                 .accessibilityIdentifier("toastty-session-subspaces-\(conversation.id.uuidString)")
             }
         }
@@ -97,7 +97,7 @@ struct ToasttySessionRow: View {
             }
             if let spawnerChip {
                 Button(
-                    isSpawnerFilterActive ? "Show All Subspaces" : "Show Its Subspaces",
+                    isSpawnerFilterActive ? "Show All Task Spaces" : "Show Its Task Spaces",
                     systemImage: "arrow.triangle.branch"
                 ) {
                     onSpawnerChip(spawnerChip)

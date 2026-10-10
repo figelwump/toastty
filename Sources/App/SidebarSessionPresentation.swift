@@ -599,7 +599,7 @@ enum SidebarSessionPresentation {
             rowLabels.append("\(sessionCount) \(sessionCount == 1 ? "session" : "sessions")")
         }
         if pill.subspaceCount > 0 {
-            rowLabels.append("\(pill.subspaceCount) \(pill.subspaceCount == 1 ? "subspace" : "subspaces")")
+            rowLabels.append("\(pill.subspaceCount) \(pill.subspaceCount == 1 ? "task space" : "task spaces")")
         }
         var label = "\(rowLabels.joined(separator: ", ")) hidden \(pill.direction.accessibilityDirection)"
         if pill.unreadCount > 0 {

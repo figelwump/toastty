@@ -2123,7 +2123,7 @@ final class SidebarViewTests: XCTestCase {
         let textValues = renderedTextValues(in: rootView)
 
         XCTAssertTrue(
-            textValues.contains { $0.hasPrefix("4 subspaces, expanded") },
+            textValues.contains { $0.hasPrefix("4 task spaces, expanded") },
             "Group header should describe the rows: \(textValues)"
         )
 
@@ -2131,14 +2131,14 @@ final class SidebarViewTests: XCTestCase {
         for subspaceID in [ids.approvalID, ids.annotatedIdleID, ids.workingID, ids.readyUnreadID] {
             let workspace = try XCTUnwrap(harness.store.state.workspacesByID[subspaceID])
             XCTAssertTrue(
-                textValues.contains { $0.hasPrefix("\(workspace.title), subspace") },
-                "Expected a subspace row for \(workspace.title): \(textValues)"
+                textValues.contains { $0.hasPrefix("\(workspace.title), task space") },
+                "Expected a task space row for \(workspace.title): \(textValues)"
             )
             let cardLabel = SidebarSessionPresentation.workspaceAccessibilityLabel(for: workspace, isSelected: false)
-            XCTAssertFalse(textValues.contains(cardLabel), "Subspace rendered as a card: \(cardLabel)")
+            XCTAssertFalse(textValues.contains(cardLabel), "Task space rendered as a card: \(cardLabel)")
         }
         XCTAssertTrue(textValues.contains("ios-tab-footer"), "Sibling card should still render: \(textValues)")
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("qa-private-app-verification, subspace, ready") })
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready") })
 
         // The legacy Ready annotation does not lift an idle row above the
         // unread ready session, approval, or working rows.
@@ -2154,7 +2154,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("ready"), "Ready rows should not show a badge: \(textValues)")
         XCTAssertTrue(textValues.contains { $0.contains("spawned by Test EmptyOS beta experience") })
         XCTAssertTrue(textValues.contains { $0.contains("spawned by Assess beta launch readiness") })
-        XCTAssertFalse(textValues.contains { $0.contains("sub-agent") }, "Subspace agents should not be ↗ rows: \(textValues)")
+        XCTAssertFalse(textValues.contains { $0.contains("sub-agent") }, "Task space agents should not be ↗ rows: \(textValues)")
 
         try writeSidebarEvidence(rootView, name: "sidebar-subspaces-sorted")
     }
@@ -2174,12 +2174,12 @@ final class SidebarViewTests: XCTestCase {
             rootView.layoutSubtreeIfNeeded()
         }
         func hiddenBelowLabel() -> String? {
-            renderedTextValues(in: rootView).first { $0.contains("subspaces hidden below") }
+            renderedTextValues(in: rootView).first { $0.contains("task spaces hidden below") }
         }
 
         settle(height: 160)
         var label = try XCTUnwrap(hiddenBelowLabel(), "\(renderedTextValues(in: rootView))")
-        XCTAssertTrue(label.contains("4 subspaces hidden below"), label)
+        XCTAssertTrue(label.contains("4 task spaces hidden below"), label)
         XCTAssertTrue(label.contains("1 unread"), label)
         XCTAssertTrue(label.contains("working"), label)
         try writeSidebarEvidence(rootView, name: "sidebar-offscreen-subspaces")
@@ -2197,10 +2197,10 @@ final class SidebarViewTests: XCTestCase {
         // Collapsed rows use the group header's position, not stale row frames.
         _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: nil))
         settle(height: 600)
-        try clickSemanticText(prefix: "4 subspaces, expanded", in: rootView)
+        try clickSemanticText(prefix: "4 task spaces, expanded", in: rootView)
         settle(height: 160)
         label = try XCTUnwrap(hiddenBelowLabel())
-        XCTAssertTrue(label.contains("4 subspaces hidden below"), label)
+        XCTAssertTrue(label.contains("4 task spaces hidden below"), label)
         XCTAssertTrue(label.contains("working"), label)
         XCTAssertTrue(label.contains("1 unread"), label)
         try writeSidebarEvidence(rootView, name: "sidebar-offscreen-collapsed-subspaces")
@@ -2217,7 +2217,7 @@ final class SidebarViewTests: XCTestCase {
                 rootView.layoutSubtreeIfNeeded()
                 let text = renderedTextValues(in: rootView)
                 if text.contains("waiting") == false,
-                   text.contains(where: { $0.hasPrefix("qa-update-visitor-fixture, subspace, \(status)") }) {
+                   text.contains(where: { $0.hasPrefix("qa-update-visitor-fixture, task space, \(status)") }) {
                     return
                 }
             } while Date() < deadline
@@ -2249,7 +2249,7 @@ final class SidebarViewTests: XCTestCase {
             pumpMainRunLoop(duration: 0.6)
             rootView.layoutSubtreeIfNeeded()
             let text = renderedTextValues(in: rootView)
-            XCTAssertTrue(text.contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, waiting") })
+            XCTAssertTrue(text.contains { $0.hasPrefix("qa-update-visitor-fixture, task space, waiting") })
             XCTAssertEqual(text.contains("waiting"), showsPill, "Pill at \(width)pt: \(text)")
             XCTAssertEqual(text.contains("github-pr: \(annotation)"), showsAnnotation, "Annotation at \(width)pt: \(text)")
             XCTAssertLessThanOrEqual(rootView.fittingSize.width, width + 1)
@@ -2267,7 +2267,7 @@ final class SidebarViewTests: XCTestCase {
             )
             waitForStatusWithoutWaitingChip("needs approval", in: rootView)
             XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
-            XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, needs approval") })
+            XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, task space, needs approval") })
 
             // Parent activity resumes while the shell remains outstanding.
             harness.sessionRuntimeStore.updateStatus(
@@ -2277,7 +2277,7 @@ final class SidebarViewTests: XCTestCase {
             )
             waitForStatusWithoutWaitingChip("working", in: rootView)
             XCTAssertFalse(renderedTextValues(in: rootView).contains("waiting"))
-            XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, working") })
+            XCTAssertTrue(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, task space, working") })
 
             XCTAssertTrue(harness.sessionRuntimeStore.syncBackgroundActivities(
                 sessionID: "working-agent", kind: .subagent, entries: [],
@@ -2290,7 +2290,7 @@ final class SidebarViewTests: XCTestCase {
             )
             pumpMainRunLoop()
             rootView.layoutSubtreeIfNeeded()
-            XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, subspace, waiting") })
+            XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("qa-update-visitor-fixture, task space, waiting") })
             if width == 220 {
                 XCTAssertTrue(renderedTextValues(in: rootView).contains("github-pr: \(annotation)"))
             }
@@ -2311,7 +2311,7 @@ final class SidebarViewTests: XCTestCase {
         // The jump read launch-checklist, which now belongs at the top of
         // the idle group; it stays where the jump found it while selected.
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
-        XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("launch-checklist, subspace, ready") })
+        XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("launch-checklist, task space, ready") })
         XCTAssertEqual(
             try subspaceRowOrder(in: rootView),
             ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
@@ -2387,7 +2387,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(
             try parentCardLeadingEdgePixels(in: rootView),
             parentSelectedEdge,
-            "Selecting a subspace should highlight its parent card as if the parent were selected"
+            "Selecting a task space should highlight its parent card as if the parent were selected"
         )
         try writeSidebarEvidence(rootView, name: "sidebar-subspace-selected-parent-highlight")
 
@@ -2431,9 +2431,9 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(harness.store.state.workspacesByID[ids.readyUnreadID]?.taskStage, .done)
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), initialSelection)
         var textValues = renderedTextValues(in: rootView)
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace, done") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, task space, done") }, "\(textValues)")
         XCTAssertTrue(
-            textValues.contains { $0.hasPrefix("4 subspaces, expanded") && $0.contains("ready") == false },
+            textValues.contains { $0.hasPrefix("4 task spaces, expanded") && $0.contains("ready") == false },
             "A done row leaves the ready tally: \(textValues)"
         )
         XCTAssertEqual(
@@ -2452,7 +2452,7 @@ final class SidebarViewTests: XCTestCase {
         rootView.layoutSubtreeIfNeeded()
         textValues = renderedTextValues(in: rootView)
         XCTAssertTrue(
-            textValues.contains { $0.hasPrefix("qa-private-app-verification, subspace") && $0.contains("ready for review") },
+            textValues.contains { $0.hasPrefix("qa-private-app-verification, task space") && $0.contains("ready for review") },
             "\(textValues)"
         )
 
@@ -2467,7 +2467,7 @@ final class SidebarViewTests: XCTestCase {
 
         XCTAssertEqual(harness.store.state.workspacesByID[ids.readyUnreadID]?.taskStage, .open)
         textValues = renderedTextValues(in: rootView)
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace, working") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, task space, working") }, "\(textValues)")
         try writeSidebarEvidence(rootView, name: "sidebar-subspace-reopened")
     }
 
@@ -2625,7 +2625,7 @@ final class SidebarViewTests: XCTestCase {
     private func subspaceRowOrder(in rootView: NSView) throws -> [String] {
         let titles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
         let rowFrames = try titles.map { title in
-            (title, try semanticTextFrame(in: rootView, prefix: "\(title), subspace"))
+            (title, try semanticTextFrame(in: rootView, prefix: "\(title), task space"))
         }
         let siblingFrame = try semanticTextFrame(in: rootView, prefix: "ios-tab-footer")
         let parentFrame = try semanticTextFrame(in: rootView, prefix: "emptyos-computer")
@@ -2641,23 +2641,23 @@ final class SidebarViewTests: XCTestCase {
 
         // A real click on the chip, which sits inside the row header's AppKit
         // pointer overlay and must be excluded from it like the disclosure pill.
-        try clickSemanticText(prefix: "3 subspaces, one needs approval", in: rootView)
+        try clickSemanticText(prefix: "3 task spaces, one needs approval", in: rootView)
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
 
         var textValues = renderedTextValues(in: rootView)
-        XCTAssertTrue(textValues.contains("Only subspaces from Test EmptyOS beta experience"), "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, subspace") })
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, subspace") }, "Other spawner's row should hide: \(textValues)")
-        XCTAssertTrue(textValues.contains("3 subspaces, one needs approval, filtering the Subspaces list"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Only task spaces from Test EmptyOS beta experience"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-mobile-navigation, task space") })
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "Other spawner's row should hide: \(textValues)")
+        XCTAssertTrue(textValues.contains("3 task spaces, one needs approval, filtering the Task Spaces list"), "\(textValues)")
         try writeSidebarEvidence(rootView, name: "sidebar-subspaces-filtered")
 
-        try clickSemanticText(prefix: "3 subspaces, one needs approval, filtering", in: rootView)
+        try clickSemanticText(prefix: "3 task spaces, one needs approval, filtering", in: rootView)
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
         textValues = renderedTextValues(in: rootView)
-        XCTAssertFalse(textValues.contains("Only subspaces from Test EmptyOS beta experience"))
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace") })
+        XCTAssertFalse(textValues.contains("Only task spaces from Test EmptyOS beta experience"))
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, task space") })
     }
 
     /// Clicks the hosted view at the semantic text bridge whose text starts
@@ -2730,7 +2730,7 @@ final class SidebarViewTests: XCTestCase {
         )
         harness.sessionRuntimeStore.updateStatus(
             sessionID: "orchestrator",
-            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Waiting on subspaces"),
+            status: SessionStatus(kind: .idle, summary: "Idle", detail: "Waiting on task spaces"),
             at: Date(timeIntervalSince1970: 1_700_000_001)
         )
         let working = try XCTUnwrap(harness.store.state.workspacesByID[ids.workingID])
@@ -2795,39 +2795,39 @@ final class SidebarViewTests: XCTestCase {
         var textValues = renderedTextValues(in: rootView)
         let orchestratorRow = try XCTUnwrap(textValues.first { $0.hasPrefix("Merge ready PRs") }, "\(textValues)")
         XCTAssertFalse(orchestratorRow.contains("sub-agent"), "The chip replaces the ↗ row: \(orchestratorRow)")
-        XCTAssertTrue(textValues.contains("1 subspace in emptyos-computer"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("1 task space in emptyos-computer"), "\(textValues)")
         XCTAssertFalse(
-            try isInSidebarViewport(prefix: "4 subspaces, expanded", in: rootView),
+            try isInSidebarViewport(prefix: "4 task spaces, expanded", in: rootView),
             "The parent's group should start out of view"
         )
         try writeSidebarEvidence(rootView, name: "sidebar-other-card-spawner-chip")
 
-        try clickSemanticText(prefix: "1 subspace in emptyos-computer", in: rootView)
+        try clickSemanticText(prefix: "1 task space in emptyos-computer", in: rootView)
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
 
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.parentID)
         textValues = renderedTextValues(in: rootView)
-        XCTAssertTrue(textValues.contains("Only subspaces from Merge ready PRs"), "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-update-visitor-fixture, subspace") }, "\(textValues)")
-        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, subspace") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Only task spaces from Merge ready PRs"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-update-visitor-fixture, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "\(textValues)")
         XCTAssertTrue(
-            textValues.contains("1 subspace in emptyos-computer, filtering the Subspaces list"),
+            textValues.contains("1 task space in emptyos-computer, filtering the Task Spaces list"),
             "\(textValues)"
         )
         XCTAssertTrue(
-            try isInSidebarViewport(prefix: "4 subspaces, expanded", in: rootView),
+            try isInSidebarViewport(prefix: "4 task spaces, expanded", in: rootView),
             "The chip should scroll the parent's group into view"
         )
         try writeSidebarEvidence(rootView, name: "sidebar-other-card-spawner-chip-filtered")
 
         // A second press clears the filter and leaves the selection alone.
-        try clickSemanticText(prefix: "1 subspace in emptyos-computer, filtering", in: rootView)
+        try clickSemanticText(prefix: "1 task space in emptyos-computer, filtering", in: rootView)
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
         textValues = renderedTextValues(in: rootView)
-        XCTAssertFalse(textValues.contains("Only subspaces from Merge ready PRs"), "\(textValues)")
-        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains("Only task spaces from Merge ready PRs"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, task space") }, "\(textValues)")
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.parentID)
     }
 
@@ -2925,8 +2925,8 @@ final class SidebarViewTests: XCTestCase {
         harness.hostingView.layoutSubtreeIfNeeded()
 
         let textValues = renderedTextValues(in: harness.hostingView)
-        XCTAssertTrue(textValues.contains("2 subspaces"), "The named spawner shows its chip: \(textValues)")
-        XCTAssertTrue(textValues.contains("1 subspace"), "The unnamed spawner shows its chip: \(textValues)")
+        XCTAssertTrue(textValues.contains("2 task spaces"), "The named spawner shows its chip: \(textValues)")
+        XCTAssertTrue(textValues.contains("1 task space"), "The unnamed spawner shows its chip: \(textValues)")
         let namedRow = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "named-spawner")
         let unnamedRow = try sessionPointerInteractionView(in: harness.hostingView, sessionID: "unnamed-spawner")
         XCTAssertGreaterThan(unnamedRow.bounds.height, 30, "The unnamed row should be two lines")

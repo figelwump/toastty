@@ -737,7 +737,7 @@ final class WorkspaceTaskHookRunner {
         switch problem {
         case .noFinishHook: return "this workspace has no finish hook; set one with workspace.task.set-hooks"
         case .workspaceNotFound: return "workspaceID does not exist"
-        case .workspaceIsTopLevel: return "workspace.task.finish applies to subspaces; this workspace is top-level"
+        case .workspaceIsTopLevel: return "workspace.task.finish applies to task spaces; this workspace is top-level"
         case .alreadyFinishing: return "a Finish Task for this workspace is still starting its agent"
         case .sendFailed(let detail): return "could not send the finish skill: \(detail)"
         case .launchFailed(let detail): return "could not launch an agent for the finish skill: \(detail)"

@@ -3423,6 +3423,41 @@ struct SidebarView: View {
         isExpanded: Bool,
         cleanupCandidates: [SidebarSubspacePresentation.Row]
     ) -> some View {
+        // Narrow sidebars drop the status tally (the rows show the same
+        // statuses) before the title has to truncate.
+        ViewThatFits(in: .horizontal) {
+            subspacesGroupHeaderRow(
+                parentWorkspaceID: parentWorkspaceID,
+                shownCount: shownCount,
+                totalCount: totalCount,
+                tally: tally,
+                showsTally: true,
+                isExpanded: isExpanded,
+                cleanupCandidates: cleanupCandidates
+            )
+            subspacesGroupHeaderRow(
+                parentWorkspaceID: parentWorkspaceID,
+                shownCount: shownCount,
+                totalCount: totalCount,
+                tally: tally,
+                showsTally: false,
+                isExpanded: isExpanded,
+                cleanupCandidates: cleanupCandidates
+            )
+        }
+        .frame(minHeight: 16)
+        .padding(.top, 6)
+    }
+
+    private func subspacesGroupHeaderRow(
+        parentWorkspaceID: UUID,
+        shownCount: Int,
+        totalCount: Int,
+        tally: SidebarSubspacePresentation.Tally,
+        showsTally: Bool,
+        isExpanded: Bool,
+        cleanupCandidates: [SidebarSubspacePresentation.Row]
+    ) -> some View {
         HStack(spacing: 8) {
             Button {
                 if isExpanded {
@@ -3438,9 +3473,13 @@ struct SidebarView: View {
                     Text(SidebarSubspacePresentation.groupTitle.uppercased())
                         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                         .tracking(0.8)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Text(SidebarSubspacePresentation.headerCountLabel(shownCount: shownCount, totalCount: totalCount))
                         .font(ToastyTheme.fontWorkspaceAgentCount)
                         .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
                 .foregroundStyle(ToastyTheme.sidebarChildContextText)
                 .contentShape(Rectangle())
@@ -3464,7 +3503,7 @@ struct SidebarView: View {
 
             Spacer(minLength: 0)
 
-            if tally.isEmpty == false {
+            if showsTally, tally.isEmpty == false {
                 HStack(spacing: 8) {
                     subspacesTallyItem(count: tally.ready, color: ToastyTheme.sessionReadyText)
                     subspacesTallyItem(count: tally.needsApproval, color: ToastyTheme.sessionNeedsApprovalText)
@@ -3477,8 +3516,6 @@ struct SidebarView: View {
                 subspacesCleanupFinishedButton(parentWorkspaceID: parentWorkspaceID, candidates: cleanupCandidates)
             }
         }
-        .frame(minHeight: 16)
-        .padding(.top, 6)
     }
 
     /// The header's clean-up icon: shown only while a finished subspace has
@@ -3498,6 +3535,7 @@ struct SidebarView: View {
                 Text("\(candidates.count)")
                     .font(ToastyTheme.fontWorkspaceAgentCount)
             }
+            .fixedSize()
             .foregroundStyle(ToastyTheme.sidebarChildContextText)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
@@ -3547,7 +3585,7 @@ struct SidebarView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Clear subspace filter")
+            .accessibilityLabel("Clear task space filter")
             .accessibilityIdentifier("sidebar.workspace.subspaces.clearFilter")
         }
         .padding(.horizontal, 7)

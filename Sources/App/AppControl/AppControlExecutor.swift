@@ -245,7 +245,7 @@ final class AppControlExecutor {
             if action == .workspaceSetDone,
                try requiredStore().state.workspacesByID[workspaceID]?.parentWorkspaceID == nil {
                 throw AutomationSocketError.invalidPayload(
-                    "workspace.set-done applies to subspaces; this workspace is top-level"
+                    "workspace.set-done applies to task spaces; this workspace is top-level"
                 )
             }
             let doneAt: Date? = action == .workspaceSetDone ? Date() : nil
@@ -265,7 +265,7 @@ final class AppControlExecutor {
             }
             if stage != .open, try requiredStore().state.workspacesByID[workspaceID]?.parentWorkspaceID == nil {
                 throw AutomationSocketError.invalidPayload(
-                    "workspace.set-task-stage applies to subspaces; this workspace is top-level"
+                    "workspace.set-task-stage applies to task spaces; this workspace is top-level"
                 )
             }
             return .init(
@@ -2517,7 +2517,7 @@ private extension AppControlExecutor {
         hooks.close = try scriptHookParameter(prefix: "close", args: args)
         if hooks.isEmpty == false, workspace.parentWorkspaceID == nil {
             throw AutomationSocketError.invalidPayload(
-                "workspace.task.set-hooks applies to subspaces; this workspace is top-level"
+                "workspace.task.set-hooks applies to task spaces; this workspace is top-level"
             )
         }
         return .init(

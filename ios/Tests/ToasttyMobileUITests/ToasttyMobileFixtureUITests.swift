@@ -512,7 +512,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             app.buttons["toastty-mobile-grouped-card-\(activeResearchConversationID)"], in: app
         ))
         XCTAssertTrue(scrollHomeTo(hiddenFooter, in: app))
-        XCTAssertEqual(hiddenFooter.label, "1 idle session and 1 done subspace hidden")
+        XCTAssertEqual(hiddenFooter.label, "1 idle session and 1 done task space hidden")
         attachScreenshot(named: "fixture-home-active-rows", of: app)
 
         filter.buttons["All"].tap()
@@ -523,7 +523,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         showAllSessions(in: app)
         let group = app.buttons["toastty-subspaces-group-\(toasttyWorkspaceID)"]
         XCTAssertTrue(scrollHomeTo(group, in: app))
-        XCTAssertEqual(group.label, "Subspaces, 4, 1 ready, 1 needs approval")
+        XCTAssertEqual(group.label, "Task Spaces, 4, 1 ready, 1 needs approval")
         XCTAssertEqual(group.value as? String, "Expanded")
 
         let approval = app.buttons["toastty-subspace-row-\(needsApprovalSubspaceID)"]
@@ -531,14 +531,14 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(scrollHomeTo(approval, in: app))
         XCTAssertEqual(
             approval.label,
-            "compact-session-rows, subspace, needs approval, Push feat/compact-session-rows?, github-pr: PR #36"
+            "compact-session-rows, task space, needs approval, Push feat/compact-session-rows?, github-pr: PR #36"
         )
         // The primary annotation is the row's one chip.
         XCTAssertTrue(
             app.buttons["toastty-subspace-row-\(readySubspaceID)"].label.hasSuffix("ticket: TOAST-45")
         )
         XCTAssertTrue(scrollHomeTo(done, in: app))
-        XCTAssertTrue(done.label.contains("subspace, done"))
+        XCTAssertTrue(done.label.contains("task space, done"))
         // A subspace is a row under its parent, not a workspace of its own.
         XCTAssertFalse(app.buttons["toastty-mobile-workspace-\(needsApprovalSubspaceID)"].exists)
         attachScreenshot(named: "fixture-home-subspaces", of: app)
@@ -551,7 +551,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         app.segmentedControls["toastty-mobile-workspace-session-filter"].buttons["Active"].tap()
         XCTAssertTrue(done.waitForNonExistence(timeout: 5))
         XCTAssertTrue(scrollHomeTo(group, in: app))
-        XCTAssertEqual(group.label, "Subspaces, 3/4, 1 ready, 1 needs approval")
+        XCTAssertEqual(group.label, "Task Spaces, 3/4, 1 ready, 1 needs approval")
         attachScreenshot(named: "fixture-home-subspaces-active", of: app)
         app.segmentedControls["toastty-mobile-workspace-session-filter"].buttons["All"].tap()
         group.tap()
@@ -574,18 +574,18 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(notice.waitForExistence(timeout: 5))
         XCTAssertEqual(notice.label, "Marked done")
         XCTAssertTrue(waitForLabel(checkbox, "Mark as Not Done"))
-        XCTAssertTrue(row.label.contains("subspace, done"))
+        XCTAssertTrue(row.label.contains("task space, done"))
         // Checking the box does not open the subspace.
         XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
         XCTAssertEqual(
             app.buttons["toastty-subspaces-group-\(toasttyWorkspaceID)"].label,
-            "Subspaces, 4, 1 needs approval"
+            "Task Spaces, 4, 1 needs approval"
         )
         attachScreenshot(named: "fixture-subspace-marked-done", of: app)
 
         app.buttons["toastty-subspace-done-undo"].tap()
         XCTAssertTrue(waitForLabel(checkbox, "Mark as Done"))
-        XCTAssertTrue(row.label.contains("subspace, ready"))
+        XCTAssertTrue(row.label.contains("task space, ready"))
         XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
     }
 
@@ -594,18 +594,18 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         showAllSessions(in: app)
         let chip = app.buttons["toastty-session-subspaces-\(pendingInteractionID)"]
         XCTAssertTrue(scrollHomeTo(chip, in: app))
-        XCTAssertEqual(chip.label, "3 subspaces")
+        XCTAssertEqual(chip.label, "3 task spaces")
         // The session row under the chip still opens the conversation.
         XCTAssertTrue(app.buttons["toastty-mobile-grouped-card-\(pendingInteractionID)"].isHittable)
 
         chip.tap()
         let clear = app.buttons["toastty-subspaces-filter-clear"]
         XCTAssertTrue(clear.waitForExistence(timeout: 5))
-        XCTAssertEqual(clear.label, "Only subspaces from Mobile gateway design")
+        XCTAssertEqual(clear.label, "Only task spaces from Mobile gateway design")
         XCTAssertFalse(app.buttons["toastty-subspace-row-\(workingSubspaceID)"].exists)
         XCTAssertEqual(
             app.buttons["toastty-subspaces-group-\(toasttyWorkspaceID)"].label,
-            "Subspaces, 3/4, 1 ready, 1 needs approval"
+            "Task Spaces, 3/4, 1 ready, 1 needs approval"
         )
         attachScreenshot(named: "fixture-subspaces-filtered", of: app)
         XCTAssertTrue(scrollHomeTo(clear, in: app))
@@ -620,7 +620,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["compact-session-rows"].waitForExistence(timeout: 5))
         let breadcrumb = app.staticTexts["toastty-mobile-workspace-breadcrumb"]
         XCTAssertTrue(breadcrumb.exists)
-        XCTAssertEqual(breadcrumb.label, "Subspace of toastty")
+        XCTAssertEqual(breadcrumb.label, "Task space of toastty")
         let session = app.buttons["toastty-mobile-workspace-session-\(subspaceSessionID)"]
         XCTAssertTrue(scrollWorkspaceTo(session, in: app))
         attachScreenshot(named: "fixture-subspace-screen", of: app)
@@ -924,9 +924,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let notice = app.staticTexts["toastty-subspace-done-notice"]
         XCTAssertTrue(notice.waitForExistence(timeout: 5))
         XCTAssertEqual(notice.label, "Marked done")
-        XCTAssertTrue(waitForLabelContaining(row, "subspace, done"))
+        XCTAssertTrue(waitForLabelContaining(row, "task space, done"))
         app.buttons["toastty-subspace-done-undo"].tap()
-        XCTAssertTrue(waitForLabelContaining(row, "subspace, ready"))
+        XCTAssertTrue(waitForLabelContaining(row, "task space, ready"))
 
         // A working subspace's mark is not a checkbox, so it has no swipe.
         let working = app.buttons["toastty-subspace-row-\(workingSubspaceID)"]

@@ -1,6 +1,6 @@
 ---
 name: worktree-cleanup
-description: Use when the user asks which pull requests or task worktrees are ready to merge, asks to merge specific ready PRs, or asks to clean up merged worktrees, branches, and their Toastty workspaces or subspaces. Run it from outside the task workspaces.
+description: Use when the user asks which pull requests or task worktrees are ready to merge, asks to merge specific ready PRs, or asks to clean up merged worktrees, branches, and their Toastty workspaces or task spaces. Run it from outside the task workspaces.
 ---
 
 # Worktree Cleanup
@@ -87,7 +87,7 @@ deletion.
 A task space created by `worktree-create` carries a cleanup hook that runs
 `scripts/worktree-status.py --cleanup-workspace` for that one workspace, with
 `TOASTTY_WORKSPACE_ID` set. The Clean Up button in the workspace header and on
-the subspace row, the Subspaces header's clean-up icon, and
+the task space row, the Task Spaces header's clean-up icon, and
 `workspace.task.cleanup` all run it. It applies the same guards as
 `--cleanup-merged` and reports through its exit status: 0 cleaned, 3 skipped
 with the reason as the last line printed, anything else failed. A PR that has

@@ -214,7 +214,7 @@ exists, omit color or repeat the claim; attempting to replace it fails. Examples
   `url=<verified canonical Linear issue URL>` when available.
 - GitHub pull request: `key=github-pr`, `text="PR #1931"`, and
   `url=<verified GitHub pull URL>` when available. Use `PR #<number>` for all
-  pull request chips, including primary annotations in subspace rows.
+  pull request chips, including primary annotations in task space rows.
 - GitHub issue: `key=github-issue`, `text="Issue #482"`, and
   `url=<verified GitHub issue URL>` when available.
 - Git branch: `key=git-branch`, `text=feat/hooks-chips`; omit `url` unless a
@@ -238,32 +238,32 @@ Include a URL only when the user supplied it or available context verified it;
 never construct one by guessing from the label. Multiple annotations of the
 same kind need distinct stable keys.
 
-A subspace's row under its parent workspace shows one annotation chip: the
+A task space's row under its parent workspace shows one annotation chip: the
 workspace's primary annotation, or its `github-pr` annotation when none is
 primary. Status pills take priority over this annotation when space is tight;
 the hover card still lists every annotation. When setting the annotation that
-best identifies the subspace's work, such as its ticket or pull request, pass
+best identifies the task space's work, such as its ticket or pull request, pass
 `primary=true`. A workspace has one
 primary annotation, so this replaces any earlier choice. Keep primary text
 short, around 12 characters or fewer (`PR #1234`, `ENG-512`), because the row
 truncates longer text. Leave `primary` out for secondary annotations such as a
 branch name or agent label.
 
-Mark a finished subspace task with `workspace.set-done`, not an annotation.
+Mark a finished task space with `workspace.set-done`, not an annotation.
 With no workspace given it marks the calling agent's own workspace, and the
-subspace row shows a check. The mark clears when an agent in that workspace
+task space row shows a check. The mark clears when an agent in that workspace
 starts new work, so do not clear it yourself before continuing. A top-level
 workspace has no check and `workspace.set-done` rejects it; mark it with a
 `task-status` annotation with text `DONE` instead, and clear that annotation
 yourself if work resumes.
 
-A task subspace moves through three stages: `open`, `review` (ready for the
+A task space moves through three stages: `open`, `review` (ready for the
 user to review and test), and `done`. Set `review` with
 `workspace.set-task-stage stage=review` once your work is published for the
 user; the workspace header then shows Finish Task. Starting new work moves the
 task back to `open`, so set `review` again after each new version.
 
-When you create a task subspace, set its lifecycle hooks with
+When you create a task space, set its lifecycle hooks with
 `workspace.task.set-hooks`: `finishSkill` names the skill the task's agent runs
 when the user clicks Finish Task, `cleanupSkill` plus `cleanupScript` (with
 repeatable `cleanupArgs`) name a script inside an installed user skill that

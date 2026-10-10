@@ -244,7 +244,7 @@ struct SubspaceHoverTipCard: View {
         VStack(alignment: .leading, spacing: 0) {
             // No status mark: each session line below shows its own, and a
             // combined one beside them would repeat it.
-            HoverTipHeader(name: model.name, tag: "subspace")
+            HoverTipHeader(name: model.name, tag: "task space")
 
             if model.annotations.isEmpty == false {
                 // Text only: the card cannot be clicked, so no chip is a link.
