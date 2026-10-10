@@ -2,7 +2,7 @@ import XCTest
 
 @MainActor
 final class ToasttyMobileBadgeUITests: XCTestCase {
-    func testHomeScreenBadgeShowsAttentionAndUnpairClearsIt() {
+    func testPermissionWaitsForIntroductionThenBadgeTracksAttentionAndUnpair() {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
@@ -11,10 +11,35 @@ final class ToasttyMobileBadgeUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        // A clean simulator may show the OS permission sheet. The test uses
-        // the real badge API; only the session snapshot comes from a fixture.
+        // This test runs on a clean simulator. Start without push configuration
+        // and with real badge writes: attention must not prompt on its own.
         let allow = springboard.buttons["Allow"]
-        if allow.waitForExistence(timeout: 3) { allow.tap() }
+        XCTAssertFalse(allow.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["toastty-mobile-notifications-continue"].exists)
+
+        // The Mac and relay remain fixtures; permission uses the system client.
+        app.terminate()
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_NOTIFICATIONS"] = "system-intro"
+        app.launch()
+        let introduction = app.descendants(matching: .any)["toastty-mobile-notifications-introduction"].firstMatch
+        XCTAssertTrue(introduction.waitForExistence(timeout: 8))
+        XCTAssertFalse(allow.exists)
+        attachHomeScreen(app, name: "ios-notification-introduction-before-permission")
+        app.buttons["toastty-mobile-notifications-not-now"].tap()
+        XCTAssertTrue(introduction.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(allow.waitForExistence(timeout: 2))
+
+        // Relaunch resets only fixture intent, so Continue can exercise the
+        // real permission prompt after the earlier Not now path stayed quiet.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(introduction.waitForExistence(timeout: 8))
+        app.buttons["toastty-mobile-notifications-continue"].tap()
+        XCTAssertTrue(allow.waitForExistence(timeout: 5),
+            "This permission test requires a clean simulator with no previous notification choice.")
+        attachHomeScreen(springboard, name: "ios-notification-permission-after-continue")
+        allow.tap()
+        XCTAssertTrue(introduction.waitForNonExistence(timeout: 5))
 
         let iconLabel = app.label
         XCTAssertFalse(iconLabel.isEmpty)
@@ -27,6 +52,7 @@ final class ToasttyMobileBadgeUITests: XCTestCase {
         // A new process has no known badge count until its first live snapshot.
         // The reconnecting fixture must preserve the badge stored by iOS.
         app.terminate()
+        app.launchEnvironment.removeValue(forKey: "TOASTTY_MOBILE_FIXTURE_NOTIFICATIONS")
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_SCENARIO"] = "reconnecting"
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))

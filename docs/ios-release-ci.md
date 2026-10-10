@@ -8,30 +8,42 @@ validates it, and uploads only when a manual run explicitly requests upload.
 This first slice is internal-only. Do not create an external TestFlight group,
 public invitation link, reviewer demo mode, or beta App Review submission.
 
+Signed validation and upload now require production notifications. New TestFlight
+artifacts are blocked until the production relay, Apple push capability, and
+distribution profile are ready. `upload=false` has the same configuration and
+signing requirements as `upload=true`. Static `--dry-run` remains secret-free.
+
 ## Apple setup
 
 Before the first CI run, create or confirm:
 
 - An active Apple Developer Program membership and accepted agreements for the
   Giant Things team.
-- Explicit App ID `com.giantthings.toastty.mobile` in Certificates,
-  Identifiers & Profiles.
+- Explicit App ID `com.giantthings.toastty.mobile` with Push Notifications enabled
+  in Certificates, Identifiers & Profiles.
 - An iOS App Store Connect app record named Toastty using that bundle ID.
 - An App Store Connect API key that can validate and upload builds.
 - An Apple Distribution certificate exported as a password-protected `.p12`.
 - An App Store distribution provisioning profile for
-  `com.giantthings.toastty.mobile` using that certificate.
+  `com.giantthings.toastty.mobile` using that certificate and containing
+  `aps-environment=production`. Regenerate the profile after enabling Push
+  Notifications on the App ID.
+- An APNs key that can send production notifications for this App ID. Install it
+  only in the separate production relay with the correct key ID and team ID.
 - An internal TestFlight group scoped to the Toastty app.
 
-The TestFlight app requires iOS 18 or newer. Push is off in the default Release
-configuration. Enabling it requires a separate production relay and these explicit
-generation inputs: `TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL`,
-`TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID`, and
-`TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT=production`. Enable Push
-Notifications on the production App ID and regenerate its distribution profile
-before building with `aps-environment=production`. The development relay and
-sandbox profile must not be reused. The current TestFlight workflow does not
-activate these inputs. See [relay setup](../workers/push/README.md).
+The TestFlight app requires iOS 18 or newer. Before signed validation, activate a
+separate production relay with `APNS_ENVIRONMENT=production`,
+`APNS_TOPIC=com.giantthings.toastty.mobile`, and `PUSH_ENABLED=true`. Its relay ID
+must match the iOS release and compatible Mac configuration. Configure the Mac
+with the same production relay URL, ID, and APNs environment. Do not reuse the
+development relay, its ID, or a sandbox provisioning profile. See
+[relay setup](../workers/push/README.md) and [Remote Access](remote-access.md).
+
+The workflow forwards the three production generation inputs below. It checks
+their syntax and the signed artifact. It does not deploy the relay, install APNs
+keys, or prove that the service can deliver a notification. Those prerequisites
+and a real-device delivery check remain separate release requirements.
 
 ## GitHub configuration
 
@@ -58,6 +70,23 @@ Alternatively, set `APP_STORE_CONNECT_API_PRIVATE_KEY` to the raw `.p8`
 contents. The release script accepts either form and fails if both or neither
 are set.
 
+Set these non-secret variables in the same `testflight` environment:
+
+```text
+TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL
+TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID
+TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT=production
+```
+
+The URL must be an HTTPS origin with a host. It must not contain credentials,
+query parameters, a fragment, or a path other than `/`. Only port 443 is allowed.
+The relay ID must be nonempty and at most 128 UTF-8 bytes. The script rejects
+surrounding whitespace, unresolved build settings, `toastty-push-dev-v1`, and the
+known development relay URL. It also rejects trailing-dot hosts and the
+configured development relay URL or ID. It passes the same values to Tuist
+without trimming or replacing them. The names-only `.secrets` manifest declares these inputs
+for separately authorized local release work through `sv exec --`.
+
 The App Store Connect key, development team, distribution certificate, and
 certificate password can be reused from another Giant Things app when their
 permissions and certificate lifetime are appropriate. The provisioning profile
@@ -76,16 +105,20 @@ run on every release-relevant push.
 
 ## First internal build
 
-1. Make sure the exact release commit is on `main` and the normal `Toastty CI`
-   workflow is green, and complete the disposable-host validation below.
+1. Complete the Apple and production relay prerequisites above. Make sure the
+   exact release commit is on `main` and the normal `Toastty CI` workflow is green.
+   Complete the disposable-host validation below.
 2. In GitHub Actions, open `iOS TestFlight` and run it from `main` with
    `upload=false`.
 3. Inspect the retained release metadata and validation log. Confirm the bundle
-   ID, version, build number, signing team, privacy manifest, and encryption
+   ID, version, build number, signing team, production relay URL and ID,
+   production push environment, IPA SHA-256, privacy manifest, and encryption
    declaration.
 4. Run the workflow again from `main` with `upload=true`.
-5. After App Store Connect finishes processing, assign the build to the
-   internal group or enable automatic distribution for that group.
+5. After App Store Connect finishes processing, limit initial distribution to
+   the release test device. Check production notification delivery on that real
+   device with the compatible Mac configuration. Then assign the build to the
+   remaining internal group or enable automatic distribution for that group.
 6. Record the git SHA, GitHub Actions run URL, marketing version, build number,
    and compatible Toastty macOS release.
 
@@ -111,11 +144,22 @@ The release script fails before upload unless it can prove:
 - the provisioning profile belongs to the configured team and exact production
   bundle ID;
 - the profile is App Store distribution rather than Development, Ad Hoc, or
-  Enterprise;
+  Enterprise, and enables `aps-environment=production` before the script changes
+  the signing Keychain;
+- all three production push inputs are present and valid for both signed
+  validation and upload;
 - only the app target receives the provisioning profile and temporary keychain
   signing flags;
 - the archive contains the expected bundle ID, version, build number, app icon,
   `ITSAppUsesNonExemptEncryption=false`, and privacy manifest;
+- the actual exported IPA contains the exact bundle ID, version, build number,
+  and three production push settings supplied to generation;
+- the exported app has a valid code signature, signed
+  `aps-environment=production`, the expected app and team identifiers, and
+  `get-task-allow=false`;
+- the exported app's embedded profile has the expected app and team identifiers,
+  enables production push, and remains App Store distribution;
+- the IPA's SHA-256 is unchanged before validation and upload;
 - App Store Connect accepts the exported IPA during validation.
 
 Before archiving, the workflow checks GitHub Actions for successful `Toastty CI`
@@ -162,7 +206,8 @@ build remains supported longer; GitHub retention policy may impose a lower limit
 
 Release metadata records the actual checked-out source SHA separately from the
 CI event SHA, plus the selected Xcode/build version, Swift version, iOS SDK, and
-Tuist version. Both ordinary iOS CI and the archive job select and verify the
+Tuist version. It also records the verified production push settings and IPA
+SHA-256. Both ordinary iOS CI and the archive job select and verify the
 exact Xcode version/build in `.github/ios-xcode-version` before generation.
 Node and Tuist continue to use `.node-version` and `.tool-versions`. To update
 Xcode, change the shared pin to a build installed on `macos-26`, pass ordinary
@@ -217,8 +262,11 @@ missing live inputs as unperformed validation.
 ## Recovery
 
 - Missing-profile or signing failures: regenerate the App Store profile for
-  `SP7JP8254U.com.giantthings.toastty.mobile`, then replace the environment
-  secret.
+  `SP7JP8254U.com.giantthings.toastty.mobile` after enabling Push Notifications,
+  confirm `aps-environment=production`, then replace the environment secret.
+- Missing or invalid production push inputs: complete production activation and
+  set the three `testflight` variables. Validation-only runs cannot bypass this
+  requirement.
 - Duplicate build number: start a new workflow run; do not retry with a manual
   reused number.
 - Processed build is bad: remove it from the internal group or expire it in

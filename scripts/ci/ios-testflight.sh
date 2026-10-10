@@ -17,6 +17,8 @@ SIGNING_PROFILE_BACKUP=""
 SIGNING_KEYCHAIN_PATH=""
 SIGNING_ASSETS_DIR=""
 ASC_KEY_DIR=""
+IPA_VERIFICATION_DIR=""
+IPA_SHA256=""
 ORIGINAL_DEFAULT_KEYCHAIN=""
 ORIGINAL_KEYCHAIN_LIST=()
 UPLOAD_REQUESTED_ORIGINAL="0"
@@ -172,6 +174,51 @@ validate_build_number() {
     || fail "TUIST_TOASTTY_MOBILE_BUILD_NUMBER must be one to three dot-separated numeric components; got '$value'"
 }
 
+validate_production_push_configuration() {
+  require_env TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL
+  require_env TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID
+  require_env TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT
+  node --input-type=module <<'NODE' || fail "invalid production push configuration"
+const prefix = "TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_";
+function fail(message) {
+  console.error(`error: ${message}`);
+  process.exit(1);
+}
+for (const suffix of ["RELAY_URL", "RELAY_ID", "ENVIRONMENT"]) {
+  const name = prefix + suffix;
+  const value = process.env[name] ?? "";
+  if (!value) fail(`${name} is required`);
+  if (value !== value.trim()) fail(`${name} must not contain surrounding whitespace`);
+  if (value.includes("$(") || value.includes("${")) fail(`${name} contains an unresolved build setting`);
+  if (/[\u0000-\u001f\u007f]/u.test(value)) fail(`${name} must not contain control characters`);
+}
+if (process.env[prefix + "ENVIRONMENT"] !== "production") {
+  fail(`${prefix}ENVIRONMENT must be production`);
+}
+const rawURL = process.env[prefix + "RELAY_URL"];
+let relayURL;
+try { relayURL = new URL(rawURL); } catch {}
+// Check the original bytes too: URL parsing can hide empty queries or
+// normalize a path such as /api/.. into an origin.
+if (!/^https:\/\/[^\s/?#@\\]+\/?$/u.test(rawURL) || !relayURL?.hostname
+    || relayURL.username || relayURL.password || relayURL.search || relayURL.hash
+    || relayURL.pathname !== "/" || relayURL.port) {
+  fail(`${prefix}RELAY_URL must be an HTTPS origin without credentials, query, fragment, path, or a port other than 443`);
+}
+if (relayURL.hostname.endsWith(".")) fail(`${prefix}RELAY_URL must not use a trailing-dot host`);
+const relayID = process.env[prefix + "RELAY_ID"];
+if (Buffer.byteLength(relayID, "utf8") > 128) fail(`${prefix}RELAY_ID must fit within 128 UTF-8 bytes`);
+let debugOrigin;
+try { debugOrigin = new URL(process.env.TUIST_TOASTTY_MOBILE_PUSH_RELAY_URL).origin; } catch {}
+if (relayID === "toastty-push-dev-v1"
+    || (process.env.TUIST_TOASTTY_MOBILE_PUSH_RELAY_ID && relayID === process.env.TUIST_TOASTTY_MOBILE_PUSH_RELAY_ID)
+    || relayURL.origin === "https://toastty-push-dev.giantthings.workers.dev"
+    || relayURL.origin === debugOrigin) {
+  fail("production notifications must not use the development relay URL or ID");
+}
+NODE
+}
+
 write_app_store_connect_key() {
   local key_id="$1"
   local key_dir="$2"
@@ -203,7 +250,7 @@ assert_plist_value() {
   local key_path="$2"
   local expected="$3"
   local actual
-  actual="$(plist_value "$plist_path" "$key_path")"
+  actual="$(plist_value_or_empty "$plist_path" "$key_path")"
   [[ "$actual" == "$expected" ]] \
     || fail "$key_path mismatch in $plist_path: expected '$expected', found '$actual'"
 }
@@ -233,6 +280,7 @@ setup_manual_signing_assets() {
   local profile_team_identifier
   local profile_app_identifier
   local profile_get_task_allow
+  local profile_push_environment
   local profile_provisioned_devices
   local profile_provisions_all_devices
   local keychain
@@ -248,6 +296,7 @@ setup_manual_signing_assets() {
   profile_team_identifier="$(plist_value "$profile_plist_path" "TeamIdentifier:0")"
   profile_app_identifier="$(plist_value "$profile_plist_path" "Entitlements:application-identifier")"
   profile_get_task_allow="$(plist_value "$profile_plist_path" "Entitlements:get-task-allow")"
+  profile_push_environment="$(plist_value_or_empty "$profile_plist_path" "Entitlements:aps-environment")"
   profile_provisioned_devices="$(plist_value_or_empty "$profile_plist_path" "ProvisionedDevices")"
   profile_provisions_all_devices="$(plist_value_or_empty "$profile_plist_path" "ProvisionsAllDevices")"
 
@@ -261,6 +310,8 @@ setup_manual_signing_assets() {
     || fail "provisioning profile must be App Store distribution, not development or Ad Hoc"
   [[ "$profile_provisions_all_devices" != "true" ]] \
     || fail "provisioning profile must be App Store distribution, not Enterprise"
+  [[ "$profile_push_environment" == "production" ]] \
+    || fail "provisioning profile must enable aps-environment=production; enable Push Notifications on $RELEASE_BUNDLE_ID and regenerate its App Store distribution profile"
 
   SIGNING_KEYCHAIN_PATH="$SIGNING_ASSETS_DIR/toastty-signing.keychain-db"
   keychain_password="$(uuidgen)"
@@ -389,6 +440,63 @@ find_exported_ipa() {
   printf '%s' "$ipa_path"
 }
 
+ipa_sha256() {
+  shasum -a 256 "$IPA_PATH" | awk '{ print $1 }'
+}
+
+verify_exported_ipa() {
+  IPA_SHA256="$(ipa_sha256)" || fail "cannot hash exported IPA"
+  [[ -n "$IPA_SHA256" ]] || fail "cannot hash exported IPA"
+  IPA_VERIFICATION_DIR="$(mktemp -d "/tmp/toastty-ios-ipa.XXXXXX")"
+  local app_path="$IPA_VERIFICATION_DIR/Payload/$APP_PRODUCT_NAME.app"
+  local app_plist="$app_path/Info.plist"
+  local signed_entitlements="$IPA_VERIFICATION_DIR/signed-entitlements.plist"
+  local embedded_profile="$IPA_VERIFICATION_DIR/embedded-profile.plist"
+  local app_count
+
+  unzip -q "$IPA_PATH" -d "$IPA_VERIFICATION_DIR" \
+    || fail "exported IPA must be a valid ZIP archive"
+  app_count="$(find "$IPA_VERIFICATION_DIR/Payload" -maxdepth 1 -type d -name '*.app' | wc -l | tr -d ' ')"
+  [[ "$app_count" == "1" && -f "$app_plist" ]] \
+    || fail "exported IPA must contain exactly one $APP_PRODUCT_NAME.app"
+  assert_plist_value "$app_plist" "CFBundleIdentifier" "$RELEASE_BUNDLE_ID"
+  assert_plist_value "$app_plist" "CFBundleShortVersionString" "$TUIST_TOASTTY_MOBILE_VERSION"
+  assert_plist_value "$app_plist" "CFBundleVersion" "$TUIST_TOASTTY_MOBILE_BUILD_NUMBER"
+  assert_plist_value "$app_plist" "ToasttyMobilePushRelayURL" "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL"
+  assert_plist_value "$app_plist" "ToasttyMobilePushRelayID" "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID"
+  assert_plist_value "$app_plist" "ToasttyMobilePushEnvironment" "production"
+
+  codesign --verify --strict "$app_path" \
+    || fail "exported app signature is invalid"
+  codesign --display --entitlements - --xml "$app_path" >"$signed_entitlements" \
+    || fail "cannot read exported app signed entitlements"
+  assert_plist_value "$signed_entitlements" "aps-environment" "production"
+  assert_plist_value "$signed_entitlements" "application-identifier" "$TOASTTY_IOS_DEVELOPMENT_TEAM.$RELEASE_BUNDLE_ID"
+  assert_plist_value "$signed_entitlements" "com.apple.developer.team-identifier" "$TOASTTY_IOS_DEVELOPMENT_TEAM"
+  assert_plist_value "$signed_entitlements" "get-task-allow" "false"
+
+  [[ -f "$app_path/embedded.mobileprovision" ]] \
+    || fail "exported app is missing embedded provisioning profile"
+  security cms -D -i "$app_path/embedded.mobileprovision" >"$embedded_profile" \
+    || fail "cannot decode exported app embedded provisioning profile"
+  assert_plist_value "$embedded_profile" "TeamIdentifier:0" "$TOASTTY_IOS_DEVELOPMENT_TEAM"
+  assert_plist_value "$embedded_profile" "Entitlements:application-identifier" "$TOASTTY_IOS_DEVELOPMENT_TEAM.$RELEASE_BUNDLE_ID"
+  assert_plist_value "$embedded_profile" "Entitlements:aps-environment" "production"
+  assert_plist_value "$embedded_profile" "Entitlements:get-task-allow" "false"
+  [[ -z "$(plist_value_or_empty "$embedded_profile" "ProvisionedDevices")" ]] \
+    || fail "exported app profile must be App Store distribution, not development or Ad Hoc"
+  [[ "$(plist_value_or_empty "$embedded_profile" "ProvisionsAllDevices")" != "true" ]] \
+    || fail "exported app profile must be App Store distribution, not Enterprise"
+  rm -rf "$IPA_VERIFICATION_DIR"
+  IPA_VERIFICATION_DIR=""
+  log "Verified exported IPA configuration, production push entitlement, team/application identifiers, and App Store profile."
+}
+
+assert_verified_ipa() {
+  [[ -n "${IPA_SHA256:-}" && "$(ipa_sha256)" == "${IPA_SHA256:-}" ]] \
+    || fail "IPA changed after verification; refusing App Store Connect validation or upload"
+}
+
 write_release_metadata() {
   local status="$1"
   local upload_requested="$2"
@@ -397,7 +505,7 @@ write_release_metadata() {
     ci_run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
   fi
   {
-    printf 'SCHEMA_VERSION=2\n'
+    printf 'SCHEMA_VERSION=3\n'
     printf 'STATUS=%s\n' "$status"
     printf 'GIT_SHA=%s\n' "$SOURCE_COMMIT_SHA"
     printf 'CI_EVENT_SHA=%s\n' "${GITHUB_SHA:-unknown}"
@@ -411,6 +519,10 @@ write_release_metadata() {
     printf 'BUNDLE_ID=%s\n' "$RELEASE_BUNDLE_ID"
     printf 'MARKETING_VERSION=%s\n' "$TUIST_TOASTTY_MOBILE_VERSION"
     printf 'BUILD_NUMBER=%s\n' "$TUIST_TOASTTY_MOBILE_BUILD_NUMBER"
+    printf 'PUSH_RELAY_URL=%s\n' "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_URL"
+    printf 'PUSH_RELAY_ID=%s\n' "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_RELAY_ID"
+    printf 'PUSH_ENVIRONMENT=%s\n' "$TUIST_TOASTTY_MOBILE_PUSH_PRODUCTION_ENVIRONMENT"
+    printf 'IPA_SHA256=%s\n' "$IPA_SHA256"
     printf 'UPLOAD_REQUESTED_ORIGINAL=%s\n' "$UPLOAD_REQUESTED_ORIGINAL"
     printf 'UPLOAD_REQUESTED=%s\n' "$upload_requested"
     printf 'UPLOAD_SUPPRESSED_BY=%s\n' "$UPLOAD_SUPPRESSED_BY"
@@ -436,6 +548,7 @@ cleanup() {
   fi
   [[ -z "$ASC_KEY_DIR" ]] || rm -rf "$ASC_KEY_DIR"
   [[ -z "$SIGNING_ASSETS_DIR" ]] || rm -rf "$SIGNING_ASSETS_DIR"
+  [[ -z "$IPA_VERIFICATION_DIR" ]] || rm -rf "$IPA_VERIFICATION_DIR"
 }
 
 trap cleanup EXIT
@@ -457,10 +570,11 @@ assert_verified_source() {
 }
 SOURCE_COMMIT_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 assert_verified_source
-for command_name in base64 find git security sed sips tar tee tr tuist uuidgen xcodebuild xcrun; do
+for command_name in awk base64 codesign find git security sed shasum sips tar tee tr tuist unzip uuidgen wc xcodebuild xcrun; do
   require_command "$command_name"
 done
 [[ -x "$PLIST_BUDDY" ]] || fail "$PLIST_BUDDY is required"
+validate_production_push_configuration
 
 require_env APP_STORE_CONNECT_API_KEY_ID
 require_env APP_STORE_CONNECT_API_ISSUER_ID
@@ -574,6 +688,8 @@ xcodebuild \
   -exportPath "$EXPORT_PATH" \
   -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" 2>&1 | tee "$OUTPUT_DIR/export.log"
 IPA_PATH="$(find_exported_ipa)"
+verify_exported_ipa
+assert_verified_ipa
 
 log "Validating the IPA with App Store Connect."
 xcrun altool \
@@ -581,6 +697,7 @@ xcrun altool \
   -f "$IPA_PATH" \
   "${ALTOOL_AUTH_ARGS[@]}" \
   --output-format normal 2>&1 | tee "$OUTPUT_DIR/validation.log"
+assert_verified_ipa
 write_release_metadata "validated" "$UPLOAD_REQUESTED"
 
 if [[ "$UPLOAD_REQUESTED" != "1" ]]; then
@@ -589,6 +706,7 @@ if [[ "$UPLOAD_REQUESTED" != "1" ]]; then
 fi
 
 log "Uploading the IPA to App Store Connect."
+assert_verified_ipa
 xcrun altool \
   --upload-app \
   -f "$IPA_PATH" \

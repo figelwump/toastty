@@ -11,7 +11,7 @@ struct AppIconBadgeSync: View {
     var body: some View {
         Color.clear
             .onChange(of: update, initial: true) { _, update in
-                controller?.update(count: update.count, isActive: update.isActive)
+                controller?.update(count: update.count)
             }
     }
 
@@ -23,6 +23,8 @@ struct AppIconBadgeSync: View {
 
     private struct Update: Equatable {
         let count: Int?
+        // Returning from iOS Settings must refresh permissions even in a build
+        // without push configuration or while the Mac is disconnected.
         let isActive: Bool
         // Continue can grant permission without changing the count or scene.
         let permission: ToasttyNotificationPermission?
