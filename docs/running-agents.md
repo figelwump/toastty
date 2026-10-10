@@ -542,7 +542,7 @@ The user's `worktree-done` request, made in the task workspace, accepts the
 reviewed version. The skill checks that the worktree is clean at exactly the PR
 head, then enables GitHub auto-merge so the PR lands when required checks pass,
 and marks the workspace done with `workspace.set-done`, which shows as a check
-on its subspace row. New work in the workspace clears the check; new commits
+on its task space row. New work in the workspace clears the check; new commits
 need the user's review and a new `worktree-done` request.
 
 ### Merging a task's pull request
@@ -552,7 +552,7 @@ default while task lifecycle hooks are built to replace them. To turn them on,
 run `defaults write com.GiantThings.toastty toastty.workspaceMergeEnabled -bool true`
 and relaunch Toastty.
 
-A subspace with a `github-pr` annotation shows a **Merge PR #N** button under
+A task space with a `github-pr` annotation shows a **Merge PR #N** button under
 its title in the top bar. The arrow beside it picks what the button does. The
 button label does not change; the menu marks the selected mode.
 
@@ -561,10 +561,10 @@ button label does not change; the menu marks the selected mode.
 - **Merge Only** merges the pull request and leaves the workspace in place.
 
 The choice applies to every workspace and is kept across launches.
-`Option+Shift+M` runs the selected subspace's button in the mode its menu
+`Option+Shift+M` runs the selected task space's button in the mode its menu
 marks. In a
 workspace without a Merge button, the key goes to the terminal as usual. The
-subspace's sidebar context menu offers both actions, as **Merge PR #N and Clean
+task space's sidebar context menu offers both actions, as **Merge PR #N and Clean
 Workspace** and **Merge PR #N Only**.
 
 Toastty merges the pull request itself, with no agent and no skills
@@ -607,7 +607,7 @@ moved. Toastty marks the workspace done when you click, so a Merge Only shows
   waiting, clears the done mark so the Merge button comes back, and a
   notification gives the reason. A refusal at the click shows an alert and
   changes nothing.
-- Top-level workspaces do not show the button, because only a subspace holds a
+- Top-level workspaces do not show the button, because only a task space holds a
   done mark.
 
 After a Merge and Clean, the button reads **Merging PR #N…** until the merge is
@@ -637,7 +637,7 @@ and remote branch, and a notification reports the result.
 - A pending cleanup is kept across launches.
 
 To abandon a task instead, choose **Close Without Merging…** from the arrow
-menu or the subspace's sidebar context menu. It is a one-time action, not a
+menu or the task space's sidebar context menu. It is a one-time action, not a
 mode, so the button and `Option+Shift+M` never close a pull request. After you
 confirm, Toastty closes the pull request on GitHub, closes the workspace,
 removes the worktree, and deletes the local branch. The branch stays on GitHub,
@@ -895,7 +895,7 @@ two marks are mutually exclusive, because a watched process cannot be flagged.
 
 Every session row reads as two lines. The first is the name, then the row's
 state: an approval or error badge, a waiting chip, and the elapsed time. The
-second is the latest summary, then a parent label and the subspace and
+second is the latest summary, then a parent label and the task space and
 sub-agent controls. Until the provider names a session, the agent's name (such
 as "Claude Code" or "Codex") stands in as the title, so naming a session changes
 only the first line's text. In a narrow sidebar the waiting chip drops out
@@ -912,7 +912,7 @@ A row that wants you — an unread reply, an approval request, or an error — g
 a faint fill in its status color and a heavier name. Approval and error keep a
 short badge so the state is not carried by color alone; the spelled-out wording
 ("needs approval") stays in the row's accessibility label. Every agent summary
-in the sidebar, on session rows, subspace rows, and sub-agent rows alike, uses
+in the sidebar, on session rows, task space rows, and sub-agent rows alike, uses
 the same small monospaced face.
 
 Working rows count up from the start of the current turn. A turn starts when the

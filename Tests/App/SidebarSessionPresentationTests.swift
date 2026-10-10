@@ -1243,9 +1243,9 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertEqual(state.below?.unreadCount, 1)
         XCTAssertEqual(state.below?.hasWorking, false)
         XCTAssertEqual(state.above.map(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel),
-                       "1 subspace hidden above, working")
+                       "1 task space hidden above, working")
         XCTAssertEqual(state.below.map(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel),
-                       "2 subspaces hidden below, 1 unread")
+                       "2 task spaces hidden below, 1 unread")
     }
 
     func testHiddenSessionPillsCombineSessionsAndBarelyVisibleSubspaces() {
@@ -1269,7 +1269,7 @@ final class SidebarSessionPresentationTests: XCTestCase {
         XCTAssertEqual(state.below?.unreadCount, 2)
         XCTAssertEqual(state.below?.hasWorking, true)
         XCTAssertEqual(state.below.map(SidebarSessionPresentation.hiddenSessionPillAccessibilityLabel),
-                       "1 session, 1 subspace hidden below, 2 unread, working")
+                       "1 session, 1 task space hidden below, 2 unread, working")
 
         let unmeasured = SidebarSessionPresentation.hiddenSessionPillState(
             orderedSessionRowIDs: [], measuredSessionRowFramesByID: [:], unreadSessionRowIDs: [],

@@ -1,6 +1,6 @@
 ---
 name: worktree-create
-description: Create a named Toastty task workspace and Git worktree, nested as a subspace under the current session, for planning or implementation. Use when the user asks to hand off a task or move it into a new worktree or subspace. Start a fresh task conversation or fork an existing Codex or Claude discussion into the worktree.
+description: Create a named Toastty task workspace and Git worktree, nested as a task space under the current session, for planning or implementation. Use when the user asks to hand off a task or move it into a new worktree or task space. Start a fresh task conversation or fork an existing Codex or Claude discussion into the worktree.
 ---
 
 # Worktree Create
