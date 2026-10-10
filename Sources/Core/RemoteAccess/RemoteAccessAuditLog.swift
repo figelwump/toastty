@@ -24,6 +24,8 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
         case remoteQueueUpdated = "remote_queue_updated"
         case remoteInterruptAccepted = "remote_interrupt_accepted"
         case remoteInterruptRejected = "remote_interrupt_rejected"
+        case remoteLocalDraftReleased = "remote_local_draft_released"
+        case remoteLocalDraftReleaseRejected = "remote_local_draft_release_rejected"
         case sessionWritesChanged = "session_writes_changed"
         case workspaceDoneChanged = "workspace_done_changed"
         case conversationFlagChanged = "conversation_flag_changed"

@@ -12,6 +12,9 @@ struct ToasttyConversationScreen: View {
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
     /// Steer is a per-send choice that falls back to queue after each send.
     @State private var steerSelected = false
+    /// The draft epoch shown when Release was tapped; confirming releases
+    /// exactly that draft.
+    @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -33,6 +36,7 @@ struct ToasttyConversationScreen: View {
     /// The mode matters only while the agent works; nil at an open prompt.
     let submitDraft: (RemoteMessageDeliveryMode?) -> Bool
     let interrupt: () -> Void
+    let releaseLocalDraft: (RemoteInputEpoch) -> Void
     let dismissSendReceipt: (String) -> Void
     let queuedMessageAction: (ToasttyQueuedMessageAction) -> Void
     let sendFeedback: ToasttyOutcomeFeedback?
@@ -61,6 +65,7 @@ struct ToasttyConversationScreen: View {
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping (RemoteMessageDeliveryMode?) -> Bool = { _ in false },
         interrupt: @escaping () -> Void = {},
+        releaseLocalDraft: @escaping (RemoteInputEpoch) -> Void = { _ in },
         dismissSendReceipt: @escaping (String) -> Void = { _ in },
         queuedMessageAction: @escaping (ToasttyQueuedMessageAction) -> Void = { _ in },
         sendFeedback: ToasttyOutcomeFeedback? = nil,
@@ -91,6 +96,7 @@ struct ToasttyConversationScreen: View {
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
         self.interrupt = interrupt
+        self.releaseLocalDraft = releaseLocalDraft
         self.dismissSendReceipt = dismissSendReceipt
         self.queuedMessageAction = queuedMessageAction
         self.sendFeedback = sendFeedback
@@ -405,7 +411,9 @@ struct ToasttyConversationScreen: View {
                 if !nowWorking { steerSelected = false }
             }
 
-            if case .disabled(let reason) = presentation.gate {
+            if presentation.canReleaseLocalDraft {
+                localDraftReleaseStatus(presentation)
+            } else if case .disabled(let reason) = presentation.gate {
                 composerDisabledStatus(reason)
                     .font(.caption.monospaced())
                     .foregroundStyle(composerStatusColor(reason))
@@ -432,6 +440,55 @@ struct ToasttyConversationScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(ToasttyDesignTokens.elevatedSurface)
         .overlay(alignment: .top) { Divider().overlay(ToasttyDesignTokens.divider) }
+    }
+
+    /// The Mac-draft lock with its Release action. Release only asks the Mac
+    /// to reopen the prompt; it types nothing there, so the confirmation says
+    /// what happens if the Mac draft is not actually gone.
+    private func localDraftReleaseStatus(
+        _ presentation: ToasttyComposerPresentation
+    ) -> some View {
+        let refusal = presentation.localDraftReleaseRefusal
+        let message = refusal?.message ?? "Paused — draft on the Mac"
+        return HStack(spacing: 10) {
+            Label(message, systemImage: refusal == nil ? "pencil.line" : "exclamationmark.circle")
+                .font(.caption.monospaced())
+                .foregroundStyle(refusal == nil ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Composer locked. \(refusal?.message ?? "A draft is in progress on the Mac.")")
+                .accessibilityAddTraits(.updatesFrequently)
+                .accessibilityIdentifier("toastty-mobile-composer-status")
+            Button("Release") {
+                confirmingLocalDraftReleaseEpoch = presentation.releasableLocalDraftEpoch
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(ToasttyDesignTokens.amber)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(ToasttyDesignTokens.amber.opacity(0.12), in: Capsule())
+            .overlay { Capsule().strokeBorder(ToasttyDesignTokens.amber.opacity(0.35), lineWidth: 1) }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Release the Mac draft")
+            .accessibilityHint("Reopens this composer if you cleared the draft on the Mac")
+            .accessibilityIdentifier("toastty-mobile-composer-release-draft")
+            .confirmationDialog(
+                "Release the Mac draft?",
+                isPresented: Binding(
+                    get: { confirmingLocalDraftReleaseEpoch != nil },
+                    set: { if !$0 { confirmingLocalDraftReleaseEpoch = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: confirmingLocalDraftReleaseEpoch
+            ) { epoch in
+                Button("Release") { releaseLocalDraft(epoch) }
+                    .accessibilityIdentifier("toastty-mobile-confirm-release-draft")
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("Use this if you cleared the draft on the Mac. Queued messages send right away. If text is still there, each message from this phone is typed after it and sent with it.")
+            }
+        }
     }
 
     @ViewBuilder

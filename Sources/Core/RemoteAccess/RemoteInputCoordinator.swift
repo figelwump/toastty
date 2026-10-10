@@ -66,6 +66,10 @@ public struct RemoteInputCoordinator: Sendable {
         /// steer into that turn could land inside the Mac user's draft, so it
         /// stays refused until a different turn runs.
         var localInputTurnEpoch: RemoteInputEpoch?
+        /// The last draft epoch issued. A release reopens the prompt at its
+        /// provider epoch, so a later draft must not reuse a draft epoch a
+        /// client may still hold from before that release.
+        var lastDraftEpoch: RemoteInputEpoch?
         var processedRequestIDs: [String] = []
         var processedRequestSet: Set<String> = []
     }
@@ -74,6 +78,12 @@ public struct RemoteInputCoordinator: Sendable {
     public enum InterruptDecision: Equatable, Sendable {
         case accept(turnEpoch: RemoteInputEpoch)
         case reject(RemoteConversationInterruptRejectionReason)
+    }
+
+    /// Outcome of a local draft release.
+    public enum LocalDraftReleaseDecision: Equatable, Sendable {
+        case released(openEpoch: RemoteInputEpoch)
+        case reject(RemoteConversationLocalDraftReleaseRejectionReason)
     }
 
     private var statesByConversation: [RemoteConversationID: ConversationState] = [:]
@@ -116,7 +126,7 @@ public struct RemoteInputCoordinator: Sendable {
             // provider prompt generation reopens remote input as usual.
             state.localInputTurnEpoch = nil
             state.invalidatedOpenEpoch = candidateEpoch
-            state.availability = .localDraft(epoch: candidateEpoch.next())
+            Self.openLocalDraft(after: candidateEpoch, in: &state)
             statesByConversation[conversationID] = state
             return
         }
@@ -133,6 +143,19 @@ public struct RemoteInputCoordinator: Sendable {
               state.localInputTurnEpoch != nil else { return }
         state.localInputTurnEpoch = nil
         statesByConversation[conversationID] = state
+    }
+
+    /// Moves to a local draft under an epoch after both `epoch` and every
+    /// draft epoch issued before, so draft epochs never repeat.
+    private static func openLocalDraft(after epoch: RemoteInputEpoch, in state: inout ConversationState) {
+        var draftEpoch = epoch.next()
+        if let last = state.lastDraftEpoch,
+           last.bindingID == draftEpoch.bindingID,
+           last.counter >= draftEpoch.counter {
+            draftEpoch = last.next()
+        }
+        state.lastDraftEpoch = draftEpoch
+        state.availability = .localDraft(epoch: draftEpoch)
     }
 
     /// Whether `candidate` represents a strictly later prompt generation than
@@ -159,13 +182,20 @@ public struct RemoteInputCoordinator: Sendable {
 
     /// Records that local keyboard/paste/menu input touched the prompt. O(1)
     /// and allocation-free on the hot path: if the prompt was open, it becomes
-    /// a local draft under a bumped epoch; while a turn runs, that turn is
-    /// marked so remote steers stay out of the Mac user's draft.
+    /// a local draft under a bumped epoch, and each later keystroke bumps the
+    /// draft epoch again so a remote release decided before it is refused;
+    /// while a turn runs, that turn is marked so remote steers stay out of the
+    /// Mac user's draft.
     public mutating func noteLocalInput(for conversationID: RemoteConversationID) {
         guard var state = statesByConversation[conversationID] else { return }
-        if case .openPrompt(let epoch) = state.availability {
+        switch state.availability {
+        case .openPrompt(let epoch):
             state.invalidatedOpenEpoch = epoch
-            state.availability = .localDraft(epoch: epoch.next())
+            Self.openLocalDraft(after: epoch, in: &state)
+        case .localDraft(let epoch):
+            Self.openLocalDraft(after: epoch, in: &state)
+        case .unavailable, .pendingInteraction:
+            break
         }
         if let turnEpoch = state.turnEpoch {
             state.localInputTurnEpoch = turnEpoch
@@ -176,6 +206,37 @@ public struct RemoteInputCoordinator: Sendable {
             state.localInputTurnEpoch = consumedEpoch
         }
         statesByConversation[conversationID] = state
+    }
+
+    /// Reopens a prompt that a local draft holds closed, after a remote user
+    /// says the Mac composer is empty. Nothing is typed. The prompt reopens at
+    /// the provider epoch the draft replaced, so the provider's own republish
+    /// of that prompt keeps it open and a send there consumes it as usual.
+    /// The client must name the current draft epoch: any Mac keystroke after
+    /// it saw the draft advances that epoch and refuses the release.
+    public mutating func releaseLocalDraft(
+        for conversationID: RemoteConversationID,
+        expectedDraftEpoch: RemoteInputEpoch,
+        context: DeliveryContext
+    ) -> LocalDraftReleaseDecision {
+        guard var state = statesByConversation[conversationID] else {
+            return .reject(.notBound)
+        }
+        guard context.deviceHasSendScope else { return .reject(.sendScopeDenied) }
+        guard context.sessionWritesEnabled else { return .reject(.sessionWritesDisabled) }
+        guard context.isBoundToLiveSurface else { return .reject(.notBound) }
+        // A local draft always records the open prompt it replaced; without
+        // one there is no provider prompt to reopen.
+        guard case .localDraft(let draftEpoch) = state.availability,
+              let openEpoch = state.invalidatedOpenEpoch else {
+            return .reject(.noLocalDraft)
+        }
+        guard draftEpoch == expectedDraftEpoch else { return .reject(.draftChanged) }
+        state.availability = .openPrompt(epoch: openEpoch)
+        state.invalidatedOpenEpoch = nil
+        state.localInputTurnEpoch = nil
+        statesByConversation[conversationID] = state
+        return .released(openEpoch: openEpoch)
     }
 
     public func turnEpoch(for conversationID: RemoteConversationID) -> RemoteInputEpoch? {

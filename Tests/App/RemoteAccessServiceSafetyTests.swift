@@ -1796,6 +1796,69 @@ struct RemoteAccessServiceSafetyTests {
         #expect(fixture.summary.title == "Build system explanation")
     }
 
+    /// The user typed on the Mac, cleared it, and released the lock from the
+    /// phone. Clients learn each newer draft epoch, a release naming an older
+    /// one is refused, and the released prompt accepts one send.
+    @MainActor
+    @Test func releasedMacDraftReopensTheBootstrappedPromptForASend() async throws {
+        let fixture = try RemoteBootstrapFixture(localDraftEpochBroadcastInterval: .milliseconds(20))
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let prompt) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed Codex prompt")
+            return
+        }
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+        let device = RemoteDeviceRecord(name: "Test iPhone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        func release(_ epoch: RemoteInputEpoch) -> RemoteConversationLocalDraftReleaseResult {
+            fixture.service.performLocalDraftRelease(
+                RemoteConversationLocalDraftReleaseRequest(conversationID: fixture.conversationID, expectedDraftEpoch: epoch),
+                device: device
+            )
+        }
+
+        fixture.terminalRuntimeRegistry.localInputObserver?(fixture.panelID)
+        guard case .localDraft(let seen) = fixture.summary.inputAvailability else {
+            Issue.record("Expected a Mac draft")
+            return
+        }
+        #expect(release(prompt) == .rejected(reason: .draftChanged))
+
+        // A second keystroke clears the draft; clients get its epoch shortly.
+        let broadcastsBefore = fixture.server.sessionListSnapshots.count
+        fixture.terminalRuntimeRegistry.localInputObserver?(fixture.panelID)
+        guard case .localDraft(let current) = fixture.summary.inputAvailability, current != seen else {
+            Issue.record("Expected the keystroke to advance the draft epoch")
+            return
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(fixture.server.sessionListSnapshots.dropFirst(broadcastsBefore).contains { snapshot in
+            snapshot.conversations.contains {
+                $0.conversationID == fixture.conversationID && $0.inputAvailability == .localDraft(epoch: current)
+            }
+        })
+
+        #expect(release(seen) == .rejected(reason: .draftChanged))
+        #expect(delivered.isEmpty)
+        #expect(release(current) == .released)
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: prompt))
+        #expect(release(current) == .rejected(reason: .noLocalDraft))
+
+        let send = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID,
+            clientRequestID: "after-release",
+            expectedInputEpoch: prompt,
+            text: "Carry on"
+        )
+        #expect(fixture.service.performRemoteSend(send, device: device) == .accepted(epoch: prompt))
+        #expect(delivered == ["Carry on"])
+    }
+
     @MainActor
     @Test func bootstrappedPromptClosesWhenDesktopStartsWorking() async throws {
         let fixture = try RemoteBootstrapFixture()
@@ -2386,6 +2449,7 @@ private final class RemoteBootstrapFixture {
         codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pairNativeDevice: Bool = false,
         pushConfiguration: RemotePushConfiguration? = nil,
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
@@ -2458,6 +2522,7 @@ private final class RemoteBootstrapFixture {
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,
             sendConfirmationTimeout: sendConfirmationTimeout,
+            localDraftEpochBroadcastInterval: localDraftEpochBroadcastInterval,
             pushConfiguration: pushConfiguration,
             pushRelay: pushRelay,
             gatewayServerFactory: { handler in

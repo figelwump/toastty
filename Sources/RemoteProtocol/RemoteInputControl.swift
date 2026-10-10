@@ -253,3 +253,90 @@ public struct RemoteConversationInterruptResponse: Codable, Equatable, Sendable 
         self.result = result
     }
 }
+
+// MARK: - Local draft release
+
+/// Reopens a prompt that the Mac holds closed because local input touched it
+/// (`RemoteInputAvailability.localDraft`). The user asserts the Mac composer
+/// is empty; the host sends no keys to the terminal. The request names the
+/// draft epoch the client saw, and every later Mac keystroke advances that
+/// epoch, so a release decided before newer Mac typing is refused.
+public struct RemoteConversationLocalDraftReleaseRequest: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var conversationID: RemoteConversationID
+    public var expectedDraftEpoch: RemoteInputEpoch
+
+    public init(
+        protocolVersion: String = RemoteGatewayProtocol.version,
+        conversationID: RemoteConversationID,
+        expectedDraftEpoch: RemoteInputEpoch
+    ) {
+        self.protocolVersion = protocolVersion
+        self.conversationID = conversationID
+        self.expectedDraftEpoch = expectedDraftEpoch
+    }
+}
+
+public enum RemoteConversationLocalDraftReleaseRejectionReason: String, Codable, Equatable, Sendable {
+    case sendScopeDenied = "send_scope_denied"
+    case sessionWritesDisabled = "session_writes_disabled"
+    case notBound = "not_bound"
+    /// No Mac draft holds the prompt now: it already reopened, or the agent
+    /// moved on (for example, the Mac user submitted the draft).
+    case noLocalDraft = "no_local_draft"
+    /// The Mac was typed on after the client saw the draft.
+    case draftChanged = "draft_changed"
+    case unsupported
+}
+
+public enum RemoteConversationLocalDraftReleaseResult: Equatable, Sendable {
+    /// The prompt is open again. The fresh session list carries its epoch.
+    case released
+    case rejected(reason: RemoteConversationLocalDraftReleaseRejectionReason)
+}
+
+extension RemoteConversationLocalDraftReleaseResult: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case reason
+    }
+
+    private enum Status: String, Codable {
+        case released
+        case rejected
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Status.self, forKey: .status) {
+        case .released:
+            self = .released
+        case .rejected:
+            self = .rejected(reason: try container.decode(
+                RemoteConversationLocalDraftReleaseRejectionReason.self,
+                forKey: .reason
+            ))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .released:
+            try container.encode(Status.released, forKey: .status)
+        case .rejected(let reason):
+            try container.encode(Status.rejected, forKey: .status)
+            try container.encode(reason, forKey: .reason)
+        }
+    }
+}
+
+public struct RemoteConversationLocalDraftReleaseResponse: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var result: RemoteConversationLocalDraftReleaseResult
+
+    public init(result: RemoteConversationLocalDraftReleaseResult) {
+        self.protocolVersion = RemoteGatewayProtocol.version
+        self.result = result
+    }
+}

@@ -455,6 +455,13 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
     }
 
+    /// A remote user released the Mac draft lock: they say the composer holds
+    /// nothing typed locally, so the active binding counts as clean again.
+    func clearLocalInputForActiveSession(panelID: UUID) {
+        guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
+        nativeBindingSessionIDsWithLocalInput.remove(activeSession.sessionID)
+    }
+
     private func acknowledgeProgramStatusAfterRead(action: AppAction, previousState: AppState, state: AppState) {
         let panelID: UUID
         switch action {

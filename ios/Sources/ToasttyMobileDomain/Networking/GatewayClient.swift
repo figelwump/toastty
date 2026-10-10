@@ -96,6 +96,9 @@ public protocol GatewayClientProtocol: Sendable {
     func interrupt(
         _ request: RemoteConversationInterruptRequest
     ) async throws -> RemoteConversationInterruptResponse
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse
     func sessionStartOptions(
         _ request: RemoteSessionStartOptionsRequest
     ) async throws -> RemoteSessionStartOptionsResponse
@@ -149,6 +152,12 @@ public extension GatewayClientProtocol {
     func interrupt(
         _ request: RemoteConversationInterruptRequest
     ) async throws -> RemoteConversationInterruptResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse {
         throw GatewayFailure.invalidResponse
     }
 
@@ -416,6 +425,41 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         return try mapCompatibility {
             let decoded = try ConversationEventCoding.makeDecoder().decode(
                 RemoteConversationInterruptResponse.self,
+                from: response.body
+            )
+            guard decoded.protocolVersion == RemoteGatewayProtocol.version else {
+                throw GatewayCompatibilityError.unsupportedProtocolVersion(decoded.protocolVersion)
+            }
+            return decoded
+        }
+    }
+
+    public func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse {
+        let urlRequest = try await makeNativeBearerRequest(
+            method: "POST",
+            path: "/api/conversation.draft.release",
+            body: try encode(request),
+            sendsOrigin: true
+        )
+        let response = try await sendTransportRequest(urlRequest)
+        // A send-scope refusal carries a result envelope the client can show
+        // instead of a bare 403.
+        if response.statusCode == 403,
+           let decoded = try? ConversationEventCoding.makeDecoder().decode(
+               RemoteConversationLocalDraftReleaseResponse.self,
+               from: response.body
+           ),
+           decoded.result == .rejected(reason: .sendScopeDenied) {
+            return decoded
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            throw try classifyHTTPError(response)
+        }
+        return try mapCompatibility {
+            let decoded = try ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationLocalDraftReleaseResponse.self,
                 from: response.body
             )
             guard decoded.protocolVersion == RemoteGatewayProtocol.version else {

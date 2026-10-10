@@ -488,6 +488,40 @@ extension ToasttyComposerPresentationTests {
         XCTAssertFalse(offline.canInterrupt)
     }
 
+    func testReleaseIsOfferedOnlyForAMacDraftOnALiveSendCapableConnection() {
+        let draftEpoch = RemoteInputEpoch(bindingID: UUID(), counter: 9)
+        let locked = ConversationComposerAuthority(
+            inputAvailability: .localDraft(epoch: draftEpoch), gateFailure: .inputUnavailable
+        )
+        XCTAssertEqual(locked.releasableLocalDraftEpoch, draftEpoch)
+        let offered = ToasttyComposerPresentation.make(
+            agentDisplayName: "Claude", authority: locked,
+            releasableLocalDraftEpoch: draftEpoch, localDraftReleaseRefusal: .macTypedAgain
+        )
+        XCTAssertEqual(offered.gate, .disabled(.localDraft))
+        XCTAssertEqual(offered.releasableLocalDraftEpoch, draftEpoch)
+        XCTAssertEqual(offered.localDraftReleaseRefusal, .macTypedAgain)
+
+        // A reconnecting, stale, or read-only composer cannot release.
+        let blocked: [ConversationSendGateFailure] = [.coordinatorNotLive, .deviceSendScopeDenied, .staleComposerAuthority]
+        for failure in blocked {
+            let authority = ConversationComposerAuthority(
+                inputAvailability: .localDraft(epoch: draftEpoch), gateFailure: failure
+            )
+            XCTAssertNil(authority.releasableLocalDraftEpoch, "\(failure)")
+        }
+
+        // Once the Mac draft no longer holds the prompt, Release and its
+        // refusal disappear even if the caller still passes them.
+        let reopened = ToasttyComposerPresentation.make(
+            agentDisplayName: "Claude",
+            authority: ConversationComposerAuthority(stamp: stamp, inputAvailability: .openPrompt(epoch: stamp.inputEpoch)),
+            releasableLocalDraftEpoch: draftEpoch, localDraftReleaseRefusal: .macTypedAgain
+        )
+        XCTAssertFalse(reopened.canReleaseLocalDraft)
+        XCTAssertNil(reopened.localDraftReleaseRefusal)
+    }
+
     func testStampChangesModeOnlyForAWorkingTurn() {
         XCTAssertEqual(workingStamp().withDeliveryMode(.steer).deliveryMode, .steer)
         XCTAssertEqual(workingStamp(.steer).withDeliveryMode(.queue).deliveryMode, .queue)

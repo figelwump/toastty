@@ -265,6 +265,22 @@ final class TerminalHostViewGhosttyBridgeTests: TerminalHostViewTestCase {
         XCTAssertEqual(text, "c")
     }
 
+    func testHeldKeyRepeatsCountAsLocalInput() throws {
+        // Remote draft protection relies on every change to the composer,
+        // including auto-repeat, reporting local input.
+        let host = TerminalHostView()
+        var localInputs = 0
+        host.handleLocalInput = { localInputs += 1 }
+        for isARepeat in [false, true, true] {
+            host.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, characters: "a", charactersIgnoringModifiers: "a",
+                isARepeat: isARepeat, keyCode: 0
+            )))
+        }
+        XCTAssertEqual(localInputs, 3)
+    }
+
     func testLocalInterruptKeyRecognizesEscape() {
         XCTAssertTrue(
             TerminalHostView.isLocalInterruptKey(

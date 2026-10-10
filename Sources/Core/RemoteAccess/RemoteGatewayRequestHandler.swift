@@ -79,6 +79,10 @@ public final class RemoteGatewayRequestHandler {
         RemoteConversationInterruptRequest,
         RemoteDeviceRecord
     ) -> RemoteConversationInterruptResult
+    public typealias LocalDraftReleaseHandler = (
+        RemoteConversationLocalDraftReleaseRequest,
+        RemoteDeviceRecord
+    ) -> RemoteConversationLocalDraftReleaseResult
 
     public typealias SessionStartOptionsHandler = (
         RemoteSessionStartOptionsRequest,
@@ -108,6 +112,7 @@ public final class RemoteGatewayRequestHandler {
     private let conversationFlagHandler: ConversationFlagHandler?
     private let queueUpdateHandler: QueueUpdateHandler?
     private let interruptHandler: InterruptHandler?
+    private let localDraftReleaseHandler: LocalDraftReleaseHandler?
     private let nativeIdentityForTesting: String?
     private var configuration: RemoteGatewayConfiguration
     private var pairingRateLimiter: RemoteAccessRateLimiter
@@ -279,6 +284,7 @@ public final class RemoteGatewayRequestHandler {
         conversationFlagHandler: ConversationFlagHandler? = nil,
         queueUpdateHandler: QueueUpdateHandler? = nil,
         interruptHandler: InterruptHandler? = nil,
+        localDraftReleaseHandler: LocalDraftReleaseHandler? = nil,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
     ) {
@@ -294,6 +300,7 @@ public final class RemoteGatewayRequestHandler {
             conversationFlagHandler: conversationFlagHandler,
             queueUpdateHandler: queueUpdateHandler,
             interruptHandler: interruptHandler,
+            localDraftReleaseHandler: localDraftReleaseHandler,
             // The public production entry point can never inject identity.
             nativeIdentityForTesting: nil,
             pairingRateLimiter: pairingRateLimiter,
@@ -316,6 +323,7 @@ public final class RemoteGatewayRequestHandler {
         conversationFlagHandler: ConversationFlagHandler? = nil,
         queueUpdateHandler: QueueUpdateHandler? = nil,
         interruptHandler: InterruptHandler? = nil,
+        localDraftReleaseHandler: LocalDraftReleaseHandler? = nil,
         nativeIdentityForTesting: String?,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
@@ -331,6 +339,7 @@ public final class RemoteGatewayRequestHandler {
         self.conversationFlagHandler = conversationFlagHandler
         self.queueUpdateHandler = queueUpdateHandler
         self.interruptHandler = interruptHandler
+        self.localDraftReleaseHandler = localDraftReleaseHandler
         self.nativeIdentityForTesting = nativeIdentityForTesting
         self.pairingRateLimiter = pairingRateLimiter
         self.authRateLimiter = authRateLimiter
@@ -466,6 +475,18 @@ public final class RemoteGatewayRequestHandler {
                     ))) ?? Data()
                     return .respond(.json(status: 403, reason: "Forbidden", body: body))
                 }
+                if policy.route == .conversationLocalDraftRelease {
+                    auditLog.record(RemoteAccessAuditEntry(
+                        at: date,
+                        action: .remoteLocalDraftReleaseRejected,
+                        deviceID: authenticated.id,
+                        detail: "send_scope_denied"
+                    ))
+                    let body = (try? encoder.encode(RemoteConversationLocalDraftReleaseResponse(
+                        result: .rejected(reason: .sendScopeDenied)
+                    ))) ?? Data()
+                    return .respond(.json(status: 403, reason: "Forbidden", body: body))
+                }
                 if policy.route == .workspaceDone || policy.route == .conversationFlag
                     || policy.route == .conversationQueueUpdate {
                     // Not a message send, so it has neither a send result to
@@ -528,6 +549,8 @@ public final class RemoteGatewayRequestHandler {
             return handleQueueUpdate(request, device: authenticated, at: date)
         case .conversationInterrupt:
             return handleInterrupt(request, device: authenticated, at: date)
+        case .conversationLocalDraftRelease:
+            return handleLocalDraftRelease(request, device: authenticated, at: date)
         case .sessionStartOptions:
             return handleSessionStartOptions(request, device: authenticated)
         case .sessionStart:
@@ -950,6 +973,47 @@ public final class RemoteGatewayRequestHandler {
             ))
         }
         let body = (try? encoder.encode(RemoteConversationInterruptResponse(result: result))) ?? Data()
+        return .respond(.json(body: body))
+    }
+
+    private func handleLocalDraftRelease(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= Self.maximumWorkspaceDoneBodyBytes,
+              let releaseRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationLocalDraftReleaseRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected draft release JSON"
+            ))
+        }
+        guard releaseRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        let result = localDraftReleaseHandler?(releaseRequest, device) ?? .rejected(reason: .unsupported)
+        switch result {
+        case .released:
+            auditLog.record(.init(at: date, action: .remoteLocalDraftReleased, deviceID: device.id))
+        case .rejected(let reason):
+            auditLog.record(.init(
+                at: date,
+                action: .remoteLocalDraftReleaseRejected,
+                deviceID: device.id,
+                detail: reason.rawValue
+            ))
+        }
+        let body = (try? encoder.encode(RemoteConversationLocalDraftReleaseResponse(result: result))) ?? Data()
         return .respond(.json(body: body))
     }
 

@@ -77,6 +77,23 @@ enum ToasttyComposerDisabledReason: Equatable, Sendable {
     }
 }
 
+/// Why a Release from this phone left the Mac draft lock in place.
+enum ToasttyLocalDraftReleaseRefusal: Equatable, Sendable {
+    /// Someone typed on the Mac after this phone showed the lock.
+    case macTypedAgain
+    /// The Mac could not be reached or did not accept the request.
+    case failed
+
+    var message: String {
+        switch self {
+        case .macTypedAgain:
+            "Mac was typed on again — still paused"
+        case .failed:
+            "Could not release the draft — try again"
+        }
+    }
+}
+
 /// What Send does while input is allowed.
 enum ToasttyComposerSendMode: Equatable, Sendable {
     /// The prompt is open: Send types the message now.
@@ -112,28 +129,43 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     let inlineFeedback: String?
     /// The running turn can be stopped from this device.
     let canInterrupt: Bool
+    /// The Mac draft epoch a Release would name, while a Mac draft holds the
+    /// prompt closed and this device may release it.
+    let releasableLocalDraftEpoch: RemoteInputEpoch?
+    let localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal?
+
+    var canReleaseLocalDraft: Bool { releasableLocalDraftEpoch != nil }
 
     init(
         agentDisplayName: String,
         gate: ToasttyComposerGate,
         inlineFeedback: String? = nil,
-        canInterrupt: Bool = false
+        canInterrupt: Bool = false,
+        releasableLocalDraftEpoch: RemoteInputEpoch? = nil,
+        localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal? = nil
     ) {
         self.agentDisplayName = agentDisplayName
         self.gate = gate
         self.inlineFeedback = inlineFeedback
         self.canInterrupt = canInterrupt
+        let releasable = gate == .disabled(.localDraft) ? releasableLocalDraftEpoch : nil
+        self.releasableLocalDraftEpoch = releasable
+        self.localDraftReleaseRefusal = releasable == nil ? nil : localDraftReleaseRefusal
     }
 
     static func make(
         agentDisplayName: String,
-        authority: ConversationComposerAuthority
+        authority: ConversationComposerAuthority,
+        releasableLocalDraftEpoch: RemoteInputEpoch? = nil,
+        localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal? = nil
     ) -> ToasttyComposerPresentation {
         return ToasttyComposerPresentation(
             agentDisplayName: agentDisplayName,
             gate: gate(for: authority),
             inlineFeedback: feedback(for: authority.gateFailure),
-            canInterrupt: authority.canInterrupt
+            canInterrupt: authority.canInterrupt,
+            releasableLocalDraftEpoch: releasableLocalDraftEpoch,
+            localDraftReleaseRefusal: localDraftReleaseRefusal
         )
     }
 

@@ -55,6 +55,9 @@ protocol LiveConnectionRuntime: Sendable {
     func interrupt(
         _ request: RemoteConversationInterruptRequest
     ) async throws -> RemoteConversationInterruptResponse?
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse?
     func sessionStartOptions(
         _ request: RemoteSessionStartOptionsRequest
     ) async throws -> RemoteSessionStartOptionsResponse?
@@ -73,6 +76,12 @@ extension LiveConnectionRuntime {
     func interrupt(
         _ request: RemoteConversationInterruptRequest
     ) async throws -> RemoteConversationInterruptResponse? {
+        nil
+    }
+
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse? {
         nil
     }
 
@@ -235,6 +244,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
         _ request: RemoteConversationInterruptRequest
     ) async throws -> RemoteConversationInterruptResponse? {
         try await coordinator.interrupt(request)
+    }
+
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse? {
+        try await coordinator.releaseLocalDraft(request)
     }
 
     func sessionStartOptions(
@@ -514,6 +529,9 @@ final class LiveSessionsController {
             },
             interrupt: { [runtime] request in
                 try await runtime.interrupt(request)
+            },
+            releaseLocalDraft: { [runtime] request in
+                try await runtime.releaseLocalDraft(request)
             }
         )
         controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }

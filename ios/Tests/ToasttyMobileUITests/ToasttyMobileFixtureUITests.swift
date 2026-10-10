@@ -1527,6 +1527,56 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-gated-send-optimistic", of: app)
     }
 
+    func testMacDraftReleaseConfirmsShowsARefusalAndReopensTheComposer() {
+        let app = launchFixtureApp(
+            environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "local-draft-release"]
+        )
+        openWorkspace(releaseWorkspaceID, in: app)
+        let session = app.buttons["toastty-mobile-workspace-session-B1000000-0000-0000-0000-000000000008"]
+        XCTAssertTrue(scrollWorkspaceTo(session, in: app))
+        session.tap()
+
+        let input = composerInput(in: app)
+        let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
+        let release = app.buttons["toastty-mobile-composer-release-draft"]
+        XCTAssertTrue(release.waitForExistence(timeout: 5))
+        XCTAssertFalse(input.isEnabled)
+        XCTAssertEqual(status.label, "Composer locked. A draft is in progress on the Mac.")
+        XCTAssertLessThan(status.frame.maxX, release.frame.minX)
+        attachScreenshot(named: "fixture-local-draft-release-paused", of: app)
+
+        // Release always asks first. The fixture Mac refuses the first
+        // release as if it was typed on after the phone showed the lock.
+        let confirm = app.buttons.matching(NSPredicate(
+            format: "identifier == %@ OR label == %@", "toastty-mobile-confirm-release-draft", "Release"
+        )).firstMatch
+        release.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-local-draft-release-confirm", of: app)
+        confirm.tap()
+        XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
+        let refusedLabel = "Composer locked. Mac was typed on again — still paused"
+        XCTAssertTrue(waitForLabel(refusedLabel, of: status))
+        XCTAssertFalse(input.isEnabled)
+        attachScreenshot(named: "fixture-local-draft-release-refused", of: app)
+
+        release.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        XCTAssertTrue(release.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(input.isEnabled)
+        XCTAssertEqual(input.value as? String, "Message Claude…")
+        attachScreenshot(named: "fixture-local-draft-release-open", of: app)
+    }
+
+    private func waitForLabel(_ label: String, of element: XCUIElement) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", label),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: 5) == .completed
+    }
+
     func testWorkingTurnQueuesByDefaultStopsAndOffersSteer() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "queue-steer"]

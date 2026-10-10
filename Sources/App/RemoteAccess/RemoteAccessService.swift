@@ -147,6 +147,21 @@ final class RemoteAccessInterruptBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's authenticated draft release into the main-actor-owned
+/// input coordinator.
+final class RemoteAccessLocalDraftReleaseBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func release(
+        _ request: RemoteConversationLocalDraftReleaseRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationLocalDraftReleaseResult {
+        MainActor.assumeIsolated {
+            service?.performLocalDraftRelease(request, device: device) ?? .rejected(reason: .notBound)
+        }
+    }
+}
+
 /// Bridges the gateway's synchronous options request into the main-actor
 /// session starter.
 final class RemoteAccessSessionStartBridge: @unchecked Sendable {
@@ -420,6 +435,7 @@ final class RemoteAccessService: ObservableObject {
     private let conversationFlagBridge = RemoteAccessConversationFlagBridge()
     private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
     private let interruptBridge = RemoteAccessInterruptBridge()
+    private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
     private let sessionStartBridge = RemoteAccessSessionStartBridge()
     private var sessionStarter: RemoteSessionStarter?
     private var coordinator = RemoteInputCoordinator()
@@ -452,8 +468,10 @@ final class RemoteAccessService: ObservableObject {
     private var storeActionObserverToken: UUID?
     private var conversationTrackingGeneration: UInt64 = 0
     private var sessionListBroadcastTask: Task<Void, Never>?
+    private var localDraftEpochBroadcastTask: Task<Void, Never>?
     private let claudePromptStabilizationDelay: Duration
     private let sendConfirmationTimeout: Duration
+    private let localDraftEpochBroadcastInterval: Duration
 
     private struct RemotePresentationDiagnosticState: Equatable {
         var provider: AgentKind
@@ -542,6 +560,7 @@ final class RemoteAccessService: ObservableObject {
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pushConfiguration: RemotePushConfiguration? = .configured(),
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
         tailnetServeSetup: @escaping TailnetServeSetup = { port, configuredOrigin, configureIfNeeded in
@@ -565,6 +584,7 @@ final class RemoteAccessService: ObservableObject {
         self.tailnetServeSetup = tailnetServeSetup
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
+        self.localDraftEpochBroadcastInterval = localDraftEpochBroadcastInterval
         self.pushConfiguration = pushConfiguration
         self.pushRelay = pushRelay
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
@@ -595,6 +615,9 @@ final class RemoteAccessService: ObservableObject {
             },
             interruptHandler: { [interruptBridge] request, device in
                 interruptBridge.interrupt(request, device: device)
+            },
+            localDraftReleaseHandler: { [localDraftReleaseBridge] request, device in
+                localDraftReleaseBridge.release(request, device: device)
             }
         )
         self.server = gatewayServerFactory(handler)
@@ -617,6 +640,7 @@ final class RemoteAccessService: ObservableObject {
         conversationFlagBridge.service = self
         queueUpdateBridge.service = self
         interruptBridge.service = self
+        localDraftReleaseBridge.service = self
         sessionStartBridge.service = self
         sessionStarter = RemoteSessionStarter(
             store: store,
@@ -980,6 +1004,8 @@ final class RemoteAccessService: ObservableObject {
             self.storeActionObserverToken = nil
         }
         terminalRuntimeRegistry.localInputObserver = nil
+        localDraftEpochBroadcastTask?.cancel()
+        localDraftEpochBroadcastTask = nil
 
         let trackedConversationIDs = Set(tailersByConversationID.keys)
             .union(activeSessionIDByConversationID.keys)
@@ -3041,6 +3067,61 @@ final class RemoteAccessService: ObservableObject {
         return result
     }
 
+    /// Reopens a prompt that a Mac draft holds closed, after the remote user
+    /// says the Mac composer is empty. Sends nothing to the terminal.
+    func performLocalDraftRelease(
+        _ request: RemoteConversationLocalDraftReleaseRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationLocalDraftReleaseResult {
+        let conversationID = request.conversationID
+        guard isReady, let panelID = panelIDByConversationID[conversationID] else {
+            return .rejected(reason: .notBound)
+        }
+        // Apply any provider transition the debounced sync has not pushed yet,
+        // so a draft the agent already received is not reopened.
+        syncCoordinatorAvailability(for: conversationID)
+        let previous = coordinator.availability(for: conversationID)
+        let result: RemoteConversationLocalDraftReleaseResult
+        switch coordinator.releaseLocalDraft(
+            for: conversationID,
+            expectedDraftEpoch: request.expectedDraftEpoch,
+            context: deliveryContext(for: conversationID, panelID: panelID, device: device)
+        ) {
+        case .reject(let reason):
+            result = .rejected(reason: reason)
+        case .released:
+            // A prompt bootstrapped from native ownership checks the session
+            // store's own local-input mark at send time.
+            sessionRuntimeStore.clearLocalInputForActiveSession(panelID: panelID)
+            result = .released
+        }
+        logCoordinatorAvailabilityTransition(
+            for: conversationID,
+            source: "remote_draft_release",
+            previous: previous
+        )
+        ToasttyLog.info(
+            "Remote local draft release evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "result": String(describing: result),
+            ]
+        )
+        switch result {
+        case .released:
+            broadcastSessionList()
+            drainSendQueue(for: conversationID)
+        case .rejected(.draftChanged), .rejected(.noLocalDraft):
+            // The client acted on a stale view; send it the current one now
+            // rather than after the next keystroke throttle.
+            broadcastSessionList()
+        case .rejected:
+            break
+        }
+        return result
+    }
+
     private func drainSendQueues() {
         for conversationID in sendQueue.conversationIDs {
             drainSendQueue(for: conversationID)
@@ -3321,13 +3402,35 @@ final class RemoteAccessService: ObservableObject {
         let previous = coordinator.availability(for: conversationID)
         let couldSteer = coordinator.canSteer(for: conversationID)
         coordinator.noteLocalInput(for: conversationID)
-        logCoordinatorAvailabilityTransition(
-            for: conversationID,
-            source: "local_terminal_input",
-            previous: previous
-        )
+        if case .localDraft = previous {
+            // Each keystroke in a draft advances its epoch; publish it
+            // throttled and skip the per-keystroke transition log.
+            scheduleLocalDraftEpochBroadcast()
+        } else {
+            logCoordinatorAvailabilityTransition(
+                for: conversationID,
+                source: "local_terminal_input",
+                previous: previous
+            )
+        }
         if previous.allowsRemoteSend || couldSteer != coordinator.canSteer(for: conversationID) {
             scheduleSessionListBroadcast()
+        }
+    }
+
+    /// Each keystroke in a Mac draft advances its epoch, and a remote release
+    /// must name the current one. Publish the epoch at most once per interval
+    /// rather than once per keystroke; the trailing publish always carries the
+    /// epoch after the last keystroke.
+    private func scheduleLocalDraftEpochBroadcast() {
+        guard isEnabled, localDraftEpochBroadcastTask == nil else { return }
+        localDraftEpochBroadcastTask = Task { @MainActor [weak self] in
+            guard let interval = self?.localDraftEpochBroadcastInterval else { return }
+            try? await Task.sleep(for: interval)
+            guard let self, Task.isCancelled == false else { return }
+            self.localDraftEpochBroadcastTask = nil
+            guard self.isEnabled else { return }
+            self.broadcastSessionList()
         }
     }
 

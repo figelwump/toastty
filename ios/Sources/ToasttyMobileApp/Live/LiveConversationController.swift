@@ -69,6 +69,9 @@ final class LiveConversationController {
     ] = [:]
     /// Queue, steer, and stop controls from the latest session snapshot.
     private(set) var inputControl: RemoteConversationInputControl?
+    /// Why the last Release from this phone left the Mac draft lock in place.
+    /// Cleared when the lock ends or the user taps Release again.
+    private(set) var localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal?
 
     private let runtime: any LiveConversationRuntime
     private let loadOlderAction: @Sendable () async -> Void
@@ -87,6 +90,9 @@ final class LiveConversationController {
     private let interruptAction: @Sendable (
         RemoteConversationInterruptRequest
     ) async throws -> RemoteConversationInterruptResponse?
+    private let releaseLocalDraftAction: @Sendable (
+        RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse?
     private var stateTask: Task<Void, Never>?
     private var sendReconciliationTask: Task<Void, Never>?
     private var readAcknowledgementTask: Task<Void, Never>?
@@ -95,6 +101,7 @@ final class LiveConversationController {
     private var connectionPhase: ConnectionCoordinatorPhase = .idle
     private(set) var supportsAttachments = false
     private var supportsQuestionAnswers = false
+    private var supportsLocalDraftRelease = false
     private var connectionGeneration: UInt64 = 0
     private var runtimeRevision: UInt64 = 0
     private var hasConsumedState = false
@@ -123,7 +130,10 @@ final class LiveConversationController {
         ) async throws -> RemoteConversationQueueUpdateResponse? = { _ in nil },
         interrupt: @escaping @Sendable (
             RemoteConversationInterruptRequest
-        ) async throws -> RemoteConversationInterruptResponse? = { _ in nil }
+        ) async throws -> RemoteConversationInterruptResponse? = { _ in nil },
+        releaseLocalDraft: @escaping @Sendable (
+            RemoteConversationLocalDraftReleaseRequest
+        ) async throws -> RemoteConversationLocalDraftReleaseResponse? = { _ in nil }
     ) {
         self.conversationID = conversationID
         self.runtime = runtime
@@ -135,6 +145,7 @@ final class LiveConversationController {
         acknowledgeReadAction = acknowledgeRead
         updateQueueAction = updateQueue
         interruptAction = interrupt
+        releaseLocalDraftAction = releaseLocalDraft
     }
 
     func start() async {
@@ -244,6 +255,48 @@ final class LiveConversationController {
             expectedTurnEpoch: turnEpoch
         )
         return try? await interruptAction(request)?.result
+    }
+
+    /// The Mac draft epoch a Release would name, while a Mac draft holds the
+    /// prompt closed and this phone may release it.
+    var releasableLocalDraftEpoch: RemoteInputEpoch? {
+        supportsLocalDraftRelease ? composerAuthority.releasableLocalDraftEpoch : nil
+    }
+
+    /// Reopens the prompt after the user says the Mac draft is gone. The
+    /// request names the draft epoch the user confirmed, not a newer one that
+    /// arrived meanwhile, so Mac typing since then refuses it. Nothing is
+    /// typed on the Mac; the host's next session list opens the composer.
+    @discardableResult
+    func releaseLocalDraft(
+        expectedDraftEpoch: RemoteInputEpoch
+    ) async -> RemoteConversationLocalDraftReleaseResult? {
+        guard releasableLocalDraftEpoch != nil else { return nil }
+        localDraftReleaseRefusal = nil
+        let request = RemoteConversationLocalDraftReleaseRequest(
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            expectedDraftEpoch: expectedDraftEpoch
+        )
+        let result: RemoteConversationLocalDraftReleaseResult?
+        do {
+            result = try await releaseLocalDraftAction(request)?.result
+        } catch {
+            result = nil
+        }
+        // A later snapshot may already have ended the lock while this ran.
+        guard composerAuthority.releasableLocalDraftEpoch != nil else { return result }
+        switch result {
+        case .released:
+            break
+        case .rejected(.draftChanged):
+            localDraftReleaseRefusal = .macTypedAgain
+        case .rejected(.noLocalDraft), .rejected(.sendScopeDenied), .rejected(.sessionWritesDisabled):
+            // The host's fresh session list explains the new state.
+            break
+        case .rejected(.notBound), .rejected(.unsupported), nil:
+            localDraftReleaseRefusal = .failed
+        }
+        return result
     }
 
     func consumeInputControl(_ control: RemoteConversationInputControl?) {
@@ -356,6 +409,7 @@ final class LiveConversationController {
     func consumeConnectionState(_ state: ConnectionCoordinator.State) {
         supportsQuestionAnswers = state.capabilities.contains(.questionAnswers)
         supportsAttachments = state.capabilities.contains(.messageAttachments)
+        supportsLocalDraftRelease = state.capabilities.contains(.localDraftRelease)
         consumeConnectionPhase(state.phase)
     }
 
@@ -409,6 +463,9 @@ final class LiveConversationController {
         firstAvailableSequence = state.firstAvailableSequence
         historyTruncated = state.historyTruncated
         composerAuthority = state.composerAuthority
+        if composerAuthority.releasableLocalDraftEpoch == nil {
+            localDraftReleaseRefusal = nil
+        }
         hasOlder = state.hasOlder
         isLoadingOlder = state.isLoadingOlder
         change = contentChanged ? classifyChange(
