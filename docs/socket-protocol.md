@@ -1462,6 +1462,19 @@ Accepted payload keys:
 - `summary?: String`
 - `detail?: String`
 
+The payload also accepts:
+
+- `text?: String` — prompt or final response text
+- `modelIdentifier?: String` — an explicitly reported model
+
+`text` is limited to 49,152 UTF-8 bytes (48 KiB) for `afterAgentResponse` and
+65,536 UTF-8 bytes (64 KiB) for other events. `modelIdentifier` is limited to
+512 UTF-8 bytes before surrounding whitespace is removed; a blank value is
+treated as absent. These fields accept null
+as absent. The socket decoder rejects non-string or oversized values. The CLI
+hook parser truncates oversized prompt and response text before forwarding it,
+and adds a visible `[Text truncated]` marker.
+
 The normalized identifiers are each limited to 512 UTF-8 bytes. If any status
 field is present, `kind` and a nonblank `summary` are required. Status summary
 and detail text have control characters and repeated whitespace removed and are
@@ -1485,6 +1498,16 @@ Behavior:
   cleanup also discards it
 - `beforeSubmitPrompt` latches its current `generationID` only for the confirmed
   root conversation; later tool and terminal events must match both
+- the first accepted `beforeSubmitPrompt` for a generation publishes nonempty
+  `text` as a user message and `modelIdentifier` as the reported execution
+  profile when present. A buffered early prompt publishes only after startup
+  confirms its root conversation
+- `afterAgentResponse` publishes nonempty `text` as a final assistant message
+  only for the confirmed root conversation and a previously observed generation.
+  Duplicate response text for that generation is suppressed. A delayed response
+  can add transcript text, but cannot change session status or reopen input
+- `text` and `modelIdentifier` do not publish conversation content on other
+  hook events
 - `stop` never establishes identity, and an unidentified, nested, or stale
   completion is ignored instead of clearing newer work
 - a matching completed `stop` after a `cloudHandoff` prompt becomes
