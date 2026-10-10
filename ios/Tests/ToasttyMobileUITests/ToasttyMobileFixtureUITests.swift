@@ -1139,18 +1139,19 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(text.waitForExistence(timeout: 5))
         XCTAssertFalse(text.otherElements.matching(NSPredicate(format: "label CONTAINS 'scroll bar'")).firstMatch.exists,
                        "Non-scrolling transcript text must not expose its own scroll controls")
-        // A row can be hittable under an overlay. Put its first line near the
-        // top before opening the keyboard, which makes the viewport smaller.
+        // A row can be hittable under an overlay. Move its first line into the
+        // visible area, with extra space if the keyboard will open.
         let transcript = app.scrollViews["toastty-mobile-transcript"]
-        let targetY = app.navigationBars.firstMatch.frame.maxY + 80
-        for _ in 0..<6 {
-            let delta = text.frame.minY + 11 - targetY
-            if abs(delta) < 30 { break }
+        let top = app.navigationBars.firstMatch.frame.maxY + 30
+        let bottom = focusComposer ? top + 130 : composerInput(in: app).frame.minY - 30
+        for _ in 0..<10 {
+            let selectionY = text.frame.minY + 11
+            if (top...bottom).contains(selectionY) { break }
             let start = transcript.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 5, dy: 350))
-            let end = start.withOffset(CGVector(dx: 0, dy: max(-200, min(200, -delta))))
+            let end = start.withOffset(CGVector(dx: 0, dy: selectionY < top ? 80 : -80))
             // Hold at the endpoint to stop momentum from carrying the text
             // behind navigation after the drag ends.
-            start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.5)
+            start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
         }
         if focusComposer {
             composerInput(in: app).tap()
