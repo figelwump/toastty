@@ -630,7 +630,7 @@ a { color: inherit; }
 .kbd span.space { width: 184px; font-size: 16px; }
 .kbd span.ret { width: 88px; background: #45403C; font-size: 16px; }
 
-/* Subspace screen and PR sheet */
+/* Task space screen and PR sheet */
 .mlist.subspace { padding-top: 0; }
 .inp { font: 12px var(--sans); color: #928D85; padding: 0 10px; }
 .chips { display: flex; gap: 6px; padding: 8px 10px 6px; flex-wrap: wrap; }

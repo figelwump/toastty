@@ -101,10 +101,10 @@ ${D}› hand this off to a worktree and verify it visually${X}
 ${B}●${X} ${B}Skill${X}(worktree-create)
   ${D}⎿ Wrote WORKTREE_HANDOFF.md${X}
   ${D}⎿ Created worktree on ${X}${Y}feat/checkout-redesign${X}
-  ${D}⎿ Forked this session into a new subspace${X}
+  ${D}⎿ Forked this session into a new task space${X}
   ${D}⎿ Copied the checkout mockup to its right panel${X}
 
-${B}●${X} Handed off. The subspace owns the build and the PR.
+${B}●${X} Handed off. The task space owns the build and the PR.
 
 EOF
 transcript tests "Claude Code" <<EOF
@@ -310,7 +310,7 @@ session() {
     | t session ingest-agent-event --source claude-hooks --session "$id" --panel "$panel" >/dev/null
   ok session status --session "$id" --panel "$panel" --kind working --summary "Thinking" >/dev/null
 }
-# status ID PANEL KIND TEXT: session rows show the detail line; subspace rows
+# status ID PANEL KIND TEXT: session rows show the detail line; task space rows
 # fall back to the summary, so both carry the same text.
 status() { ok session status --session "$1" --panel "$2" --kind "$3" --summary "$4" --detail "$4" >/dev/null; }
 
@@ -332,7 +332,7 @@ ok action run panel.scratchpad.set-content sessionID=demo-plan title="Checkout m
   filePath="$DEMO/checkout-mockup.html" >/dev/null
 
 # new_workspace TITLE [PARENT]: prints the new workspace ID. A parent makes it a
-# subspace, with demo-plan recorded as the session that spawned it. Without one,
+# task space, with demo-plan recorded as the session that spawned it. Without one,
 # the call is not made as a session, which would also nest it.
 new_workspace() {
   local args=(action run workspace.create --window "$WIN" title="$1" activate=false)
@@ -377,7 +377,7 @@ status demo-infra "$P" needs_approval "Allow terraform apply staging.plan?"
 
 status demo-tests "$TESTS_PANEL" working "Running auth tests…"
 status demo-plan "$PLAN_PANEL" idle "Handed off to checkout-redesign"
-# Visiting the background workspaces clears their "New" badges; the subspace
+# Visiting the background workspaces clears their "New" badges; the task space
 # with the ready result is left unvisited so its row stays unread.
 for ws in "$DOCS" "$INFRA" "$LUMEN"; do
   ok action run workspace.select --workspace "$ws" >/dev/null
@@ -430,7 +430,7 @@ guard let rightPanelX = dividers.last(where: { $0 > 300 * scale && $0 < rep.pixe
 save("sidebar.png", CGRect(x: 0, y: 0, width: 280 * scale, height: 560 * scale))
 let panelLeft = rightPanelX + scale
 save("right-panel.png", CGRect(x: panelLeft, y: 0, width: rep.pixelsWide - panelLeft - scale, height: 560 * scale))
-// The social card's close-up: the lumen card down to the ready subspace row.
+// The social card's close-up: the lumen card down to the ready task space row.
 try! "0,0,\(280 * scale),\(262 * scale)\n".write(toFile: out + "/social-crop.txt", atomically: true, encoding: .utf8)
 EOF
 echo "wrote window.png, sidebar.png, right-panel.png, and social-crop.txt to $OUT"

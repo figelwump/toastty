@@ -7,7 +7,7 @@
     if (!wrap || !stage) return;
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     // POSTER is the still used for reduced motion, the README, and the mobile social card: Home,
-    // with the checkout-redesign subspace just turned green with its PR chip.
+    // with the checkout-redesign task space just turned green with its PR chip.
     var POSTER = 16.0;
     var t = reduce ? POSTER : 0, playing = !reduce, last = null, onScreen = true, rendering = false;
 
@@ -104,7 +104,7 @@
       setText(migrateS, pick(MIGRATE_S));
       setText(migrateAge, mstate === 'working' ? mmss((t - (t < T.ready ? T.resolved : T.working2)) * 9 + 3) : t < T.resolved ? '1m' : 'now');
 
-      // The subspace works, then turns ready with its PR chip.
+      // The task space works, then turns ready with its PR chip.
       var cready = t >= T.checkoutReady;
       rowCheckout.className = 'mrow subr ' + (cready ? 'ready' : 'working');
       setIcon(checkoutIc, cready ? '<i class="mk sq ready"></i>' : '<span class="spin"></span>');
