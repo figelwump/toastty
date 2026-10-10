@@ -2265,16 +2265,12 @@ final class WorkspaceViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.2)
         hostingView.layoutSubtreeIfNeeded()
 
-        let button = try XCTUnwrap(
-            accessibilityElement(withIdentifier: "topbar.workspace.task", in: hostingView),
-            "no task button: \(accessibilityIdentifiers(in: hostingView))"
-        )
-        XCTAssertEqual(accessibilityString("accessibilityLabel", of: button), "Finish Task")
-        XCTAssertEqual(accessibilityString("accessibilityHelp", of: button), WorkspaceTaskHookPresentation.finishHelp(skill: "worktree-done"))
-        XCTAssertNotNil(accessibilityElement(withIdentifier: "topbar.workspace.task.options", in: hostingView))
-        let press = NSSelectorFromString("accessibilityPerformPress")
-        XCTAssertTrue(button.responds(to: press), "the task button is pressable")
-        _ = button.perform(press)
+        // The test host vends no accessibility tree, so the control is
+        // found through its semantic text and help bridges, like a sidebar row.
+        let buttonFrame = try XCTUnwrap(semanticTextFrame("Finish Task", in: hostingView), "no task button: \(semanticTexts(in: hostingView))")
+        XCTAssertFalse(toolTipViews(in: hostingView, toolTip: WorkspaceTaskHookPresentation.finishHelp(skill: "worktree-done")).isEmpty, "tooltip names the skill")
+        XCTAssertNotNil(semanticTextFrame("Task options", in: hostingView), "the arrow menu sits beside the button")
+        try click(at: CGPoint(x: buttonFrame.midX, y: buttonFrame.midY), in: hostingView, window: window)
         pumpMainRunLoop(duration: 0.1)
         XCTAssertEqual(runs, 1)
 
@@ -2286,55 +2282,49 @@ final class WorkspaceViewTests: XCTestCase {
         ).frame(width: 240, height: 24)
         pumpMainRunLoop(duration: 0.2)
         hostingView.layoutSubtreeIfNeeded()
-        XCTAssertNil(accessibilityElement(withIdentifier: "topbar.workspace.task", in: hostingView))
-        let stopped = try XCTUnwrap(accessibilityElement(withIdentifier: "topbar.workspace.task.stopped", in: hostingView))
-        XCTAssertEqual(accessibilityString("accessibilityHelp", of: stopped), "PR #130 has not merged")
+        XCTAssertNil(semanticTextFrame("Finish Task", in: hostingView))
+        XCTAssertNotNil(semanticTextFrame("Skipped", in: hostingView), "\(semanticTexts(in: hostingView))")
+        XCTAssertFalse(toolTipViews(in: hostingView, toolTip: "PR #130 has not merged").isEmpty)
     }
 
-    /// SwiftUI's accessibility nodes answer the Objective-C selectors but
-    /// do not always bridge to `NSAccessibilityProtocol`, so the walk uses
-    /// the selectors, as the sidebar tests do.
-    private func accessibilityElement(withIdentifier identifier: String, in view: NSView) -> AnyObject? {
-        accessibilityElements(in: view).first { accessibilityString("accessibilityIdentifier", of: $0) == identifier }
+    @MainActor
+    private func semanticTextFrame(_ text: String, in rootView: NSView) -> CGRect? {
+        semanticTextFields(in: rootView).first { $0.stringValue == text }.map { $0.convert($0.bounds, to: rootView) }
     }
 
-    private func accessibilityIdentifiers(in view: NSView) -> [String] {
-        accessibilityElements(in: view).compactMap { accessibilityString("accessibilityIdentifier", of: $0) }
+    @MainActor
+    private func semanticTexts(in rootView: NSView) -> [String] {
+        semanticTextFields(in: rootView).map { $0.stringValue }
     }
 
-    private func accessibilityString(_ selectorName: String, of object: AnyObject) -> String? {
-        let selector = NSSelectorFromString(selectorName)
-        guard object.responds(to: selector),
-              let result = object.perform(selector)?.takeUnretainedValue() as? String,
-              result.isEmpty == false else {
-            return nil
+    @MainActor
+    private func semanticTextFields(in view: NSView) -> [NSTextField] {
+        ((view as? NSTextField).map { [$0] } ?? []) + view.subviews.flatMap { semanticTextFields(in: $0) }
+    }
+
+    @MainActor
+    private func toolTipViews(in view: NSView, toolTip: String) -> [NSView] {
+        (view.toolTip == toolTip ? [view] : []) + view.subviews.flatMap { toolTipViews(in: $0, toolTip: toolTip) }
+    }
+
+    @MainActor
+    private func click(at point: CGPoint, in view: NSView, window: NSWindow) throws {
+        let windowPoint = view.convert(point, to: nil)
+        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: windowPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: eventNumber,
+                clickCount: 1,
+                pressure: pressure
+            ))
+            window.sendEvent(event)
+            pumpMainRunLoop(duration: 0.05)
         }
-        return result
-    }
-
-    private func accessibilityElements(in view: NSView) -> [AnyObject] {
-        var visited: Set<ObjectIdentifier> = []
-        var elements: [AnyObject] = []
-        func walk(_ object: AnyObject) {
-            guard visited.insert(ObjectIdentifier(object)).inserted else { return }
-            elements.append(object)
-            var children: [AnyObject] = []
-            for selectorName in ["accessibilityChildrenInNavigationOrder", "accessibilityChildren"] {
-                let selector = NSSelectorFromString(selectorName)
-                guard object.responds(to: selector),
-                      let result = object.perform(selector)?.takeUnretainedValue() as? [AnyObject],
-                      result.isEmpty == false else {
-                    continue
-                }
-                children = result
-                break
-            }
-            for child in NSAccessibility.unignoredChildren(from: children) {
-                walk(child as AnyObject)
-            }
-        }
-        walk((NSAccessibility.unignoredDescendant(of: view) as AnyObject?) ?? view)
-        return elements
     }
 
     func testWorkspaceTabUnreadDotUsesLargerDiameter() {

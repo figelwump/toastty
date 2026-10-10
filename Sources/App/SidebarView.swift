@@ -25,7 +25,9 @@ struct SidebarSemanticTextBridge: NSViewRepresentable {
     }
 }
 
-private struct SidebarTooltipBridge: NSViewRepresentable {
+/// A help tag AppKit inspectors and hosted tests can find; the remote
+/// test host has no accessibility tree.
+struct SidebarTooltipBridge: NSViewRepresentable {
     let text: String
 
     func makeNSView(context: Context) -> NSView {

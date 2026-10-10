@@ -32,6 +32,15 @@ struct WorkspaceHeaderTaskControl: View {
                     }
                 }
                 .buttonStyle(WorkspaceTaskButtonStyle(corners: .leading))
+                .background {
+                    // Hosted tests find the button by these; the test host
+                    // vends no accessibility tree.
+                    ZStack {
+                        SidebarTooltipBridge(text: button.help)
+                        SidebarSemanticTextBridge(text: button.title)
+                    }
+                    .allowsHitTesting(false)
+                }
                 .help(button.help)
                 .accessibilityLabel(button.title)
                 .accessibilityHint(button.help)
@@ -54,6 +63,7 @@ struct WorkspaceHeaderTaskControl: View {
                 .menuIndicator(.hidden)
                 .buttonStyle(WorkspaceTaskButtonStyle(corners: .trailing, horizontalPadding: 4))
                 .fixedSize()
+                .background { SidebarSemanticTextBridge(text: "Task options").allowsHitTesting(false) }
                 .help("More task actions")
                 .accessibilityLabel("Task options")
                 .accessibilityIdentifier("topbar.workspace.task.options")
@@ -100,6 +110,13 @@ struct WorkspaceHeaderTaskControl: View {
                 .font(ToastyTheme.fontWorkspaceTaskProgress)
                 .foregroundStyle(ToastyTheme.sidebarSummaryText)
                 .frame(height: ToastyTheme.workspaceTaskControlHeight)
+                .background {
+                    ZStack {
+                        SidebarTooltipBridge(text: detail)
+                        SidebarSemanticTextBridge(text: button.title)
+                    }
+                    .allowsHitTesting(false)
+                }
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
