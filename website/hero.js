@@ -5,7 +5,7 @@
     var stage = document.getElementById('stage');
     var wrap = document.getElementById('wrap');
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    // POSTER is the still used for reduced motion, the README, and the social card: the subspace
+    // POSTER is the still used for reduced motion, the README, and the social card: the task space
     // has just turned green with its PR chip, and the docs fix is visible in the right panel.
     var POSTER = 15.0;
     var t = reduce ? POSTER : 0, playing = !reduce, last = null, onScreen = true;
@@ -86,17 +86,17 @@
       setIcon(planIc, planWorking ? '<span class="spin"></span>' : '');
       planFork.style.display = t >= 6.0 ? '' : 'none';
 
-      // which workspace is on screen; the subspace isn't opened until it's ready
+      // which workspace is on screen; the task space isn't opened until it's ready
       var ws = t < 8.9 ? 'lumen' : t < 17.75 ? 'docs' : 'child';
       Object.keys(viewEls).forEach(function (key) { viewEls[key].classList.toggle('show', key === ws); });
 
-      // subspace row: working, then ready (green) until you open it
+      // task space row: working, then ready (green) until you open it
       var done = t >= 15.0;
       var readyUnread = done && ws !== 'child';
       rowSub.classList.toggle('working', !done);
       rowSub.classList.toggle('ready', readyUnread);
       subS.textContent = pick(SUB_S);
-      // subspace marks are square: filled green while ready and unread, hollow once opened
+      // task space marks are square: filled green while ready and unread, hollow once opened
       setIcon(subIc, !done ? '<span class="spin"></span>' : readyUnread ? '<span class="mk sq ready"></span>' : '<span class="mk sq quiet"></span>');
       subPr.classList.toggle('show', done);
       var secs = Math.round(Math.max(0, Math.min(t, 15.0) - 4.8) * 25 + 4);
@@ -156,7 +156,7 @@
       rowSub.classList.toggle('sel', ws === 'child');
       cardDocs.classList.toggle('sel', ws === 'docs');
       rowDocs.classList.toggle('sel', ws === 'docs');
-      wtitle.innerHTML = ws === 'child' ? '<b>checkout-redesign</b><span>subspace of lumen</span>'
+      wtitle.innerHTML = ws === 'child' ? '<b>checkout-redesign</b><span>task space of lumen</span>'
         : ws === 'docs' ? '<b>docs-site</b><span>' + (docsWorking ? '1 running' : 'idle') + '</span>'
         : '<b>lumen</b><span>' + (running ? running + ' running' : 'idle') + '</span>';
       phead.textContent = ws === 'child' ? 'Claude Code · lumen-checkout-redesign' : ws === 'docs' ? 'Codex · docs-site' : 'Claude Code · lumen';
@@ -173,11 +173,11 @@
       Object.keys(views).forEach(function (key) { views[key].classList.toggle('on', key === active); });
       cb.classList.toggle('done', t >= 12.0);
 
-      // camera: zoom into the sidebar when the subspace appears and when it turns ready
+      // camera: zoom into the sidebar when the task space appears and when it turns ready
       function seg(a, b) { return ease(Math.max(0, Math.min(1, (t - a) / (b - a)))); }
       var zoomAmt = Math.max(seg(3.5, 4.2) - seg(7.4, 8.0), seg(15.0, 15.5) - seg(19.6, 20.2));
       var focus = offsetIn(card), Z = 1 + 1.05 * zoomAmt;
-      // anchor on the card's top so the view doesn't drift as the subspace row grows in
+      // anchor on the card's top so the view doesn't drift as the task space row grows in
       var fx = focus.x + focus.w / 2, fy = focus.y + 190;
       var tx = Math.min(0, Math.max(VW - 1200 * Z, 330 - fx * Z)), ty = Math.min(0, Math.max(740 - 740 * Z, 370 - fy * Z));
       if (VW < 1200 && zoomAmt < 0.001) {

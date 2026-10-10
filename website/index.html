@@ -13,8 +13,8 @@
     <meta property="og:image" content="https://toastty.dev/assets/social-preview.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="Toastty: Any agent. Any workflow. Beside the Toastty sidebar, where a checkout-redesign subspace is ready for review with its PR #128 chip.">
-    <meta name="twitter:image:alt" content="Toastty: Any agent. Any workflow. Beside the Toastty sidebar, where a checkout-redesign subspace is ready for review with its PR #128 chip.">
+    <meta property="og:image:alt" content="Toastty: Any agent. Any workflow. Beside the Toastty sidebar, where a checkout-redesign task space is ready for review with its PR #128 chip.">
+    <meta name="twitter:image:alt" content="Toastty: Any agent. Any workflow. Beside the Toastty sidebar, where a checkout-redesign task space is ready for review with its PR #128 chip.">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Toastty — Any agent. Any workflow.">
     <meta name="twitter:description" content="Toastty gives your agents building blocks they can drive. Shape them into the workflow that fits how you work, with any agent that runs in a terminal.">
@@ -76,7 +76,7 @@
 
 <section class="shell video" aria-labelledby="video-title">
   <h2 class="sr-only" id="video-title">Example workflow</h2>
-  <p class="sr-only">An animated recreation of Toastty: a Claude Code session hands a checkout redesign off to a new worktree, which appears as a subspace in the sidebar with the conversation forked into it. While it works, the user marks up a docs preview in the right panel and sends the comment to a Codex session, which fixes the page. The subspace turns green when it is ready, and its PR opens from the chip in the sidebar.</p>
+  <p class="sr-only">An animated recreation of Toastty: a Claude Code session hands a checkout redesign off to a new worktree, which appears as a task space in the sidebar with the conversation forked into it. While it works, the user marks up a docs preview in the right panel and sends the comment to a Codex session, which fixes the page. The task space turns green when it is ready, and its PR opens from the chip in the sidebar.</p>
   <div class="stage-wrap" id="wrap" aria-hidden="true">
     <div class="stage" id="stage">
      <div class="viewport" id="viewport">
@@ -102,7 +102,7 @@
               <div class="s">Ready for prompt</div>
             </div>
             <div class="grow" data-at="5.0">
-              <div class="grp">⌄ SUBSPACES 1</div>
+              <div class="grp">⌄ TASK SPACES 1</div>
               <div class="row working has-chip" id="row-sub">
                 <span class="ic" id="sub-ic"><span class="spin"></span></span>
                 <div class="t">checkout-redesign</div>
@@ -158,10 +158,10 @@
               <div class="ln" data-at="3.6"><span class="b">●</span> <span class="b">Skill</span>(worktree-create)</div>
               <div class="ln m" data-at="4.1">  ⎿ Wrote WORKTREE_HANDOFF.md</div>
               <div class="ln m" data-at="4.5">  ⎿ Created worktree on <span class="a">feat/checkout-redesign</span></div>
-              <div class="ln m" data-at="4.9">  ⎿ Forked this session into a new subspace</div>
+              <div class="ln m" data-at="4.9">  ⎿ Forked this session into a new task space</div>
               <div class="ln m" data-at="5.3">  ⎿ Copied the checkout mockup to its right panel</div>
               <div class="ln gap" data-at="5.9"></div>
-              <div class="ln" data-at="5.9"><span class="b">●</span> Handed off. The subspace owns the build and the PR.</div>
+              <div class="ln" data-at="5.9"><span class="b">●</span> Handed off. The task space owns the build and the PR.</div>
             </div>
             <div class="prompt"><span class="gt">›</span><span id="typed"></span><span class="caret"></span></div>
           </div>
@@ -326,9 +326,9 @@
   <div class="beats" id="beats" aria-label="Video steps">
     <button type="button" class="pp" id="pp" aria-label="Pause"><svg viewBox="0 0 24 24" id="pp-ic"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
     <button type="button" class="beat" data-t="0" aria-label="Step 1: Hand off a task to a worktree"><span class="bar"><i></i></span><span class="n">01</span><span class="l">Hand off a task to a worktree</span></button>
-    <button type="button" class="beat" data-t="3.5" aria-label="Step 2: It becomes a subspace in the sidebar"><span class="bar"><i></i></span><span class="n">02</span><span class="l">It becomes a subspace in the sidebar</span></button>
+    <button type="button" class="beat" data-t="3.5" aria-label="Step 2: It becomes a task space in the sidebar"><span class="bar"><i></i></span><span class="n">02</span><span class="l">It becomes a task space in the sidebar</span></button>
     <button type="button" class="beat" data-t="8.0" aria-label="Step 3: Meanwhile, annotate a preview and send it to an agent"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Meanwhile, annotate a preview and send it to an agent</span></button>
-    <button type="button" class="beat" data-t="15.0" aria-label="Step 4: The subspace turns green when it's ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">The subspace turns green when it's ready</span></button>
+    <button type="button" class="beat" data-t="15.0" aria-label="Step 4: The task space turns green when it's ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">The task space turns green when it's ready</span></button>
     <button type="button" class="beat" data-t="17.6" aria-label="Step 5: Open the PR right from the sidebar"><span class="bar"><i></i></span><span class="n">05</span><span class="l">Open the PR right from the sidebar</span></button>
   </div>
 </section>
@@ -353,7 +353,7 @@
       <div class="cli"><span class="badge" style="position:static;display:inline-block;width:20px;height:20px;line-height:20px;font-size:11px;margin-right:8px">5</span>toastty action run workspace.create  ·  panel.create.local-document  ·  workspace.set-annotation</div>
     </div>
     <ol class="blist">
-      <li><b>Workspaces and subspaces</b><span>One per project or task, in the sidebar. A subspace nests new work under the session that started it.</span></li>
+      <li><b>Workspaces and task spaces</b><span>One per project or task, in the sidebar. A task space nests new work under the session that started it.</span></li>
       <li><b>Tabs and splits</b><span>Any terminal layout, with any agent or command in each pane. Layouts persist across restarts.</span></li>
       <li><b>Right panel</b><span>Scratchpad pages, local files, and a browser beside the terminal: plans, mockups, handoffs, previews.</span></li>
       <li><b>Status and chips</b><span>Live agent status and notifications, plus links like PR #128 or ENG-412 pinned to a workspace.</span></li>
@@ -367,10 +367,10 @@
   <h2>Put the pieces together however you work.</h2>
   <p class="lead">A workflow is a short skill file that tells your agent which pieces to use and when. Start from the worktree examples, or describe how you work and let your agent write one.</p>
   <div class="flows">
-    <div class="flow"><div><h4>Worktree handoff</h4><span class="ask">"hand this off"</span><a class="tag" href="https://github.com/figelwump/toastty/tree/main/examples/skills">Example included</a></div><p>Packages the conversation into a handoff, opens a worktree in a new subspace, and comes back with a screenshot report and a PR chip.</p><div class="tools">git · GitHub</div></div>
+    <div class="flow"><div><h4>Worktree handoff</h4><span class="ask">"hand this off"</span><a class="tag" href="https://github.com/figelwump/toastty/tree/main/examples/skills">Example included</a></div><p>Packages the conversation into a handoff, opens a worktree in a new task space, and comes back with a screenshot report and a PR chip.</p><div class="tools">git · GitHub</div></div>
     <div class="flow"><div><h4>Issue to PR</h4><span class="ask">"start ENG-412"</span></div><p>Reads the issue, names a workspace after it with a chip linking back, drafts the plan in a Scratchpad, and links the PR on the issue when it's up.</p><div class="tools">Linear · GitHub Issues</div></div>
-    <div class="flow"><div><h4>Review queue</h4><span class="ask">"review my PRs"</span></div><p>Opens a subspace per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies you as each one is ready.</p><div class="tools">GitHub</div></div>
-    <div class="flow"><div><h4>Spec to tasks</h4><span class="ask">"build from this spec"</span></div><p>Opens the spec beside the terminal, splits it into tasks, starts a subspace for each, and keeps a progress page up to date.</p><div class="tools">Google Docs · Notion · Markdown</div></div>
+    <div class="flow"><div><h4>Review queue</h4><span class="ask">"review my PRs"</span></div><p>Opens a task space per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies you as each one is ready.</p><div class="tools">GitHub</div></div>
+    <div class="flow"><div><h4>Spec to tasks</h4><span class="ask">"build from this spec"</span></div><p>Opens the spec beside the terminal, splits it into tasks, starts a task space for each, and keeps a progress page up to date.</p><div class="tools">Google Docs · Notion · Markdown</div></div>
     <div class="flow"><div><h4>Crash to fix</h4><span class="ask">"fix this crash"</span></div><p>Reproduces the report in a worktree with the dev server in a split the agent can read, then shows before and after screenshots.</p><div class="tools">Sentry · logs</div></div>
     <div class="flow"><div><h4>Second opinion</h4><span class="ask">"ask another model"</span></div><p>Runs two agents side by side on the same question and compares their answers in a Scratchpad.</p><div class="tools">Any two CLI agents</div></div>
   </div>
@@ -384,7 +384,7 @@
       <h2>See what needs you next.</h2>
       <p class="lead">Every workspace is a card in the sidebar. Sessions report live status, and the rows that want you are tinted: green when ready, amber when waiting for approval, red on an error.</p>
       <ul class="feats">
-        <li><b>Subspaces</b><span>Task workspaces nest under the session that started them, each with its own status and PR chip.</span></li>
+        <li><b>Task spaces</b><span>Task workspaces nest under the session that started them, each with its own status and PR chip.</span></li>
         <li><b>Jump to what's next</b><span><kbd>⌘⇧A</kbd> cycles through unread, approval, and active sessions.</span></li>
         <li><b>Mark for later</b><span><kbd>⌘⇧L</kbd> flags a session; the flag clears when it moves forward.</span></li>
         <li><b>OSC 7501 support</b><span>Programs that report <a href="https://mitchellh.com/writing/program-status-osc7501">OSC 7501</a> status appear in the sidebar with progress and approval, input, or login labels.</span><small class="watch-note">You can also watch any command with <kbd>⌘⇧M</kbd> and get notified when it exits.</small></li>
@@ -393,14 +393,14 @@
       <p class="agents-line">Rich status for Claude Code, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi. Any process or agent CLI that supports <a href="https://mitchellh.com/writing/program-status-osc7501">OSC 7501</a> will provide basic status updates as well.</p>
     </div>
     <figure class="sidebar-figure">
-      <div class="sbdemo" role="img" aria-label="Toastty sidebar with agent sessions, subspaces, and a deploy command reporting 65 percent progress through OSC 7501.">
+      <div class="sbdemo" role="img" aria-label="Toastty sidebar with agent sessions, task spaces, and a deploy command reporting 65 percent progress through OSC 7501.">
       <div class="card sel">
         <div class="wsn"><span>lumen</span><span class="pill"><span class="spin"></span>2/6</span></div>
         <span class="branch">main</span>
         <div class="row working"><span class="ic"><span class="spin"></span></span><div class="t">Refactor cart totals</div><div class="s">Running tests…</div><span class="elapsed">2m 10s</span></div>
         <div class="row ready"><span class="ic"><span class="mk dot ready"></span></span><div class="t">Plan checkout redesign</div><div class="s">Plan agreed. Ready to build.</div></div>
         <div class="row approval has-chip"><span class="ic"><span class="mk dot appr"></span></span><div class="t">Migrate orders table</div><div class="s">Needs approval: run migration</div><span class="chip appr">approval</span></div>
-        <div class="grp">⌄ SUBSPACES 3</div>
+        <div class="grp">⌄ TASK SPACES 3</div>
         <div class="row working"><span class="ic"><span class="spin"></span></span><div class="t">search-filters</div><div class="s">Editing FilterBar.tsx</div><span class="elapsed">6m 41s</span></div>
         <div class="row ready has-chip"><span class="ic"><span class="mk sq ready"></span></span><div class="t">checkout-redesign</div><div class="s">Ready for review</div><span class="chip pr show">PR #128</span></div>
         <div class="row has-chip"><span class="ic"><span class="mk done">✓</span></span><div class="t muted">sidebar-icons</div><div class="s">Merged</div><span class="chip pr show">PR #121</span></div>
@@ -449,7 +449,7 @@
       <h2 id="mobile-title">Check on your agents from your phone.</h2>
       <p class="lead">The same sidebar, on your iPhone. See which sessions need you, answer the questions your agents ask, and send the next message, all over your private tailnet.</p>
       <ul class="feats">
-        <li><b>Every session, live</b><span>Workspaces and subspaces with live status. Rows that need you are tinted green, amber, or red, just like on the Mac.</span></li>
+        <li><b>Every session, live</b><span>Workspaces and task spaces with live status. Rows that need you are tinted green, amber, or red, just like on the Mac.</span></li>
         <li><b>Answer your agents' questions</b><span>When an agent asks you to choose, pick an option or type a custom answer. It lands in the terminal on your Mac as if you were there.</span></li>
         <li><b>Reply from anywhere</b><span>Send the next prompt with photos and files attached. While the agent works, queue a follow-up for the next turn, steer a Codex or Claude Code turn, or stop it.</span></li>
         <li><b>Scratchpads and files</b><span>Open the pages, documents, and previews your agents published, and tap a PR chip to read the pull request.</span></li>
@@ -458,7 +458,7 @@
       <p class="agents-line">Available through TestFlight for now. <a href="https://github.com/figelwump/toastty/blob/main/docs/remote-access.md">Remote Access</a> covers pairing and the tailnet setup.</p>
     </div>
     <div class="mstage-col">
-      <p class="sr-only">An animated recreation of Toastty Mobile: the Home screen lists every session with live status. A session waiting on a Claude Code question is opened, the question is answered by choosing an option, and the agent gets back to work. A reply is typed and sent from the phone. Back on Home, the checkout-redesign subspace turns green with its PR #128 chip, and the pull request opens in a sheet.</p>
+      <p class="sr-only">An animated recreation of Toastty Mobile: the Home screen lists every session with live status. A session waiting on a Claude Code question is opened, the question is answered by choosing an option, and the agent gets back to work. A reply is typed and sent from the phone. Back on Home, the checkout-redesign task space turns green with its PR #128 chip, and the pull request opens in a sheet.</p>
       <div class="mstage-wrap" id="mwrap" aria-hidden="true">
         <div class="mstage" id="mstage">
           <div class="ph">
@@ -478,7 +478,7 @@
                   <div class="mrow ready"><span class="rail"><i class="mk dot ready"></i></span><div class="rt"><b>Plan checkout redesign</b><span class="age">4m</span></div><div class="rs">Plan agreed. Ready to build.</div><span class="fork">⑂ 1</span></div>
                   <div class="mrow approval" id="row-migrate"><span class="rail" id="migrate-ic"><i class="mk dot appr"></i></span><div class="rt"><b id="migrate-t">Migrate orders table</b><em class="sbadge appr" id="migrate-badge">approval</em><span class="age" id="migrate-age">1m</span></div><div class="rs" id="migrate-s">Needs approval: run migration</div></div>
                   <div class="mrow"><span class="rail"></span><div class="rt"><b class="idle">Fix flaky auth test</b><span class="age">2h</span></div><div class="rs">Ready for prompt</div></div>
-                  <div class="grph"><span class="chev down"></span>SUBSPACES <span>2/2</span><span class="tally" id="tally"><i></i>1</span></div>
+                  <div class="grph"><span class="chev down"></span>TASK SPACES <span>2/2</span><span class="tally" id="tally"><i></i>1</span></div>
                   <div class="mrow subr" id="row-checkout"><span class="rail" id="checkout-ic"><span class="spin"></span></span><div class="rt"><b id="checkout-t">checkout-redesign</b><span class="age" id="checkout-age">6m 41s</span><em class="achip pr" id="checkout-pr">PR #128 <i>↗</i></em><span class="arrow">→</span></div><div class="rs" id="checkout-s">Capturing screenshots…</div></div>
                   <div class="mrow subr"><span class="rail"><i class="idlebox"></i></span><div class="rt"><b class="idle">search-filters</b><span class="age">1d</span><span class="arrow">→</span></div><div class="rs">Paused for review</div></div>
                   <div class="wsh"><div><b>docs-site</b><small>1 session</small></div><span class="chev"></span></div>
@@ -550,7 +550,7 @@
                 </div>
               </div>
 
-              <!-- Subspace -->
+              <!-- Task space -->
               <div class="screen subws" id="s-sub">
                 <div class="cnav">
                   <span class="backb"></span>
@@ -598,7 +598,7 @@
     <button type="button" class="beat" data-t="0" data-seek="0.6" aria-label="Step 1: Every session at a glance"><span class="bar"><i></i></span><span class="n">01</span><span class="l">Every session at a glance</span></button>
     <button type="button" class="beat" data-t="2.5" data-seek="3.3" aria-label="Step 2: Answer the question your agent asked"><span class="bar"><i></i></span><span class="n">02</span><span class="l">Answer the question your agent asked</span></button>
     <button type="button" class="beat" data-t="8.0" data-seek="11.4" aria-label="Step 3: Queue the next step while it works"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Queue the next step while it works</span></button>
-    <button type="button" class="beat" data-t="14.3" data-seek="18.5" aria-label="Step 4: Open the PR when a subspace is ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">Open the PR when a subspace is ready</span></button>
+    <button type="button" class="beat" data-t="14.3" data-seek="18.5" aria-label="Step 4: Open the PR when a task space is ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">Open the PR when a task space is ready</span></button>
   </div>
 </section>
 
