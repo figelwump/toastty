@@ -3057,8 +3057,9 @@ extension RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
-    @Test func queuedSendWaitsForTheNextPromptAndSteerTypesIntoTheRunningTurn() async throws {
-        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true)
+    @Test(arguments: [AgentKind.codex, .claude])
+    func queuedSendWaitsForTheNextPromptAndSteerTypesIntoTheRunningTurn(agent: AgentKind) async throws {
+        let fixture = try RemoteBootstrapFixture(agent: agent, pairNativeDevice: true)
         defer { fixture.removeRuntimeFiles() }
         #expect(fixture.confirmCurrentLaunchBinding())
         var delivered: [String] = []
@@ -3083,25 +3084,76 @@ extension RemoteAccessServiceSafetyTests {
         let idleControl = try #require(fixture.summary.inputControl)
         #expect(idleControl.canQueue)
         #expect(idleControl.turnEpoch == nil)
+        #expect(idleControl.canSteer == false)
         #expect(idleControl.canInterrupt == false)
+
+        // Claude's hooks publish lifecycle observations through the managed
+        // feed; its transcript has no authoritative turn-end record.
+        func observeClaude(_ payload: ProviderObservationPayload, fingerprint: String, offset: TimeInterval) {
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID,
+                provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "claude-queue-steer",
+                observation: ProviderTranscriptObservation(
+                    timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                    fingerprint: fingerprint,
+                    payload: payload
+                )
+            ))
+        }
 
         // The Mac user starts a turn: the provider reports it under the
         // consumed prompt's epoch.
         let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
         defer { try? transcript.close() }
-        try transcript.write(contentsOf: Self.codexLine(
-            #"{"type":"user_message","message":"Fix the flicker","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
-            at: "2026-08-07T10:00:05.000Z"
-        ))
-        try transcript.write(contentsOf: Self.codexLine(
-            #"{"type":"task_started","turn_id":"turn-1","started_at":1786000805,"model_context_window":258400,"collaboration_mode_kind":"default"}"#,
-            at: "2026-08-07T10:00:05.100Z"
-        ))
+        if agent == .claude {
+            #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+                managedSessionID: fixture.sessionID,
+                provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "claude-queue-steer",
+                at: fixture.confirmedAt
+            ))
+            observeClaude(.transcript(.userMessage(.init(text: "Fix the flicker"))), fingerprint: "user-1", offset: 1)
+            observeClaude(.turnStarted(turnID: "turn-1"), fingerprint: "start-1", offset: 1.1)
+        } else {
+            try transcript.write(contentsOf: Self.codexLine(
+                #"{"type":"user_message","message":"Fix the flicker","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+                at: "2026-08-07T10:00:05.000Z"
+            ))
+            try transcript.write(contentsOf: Self.codexLine(
+                #"{"type":"task_started","turn_id":"turn-1","started_at":1786000805,"model_context_window":258400,"collaboration_mode_kind":"default"}"#,
+                at: "2026-08-07T10:00:05.100Z"
+            ))
+        }
         let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
         let turnEpoch = try #require(working.inputControl?.turnEpoch)
         #expect(working.state == .working)
         #expect(working.inputControl?.canSteer == true)
         #expect(working.inputControl?.canInterrupt == true)
+
+        if agent == .claude {
+            // A permission prompt must never receive Steer text or Enter.
+            observeClaude(.interactionPresented(.init(
+                kind: .permission, providerCallID: "approval-1", prompt: "Run the command?"
+            )), fingerprint: "approval-1", offset: 1.2)
+            let awaitingApproval = try await Self.waitForSummary(fixture) {
+                $0.inputControl?.turnEpoch == nil
+            }
+            #expect(awaitingApproval.inputControl?.canSteer == false)
+            #expect(fixture.service.performRemoteSend(.init(
+                conversationID: fixture.conversationID, clientRequestID: "steer-during-approval",
+                expectedInputEpoch: turnEpoch, text: "Use 300 ms", deliveryMode: .steer
+            ), device: device) == .rejected(reason: .notWorking))
+            #expect(delivered.isEmpty)
+            observeClaude(.transcript(.toolFinished(.init(callID: "approval-1"))),
+                          fingerprint: "approval-resolved", offset: 1.3)
+            let resumed = try await Self.waitForSummary(fixture) {
+                $0.inputControl?.canSteer == true
+            }
+            #expect(resumed.inputControl?.turnEpoch == turnEpoch)
+        }
 
         // Queue: held, listed, not typed.
         let queued = RemoteMessageSendRequest(
@@ -3123,8 +3175,26 @@ extension RemoteAccessServiceSafetyTests {
             expectedInputEpoch: turnEpoch, text: "Use 300 ms", deliveryMode: .steer
         )
         #expect(fixture.service.performRemoteSend(steer, device: device) == .accepted(epoch: turnEpoch))
+        #expect(fixture.service.performRemoteSend(steer, device: device) == .duplicate)
         #expect(delivered == ["Use 300 ms"])
         #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+        if agent == .claude {
+            observeClaude(.transcript(.userMessage(.init(text: steer.text))),
+                          fingerprint: "steer-echo", offset: 1.4)
+            guard case .page(let page) = fixture.service.facadeConversationEvents(
+                for: fixture.conversationID, after: nil, limit: 100
+            ) else {
+                Issue.record("Expected Claude's Steer receipt")
+                return
+            }
+            #expect(page.events.contains { event in
+                guard case .userMessage(let payload) = event.payload else { return false }
+                return payload.clientRequestID == steer.clientRequestID
+                    && payload.origin == .remote && payload.deliveryMode == .steer
+            })
+            #expect(fixture.summary.inputControl?.turnEpoch == turnEpoch)
+            #expect(fixture.summary.inputControl?.queuedMessages.count == 1)
+        }
         var wrongTurn = steer
         wrongTurn.clientRequestID = "steer-2"
         wrongTurn.expectedInputEpoch = turnEpoch.next()
@@ -3155,14 +3225,19 @@ extension RemoteAccessServiceSafetyTests {
 
         // The Mac user submitted their typing, then the turn ends: the next
         // prompt opens and the queued message is typed, once, as a prompt.
-        try transcript.write(contentsOf: Self.codexLine(
-            #"{"type":"user_message","message":"typed on the mac","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
-            at: "2026-08-07T10:00:06.000Z"
-        ))
-        try transcript.write(contentsOf: Self.codexLine(
-            #"{"type":"task_complete","turn_id":"turn-1","last_agent_message":"Done.","started_at":1786000805,"completed_at":1786000821,"duration_ms":16000}"#,
-            at: "2026-08-07T10:00:21.000Z"
-        ))
+        if agent == .claude {
+            observeClaude(.transcript(.userMessage(.init(text: "typed on the mac"))), fingerprint: "user-2", offset: 2)
+            observeClaude(.turnEnded(turnID: "turn-1", reason: .completed), fingerprint: "end-1", offset: 3)
+        } else {
+            try transcript.write(contentsOf: Self.codexLine(
+                #"{"type":"user_message","message":"typed on the mac","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+                at: "2026-08-07T10:00:06.000Z"
+            ))
+            try transcript.write(contentsOf: Self.codexLine(
+                #"{"type":"task_complete","turn_id":"turn-1","last_agent_message":"Done.","started_at":1786000805,"completed_at":1786000821,"duration_ms":16000}"#,
+                at: "2026-08-07T10:00:21.000Z"
+            ))
+        }
         let drained = try await Self.waitForSummary(fixture) { $0.inputControl?.queuedMessages.isEmpty == true }
         #expect(drained.inputControl?.queuedMessages.isEmpty == true)
         #expect(delivered == ["Use 300 ms", "Also add a UI test"])
@@ -3170,6 +3245,66 @@ extension RemoteAccessServiceSafetyTests {
         // provider opens the next one.
         #expect(drained.inputAvailability.allowsRemoteSend == false)
         #expect(fixture.service.performRemoteSend(queued, device: device) == .duplicate)
+    }
+
+    @MainActor
+    @Test func claudeSteerStartingTheNextTurnKeepsToasttyQueueHeld() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude, claudePromptStabilizationDelay: .milliseconds(40), pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, submit, _, _ in
+            #expect(submit)
+            delivered.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-steer-next-turn", at: fixture.confirmedAt
+        ))
+        func observe(_ payload: ProviderObservationPayload, fingerprint: String, offset: TimeInterval) {
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID, provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "claude-steer-next-turn",
+                observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                                   fingerprint: fingerprint, payload: payload)
+            ))
+        }
+        observe(.transcript(.userMessage(.init(text: "Original task"))), fingerprint: "first-user", offset: 1)
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        let firstTurn = try #require(working.inputControl?.turnEpoch)
+        let queued = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "queued-next",
+            expectedInputEpoch: firstTurn, text: "Next queued task", deliveryMode: .queue
+        )
+        #expect(fixture.service.performRemoteSend(queued, device: device) == .queued(position: 1))
+        let steer = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "steer-next",
+            expectedInputEpoch: firstTurn, text: "Correction", deliveryMode: .steer
+        )
+        #expect(fixture.service.performRemoteSend(steer, device: device) == .accepted(epoch: firstTurn))
+
+        // Claude may read a Steer only after its original turn ends. That
+        // next turn must cancel the old prompt-opening delay and hold Queue.
+        observe(.turnEnded(turnID: "turn-1", reason: .completed), fingerprint: "first-end", offset: 2)
+        observe(.transcript(.userMessage(.init(text: steer.text))), fingerprint: "steer-user", offset: 2.1)
+        let nextTurn = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch == firstTurn.next() }
+        #expect(nextTurn.inputControl?.turnEpoch == firstTurn.next())
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+        #expect(fixture.summary.inputControl?.queuedMessages.map(\.clientRequestID) == [queued.clientRequestID])
+        #expect(delivered == [steer.text])
+
+        observe(.turnEnded(turnID: "turn-2", reason: .completed), fingerprint: "second-end", offset: 3)
+        let drained = try await Self.waitForSummary(fixture) { $0.inputControl?.queuedMessages.isEmpty == true }
+        #expect(drained.inputControl?.queuedMessages.isEmpty == true)
+        #expect(delivered == [steer.text, queued.text])
     }
 
     @MainActor

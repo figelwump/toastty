@@ -275,11 +275,13 @@ transcript, not under the field.
   remove the message on the Mac and act only when the Mac confirms it was still
   waiting. A queued message with attachments keeps them on the Mac; editing it
   restores only the text.
-- **Steer** types the message into the running turn. It is offered only for
-  Codex, which injects input into the current turn, and only while nobody has
-  typed in that turn's terminal on the Mac. Claude Code holds such input in its
-  own queue until the turn ends, which Toastty's queue already covers, so the
-  chip stays on Queue for Claude. The chip returns to Queue after each send.
+- **Steer** submits the message to the running Codex or Claude Code CLI, only
+  while nobody has typed in that turn's terminal on the Mac. Claude Code labels
+  this input queued, but can read it within the current turn after active tool
+  calls finish. If it has no earlier opportunity to read the message, it sends
+  it after the turn ends. Toastty's **Queue** holds the message until the turn
+  ends and the next prompt opens. See Claude Code's [interrupt and steer documentation](https://code.claude.com/docs/en/how-claude-code-works#interrupt-and-steer).
+  The chip returns to Queue after each send.
 - **Stop** sends the agent's interrupt key (Escape) for the turn the phone saw.
   A stop names that turn, so a late tap cannot stop a later one. After a stop
   the queue pauses until the user taps **Send next** on a queued message,
