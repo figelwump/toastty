@@ -668,6 +668,22 @@ enum CLICommand: Equatable {
         }
     }
 
+    /// Actions that wait for a task hook to finish: an agent launch, or a
+    /// cleanup script that may take minutes per task.
+    static let longRunningActionIDs: Set<String> = [
+        "workspace.task.finish",
+        "workspace.task.cleanup",
+        "workspace.task.cleanup-finished",
+        "workspace.task.close",
+    ]
+
+    var socketTimeoutInterval: TimeInterval {
+        if case .appControlRun(.action, let id, _) = self, Self.longRunningActionIDs.contains(id) {
+            return 30 * 60
+        }
+        return 10
+    }
+
     var isSessionScopeCommand: Bool {
         switch self {
         case .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
@@ -752,7 +768,10 @@ public enum ToasttyCLI {
                 )
 
             default:
-                let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
+                let client = ToasttySocketClient(
+                    socketPath: invocation.options.socketPath,
+                    timeoutInterval: invocation.command.socketTimeoutInterval
+                )
                 let response: AutomationResponseEnvelope
                 if let request = invocation.command.makeRequestEnvelope(callerSessionID: callerSessionID) {
                     response = try client.send(request)

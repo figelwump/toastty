@@ -65,6 +65,29 @@ visual correctness, HTTP success, SPA readiness, or video playback. Persisted
 restoration, superseded navigation callbacks, and detached screenshot rejection
 require the separate runtime tests.
 
+### Task lifecycle hooks
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote \
+  --validation-command 'python3 scripts/automation/task-hooks-check.py'
+```
+
+This drives the hook actions over the wrapper's isolated instance: it installs
+a throwaway user skill in the run's runtime home, creates a background
+workspace with one subspace, sets the subspace's finish, cleanup, and close
+hooks with `workspace.task.set-hooks`, moves the task through open, review,
+done, and back with `workspace.set-task-stage`, and runs
+`workspace.task.close`, `workspace.task.cleanup`, and
+`workspace.task.cleanup-finished`. The fake hook script records the
+environment Toastty gave it and exits 3 the first time it runs for a marker,
+then closes its workspace and exits 0. The check verifies the stage in
+`workspace.snapshot`, the skipped close and the skipped then cleaned cleanup
+outcomes, that the script saw `TOASTTY_WORKSPACE_ID` and `TOASTTY_CLI_PATH`
+but no session identity, and that the subspace is gone afterwards. It never
+selects a workspace or launches an agent, so Finish Task and the header and
+row buttons are covered by the app tests only. It writes
+`task-hooks-check.json` under the run's artifacts directory.
+
 ### Remote session start
 
 ```bash

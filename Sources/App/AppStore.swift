@@ -85,12 +85,6 @@ final class AppStore: ObservableObject {
     @Published private(set) var hasEverLaunchedAgent: Bool
     @Published private(set) var hasAutoOpenedGettingStartedPanelThisLaunch = false
     @Published private(set) var askBeforeQuitting: Bool
-    /// What a subspace's Merge button and shortcut do; the user picks it from
-    /// the button's menu, and it applies to every workspace.
-    @Published private(set) var workspaceMergeMode: WorkspaceMergeMode
-    /// Whether the subspace Merge button, its menu items, and its shortcut
-    /// show at all. Read once at launch from a hidden defaults key.
-    let isWorkspaceMergeEnabled: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
     @Published private(set) var recentRightPanelItems: [RecentRightPanelItem]
@@ -133,8 +127,6 @@ final class AppStore: ObservableObject {
         persistTerminalFontPreference: Bool = true,
         initialHasEverLaunchedAgent: Bool = false,
         initialAskBeforeQuitting: Bool = true,
-        initialWorkspaceMergeMode: WorkspaceMergeMode = .mergeAndCleanUp,
-        isWorkspaceMergeEnabled: Bool = false,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit,
         appIsActiveProvider: @escaping AppIsActiveProvider = { NSApplication.shared.isActive },
@@ -143,8 +135,6 @@ final class AppStore: ObservableObject {
         self.state = state
         hasEverLaunchedAgent = initialHasEverLaunchedAgent
         askBeforeQuitting = initialAskBeforeQuitting
-        workspaceMergeMode = initialWorkspaceMergeMode
-        self.isWorkspaceMergeEnabled = isWorkspaceMergeEnabled
         self.recentRightPanelItems = recentRightPanelItemsStore.items
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
@@ -1967,13 +1957,6 @@ final class AppStore: ObservableObject {
         self.askBeforeQuitting = askBeforeQuitting
         guard persistUserSettings else { return }
         ToasttySettingsStore.persistAskBeforeQuitting(askBeforeQuitting)
-    }
-
-    func setWorkspaceMergeMode(_ mode: WorkspaceMergeMode) {
-        guard workspaceMergeMode != mode else { return }
-        workspaceMergeMode = mode
-        guard persistUserSettings else { return }
-        ToasttySettingsStore.persistWorkspaceMergeMode(mode)
     }
 
     func setURLRoutingPreferences(_ preferences: URLRoutingPreferences) {

@@ -261,6 +261,20 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     /// session runtime clears it when an agent in the workspace starts new
     /// work.
     public var doneAt: Date?
+    /// When the agent said this subspace's task was ready for the user to
+    /// review; `nil` while it is still being worked on. Cleared with the done
+    /// mark when new work starts. Together with `doneAt` it gives `taskStage`.
+    public var reviewReadyAt: Date?
+    /// How this subspace's task is finished and cleaned up; empty for a
+    /// workspace with no hooks. Only subspaces hold hooks: the reducer drops
+    /// them when the workspace moves to top level.
+    public var taskHooks: WorkspaceTaskHooks
+
+    public var taskStage: WorkspaceTaskStage {
+        if doneAt != nil { return .done }
+        if reviewReadyAt != nil { return .review }
+        return .open
+    }
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -287,7 +301,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         parentWorkspaceID: UUID? = nil,
         spawningSessionID: String? = nil,
         primaryAnnotationKey: String? = nil,
-        doneAt: Date? = nil
+        doneAt: Date? = nil,
+        reviewReadyAt: Date? = nil,
+        taskHooks: WorkspaceTaskHooks = WorkspaceTaskHooks()
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
             preferredSelectedTabID: selectedTabID,
@@ -311,6 +327,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.parentWorkspaceID = parentWorkspaceID
         self.spawningSessionID = spawningSessionID
         self.doneAt = doneAt
+        self.reviewReadyAt = reviewReadyAt
+        self.taskHooks = taskHooks
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
         self.sidebarSessionPanelOrder = sidebarSessionPanelOrder
         normalizeSidebarSessionPanelOrder()
@@ -651,6 +669,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case parentWorkspaceID
         case spawningSessionID
         case doneAt
+        case reviewReadyAt
+        case taskHooks
     }
 
     public init(from decoder: any Decoder) throws {
@@ -709,6 +729,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         parentWorkspaceID = (try? container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)) ?? nil
         spawningSessionID = (try? container.decodeIfPresent(String.self, forKey: .spawningSessionID)) ?? nil
         doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
+        reviewReadyAt = (try? container.decodeIfPresent(Date.self, forKey: .reviewReadyAt)) ?? nil
+        taskHooks = ((try? container.decodeIfPresent(WorkspaceTaskHooks.self, forKey: .taskHooks)) ?? nil)?.sanitized
+            ?? WorkspaceTaskHooks()
         normalizeSidebarSessionPanelOrder()
     }
 
@@ -726,6 +749,10 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encodeIfPresent(spawningSessionID, forKey: .spawningSessionID)
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
+        try container.encodeIfPresent(reviewReadyAt, forKey: .reviewReadyAt)
+        if taskHooks.isEmpty == false {
+            try container.encode(taskHooks, forKey: .taskHooks)
+        }
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

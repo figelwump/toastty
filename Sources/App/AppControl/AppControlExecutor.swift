@@ -254,6 +254,30 @@ final class AppControlExecutor {
                 result: nil
             )
 
+        case .workspaceTaskSetHooks:
+            return try runSetWorkspaceTaskHooks(args: args)
+
+        case .workspaceSetTaskStage:
+            let workspaceID = try resolveWorkspaceIDDefaultingToCallerSession(args: args)
+            guard let rawStage = normalizedOptionalText(args.stringValue("stage")),
+                  let stage = WorkspaceTaskStage(rawValue: rawStage) else {
+                throw AutomationSocketError.invalidPayload("stage must be one of open, review, done")
+            }
+            if stage != .open, try requiredStore().state.workspacesByID[workspaceID]?.parentWorkspaceID == nil {
+                throw AutomationSocketError.invalidPayload(
+                    "workspace.set-task-stage applies to subspaces; this workspace is top-level"
+                )
+            }
+            return .init(
+                didMutateState: try requiredStore().send(.setWorkspaceTaskStage(workspaceID: workspaceID, stage: stage, at: Date())),
+                result: ["taskStage": .string(stage.rawValue)]
+            )
+
+        case .workspaceTaskFinish, .workspaceTaskCleanup, .workspaceTaskCleanupFinished, .workspaceTaskClose:
+            // These wait for an agent launch or a script, so they only run
+            // through the async path the socket server uses.
+            throw AutomationSocketError.invalidPayload("\(action.rawValue) must run through app_control.run_action")
+
         case .workspaceSetParent:
             let store = try requiredStore()
             let workspaceID = try resolveWorkspaceID(args: args)
@@ -772,7 +796,44 @@ final class AppControlExecutor {
             commandName: "app_control.run_action"
         )
     ) async throws -> AppControlActionOutcome {
-        guard AppControlActionID.resolve(rawID) == .agentLaunch else {
+        switch AppControlActionID.resolve(rawID) {
+        case .agentLaunch:
+            break
+        case .workspaceTaskFinish:
+            let (workspaceID, runner) = try withRequestContext(context) { try workspaceTaskTarget(args: args) }
+            switch await runner.finish(workspaceID: workspaceID) {
+            case .success(let outcome):
+                var result: [String: AutomationJSONValue] = ["workspaceID": .string(workspaceID.uuidString)]
+                switch outcome {
+                case .sentToSession(let sessionID, let panelID):
+                    result["delivery"] = .string("sent")
+                    result["sessionID"] = .string(sessionID)
+                    result["panelID"] = .string(panelID.uuidString)
+                case .launchedSession(let sessionID, let panelID):
+                    result["delivery"] = .string("launched")
+                    result["sessionID"] = .string(sessionID)
+                    result["panelID"] = .string(panelID.uuidString)
+                }
+                return .init(didMutateState: true, result: result)
+            case .failure(let problem):
+                throw AutomationSocketError.invalidPayload(WorkspaceTaskHookRunner.message(for: problem))
+            }
+        case .workspaceTaskCleanup, .workspaceTaskClose:
+            let kind: WorkspaceTaskHooks.ScriptKind = AppControlActionID.resolve(rawID) == .workspaceTaskClose ? .close : .cleanup
+            let task = try withRequestContext(context) { try startWorkspaceTaskScript(kind, args: args) }
+            let outcome = await task.value.value
+            return .init(didMutateState: true, result: Self.scriptResultJSON(workspaceID: task.workspaceID, outcome: outcome, kind: kind))
+        case .workspaceTaskCleanupFinished:
+            let plan = try withRequestContext(context) { try planWorkspaceTaskCleanupFinished(args: args) }
+            let results = await plan.runner.cleanUpFinished(parentWorkspaceID: plan.rootID, isAllowed: plan.isAllowed).value
+            return .init(
+                didMutateState: true,
+                result: [
+                    "workspaceID": .string(plan.rootID.uuidString),
+                    "results": .array(results.map { .object(Self.scriptResultJSON(workspaceID: $0.workspaceID, outcome: $0.outcome, kind: .cleanup)) }),
+                ]
+            )
+        default:
             return try runAction(id: rawID, args: args, context: context)
         }
 
@@ -2435,6 +2496,162 @@ private extension AppControlExecutor {
     /// then mutates the workspace. A live key's claim cannot be replaced; a
     /// key becomes replaceable only after its usage reaches zero across the
     /// live state and inactive persisted layout profiles.
+    // MARK: - Task lifecycle hooks
+
+    private func runSetWorkspaceTaskHooks(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let store = try requiredStore()
+        let workspaceID = try resolveWorkspaceIDDefaultingToCallerSession(args: args)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+        var hooks = WorkspaceTaskHooks()
+        if let rawSkill = normalizedOptionalText(args.stringValue("finishSkill")) {
+            guard let skill = WorkspaceTaskHooks.validatedSkillName(rawSkill) else {
+                throw AutomationSocketError.invalidPayload(
+                    "finishSkill must be 1-\(WorkspaceTaskHooks.maximumSkillNameLength) ASCII letters, digits, '.', '_', or '-', and not start with '.'"
+                )
+            }
+            hooks.finishSkill = skill
+        }
+        hooks.cleanup = try scriptHookParameter(prefix: "cleanup", args: args)
+        hooks.close = try scriptHookParameter(prefix: "close", args: args)
+        if hooks.isEmpty == false, workspace.parentWorkspaceID == nil {
+            throw AutomationSocketError.invalidPayload(
+                "workspace.task.set-hooks applies to subspaces; this workspace is top-level"
+            )
+        }
+        return .init(
+            didMutateState: store.send(.setWorkspaceTaskHooks(workspaceID: workspaceID, hooks: hooks)),
+            result: taskHooksJSON(hooks)
+        )
+    }
+
+    /// Reads `<prefix>Skill`, `<prefix>Script`, and `<prefix>Args`.
+    private func scriptHookParameter(prefix: String, args: [String: AutomationJSONValue]) throws -> WorkspaceTaskHooks.ScriptHook? {
+        let rawSkill = normalizedOptionalText(args.stringValue("\(prefix)Skill"))
+        let rawScript = normalizedOptionalText(args.stringValue("\(prefix)Script"))
+        let rawArgs = try agentLaunchStringArray("\(prefix)Args", args: args)
+        switch (rawSkill, rawScript) {
+        case (nil, nil):
+            if rawArgs.isEmpty == false {
+                throw AutomationSocketError.invalidPayload("\(prefix)Args needs \(prefix)Skill and \(prefix)Script")
+            }
+            return nil
+        case (let skill?, let script?):
+            guard WorkspaceTaskHooks.validatedSkillName(skill) != nil else {
+                throw AutomationSocketError.invalidPayload(
+                    "\(prefix)Skill must be 1-\(WorkspaceTaskHooks.maximumSkillNameLength) ASCII letters, digits, '.', '_', or '-', and not start with '.'"
+                )
+            }
+            guard WorkspaceTaskHooks.validatedScriptPath(script) != nil else {
+                throw AutomationSocketError.invalidPayload(
+                    "\(prefix)Script must be a relative path inside the skill with no '..' component"
+                )
+            }
+            guard let hook = WorkspaceTaskHooks.validatedScriptHook(skill: skill, script: script, arguments: rawArgs) else {
+                throw AutomationSocketError.invalidPayload(
+                    "\(prefix)Args allows up to \(WorkspaceTaskHooks.maximumArgumentCount) non-empty arguments of at most \(WorkspaceTaskHooks.maximumArgumentLength) bytes without control characters"
+                )
+            }
+            return hook
+        default:
+            throw AutomationSocketError.invalidPayload("\(prefix)Skill and \(prefix)Script go together")
+        }
+    }
+
+    private func workspaceTaskTarget(args: [String: AutomationJSONValue]) throws -> (UUID, WorkspaceTaskHookRunner) {
+        let workspaceID = try resolveWorkspaceID(args: args)
+        guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else {
+            throw AutomationSocketError.invalidPayload("task hooks are unavailable in this launch context")
+        }
+        return (workspaceID, runner)
+    }
+
+    private struct StartedWorkspaceTaskScript {
+        let workspaceID: UUID
+        let value: Task<WorkspaceTaskHookRunner.ScriptOutcome, Never>
+    }
+
+    /// Starts one workspace's cleanup or close script; the async action
+    /// waits for it.
+    private func startWorkspaceTaskScript(_ kind: WorkspaceTaskHooks.ScriptKind, args: [String: AutomationJSONValue]) throws -> StartedWorkspaceTaskScript {
+        let workspaceID = try resolveWorkspaceID(args: args)
+        if let caller = callerManagedSession(), caller.workspaceID == workspaceID {
+            throw AutomationSocketError.invalidPayload(
+                "workspace.task.\(kind.rawValue) cannot run from inside the workspace it acts on; run it from another workspace"
+            )
+        }
+        guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else {
+            throw AutomationSocketError.invalidPayload("task hooks are unavailable in this launch context")
+        }
+        switch runner.runScript(kind, workspaceID: workspaceID) {
+        case .success(let task):
+            return StartedWorkspaceTaskScript(workspaceID: workspaceID, value: task)
+        case .failure(let problem):
+            throw AutomationSocketError.invalidPayload(WorkspaceTaskHookRunner.message(for: problem))
+        }
+    }
+
+    private struct WorkspaceTaskCleanupFinishedPlan {
+        let rootID: UUID
+        let runner: WorkspaceTaskHookRunner
+        /// A caller's own workspace is left out, as the script would close
+        /// the terminal that asked for it, and so is any workspace outside
+        /// the caller's scope.
+        let isAllowed: @MainActor (UUID) -> Bool
+    }
+
+    private func planWorkspaceTaskCleanupFinished(args: [String: AutomationJSONValue]) throws -> WorkspaceTaskCleanupFinishedPlan {
+        let store = try requiredStore()
+        let parentWorkspaceID = try resolveWorkspaceID(args: args)
+        guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else {
+            throw AutomationSocketError.invalidPayload("task hooks are unavailable in this launch context")
+        }
+        let rootID = store.state.workspacesByID[parentWorkspaceID]?.parentWorkspaceID ?? parentWorkspaceID
+        let callerSessionID = requestContext().callerSessionID
+        let callerWorkspaceID = callerManagedSession()?.workspaceID
+        let sessionRuntimeStore = sessionRuntimeStore
+        return WorkspaceTaskCleanupFinishedPlan(rootID: rootID, runner: runner) { subspaceID in
+            subspaceID != callerWorkspaceID
+                && sessionRuntimeStore.allowsWorkspaceAutomation(callerSessionID: callerSessionID, of: subspaceID)
+        }
+    }
+
+    private func taskHooksJSON(_ hooks: WorkspaceTaskHooks) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = [
+            "finishSkill": hooks.finishSkill.map(AutomationJSONValue.string) ?? .null,
+        ]
+        for (key, hook) in [("cleanup", hooks.cleanup), ("close", hooks.close)] {
+            if let hook {
+                result[key] = .object([
+                    "skill": .string(hook.skill),
+                    "script": .string(hook.script),
+                    "args": .array(hook.arguments.map(AutomationJSONValue.string)),
+                ])
+            } else {
+                result[key] = .null
+            }
+        }
+        return result
+    }
+
+    /// A close script that changed the task reports `closed`, not `cleaned`.
+    private static func scriptResultJSON(
+        workspaceID: UUID,
+        outcome: WorkspaceTaskHookRunner.ScriptOutcome,
+        kind: WorkspaceTaskHooks.ScriptKind
+    ) -> [String: AutomationJSONValue] {
+        var name = WorkspaceTaskHookRunner.outcomeName(outcome)
+        if name == "cleaned", kind == .close {
+            name = "closed"
+        }
+        return [
+            "workspaceID": .string(workspaceID.uuidString),
+            "outcome": .string(name),
+            "detail": .string(WorkspaceTaskHookRunner.outcomeDetail(outcome)),
+        ]
+    }
+
     private func runSetWorkspaceAnnotation(
         args: [String: AutomationJSONValue]
     ) throws -> AppControlActionOutcome {
@@ -2729,6 +2946,8 @@ private extension AppControlExecutor {
                     "isSelected": .bool(store.state.selectedWorkspaceID(in: window.id) == workspaceID),
                     "annotations": .array(annotationsJSON(for: workspace)),
                     "done": .bool(workspace.doneAt != nil),
+                    "taskStage": .string(workspace.taskStage.rawValue),
+                    "taskHooks": .object(taskHooksJSON(workspace.taskHooks)),
                     "terminalCwds": .array(terminalCwds.sorted().map(AutomationJSONValue.string)),
                     "activeSessions": .array(activeSessions),
                     "busyTerminalCount": .int(busyTerminalCount),
@@ -2855,6 +3074,8 @@ private extension AppControlExecutor {
             "workspaceID": .string(workspaceID.uuidString),
             "annotations": .array(annotationsJSON(for: workspace)),
             "done": .bool(workspace.doneAt != nil),
+            "taskStage": .string(workspace.taskStage.rawValue),
+            "taskHooks": .object(taskHooksJSON(workspace.taskHooks)),
             // Related workspaces outside the caller's scope stay hidden, as
             // they are everywhere else in the automation surface.
             "parentWorkspaceID": workspace.parentWorkspaceID

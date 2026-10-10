@@ -199,8 +199,35 @@ started. The child verifies its directory, branch, scope and handoff before
 writes; previous paths in inherited history are historical. Do not resume the
 same live native session into a second writer.
 
-After launch, record returned workspace/panel/session IDs in the launcher's
-completion notes. Do not rewrite the child's handoff or task state after launch.
+After launch, set the task space's lifecycle hooks, so its workspace header
+and sidebar row offer Finish Task once the task is ready for review, Clean Up
+once it is done, and Close Task to abandon it:
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run workspace.task.set-hooks \
+  --workspace "$WORKSPACE_ID" \
+  finishSkill=worktree-done \
+  cleanupSkill=worktree-cleanup \
+  cleanupScript=scripts/worktree-status.py \
+  cleanupArgs=--cleanup-workspace \
+  closeSkill=worktree-cleanup \
+  closeScript=scripts/worktree-status.py \
+  closeArgs=--close-workspace
+```
+
+Finish Task sends `worktree-done` to the task's agent session, which is the
+user's acceptance of the version there. Clean Up and Close Task run
+`worktree-cleanup/scripts/worktree-status.py` without an agent; Toastty
+appends nothing, because the script reads the workspace from
+`TOASTTY_WORKSPACE_ID`. The task session marks the task ready for review with
+`workspace.set-task-stage stage=review` when its PR is published, as the task
+workflow says. If the running Toastty does not list `workspace.task.set-hooks`
+in `action list`, skip this step and note it in the completion record; the
+user then finishes with `worktree-done` and cleans up with `worktree-cleanup`
+by hand.
+
+Record returned workspace/panel/session IDs in the launcher's completion notes.
+Do not rewrite the child's handoff or task state after launch.
 
 ## Open referenced artifacts
 

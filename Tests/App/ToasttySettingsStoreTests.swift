@@ -36,17 +36,6 @@ final class ToasttySettingsStoreTests: XCTestCase {
         XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
-    func testWorkspaceMergeModeDefaultsToMergeAndCleanUpAndPersists() {
-        let userDefaults = makeUserDefaults()
-        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).workspaceMergeMode, .mergeAndCleanUp)
-
-        ToasttySettingsStore.persistWorkspaceMergeMode(.mergeOnly, userDefaults: userDefaults)
-        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).workspaceMergeMode, .mergeOnly)
-
-        userDefaults.set("unknown", forKey: "toastty.workspaceMergeMode")
-        XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).workspaceMergeMode, .mergeAndCleanUp)
-    }
-
     func testAppKitDefaultPreferencesDoNotCountAsToasttyPersistedSettings() {
         let userDefaults = makeUserDefaults()
 

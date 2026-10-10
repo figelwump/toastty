@@ -73,11 +73,11 @@ final class SessionRuntimeStore: ObservableObject {
     var programStatusRuntime = TerminalProgramStatusRuntime()
     var programStatusPublicationTask: Task<Void, Never>?
     @Published private(set) var providerConversationRevision: UInt64 = 0
-    /// What each subspace's Merge button is doing, by workspace, published
-    /// for the button. `WorkspaceMergeCoordinator` owns and updates them.
-    @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
-    /// Set once at launch; runs what the Merge button asks for.
-    var workspaceMergeCoordinator: WorkspaceMergeCoordinator?
+    /// Each subspace's running or finished script hook, by workspace,
+    /// published for its row. `WorkspaceTaskHookRunner` owns and updates them.
+    @Published private(set) var workspaceTaskScriptRuns: [UUID: WorkspaceTaskScriptRun] = [:]
+    /// Set once at launch; runs what the Finish Task and Clean Up buttons ask for.
+    var workspaceTaskHookRunner: WorkspaceTaskHookRunner?
 
     /// Receives accepted actionable transitions after deduplication and any
     /// child/resume delay. Delivery is independent of shell hooks and Mac focus.
@@ -5364,11 +5364,12 @@ final class SessionRuntimeStore: ObservableObject {
         return isBusy(nextKind) && isBusy(previousKind) == false
     }
 
-    /// A workspace marked done reopens when an agent in it starts new work,
-    /// so a merged task that picks up more work stops reading as finished.
+    /// A workspace marked done or ready for review reopens when an agent in
+    /// it starts new work, so a task that picks up more work stops reading as
+    /// finished, and the user reviews the next version before finishing it.
     private func reopenDoneWorkspaceIfNeeded(workspaceID: UUID, sessionID: String, trigger: String) {
-        guard let store, store.state.workspacesByID[workspaceID]?.doneAt != nil else { return }
-        guard store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil)) else { return }
+        guard let store, store.state.workspacesByID[workspaceID]?.taskStage != .open else { return }
+        guard store.send(.setWorkspaceTaskStage(workspaceID: workspaceID, stage: .open, at: Date())) else { return }
         ToasttyLog.info(
             "Cleared workspace done mark for new work",
             category: .terminal,
@@ -5380,9 +5381,9 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
-    func setWorkspaceMergeRequests(_ requests: [UUID: WorkspaceMergeRequest]) {
-        if workspaceMergeRequests != requests {
-            workspaceMergeRequests = requests
+    func setWorkspaceTaskScriptRun(_ run: WorkspaceTaskScriptRun?, for workspaceID: UUID) {
+        if workspaceTaskScriptRuns[workspaceID] != run {
+            workspaceTaskScriptRuns[workspaceID] = run
         }
     }
 

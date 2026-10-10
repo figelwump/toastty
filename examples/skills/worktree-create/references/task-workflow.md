@@ -55,7 +55,12 @@ commits, and omit secrets or sensitive unrelated output.
 
 After creating or updating the PR, annotate this workspace with it: set the
 `github-pr` annotation to the PR number and its URL, following the workspace
-annotation rules in the toastty-capabilities skill. Agent session status already
+annotation rules in the toastty-capabilities skill. Once the PR is ready for
+the user's review or testing, mark the task ready for review with
+`"$TOASTTY_CLI_PATH" action run workspace.set-task-stage stage=review`; its
+workspace header then offers Finish Task. Toastty moves the task back to open
+when you start new work, so mark it ready again after each new version. Skip
+this when the running Toastty does not list `workspace.set-task-stage`. Agent session status already
 shows live activity, so do not add task or Git branch annotations.
 
 At completion, state validation results, remaining work, and its owner directly

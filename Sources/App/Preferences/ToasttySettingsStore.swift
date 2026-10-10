@@ -6,28 +6,17 @@ struct ToasttySettings: Equatable {
     var hasEverLaunchedAgent = false
     /// When false, Cmd+Q quits immediately without checking terminal activity.
     var askBeforeQuitting = true
-    /// What a subspace's Merge button and shortcut do.
-    var workspaceMergeMode = WorkspaceMergeMode.mergeAndCleanUp
-    /// Hidden flag for the subspace Merge button, its context menu items, and
-    /// its shortcut. Off until task lifecycle hooks replace it; there is no
-    /// settings UI, so turn it on by writing the defaults key.
-    var isWorkspaceMergeEnabled = false
 }
 
 enum ToasttySettingsStore {
     private static let terminalFontSizeKey = "toastty.terminalFontSizePoints"
     private static let hasEverLaunchedAgentKey = "toastty.hasEverLaunchedAgent"
     private static let askBeforeQuittingKey = "toastty.askBeforeQuitting"
-    private static let workspaceMergeModeKey = "toastty.workspaceMergeMode"
-    private static let workspaceMergeEnabledKey = "toastty.workspaceMergeEnabled"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         return ToasttySettings(
             hasEverLaunchedAgent: loadHasEverLaunchedAgent(userDefaults: userDefaults),
-            askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults),
-            workspaceMergeMode: userDefaults.string(forKey: workspaceMergeModeKey)
-                .flatMap(WorkspaceMergeMode.init(rawValue:)) ?? .mergeAndCleanUp,
-            isWorkspaceMergeEnabled: userDefaults.bool(forKey: workspaceMergeEnabledKey)
+            askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults)
         )
     }
 
@@ -64,13 +53,6 @@ enum ToasttySettingsStore {
         userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) {
         userDefaults.set(askBeforeQuitting, forKey: askBeforeQuittingKey)
-    }
-
-    static func persistWorkspaceMergeMode(
-        _ mode: WorkspaceMergeMode,
-        userDefaults: UserDefaults = ToasttyAppDefaults.current
-    ) {
-        userDefaults.set(mode.rawValue, forKey: workspaceMergeModeKey)
     }
 
     private static func loadTerminalFontSizePoints(userDefaults: UserDefaults) -> Double? {

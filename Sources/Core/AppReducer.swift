@@ -214,9 +214,44 @@ public struct AppReducer {
             // Only a subspace row shows the mark, so a top-level workspace
             // cannot hold one.
             guard doneAt == nil || workspace.parentWorkspaceID != nil else { return false }
-            // Marking an already-done workspace keeps its original time.
-            guard (workspace.doneAt == nil) != (doneAt == nil) else { return false }
-            workspace.doneAt = doneAt
+            if let doneAt {
+                // Marking an already-done workspace keeps its original time.
+                guard workspace.doneAt == nil else { return false }
+                workspace.doneAt = doneAt
+            } else {
+                // Clearing is the open stage: the review mark goes too.
+                guard workspace.doneAt != nil || workspace.reviewReadyAt != nil else { return false }
+                workspace.doneAt = nil
+                workspace.reviewReadyAt = nil
+            }
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .setWorkspaceTaskStage(let workspaceID, let stage, let now):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard stage == .open || workspace.parentWorkspaceID != nil else { return false }
+            switch stage {
+            case .open:
+                workspace.doneAt = nil
+                workspace.reviewReadyAt = nil
+            case .review:
+                workspace.doneAt = nil
+                workspace.reviewReadyAt = workspace.reviewReadyAt ?? now
+            case .done:
+                workspace.doneAt = workspace.doneAt ?? now
+            }
+            guard workspace != state.workspacesByID[workspaceID] else { return false }
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .setWorkspaceTaskHooks(let workspaceID, let hooks):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            let sanitized = hooks.sanitized
+            // Only a subspace row shows the buttons, so a top-level workspace
+            // cannot hold hooks.
+            guard sanitized.isEmpty || workspace.parentWorkspaceID != nil else { return false }
+            guard workspace.taskHooks != sanitized else { return false }
+            workspace.taskHooks = sanitized
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
@@ -249,6 +284,8 @@ public struct AppReducer {
             workspace.spawningSessionID = resolvedSpawningSessionID
             if resolvedParentID == nil {
                 workspace.doneAt = nil
+                workspace.reviewReadyAt = nil
+                workspace.taskHooks = WorkspaceTaskHooks()
             }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             for nestedWorkspaceID in nestedWorkspaceIDs {
@@ -2120,6 +2157,8 @@ public struct AppReducer {
             state.workspacesByID[subspaceID]?.parentWorkspaceID = nil
             state.workspacesByID[subspaceID]?.spawningSessionID = nil
             state.workspacesByID[subspaceID]?.doneAt = nil
+            state.workspacesByID[subspaceID]?.reviewReadyAt = nil
+            state.workspacesByID[subspaceID]?.taskHooks = WorkspaceTaskHooks()
         }
         state.workspacesByID.removeValue(forKey: workspaceID)
         window.workspaceIDs.remove(at: workspaceIndex)

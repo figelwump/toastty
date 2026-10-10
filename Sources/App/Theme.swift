@@ -183,13 +183,14 @@ enum ToastyTheme {
     static let fontWorkspaceName = Font.system(size: sidebarWorkspaceNameFontSize, weight: .semibold, design: .default)
     static let fontWorkspaceNameInactive = Font.system(size: sidebarWorkspaceNameFontSize, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)
-    /// The Merge control in the top bar's subtitle slot. 16pt is what fits
-    /// between the title and the bar's bottom hairline.
-    static let fontWorkspaceMergeButton = Font.system(size: 10, weight: .semibold, design: .rounded)
-    static let fontWorkspaceMergeProgress = Font.system(size: 10, weight: .medium, design: .rounded)
-    static let workspaceMergeControlHeight: CGFloat = 16
-    static let workspaceMergeControlHorizontalPadding: CGFloat = 6
-    static let workspaceMergeControlCornerRadius: CGFloat = 4
+    /// The task control in the top bar's subtitle slot and on a hovered
+    /// subspace row. 16pt is what fits between the title and the bar's
+    /// bottom hairline.
+    static let fontWorkspaceTaskButton = Font.system(size: 10, weight: .semibold, design: .rounded)
+    static let fontWorkspaceTaskProgress = Font.system(size: 10, weight: .medium, design: .rounded)
+    static let workspaceTaskControlHeight: CGFloat = 16
+    static let workspaceTaskControlHorizontalPadding: CGFloat = 6
+    static let workspaceTaskControlCornerRadius: CGFloat = 4
     static let fontWorkspaceSessionAgent = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontWorkspaceSessionChip = Font.system(size: 10, weight: .medium, design: .default)
     static let fontWorkspaceSessionDetail = Font.system(size: 11, weight: .regular, design: .default)

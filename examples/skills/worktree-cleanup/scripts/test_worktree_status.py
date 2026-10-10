@@ -33,6 +33,9 @@ elif args[:2] == ["pr", "list"]:
 elif args[:2] == ["pr", "view"]:
     pr = next(p for p in state["prs"] if p["number"] == int(args[2]))
     print(json.dumps({"mergeable": pr["mergeable"], "mergeStateStatus": pr["mergeStateStatus"]}))
+elif args[:2] == ["pr", "close"]:
+    with open(os.environ["FAKE_GH_LOG"], "a") as log:
+        log.write(" ".join(args) + "\n")
 else:
     sys.exit(f"unexpected gh call: {args}")
 '''
@@ -93,9 +96,10 @@ class CleanupTests(unittest.TestCase):
             (bin_dir / name).chmod(0o755)
         self.state_file = self.root / "state.json"
         self.log = self.root / "toastty.log"
+        self.gh_log_path = self.root / "gh.log"
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_STATE=str(self.state_file),
-                        FAKE_TOASTTY_LOG=str(self.log), TOASTTY_CLI_PATH=str(bin_dir / "toastty"),
-                        TOASTTY_PANEL_ID="own-panel")
+                        FAKE_TOASTTY_LOG=str(self.log), FAKE_GH_LOG=str(self.gh_log_path),
+                        TOASTTY_CLI_PATH=str(bin_dir / "toastty"), TOASTTY_PANEL_ID="own-panel")
         self.prs, self.workspaces, self.scoped = [], [], False
         self.extra_state = {}
 
@@ -143,6 +147,35 @@ class CleanupTests(unittest.TestCase):
     def closed(self):
         return [line for line in self.log.read_text().splitlines() if "workspace.close" in line] \
             if self.log.exists() else []
+
+    def close_workspace(self, workspace_id, cwd=None):
+        self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces,
+                                               "own": OWN_WORKSPACE, "scoped": self.scoped, **self.extra_state}))
+        hook_env = dict(self.env, TOASTTY_WORKSPACE_ID=workspace_id)
+        hook_env.pop("TOASTTY_PANEL_ID", None)
+        result = subprocess.run([sys.executable, str(SCRIPT), "--close-workspace"],
+                                cwd=cwd or self.repo, env=hook_env, capture_output=True, text=True)
+        lines = [line for line in (result.stdout + result.stderr).splitlines() if line.strip()]
+        return result.returncode, (lines[-1] if lines else "")
+
+    def cleanup_workspace(self, workspace_id, cwd=None, env=None):
+        """Runs the hook form from the task directory, as Toastty does, and returns
+        (exit status, last line printed)."""
+        self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces,
+                                               "own": OWN_WORKSPACE, "scoped": self.scoped,
+                                               **self.extra_state}))
+        # Exactly what the recorded hook runs: the flag alone, with the ID in
+        # the environment and no session identity.
+        hook_env = dict(env or self.env, TOASTTY_WORKSPACE_ID=workspace_id)
+        if env is None:
+            hook_env.pop("TOASTTY_PANEL_ID", None)
+        result = subprocess.run([sys.executable, str(SCRIPT), "--cleanup-workspace"],
+                                cwd=cwd or self.repo, env=hook_env, capture_output=True, text=True)
+        lines = [line for line in (result.stdout + result.stderr).splitlines() if line.strip()]
+        return result.returncode, (lines[-1] if lines else "")
+
+    def gh_log(self):
+        return self.gh_log_path.read_text() if self.gh_log_path.exists() else ""
 
     def remote_has(self, branch):
         return bool(self.git("ls-remote", "--heads", "origin", branch))
@@ -492,6 +525,137 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(with_sessions.exists() or busy.exists())
         self.assertFalse(self.remote_has(branch))
         self.assertEqual(len(self.closed()), 2)
+
+    def test_cleanup_workspace_cleans_one_merged_task_from_its_directory(self):
+        branch, path = self.task(1, session=True)
+        _, other = self.task(2)
+        status, detail = self.cleanup_workspace(self.workspaces[0]["workspaceID"], cwd=path)
+        self.assertEqual(status, 0, detail)
+        self.assertIn("removed worktree", detail)
+        self.assertFalse(path.exists())
+        self.assertTrue(other.exists(), "only the named workspace is cleaned")
+        self.assertEqual(self.git("branch", "--list", branch), "")
+        self.assertFalse(self.remote_has(branch))
+        self.assertEqual(len(self.closed()), 1)
+
+    def test_cleanup_workspace_skips_unmerged_dirty_and_unknown_tasks_with_exit_3(self):
+        _, open_path = self.task(1, state="OPEN")
+        _, dirty = self.task(2)
+        (dirty / "notes.txt").write_text("unsaved\n")
+        status, detail = self.cleanup_workspace(self.workspaces[0]["workspaceID"], cwd=open_path)
+        self.assertEqual(status, 3)
+        self.assertIn("PR #1 is open", detail)
+        status, detail = self.cleanup_workspace(self.workspaces[1]["workspaceID"], cwd=dirty)
+        self.assertEqual(status, 3)
+        self.assertIn("uncommitted", detail)
+        status, detail = self.cleanup_workspace("00000000-0000-0000-0000-0000000000ff")
+        self.assertEqual(status, 3)
+        self.assertIn("no task worktree matches", detail)
+        self.assertTrue(open_path.exists() and dirty.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_cleanup_workspace_reports_a_partial_as_failure(self):
+        branch, path = self.task(1, session=True)
+        self.extra_state["dirty_on_close"] = {self.workspaces[-1]["workspaceID"]: str(path)}
+        status, detail = self.cleanup_workspace(self.workspaces[0]["workspaceID"], cwd=path)
+        self.assertEqual(status, 1, detail)
+        self.assertIn("closed task-1", detail)
+        self.assertIn("worktree kept", detail)
+        self.assertTrue(path.exists())
+
+    def test_cleanup_workspace_keeps_the_cleanup_merged_guards_for_hand_runs(self):
+        """An agent running the hook form itself gets the same refusals as
+        --cleanup-merged: never its own workspace, never from a partial list."""
+        _, path = self.task(1)
+        own = self.workspaces[0]["workspaceID"]
+        self.extra_state["own"] = own
+        status, detail = self.cleanup_workspace(own, cwd=path, env=dict(self.env, TOASTTY_PANEL_ID="own-panel"))
+        self.assertEqual(status, 3)
+        self.assertIn("own workspace", detail)
+        self.scoped = True
+        status, detail = self.cleanup_workspace(own, cwd=path)
+        self.assertEqual(status, 3)
+        self.assertIn("workspace-scoped", detail)
+        self.assertTrue(path.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_cleanup_workspace_accepts_an_explicit_id_and_a_separate_git_dir(self):
+        branch, path = self.task(1)
+        # A clone with its Git directory elsewhere, as `git clone --separate-git-dir` makes.
+        separate = self.root / "separate"
+        subprocess.run(["git", "clone", "-q", "--separate-git-dir", str(self.root / "separate.git"),
+                        str(self.origin), str(separate)], check=True, capture_output=True)
+        self.git("config", "user.name", "Cleanup Test", cwd=separate)
+        self.git("config", "user.email", "cleanup@example.invalid", cwd=separate)
+        task_path = self.root / "separate-task"
+        self.git("worktree", "add", "-q", "-b", "separate-task", str(task_path), cwd=separate)
+        head = self.commit(task_path, "separate-task")
+        self.git("push", "-q", "-u", "origin", "separate-task", cwd=task_path)
+        self.prs.append(dict(self.prs[-1], number=2, title="separate-task", headRefName="separate-task", headRefOid=head,
+                             url="https://github.com/test/repo/pull/2"))
+        self.workspaces.append(dict(self.workspaces[-1], workspaceID="00000000-0000-0000-0000-000000000002",
+                                    title="separate-task", terminalCwds=[str(task_path)]))
+        self.state_file.write_text(json.dumps({"prs": self.prs, "workspaces": self.workspaces, "own": OWN_WORKSPACE,
+                                               "scoped": False}))
+        result = subprocess.run([sys.executable, str(SCRIPT), "--cleanup-workspace", "00000000-0000-0000-0000-000000000002"],
+                                cwd=task_path, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(task_path.exists())
+        self.assertTrue(path.exists(), "the other repository's task is untouched")
+
+    def test_close_workspace_closes_the_pr_removes_the_worktree_and_keeps_the_remote_branch(self):
+        branch, path = self.task(1, state="OPEN", session=True)
+        status, detail = self.close_workspace(self.workspaces[0]["workspaceID"], cwd=path)
+        self.assertEqual(status, 0, detail)
+        self.assertIn("closed PR #1", detail)
+        self.assertIn("removed worktree", detail)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("branch", "--list", branch), "")
+        self.assertTrue(self.remote_has(branch), "the branch stays on GitHub so the PR can be reopened")
+        self.assertEqual(len(self.closed()), 1)
+        self.assertIn("pr close 1", self.gh_log())
+
+    def test_close_workspace_refuses_unpushed_work_merged_prs_and_dirty_trees(self):
+        _, ahead = self.task(1, state="OPEN")
+        self.commit(ahead, "local only")
+        status, detail = self.close_workspace(self.workspaces[0]["workspaceID"], cwd=ahead)
+        self.assertEqual(status, 3)
+        self.assertIn("not on GitHub", detail)
+        _, merged = self.task(2)
+        status, detail = self.close_workspace(self.workspaces[1]["workspaceID"], cwd=merged)
+        self.assertEqual(status, 3)
+        self.assertIn("has merged", detail)
+        _, dirty = self.task(3, state="OPEN")
+        (dirty / "notes.txt").write_text("unsaved\n")
+        status, detail = self.close_workspace(self.workspaces[2]["workspaceID"], cwd=dirty)
+        self.assertEqual(status, 3)
+        self.assertIn("uncommitted", detail)
+        self.assertTrue(ahead.exists() and merged.exists() and dirty.exists())
+        self.assertEqual(self.closed(), [])
+
+    def test_close_workspace_refuses_a_workspace_showing_another_pr(self):
+        _, path = self.task(1, state="OPEN")
+        self.workspaces[-1]["annotations"] = [
+            {"key": "github-pr", "text": "PR #9", "url": "https://github.com/test/repo/pull/9"}]
+        status, detail = self.close_workspace(self.workspaces[0]["workspaceID"], cwd=path)
+        self.assertEqual(status, 3, detail)
+        self.assertIn("different PR", detail)
+        self.assertTrue(path.exists())
+        self.assertNotIn("pr close", self.gh_log())
+        self.assertEqual(self.closed(), [])
+
+    def test_close_workspace_without_a_pr_removes_a_pushed_branch(self):
+        branch, path = self.root / "no-pr", self.root / "no-pr"
+        self.git("worktree", "add", "-q", "-b", "no-pr", str(path))
+        self.commit(path, "no-pr")
+        self.git("push", "-q", "-u", "origin", "no-pr", cwd=path)
+        self.workspaces.append({"workspaceID": "00000000-0000-0000-0000-00000000000b", "title": "no-pr",
+                                "terminalCwds": [str(path)], "annotations": [], "activeSessions": [],
+                                "busyTerminalCount": 0, "unsavedDocumentCount": 0})
+        status, detail = self.close_workspace("00000000-0000-0000-0000-00000000000b", cwd=path)
+        self.assertEqual(status, 0, detail)
+        self.assertFalse(path.exists())
+        self.assertTrue(self.remote_has("no-pr"))
 
     def test_keeps_worktree_a_closed_session_dirtied(self):
         branch, path = self.task(1, session=True)

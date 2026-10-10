@@ -1626,94 +1626,6 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(summary.active, 0)
     }
 
-    /// The merge control replaces the unread summary under a pull request
-    /// subspace's title: a click on it asks for the merge, and it follows the
-    /// request through to the done mark.
-    @MainActor
-    func testPullRequestSubspaceHeaderShowsMergeControlInSubtitleSlot() throws {
-        var mergeRequests: [UUID] = []
-        var mergeModes: [WorkspaceMergeMode] = []
-        let configurePullRequestSubspace: (inout AppState, UUID, UUID) throws -> Void = { state, windowID, workspaceID in
-            let parent = WorkspaceState.bootstrap(title: "toastty")
-            state.workspacesByID[parent.id] = parent
-            let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
-            state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
-            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
-            workspace.title = "fix-claude-question-lifetime"
-            workspace.parentWorkspaceID = parent.id
-            workspace.annotations["github-pr"] = try XCTUnwrap(
-                WorkspaceAnnotation.validated(text: "PR #59", url: "https://github.com/example/toastty/pull/59")
-            )
-            // An unread panel would otherwise claim the subtitle slot.
-            workspace.unreadPanelIDs = Set([workspace.focusedPanelID].compactMap { $0 })
-            state.workspacesByID[workspaceID] = workspace
-        }
-        // The control sits under the title: 12pt in from the leading edge,
-        // 16pt tall starting below the title line.
-        let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
-
-        // With the hidden flag off, which is the default, there is no control.
-        let hiddenHarness = try makeWorkspaceHarness(
-            hostWidth: 720,
-            configureState: configurePullRequestSubspace,
-            requestWorkspaceMerge: { mergeRequests.append($0); mergeModes.append($1) }
-        )
-        try writeTopBarEvidence(hiddenHarness, name: "topbar-merge-hidden")
-        try click(atTopLeadingPoint: subtitleSlotCenter, in: hiddenHarness)
-        hiddenHarness.window.orderOut(nil)
-        XCTAssertEqual(mergeRequests, [])
-
-        let harness = try makeWorkspaceHarness(
-            hostWidth: 720,
-            isWorkspaceMergeEnabled: true,
-            configureState: configurePullRequestSubspace,
-            requestWorkspaceMerge: { mergeRequests.append($0); mergeModes.append($1) }
-        )
-        defer { harness.window.orderOut(nil) }
-        try writeTopBarEvidence(harness, name: "topbar-merge-ready")
-
-        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
-        XCTAssertEqual(mergeRequests, [harness.workspaceID])
-        // The store's default mode is the button's default.
-        XCTAssertEqual(mergeModes, [.mergeAndCleanUp])
-
-        harness.store.setWorkspaceMergeMode(.mergeOnly)
-        pumpMainRunLoop(duration: 0.05)
-        try writeTopBarEvidence(harness, name: "topbar-merge-ready-just-merge")
-        harness.store.setWorkspaceMergeMode(.mergeAndCleanUp)
-        pumpMainRunLoop(duration: 0.05)
-
-        let pullRequest = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/59"))
-        var request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: "/work/task", phase: .merging(thenCleanUp: true))
-        harness.sessionRuntimeStore.setWorkspaceMergeRequests([harness.workspaceID: request])
-        pumpMainRunLoop(duration: 0.05)
-        try writeTopBarEvidence(harness, name: "topbar-merge-merging")
-
-        // While the merge runs the control is not a button.
-        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
-        XCTAssertEqual(mergeRequests, [harness.workspaceID])
-
-        harness.store.send(.setWorkspaceDone(workspaceID: harness.workspaceID, doneAt: Date()))
-        pumpMainRunLoop(duration: 0.05)
-        try writeTopBarEvidence(harness, name: "topbar-merge-done")
-        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
-        XCTAssertEqual(mergeRequests, [harness.workspaceID])
-
-        request.phase = .awaitingMerge
-        harness.sessionRuntimeStore.setWorkspaceMergeRequests([harness.workspaceID: request])
-        pumpMainRunLoop(duration: 0.05)
-        try writeTopBarEvidence(harness, name: "topbar-merge-awaiting-cleanup")
-        request.phase = .cleaningUp
-        harness.sessionRuntimeStore.setWorkspaceMergeRequests([harness.workspaceID: request])
-        pumpMainRunLoop(duration: 0.05)
-        try writeTopBarEvidence(harness, name: "topbar-merge-cleaning-up")
-        request.phase = .failed(reason: "the worktree has uncommitted changes")
-        harness.sessionRuntimeStore.setWorkspaceMergeRequests([harness.workspaceID: request])
-        pumpMainRunLoop(duration: 0.05)
-        try writeTopBarEvidence(harness, name: "topbar-merge-cleanup-failed")
-        XCTAssertEqual(mergeRequests, [harness.workspaceID])
-    }
-
     func testWorkspaceHeaderSubtitleAccessibilityIdentifierPreservesUnreadSelector() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: "1 unread"),
@@ -2327,6 +2239,94 @@ final class WorkspaceViewTests: XCTestCase {
         try assertColor(borderColor, equals: ToastyTheme.subtleBorder)
     }
 
+    /// The top-bar task control is a real button: Finish Task runs the
+    /// finish hook, the arrow menu beside it holds the stage moves and
+    /// Close Task, and the tooltip names the skill.
+    @MainActor
+    func testWorkspaceHeaderTaskControlRunsItsButtonAndNamesTheHook() throws {
+        var runs = 0
+        let hook = WorkspaceTaskHooks.ScriptHook(skill: "worktree-cleanup", script: "scripts/worktree-status.py", arguments: ["--close-workspace"])
+        let control = WorkspaceHeaderTaskControl(
+            button: .finish(skill: "worktree-done"),
+            stageActions: SidebarSubspacePresentation.stageActions(for: .review),
+            closeHook: hook,
+            runButton: { runs += 1 }
+        )
+        let hostingView = NSHostingView(rootView: control.frame(width: 240, height: 24))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 24),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        pumpMainRunLoop(duration: 0.2)
+        hostingView.layoutSubtreeIfNeeded()
+
+        // The test host vends no accessibility tree, so the control is
+        // found through its semantic text and help bridges, like a sidebar row.
+        let buttonFrame = try XCTUnwrap(semanticTextFrame("Finish Task", in: hostingView), "no task button: \(semanticTexts(in: hostingView))")
+        XCTAssertFalse(toolTipViews(in: hostingView, toolTip: WorkspaceTaskHookPresentation.finishHelp(skill: "worktree-done")).isEmpty, "tooltip names the skill")
+        XCTAssertNotNil(semanticTextFrame("Task options", in: hostingView), "the arrow menu sits beside the button")
+        try click(at: CGPoint(x: buttonFrame.midX, y: buttonFrame.midY), in: hostingView, window: window)
+        pumpMainRunLoop(duration: 0.1)
+        XCTAssertEqual(runs, 1)
+
+        // A stopped script shows its state in the same slot.
+        hostingView.rootView = WorkspaceHeaderTaskControl(
+            button: .skipped(.cleanup, detail: "PR #130 has not merged"),
+            stageActions: SidebarSubspacePresentation.stageActions(for: .done),
+            closeHook: hook
+        ).frame(width: 240, height: 24)
+        pumpMainRunLoop(duration: 0.2)
+        hostingView.layoutSubtreeIfNeeded()
+        XCTAssertNil(semanticTextFrame("Finish Task", in: hostingView))
+        XCTAssertNotNil(semanticTextFrame("Skipped", in: hostingView), "\(semanticTexts(in: hostingView))")
+        XCTAssertFalse(toolTipViews(in: hostingView, toolTip: "PR #130 has not merged").isEmpty)
+    }
+
+    @MainActor
+    private func semanticTextFrame(_ text: String, in rootView: NSView) -> CGRect? {
+        semanticTextFields(in: rootView).first { $0.stringValue == text }.map { $0.convert($0.bounds, to: rootView) }
+    }
+
+    @MainActor
+    private func semanticTexts(in rootView: NSView) -> [String] {
+        semanticTextFields(in: rootView).map { $0.stringValue }
+    }
+
+    @MainActor
+    private func semanticTextFields(in view: NSView) -> [NSTextField] {
+        ((view as? NSTextField).map { [$0] } ?? []) + view.subviews.flatMap { semanticTextFields(in: $0) }
+    }
+
+    @MainActor
+    private func toolTipViews(in view: NSView, toolTip: String) -> [NSView] {
+        (view.toolTip == toolTip ? [view] : []) + view.subviews.flatMap { toolTipViews(in: $0, toolTip: toolTip) }
+    }
+
+    @MainActor
+    private func click(at point: CGPoint, in view: NSView, window: NSWindow) throws {
+        let windowPoint = view.convert(point, to: nil)
+        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: windowPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: eventNumber,
+                clickCount: 1,
+                pressure: pressure
+            ))
+            window.sendEvent(event)
+            pumpMainRunLoop(duration: 0.05)
+        }
+    }
+
     func testWorkspaceTabUnreadDotUsesLargerDiameter() {
         XCTAssertEqual(ToastyTheme.workspaceTabUnreadDotDiameter, 7)
     }
@@ -2890,9 +2890,7 @@ final class WorkspaceViewTests: XCTestCase {
         tabCount: Int = 1,
         hostWidth: CGFloat = 900,
         appIsActive: Bool? = nil,
-        isWorkspaceMergeEnabled: Bool = false,
-        configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil,
-        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
+        configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil
     ) throws -> WorkspaceHarness {
         XCTAssertGreaterThanOrEqual(tabCount, 1)
         var state = AppState.bootstrap()
@@ -2924,15 +2922,10 @@ final class WorkspaceViewTests: XCTestCase {
             store = AppStore(
                 state: state,
                 persistTerminalFontPreference: false,
-                isWorkspaceMergeEnabled: isWorkspaceMergeEnabled,
                 appIsActiveProvider: { appIsActive }
             )
         } else {
-            store = AppStore(
-                state: state,
-                persistTerminalFontPreference: false,
-                isWorkspaceMergeEnabled: isWorkspaceMergeEnabled
-            )
+            store = AppStore(state: state, persistTerminalFontPreference: false)
         }
         let registry = TerminalRuntimeRegistry()
         registry.bind(store: store)
@@ -2984,8 +2977,7 @@ final class WorkspaceViewTests: XCTestCase {
                 windowID: windowID,
                 runtimeRegistry: registry
             ),
-            sidebarVisible: true,
-            requestWorkspaceMerge: requestWorkspaceMerge
+            sidebarVisible: true
         )
         let hostingView = NSHostingView(rootView: workspaceView.frame(width: hostWidth, height: 600))
         let window = NSWindow(
@@ -3041,35 +3033,6 @@ final class WorkspaceViewTests: XCTestCase {
     /// xcodebuild). `scripts/remote/test.sh` forwards no environment, so a
     /// remote run writes to `evidence/` in its run directory instead, which
     /// the wrapper copies back with the other artifacts.
-    @MainActor
-    private func writeTopBarEvidence(_ harness: WorkspaceHarness, name: String) throws {
-        let directory: String
-        if let configured = ProcessInfo.processInfo.environment["TOASTTY_WORKSPACE_MERGE_EVIDENCE_DIR"],
-           configured.isEmpty == false {
-            directory = configured
-        } else {
-            let bundlePath = Bundle(for: Self.self).bundleURL.path
-            guard bundlePath.contains("/test-runs/"),
-                  let derivedRange = bundlePath.range(of: "/Derived/") else {
-                return
-            }
-            directory = String(bundlePath[..<derivedRange.lowerBound]) + "/evidence"
-        }
-        let bitmap = try renderedBitmap(for: harness.hostingView)
-        let scale = CGFloat(bitmap.pixelsHigh) / harness.hostingView.bounds.height
-        let cropRect = CGRect(
-            x: 0,
-            y: 0,
-            width: CGFloat(bitmap.pixelsWide),
-            height: (ToastyTheme.topBarHeight + 8) * scale
-        )
-        let cropped = NSBitmapImageRep(cgImage: try XCTUnwrap(bitmap.cgImage?.cropping(to: cropRect)))
-        let data = try XCTUnwrap(cropped.representation(using: .png, properties: [:]))
-        let directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        try data.write(to: directoryURL.appendingPathComponent("\(name).png"))
-    }
-
     private func makeScratchpadRightAuxPanel(
         panelID: UUID,
         isVisible: Bool,

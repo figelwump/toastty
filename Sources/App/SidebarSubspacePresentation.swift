@@ -59,6 +59,13 @@ enum SidebarSubspacePresentation {
         /// The workspace's done mark, which `status` shows only while its
         /// sessions are quiet.
         var isDone = false
+        /// Where the task is: open, ready for the user's review, or done.
+        var taskStage = WorkspaceTaskStage.open
+        /// How the task is finished, cleaned up, and closed; empty for a
+        /// subspace without hooks.
+        var taskHooks = WorkspaceTaskHooks()
+        /// The cleanup or close script run shown on the row, if any.
+        var scriptRun: WorkspaceTaskScriptRun? = nil
         let annotations: [String: WorkspaceAnnotation]
         var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
@@ -320,18 +327,158 @@ enum SidebarSubspacePresentation {
         shownCount == totalCount ? "\(totalCount)" : "\(shownCount)/\(totalCount)"
     }
 
-    /// The rail mark toggles the done mark only while it is a box: idle,
-    /// done, or a ready turn the user can wave off. A working, approval, or
-    /// error mark is about the agent, not the task.
-    static func showsDoneToggle(_ row: Row) -> Bool {
-        switch row.status {
-        case .idle, .ready, .done: return true
-        case .needsApproval, .error, .working: return false
+    /// The rail mark is a status glyph: a box while the task is open or
+    /// ready for review, a check once it is done. Moving the task by hand
+    /// goes through the row's menu.
+    static func stageAccessibilityValue(_ stage: WorkspaceTaskStage) -> String? {
+        switch stage {
+        case .open: return nil
+        case .review: return "ready for review"
+        case .done: return "done"
         }
     }
 
-    static func doneToggleActionTitle(isDone: Bool) -> String {
-        isDone ? "Mark as not done" : "Mark as done"
+    /// The task lifecycle button a row (and the workspace header) shows, if
+    /// any. The task's stage is the switch: nothing while it is open, Finish
+    /// Task once the agent marked it ready for review, Clean Up once it is
+    /// done. A missing hook hides its button. A running or finished script
+    /// replaces the button with its state.
+    enum TaskButton: Equatable, Sendable {
+        case finish(skill: String)
+        case cleanUp(WorkspaceTaskHooks.ScriptHook)
+        case running(WorkspaceTaskHooks.ScriptKind)
+        /// The script changed nothing and said why; the row offers to run
+        /// it again or drop the result.
+        case skipped(WorkspaceTaskHooks.ScriptKind, detail: String)
+        case failed(WorkspaceTaskHooks.ScriptKind, detail: String)
+
+        var title: String {
+            switch self {
+            case .finish: return "Finish Task"
+            case .cleanUp: return WorkspaceTaskHookPresentation.title(.cleanup)
+            case .running(let kind): return WorkspaceTaskHookPresentation.runningTitle(kind)
+            case .skipped: return "Skipped"
+            case .failed(let kind, _): return WorkspaceTaskHookPresentation.failedTitle(kind)
+            }
+        }
+
+        /// The SF Symbol beside the title.
+        var symbolName: String? {
+            switch self {
+            case .finish: return "checkmark"
+            case .cleanUp: return "trash"
+            case .running: return nil
+            case .skipped, .failed: return "exclamationmark.triangle.fill"
+            }
+        }
+
+        var isEnabled: Bool {
+            switch self {
+            case .finish, .cleanUp, .skipped, .failed: return true
+            case .running: return false
+            }
+        }
+
+        /// What the button's tooltip and spoken label say: what a click runs,
+        /// or why the last run stopped.
+        var help: String {
+            switch self {
+            case .finish(let skill): return WorkspaceTaskHookPresentation.finishHelp(skill: skill)
+            case .cleanUp(let hook): return WorkspaceTaskHookPresentation.scriptHelp(hook)
+            case .running(let kind): return "The \(kind.rawValue) script is running"
+            case .skipped(_, let detail), .failed(_, let detail): return detail
+            }
+        }
+
+        /// The script a Retry runs again.
+        var retryKind: WorkspaceTaskHooks.ScriptKind? {
+            switch self {
+            case .skipped(let kind, _), .failed(let kind, _): return kind
+            case .finish, .cleanUp, .running: return nil
+            }
+        }
+    }
+
+    static func taskButton(_ row: Row) -> TaskButton? {
+        taskButton(stage: row.taskStage, hooks: row.taskHooks, run: row.scriptRun)
+    }
+
+    static func taskButton(stage: WorkspaceTaskStage, hooks: WorkspaceTaskHooks, run: WorkspaceTaskScriptRun?) -> TaskButton? {
+        if let run {
+            switch run.phase {
+            case .running: return .running(run.kind)
+            case .skipped(let detail): return .skipped(run.kind, detail: detail)
+            case .failed(let detail): return .failed(run.kind, detail: detail)
+            }
+        }
+        switch stage {
+        case .open:
+            return nil
+        case .review:
+            return hooks.finishSkill.map { .finish(skill: $0) }
+        case .done:
+            return hooks.cleanup.map { .cleanUp($0) }
+        }
+    }
+
+    /// The manual stage moves a row offers, as the user sees them.
+    enum StageAction: Equatable, Sendable {
+        case markReadyForReview
+        case markDone
+        case reopen
+
+        var title: String {
+            switch self {
+            case .markReadyForReview: return "Mark Ready for Review"
+            case .markDone: return "Mark Done"
+            case .reopen: return "Reopen Task"
+            }
+        }
+
+        var stage: WorkspaceTaskStage {
+            switch self {
+            case .markReadyForReview: return .review
+            case .markDone: return .done
+            case .reopen: return .open
+            }
+        }
+    }
+
+    /// `Mark Done` is offered in `open` too, for a task the agent never
+    /// marked ready. Reopen takes review back to open as well.
+    static func stageActions(for stage: WorkspaceTaskStage) -> [StageAction] {
+        switch stage {
+        case .open: return [.markReadyForReview, .markDone]
+        case .review: return [.markDone, .reopen]
+        case .done: return [.reopen]
+        }
+    }
+
+    /// Rows the header's clean-up button runs: done, with a cleanup hook,
+    /// and not already running a script.
+    static func cleanupCandidates(_ rows: [Row]) -> [Row] {
+        rows.filter { row in
+            row.taskStage == .done && row.taskHooks.cleanup != nil && row.scriptRun?.phase != .running
+        }
+    }
+
+    static func cleanupFinishedTitle(count: Int) -> String {
+        count == 1 ? "Clean Up 1 Done Task…" : "Clean Up \(count) Done Tasks…"
+    }
+
+    static func cleanupFinishedConfirmation(rows: [Row], skippedCount: Int) -> (title: String, message: String) {
+        let count = rows.count
+        let title = count == 1 ? "Clean up 1 done task?" : "Clean up \(count) done tasks?"
+        var lines = ["Toastty runs each task's cleanup script. The script decides whether cleanup is safe and can skip the task."]
+        lines.append("")
+        lines.append(contentsOf: rows.map { "• \($0.title)" })
+        if skippedCount > 0 {
+            lines.append("")
+            lines.append(skippedCount == 1
+                ? "1 other subspace is not done or has no cleanup hook."
+                : "\(skippedCount) other subspaces are not done or have no cleanup hook.")
+        }
+        return (title, lines.joined(separator: "\n"))
     }
 
     static func spawnerFilterActionTitle(_ chip: SpawnerChip) -> String {
@@ -374,6 +521,12 @@ enum SidebarSubspacePresentation {
         }
         if showsSpawnerTag, let spawnerName = row.spawnerName {
             components.append("spawned by \(spawnerName)")
+        }
+        if row.status != .done, let stageValue = stageAccessibilityValue(row.taskStage) {
+            components.append(stageValue)
+        }
+        if let button = taskButton(row) {
+            components.append(button.title.lowercased().replacingOccurrences(of: "…", with: ""))
         }
         return components.joined(separator: ", ")
     }

@@ -269,6 +269,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
         baseLaunchEnvironmentProvider = provider
     }
 
+    /// The launch context variables a terminal at `panelID` would get.
+    func baseLaunchEnvironment(panelID: UUID) -> [String: String] {
+        baseLaunchEnvironmentProvider?(panelID) ?? [:]
+    }
+
     private func logSurfaceLaunchEnvironmentIfNeeded(
         panelID: UUID,
         environment: [String: String]

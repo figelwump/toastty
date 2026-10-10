@@ -1997,7 +1997,10 @@ final class SidebarViewTests: XCTestCase {
     /// A parent card with two spawning sessions and four subspaces in one
     /// group, plus a second top-level card, so the test can see sorting,
     /// the spawner tags, and that subspaces do not render as cards.
-    private func makeSubspacesHarness(sidebarWidth: CGFloat = ToastyTheme.sidebarWidth) throws -> (SidebarHarness, SubspacesHarnessIDs) {
+    private func makeSubspacesHarness(
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        hoveredSubspaceTitle: String? = nil
+    ) throws -> (SidebarHarness, SubspacesHarnessIDs) {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentLeftPanelID = UUID()
         let parentRightPanelID = UUID()
@@ -2065,7 +2068,13 @@ final class SidebarViewTests: XCTestCase {
             workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
             selectedWindowID: windowID
         )
-        let harness = try makeSidebarHarness(state: state, windowID: windowID, sidebarWidth: sidebarWidth)
+        let hoveredSubspaceID = workspaces.first { $0.title == hoveredSubspaceTitle }?.id
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            sidebarWidth: sidebarWidth,
+            hoveredSubspaceID: hoveredSubspaceID
+        )
 
         func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
             harness.sessionRuntimeStore.startSession(
@@ -2404,23 +2413,23 @@ final class SidebarViewTests: XCTestCase {
         return Array(UnsafeBufferPointer(start: data + rowStart, count: Int(20 * scale) * bytesPerPixel))
     }
 
-    func testDoneCheckboxSinksASubspaceUntilItsAgentStartsNewWork() throws {
+    /// A done task sinks to the bottom of its group and shows the check in
+    /// its rail; the mark is display-only, so the stage moves through the
+    /// store (the row menu, the header menu, or an agent). New agent work
+    /// reopens the task.
+    func testDoneStageSinksASubspaceUntilItsAgentStartsNewWork() throws {
         let (harness, ids) = try makeSubspacesHarness()
         let rootView = harness.hostingView
         // The runtime clears the mark through the store, as it does in the app.
         harness.sessionRuntimeStore.bind(store: harness.store)
 
-        // The unread ready row sorts first; its rail box marks it done.
-        try clickDoneToggle(forRowTitled: "launch-checklist", in: rootView)
+        let initialSelection = harness.store.selectedWorkspaceID(in: harness.windowID)
+        harness.store.send(.setWorkspaceTaskStage(workspaceID: ids.readyUnreadID, stage: .done, at: Date()))
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
 
-        XCTAssertNotNil(harness.store.state.workspacesByID[ids.readyUnreadID]?.doneAt)
-        XCTAssertEqual(
-            harness.store.selectedWorkspaceID(in: harness.windowID),
-            ids.parentID,
-            "The box toggles the mark without selecting the row"
-        )
+        XCTAssertEqual(harness.store.state.workspacesByID[ids.readyUnreadID]?.taskStage, .done)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), initialSelection)
         var textValues = renderedTextValues(in: rootView)
         XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace, done") }, "\(textValues)")
         XCTAssertTrue(
@@ -2431,7 +2440,21 @@ final class SidebarViewTests: XCTestCase {
             try subspaceRowOrder(in: rootView),
             ["qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification", "launch-checklist"]
         )
+        // The rail mark no longer offers a click: no tooltip view carries a
+        // done-toggle title.
+        XCTAssertTrue(toolTipViews(in: rootView, toolTip: "Mark done").isEmpty)
+        XCTAssertTrue(toolTipViews(in: rootView, toolTip: "Mark not done").isEmpty)
         try writeSidebarEvidence(rootView, name: "sidebar-subspace-done")
+
+        // Ready for review reads in the spoken label too.
+        harness.store.send(.setWorkspaceTaskStage(workspaceID: ids.annotatedIdleID, stage: .review, at: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(
+            textValues.contains { $0.hasPrefix("qa-private-app-verification, subspace") && $0.contains("ready for review") },
+            "\(textValues)"
+        )
 
         // The user prompts the subspace's agent again.
         harness.sessionRuntimeStore.updateStatus(
@@ -2442,25 +2465,130 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
 
-        XCTAssertNil(harness.store.state.workspacesByID[ids.readyUnreadID]?.doneAt)
+        XCTAssertEqual(harness.store.state.workspacesByID[ids.readyUnreadID]?.taskStage, .open)
         textValues = renderedTextValues(in: rootView)
         XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, subspace, working") }, "\(textValues)")
         try writeSidebarEvidence(rootView, name: "sidebar-subspace-reopened")
     }
 
-    /// Clicks the rail box of the subspace row titled `title`. The box
-    /// carries a click-through tooltip view, which is how the test finds it.
-    private func clickDoneToggle(forRowTitled title: String, in rootView: NSView) throws {
-        let rowFrame = try semanticTextFrame(in: rootView, prefix: "\(title), subspace")
-        let toggles = toolTipViews(in: rootView, toolTip: SidebarSubspacePresentation.doneToggleActionTitle(isDone: false))
-            .map { $0.convert($0.bounds, to: rootView) }
-        let toggleFrame = try XCTUnwrap(
-            toggles.min { abs($0.midY - rowFrame.midY) < abs($1.midY - rowFrame.midY) },
-            "No done toggle rendered"
+    /// The hovered row's Finish Task button appears once the task is ready
+    /// for review and sends the finish skill to the task's agent; once the
+    /// task is done the same slot runs the cleanup script after a
+    /// confirmation, and the header icon runs every done task. Rows the
+    /// pointer is not on show no button.
+    func testTaskButtonsFinishThenCleanUpThroughTheHooks() throws {
+        let (harness, ids) = try makeSubspacesHarness(hoveredSubspaceTitle: "qa-update-visitor-fixture")
+        defer { harness.window.orderOut(nil) }
+        let rootView = harness.hostingView
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        var sentTexts: [(String, UUID)] = []
+        let cleanupRunner = RecordingCleanupRunner(result: WorkspaceTaskCleanupCommandResult(
+            exitCode: 3, output: "PR #130 has not merged\n", failure: nil
+        ))
+        let skillsRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-sidebar-hooks-\(UUID().uuidString)", isDirectory: true)
+        let scriptURL = skillsRoot.appendingPathComponent("worktree-cleanup/scripts/worktree-status.py")
+        try FileManager.default.createDirectory(at: scriptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: skillsRoot) }
+        let runner = WorkspaceTaskHookRunner(
+            store: harness.store,
+            sessionRuntimeStore: harness.sessionRuntimeStore,
+            runner: cleanupRunner,
+            userSkillsDirectoryURL: skillsRoot,
+            acceptedUserSkillNames: { ["worktree-cleanup", "worktree-done"] },
+            baseEnvironment: { [:] },
+            sendText: { text, panelID in sentTexts.append((text, panelID)); return true },
+            launchAgent: { _, _, _, _ in throw WorkspaceTaskHookRunner.FinishProblem.launchFailed("not expected") }
         )
-        XCTAssertLessThan(abs(toggleFrame.midY - rowFrame.midY), 20, "The nearest toggle belongs to another row")
+        _ = runner
+        var confirmations: [String] = []
+        var alerts: [String] = []
+        let previousConfirm = WorkspaceTaskHookPrompts.confirm
+        let previousAlert = WorkspaceTaskHookPrompts.presentAlert
+        WorkspaceTaskHookPrompts.confirm = { title, _, _ in confirmations.append(title); return true }
+        // A modal alert would block the test host; record it instead.
+        WorkspaceTaskHookPrompts.presentAlert = { title, message in alerts.append("\(title): \(message)") }
+        defer {
+            WorkspaceTaskHookPrompts.confirm = previousConfirm
+            WorkspaceTaskHookPrompts.presentAlert = previousAlert
+        }
+
+        let hooks = WorkspaceTaskHooks(
+            finishSkill: "worktree-done",
+            cleanup: WorkspaceTaskHooks.ScriptHook(skill: "worktree-cleanup", script: "scripts/worktree-status.py", arguments: ["--cleanup-workspace"]),
+            close: WorkspaceTaskHooks.ScriptHook(skill: "worktree-cleanup", script: "scripts/worktree-status.py", arguments: ["--close-workspace"])
+        )
+        harness.store.send(.setWorkspaceTaskHooks(workspaceID: ids.workingID, hooks: hooks))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        var textValues = renderedTextValues(in: rootView)
+        XCTAssertFalse(textValues.contains("Finish Task"), "an open task has no button: \(textValues)")
+
+        // The agent marks the task ready for review: the hovered row grows
+        // Finish Task.
+        harness.store.send(.setWorkspaceTaskStage(workspaceID: ids.workingID, stage: .review, at: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains("Finish Task"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Clean Up") }, "no done task yet: \(textValues)")
+        XCTAssertFalse(toolTipViews(in: rootView, toolTip: WorkspaceTaskHookPresentation.finishHelp(skill: "worktree-done")).isEmpty, "tooltip names the skill")
+        try writeSidebarEvidence(rootView, name: "sidebar-task-finish-button")
+
+        // Finish Task goes to the row's agent session as that agent's skill syntax.
+        try clickSemanticText("Finish Task", nearRowTitled: "qa-update-visitor-fixture", in: rootView)
+        pumpMainRunLoop(duration: 0.2)
+        XCTAssertEqual(alerts, [])
+        XCTAssertEqual(sentTexts.count, 1)
+        XCTAssertTrue(sentTexts.first?.0.hasPrefix("$toastty-user:worktree-done ") == true, "\(sentTexts)")
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.parentID, "The button does not select the row")
+
+        // The skill marks the task done; the hovered row switches to Clean
+        // Up and the header grows its clean-up icon. A second done task the
+        // pointer is not on counts in the header but shows no button.
+        harness.store.send(.setWorkspaceTaskStage(workspaceID: ids.workingID, stage: .done, at: Date()))
+        harness.store.send(.setWorkspaceTaskHooks(workspaceID: ids.annotatedIdleID, hooks: hooks))
+        harness.store.send(.setWorkspaceTaskStage(workspaceID: ids.annotatedIdleID, stage: .done, at: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertEqual(textValues.filter { $0 == "Clean Up" }.count, 1, "only the hovered row shows a button: \(textValues)")
+        XCTAssertFalse(textValues.contains("Finish Task"))
+        XCTAssertTrue(textValues.contains("Clean Up 2 Done Tasks…"), "header icon missing: \(textValues)")
+        try writeSidebarEvidence(rootView, name: "sidebar-task-cleanup-button")
+
+        // The header icon confirms, then runs each script in turn; a skip
+        // stays on the row.
+        try clickSemanticText("Clean Up 2 Done Tasks…", nearRowTitled: "emptyos-computer", in: rootView)
+        let deadline = Date().addingTimeInterval(2)
+        while cleanupRunner.invocations.count < 2, Date() < deadline {
+            pumpMainRunLoop(duration: 0.05)
+        }
+        pumpMainRunLoop(duration: 0.3)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(confirmations, ["Clean up 2 done tasks?"])
+        XCTAssertEqual(
+            Set(cleanupRunner.invocations.map(\.workspaceID)),
+            [ids.workingID.uuidString, ids.annotatedIdleID.uuidString]
+        )
+        XCTAssertEqual(cleanupRunner.invocations.first?.arguments.last, "--cleanup-workspace")
+        textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains("Skipped"), "the hovered row shows its result: \(textValues)")
+        XCTAssertTrue(textValues.contains("Clean Up 2 Done Tasks…"), "a skipped run is still a candidate: \(textValues)")
+        try writeSidebarEvidence(rootView, name: "sidebar-task-cleanup-skipped")
+    }
+
+    /// Clicks the semantic text `text` closest to the row titled `title`.
+    private func clickSemanticText(_ text: String, nearRowTitled title: String, in rootView: NSView) throws {
+        let rowFrame = try semanticTextFrame(in: rootView, prefix: "\(title)")
+        let fields = semanticTextFields(in: rootView, text: text).map { $0.convert($0.bounds, to: rootView) }
+        let frame = try XCTUnwrap(
+            fields.min { abs($0.midY - rowFrame.midY) < abs($1.midY - rowFrame.midY) },
+            "No rendered text \"\(text)\": \(renderedTextValues(in: rootView))"
+        )
         let window = try XCTUnwrap(rootView.window)
-        let windowPoint = rootView.convert(CGPoint(x: toggleFrame.midX, y: toggleFrame.midY), to: nil)
+        let windowPoint = rootView.convert(CGPoint(x: frame.midX, y: frame.midY), to: nil)
         for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
             let event = try XCTUnwrap(NSEvent.mouseEvent(
                 with: type,
@@ -2476,6 +2604,17 @@ final class SidebarViewTests: XCTestCase {
             window.sendEvent(event)
             pumpMainRunLoop(duration: 0.05)
         }
+    }
+
+    private func semanticTextFields(in rootView: NSView, text: String) -> [NSTextField] {
+        var result: [NSTextField] = []
+        if let field = rootView as? NSTextField, field.stringValue == text {
+            result.append(field)
+        }
+        for subview in rootView.subviews {
+            result.append(contentsOf: semanticTextFields(in: subview, text: text))
+        }
+        return result
     }
 
     private func toolTipViews(in view: NSView, toolTip: String) -> [NSView] {
@@ -2963,10 +3102,14 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    /// `hoveredSubspaceID` pins the sidebar's hover state to that row, since
+    /// the hosted view never sees a real pointer; it is fixed for the
+    /// harness's life.
     private func makeSidebarHarness(
         state: AppState,
         windowID: UUID,
-        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        hoveredSubspaceID: UUID? = nil
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -2979,7 +3122,8 @@ final class SidebarViewTests: XCTestCase {
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
             annotationStyleStore: makeTestAnnotationStyleStore(),
-            terminalRuntimeContext: runtimeContext
+            terminalRuntimeContext: runtimeContext,
+            hoveredSubspaceIDOverride: hoveredSubspaceID
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
         let hostWindow = NSWindow(
@@ -3810,4 +3954,41 @@ final class SidebarViewTests: XCTestCase {
 private final class SidebarHoverTestWindow: NSWindow {
     var pointerLocation = NSPoint(x: -100, y: -100)
     override var mouseLocationOutsideOfEventStream: NSPoint { pointerLocation }
+}
+
+
+/// A cleanup runner for hosted sidebar tests: records each run's workspace
+/// and arguments and answers with one scripted result.
+private final class RecordingCleanupRunner: WorkspaceTaskCleanupCommandRunning, @unchecked Sendable {
+    struct Invocation {
+        let arguments: [String]
+        let workspaceID: String?
+    }
+
+    private let lock = NSLock()
+    private var _invocations: [Invocation] = []
+    let result: WorkspaceTaskCleanupCommandResult
+
+    init(result: WorkspaceTaskCleanupCommandResult) {
+        self.result = result
+    }
+
+    var invocations: [Invocation] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _invocations
+    }
+
+    func run(
+        executable: String,
+        arguments: [String],
+        directory: String?,
+        environment: [String: String],
+        timeout: TimeInterval
+    ) async -> WorkspaceTaskCleanupCommandResult {
+        lock.withLock {
+            _invocations.append(Invocation(arguments: arguments, workspaceID: environment["TOASTTY_WORKSPACE_ID"]))
+        }
+        return result
+    }
 }

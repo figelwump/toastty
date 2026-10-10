@@ -94,10 +94,6 @@ struct WorkspaceView: View {
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
-    /// Runs a click on the top bar's Merge button for a workspace.
-    var requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
-    /// Runs the Merge button menu's Close Without Merging for a workspace.
-    var requestWorkspaceClose: @MainActor (UUID) -> Void = { _ in }
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var seenUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -710,27 +706,28 @@ struct WorkspaceView: View {
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        if store.isWorkspaceMergeEnabled,
-           let mergePresentation = WorkspaceMergePresentation.make(
-            workspace: workspace,
-            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
-            mode: store.workspaceMergeMode
-        ) {
-            // A pull request subspace gives the whole slot to its merge
-            // control; the sidebar and tab dots still show unreads.
-            WorkspaceHeaderMergeControl(
-                presentation: mergePresentation,
-                pullRequestName: WorkspaceMergePresentation.pullRequestLink(in: workspace)?.displayName
-                    ?? mergePresentation.pullRequest,
-                merge: { requestWorkspaceMerge(workspace.id, store.workspaceMergeMode) },
-                setMode: { store.setWorkspaceMergeMode($0) },
-                retryCleanup: {
-                    sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: workspace.id)
+        if workspace.parentWorkspaceID != nil,
+           let button = SidebarSubspacePresentation.taskButton(
+            stage: workspace.taskStage,
+            hooks: workspace.taskHooks,
+            run: sessionRuntimeStore.workspaceTaskScriptRuns[workspace.id]
+           ) {
+            // A task subspace gives the whole slot to its task control; the
+            // sidebar and tab dots still show unreads.
+            WorkspaceHeaderTaskControl(
+                button: button,
+                stageActions: SidebarSubspacePresentation.stageActions(for: workspace.taskStage),
+                closeHook: workspace.taskHooks.close,
+                runButton: { runWorkspaceTaskButton(button, workspace: workspace) },
+                setStage: { stage in
+                    _ = store.send(
+                        .setWorkspaceTaskStage(workspaceID: workspace.id, stage: stage, at: Date()),
+                        source: .ui("topbar_task_set_stage")
+                    )
                 },
-                cancelCleanup: {
-                    sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: workspace.id)
-                },
-                closeWithoutMerging: { requestWorkspaceClose(workspace.id) }
+                close: { requestWorkspaceTaskScript(.close, workspace: workspace) },
+                retry: { kind in requestWorkspaceTaskScript(kind, workspace: workspace) },
+                dismiss: { sessionRuntimeStore.workspaceTaskHookRunner?.dismissScriptResult(workspaceID: workspace.id) }
             )
         } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show
@@ -752,6 +749,39 @@ struct WorkspaceView: View {
                     .frame(width: 0, height: 0)
                     .accessibilityHidden(true)
             }
+        }
+    }
+
+    private func runWorkspaceTaskButton(_ button: SidebarSubspacePresentation.TaskButton, workspace: WorkspaceState) {
+        switch button {
+        case .finish:
+            guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else { return }
+            Task { @MainActor in
+                if case .failure(let problem) = await runner.finish(workspaceID: workspace.id) {
+                    WorkspaceTaskHookPrompts.presentAlert(
+                        "Unable to Finish \(workspace.title)",
+                        WorkspaceTaskHookRunner.message(for: problem)
+                    )
+                }
+            }
+        case .cleanUp:
+            requestWorkspaceTaskScript(.cleanup, workspace: workspace)
+        case .running, .skipped, .failed:
+            break
+        }
+    }
+
+    private func requestWorkspaceTaskScript(_ kind: WorkspaceTaskHooks.ScriptKind, workspace: WorkspaceState) {
+        guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else { return }
+        let confirmation = WorkspaceTaskHookPresentation.confirmation(kind, taskTitle: workspace.title)
+        guard WorkspaceTaskHookPrompts.confirm(confirmation.title, confirmation.message, confirmation.button) else {
+            return
+        }
+        if case .failure(let problem) = runner.runScript(kind, workspaceID: workspace.id) {
+            WorkspaceTaskHookPrompts.presentAlert(
+                "Unable to \(WorkspaceTaskHookPresentation.title(kind)) \(workspace.title)",
+                WorkspaceTaskHookRunner.message(for: problem)
+            )
         }
     }
 

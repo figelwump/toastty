@@ -8,7 +8,9 @@ description: Use when the user says they are done reviewing or testing this work
 The user's invocation accepts the version they reviewed and authorizes merging
 this task's PR once the repository's required checks pass. It does not authorize
 merging other PRs, deployment, or a release. Do not invoke it on the user's
-behalf merely because implementation is finished.
+behalf merely because implementation is finished. The subspace row's Finish Task
+button sends this skill with a note that the user clicked it; that click is the
+same acceptance as typing the invocation.
 
 Cleanup happens from outside this workspace with `worktree-cleanup`. Do not close
 this workspace, remove its worktree, or delete its branch from inside it.
@@ -58,8 +60,9 @@ Stop and report, without merging, when:
    merging or enabling auto-merge.
 
 Report the PR, the accepted commit, and whether it merged or will merge when
-checks pass. Mention that `worktree-cleanup` removes the workspace and worktree
-after the merge. Keep the `github-pr` workspace chip; do not clear it when marking done.
+checks pass. Mention that the row's Clean Up button, or `worktree-cleanup`,
+removes the workspace and worktree after the merge. Keep the `github-pr`
+workspace chip; do not clear it when marking done.
 
 `--match-head-commit` checks the head only when auto-merge is enabled. GitHub
 keeps auto-merge on if someone with write access pushes later, so a later commit

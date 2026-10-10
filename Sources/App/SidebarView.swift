@@ -25,7 +25,9 @@ struct SidebarSemanticTextBridge: NSViewRepresentable {
     }
 }
 
-private struct SidebarTooltipBridge: NSViewRepresentable {
+/// A help tag AppKit inspectors and hosted tests can find; the remote
+/// test host has no accessibility tree.
+struct SidebarTooltipBridge: NSViewRepresentable {
     let text: String
 
     func makeNSView(context: Context) -> NSView {
@@ -426,25 +428,19 @@ struct SessionRailStatusIcon: View {
 
 /// A subspace row's status mark: square where a session's is round, so a
 /// workspace reads apart from an agent, and hollow when idle so an idle
-/// subspace still has one. The hollow box doubles as the done checkbox: it
-/// previews the check under the pointer and fills with one when done.
+/// subspace still has one. The box fills with a check once the task is
+/// done; it is a status mark only, the stage moves live in the row's menu.
 private struct SubspaceRailStatusIcon: View {
     private static let markSize: CGFloat = 7
     private static let doneMarkSize: CGFloat = 10
     private static let cornerRadius: CGFloat = 1.5
 
     let status: SidebarSubspacePresentation.RowStatus
-    var isDoneTogglePreviewed = false
 
     var body: some View {
         switch status {
         case .working:
             SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
-        case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed:
-            RoundedRectangle(cornerRadius: 2)
-                .strokeBorder(ToastyTheme.sidebarSubspaceDoneMark, lineWidth: 1.2)
-                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
-                .overlay { checkGlyph(ToastyTheme.sidebarSubspaceDoneMark) }
         case .idle:
             RoundedRectangle(cornerRadius: Self.cornerRadius)
                 .strokeBorder(ToastyTheme.sidebarSubspaceQuietMark, lineWidth: 1.2)
@@ -454,7 +450,6 @@ private struct SubspaceRailStatusIcon: View {
                 .fill(ToastyTheme.sidebarSubspaceDoneMarkBackground)
                 .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
                 .overlay { checkGlyph(ToastyTheme.sidebarSubspaceDoneMark) }
-                .opacity(isDoneTogglePreviewed ? 0.6 : 1)
         case .ready:
             filledMark(ToastyTheme.sessionReadyText)
         case .needsApproval:
@@ -548,10 +543,9 @@ struct SidebarView: View {
     // materialization immediately restyle every visible chip with that key.
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
-    /// Runs a subspace row's Merge menu item for that workspace.
-    let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
-    /// Runs a subspace row's Close Without Merging menu item.
-    let requestWorkspaceClose: @MainActor (UUID) -> Void
+    /// Test seam: a subspace row to treat as hovered, because SwiftUI hover
+    /// cannot be driven from a hosted test.
+    let hoveredSubspaceIDOverride: UUID?
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
@@ -591,7 +585,6 @@ struct SidebarView: View {
     @State private var subspaceGroupScrollRequest: SubspaceGroupScrollRequest?
     @State private var hoveredSpawnerSessionID: String?
     @State private var hoveredSubspaceID: UUID?
-    @State private var hoveredSubspaceDoneToggleID: UUID?
     @State private var optionKeyPressed = false
 
     private static let sessionStatusesTopSpacing: CGFloat = 0
@@ -717,8 +710,7 @@ struct SidebarView: View {
         sessionRuntimeStore: SessionRuntimeStore,
         annotationStyleStore: AnnotationStyleStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
-        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
-        requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
+        hoveredSubspaceIDOverride: UUID? = nil,
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
         workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
         workspaceViewportHeightObserver: ((CGFloat) -> Void)? = nil
@@ -729,8 +721,7 @@ struct SidebarView: View {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.annotationStyleStore = annotationStyleStore
         self.terminalRuntimeContext = terminalRuntimeContext
-        self.requestWorkspaceMerge = requestWorkspaceMerge
-        self.requestWorkspaceClose = requestWorkspaceClose
+        self.hoveredSubspaceIDOverride = hoveredSubspaceIDOverride
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
         self.workspaceViewportHeightObserver = workspaceViewportHeightObserver
@@ -3285,6 +3276,9 @@ struct SidebarView: View {
                     isDone: workspace.doneAt != nil
                 ),
                 isDone: workspace.doneAt != nil,
+                taskStage: workspace.taskStage,
+                taskHooks: workspace.taskHooks,
+                scriptRun: sessionRuntimeStore.workspaceTaskScriptRuns[subspaceID],
                 annotations: workspace.annotations,
                 primaryAnnotationKey: workspace.primaryAnnotationKey,
                 summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
@@ -3345,7 +3339,8 @@ struct SidebarView: View {
                 shownCount: filteredRows.count,
                 totalCount: rows.count,
                 tally: tally,
-                isExpanded: isExpanded
+                isExpanded: isExpanded,
+                cleanupCandidates: SidebarSubspacePresentation.cleanupCandidates(rows)
             )
             .background(subspaceFrameMeasurement(id: .group(parentWorkspaceID)))
 
@@ -3425,7 +3420,8 @@ struct SidebarView: View {
         shownCount: Int,
         totalCount: Int,
         tally: SidebarSubspacePresentation.Tally,
-        isExpanded: Bool
+        isExpanded: Bool,
+        cleanupCandidates: [SidebarSubspacePresentation.Row]
     ) -> some View {
         HStack(spacing: 8) {
             Button {
@@ -3476,9 +3472,47 @@ struct SidebarView: View {
                 }
                 .accessibilityHidden(true)
             }
+
+            if cleanupCandidates.isEmpty == false {
+                subspacesCleanupFinishedButton(parentWorkspaceID: parentWorkspaceID, candidates: cleanupCandidates)
+            }
         }
         .frame(minHeight: 16)
         .padding(.top, 6)
+    }
+
+    /// The header's clean-up icon: shown only while a finished subspace has
+    /// a cleanup hook, with the count beside it. A click confirms, then runs
+    /// each script in turn.
+    private func subspacesCleanupFinishedButton(
+        parentWorkspaceID: UUID,
+        candidates: [SidebarSubspacePresentation.Row]
+    ) -> some View {
+        let title = SidebarSubspacePresentation.cleanupFinishedTitle(count: candidates.count)
+        return Button {
+            requestCleanupFinishedSubspaces(parentWorkspaceID: parentWorkspaceID)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "trash")
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text("\(candidates.count)")
+                    .font(ToastyTheme.fontWorkspaceAgentCount)
+            }
+            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background {
+            ZStack {
+                SidebarTooltipBridge(text: title)
+                SidebarSemanticTextBridge(text: title)
+            }
+            .allowsHitTesting(false)
+        }
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("sidebar.workspace.subspaces.cleanupFinished.\(parentWorkspaceID.uuidString)")
     }
 
     @ViewBuilder
@@ -3583,7 +3617,11 @@ struct SidebarView: View {
                 if showsWaitingChip {
                     Self.sessionWaitingChip()
                 }
-                if showsAnnotation, let rowAnnotation = row.rowAnnotation {
+                if let button = SidebarSubspacePresentation.taskButton(row), isSubspaceRowHovered(row.id) {
+                    // The task button takes the chip's place while the
+                    // pointer is on the row, so the row does not grow.
+                    subspaceTaskButton(row, button: button)
+                } else if showsAnnotation, let rowAnnotation = row.rowAnnotation {
                     // No ↗ glyph here to save width; the chip still opens
                     // its link.
                     workspaceAnnotationChip(
@@ -3597,6 +3635,113 @@ struct SidebarView: View {
             .fixedSize(horizontal: true, vertical: false)
             .layoutPriority(1)
         }
+    }
+
+    /// The row's Finish Task or Clean Up button, or the state of a script
+    /// that ran, in the same green as the top bar's control. Shown only
+    /// while the pointer is on the row; the header shows it all the time.
+    private func subspaceTaskButton(
+        _ row: SidebarSubspacePresentation.Row,
+        button: SidebarSubspacePresentation.TaskButton
+    ) -> some View {
+        Button {
+            runSubspaceTaskButton(row, button: button)
+        } label: {
+            HStack(spacing: 4) {
+                if case .running = button {
+                    SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.5)
+                } else if let symbolName = button.symbolName {
+                    Image(systemName: symbolName)
+                        .font(.system(size: 8, weight: .bold))
+                }
+                Text(button.title)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .buttonStyle(WorkspaceTaskButtonStyle())
+        .disabled(button.isEnabled == false)
+        .background {
+            ZStack {
+                SidebarTooltipBridge(text: button.help)
+                SidebarSemanticTextBridge(text: button.title)
+            }
+            .allowsHitTesting(false)
+        }
+        .accessibilityLabel(button.title)
+        .accessibilityHint(button.help)
+        .accessibilityIdentifier("sidebar.workspace.subspace.taskButton.\(row.id.uuidString)")
+    }
+
+    private func isSubspaceRowHovered(_ rowID: UUID) -> Bool {
+        hoveredSubspaceID == rowID || hoveredSubspaceIDOverride == rowID
+    }
+
+    private func runSubspaceTaskButton(
+        _ row: SidebarSubspacePresentation.Row,
+        button: SidebarSubspacePresentation.TaskButton
+    ) {
+        switch button {
+        case .finish:
+            requestFinishSubspaceTask(row)
+        case .cleanUp:
+            requestSubspaceTaskScript(.cleanup, row: row)
+        case .skipped(let kind, _), .failed(let kind, _):
+            requestSubspaceTaskScript(kind, row: row)
+        case .running:
+            break
+        }
+    }
+
+    private func requestFinishSubspaceTask(_ row: SidebarSubspacePresentation.Row) {
+        guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else { return }
+        Task { @MainActor in
+            if case .failure(let problem) = await runner.finish(workspaceID: row.id) {
+                WorkspaceTaskHookPrompts.presentAlert(
+                    "Unable to Finish \(row.title)",
+                    WorkspaceTaskHookRunner.message(for: problem)
+                )
+            }
+        }
+    }
+
+    private func requestSubspaceTaskScript(_ kind: WorkspaceTaskHooks.ScriptKind, row: SidebarSubspacePresentation.Row) {
+        guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else { return }
+        let confirmation = WorkspaceTaskHookPresentation.confirmation(kind, taskTitle: row.title)
+        guard WorkspaceTaskHookPrompts.confirm(confirmation.title, confirmation.message, confirmation.button) else {
+            return
+        }
+        if case .failure(let problem) = runner.runScript(kind, workspaceID: row.id) {
+            WorkspaceTaskHookPrompts.presentAlert(
+                "Unable to \(WorkspaceTaskHookPresentation.title(kind)) \(row.title)",
+                WorkspaceTaskHookRunner.message(for: problem)
+            )
+        }
+    }
+
+    private func setSubspaceTaskStage(_ row: SidebarSubspacePresentation.Row, stage: WorkspaceTaskStage) {
+        _ = store.send(
+            .setWorkspaceTaskStage(workspaceID: row.id, stage: stage, at: Date()),
+            source: .ui("sidebar_subspace_set_task_stage")
+        )
+    }
+
+    /// Confirms once, then runs each done subspace's cleanup script in turn
+    /// so the scripts do not race each other for git and the workspace list.
+    private func requestCleanupFinishedSubspaces(parentWorkspaceID: UUID) {
+        guard let runner = sessionRuntimeStore.workspaceTaskHookRunner else { return }
+        let rows = subspaceRows(for: parentWorkspaceID, parentSessionStatuses: sidebarSessionStatuses(for: parentWorkspaceID))
+        let candidates = SidebarSubspacePresentation.sortedRows(SidebarSubspacePresentation.cleanupCandidates(rows))
+        guard candidates.isEmpty == false else { return }
+        let confirmation = SidebarSubspacePresentation.cleanupFinishedConfirmation(
+            rows: candidates,
+            skippedCount: rows.count - candidates.count
+        )
+        let buttonTitle = candidates.count == 1 ? "Clean Up" : "Clean Up \(candidates.count)"
+        guard WorkspaceTaskHookPrompts.confirm(confirmation.title, confirmation.message, buttonTitle) else {
+            return
+        }
+        _ = runner.cleanUpFinished(parentWorkspaceID: parentWorkspaceID)
     }
 
     private func subspaceRow(
@@ -3751,9 +3896,6 @@ struct SidebarView: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, select)
-        .accessibilityAction(named: Text(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone))) {
-            toggleSubspaceDone(row)
-        }
         .accessibilityAction(named: Text("Move to top level")) {
             _ = store.send(
                 .setWorkspaceParent(workspaceID: row.id, parentWorkspaceID: nil, spawningSessionID: nil),
@@ -3764,16 +3906,7 @@ struct SidebarView: View {
         .background(subspaceFrameMeasurement(id: .row(row.id)))
         .id(row.id)
         .contextMenu {
-            let mergePresentation = subspaceMergeMenuPresentation(row)
-            if let mergePresentation {
-                subspaceMergeMenuItems(row, presentation: mergePresentation)
-            }
-            Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
-                toggleSubspaceDone(row)
-            }
-            if mergePresentation != nil {
-                Divider()
-            }
+            subspaceTaskMenuItems(row)
             Button("Move to top level") {
                 _ = store.send(
                     .setWorkspaceParent(workspaceID: row.id, parentWorkspaceID: nil, spawningSessionID: nil),
@@ -3786,113 +3919,49 @@ struct SidebarView: View {
         }
     }
 
-    /// The rail mark, which is also the done checkbox while it is a box. A
-    /// click on it toggles the mark instead of selecting the row.
-    @ViewBuilder
+    /// The rail mark is a status glyph only; the task moves through the
+    /// row's menu and the task button.
     private func subspaceRailMark(_ row: SidebarSubspacePresentation.Row) -> some View {
-        if SidebarSubspacePresentation.showsDoneToggle(row) {
-            let isPreviewed = hoveredSubspaceDoneToggleID == row.id
-            Button {
-                toggleSubspaceDone(row)
-            } label: {
-                // The glyph stays in the rail, but the click target reaches
-                // into the row's padding and the gap beside the rail, so a
-                // near miss does not fall through and open the workspace.
-                SubspaceRailStatusIcon(status: row.status, isDoneTogglePreviewed: isPreviewed)
-                    .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
-                    .padding(Self.subspaceDoneToggleHitOutset)
-                    .contentShape(Rectangle())
-                    .padding(-Self.subspaceDoneToggleHitOutset)
-            }
-            .buttonStyle(.plain)
-            .onHover { isHovering in
-                if isHovering {
-                    hoveredSubspaceDoneToggleID = row.id
-                } else if hoveredSubspaceDoneToggleID == row.id {
-                    hoveredSubspaceDoneToggleID = nil
-                }
-            }
-            .background {
-                SidebarTooltipBridge(text: SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone))
-                    .allowsHitTesting(false)
-            }
+        SubspaceRailStatusIcon(status: row.status)
+            .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
             .accessibilityHidden(true)
-            .accessibilityIdentifier("sidebar.workspace.subspace.doneToggle.\(row.id.uuidString)")
-        } else {
-            SubspaceRailStatusIcon(status: row.status)
-                .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
-                .accessibilityHidden(true)
-                .onAppear {
-                    // The box can turn into a spinner under the pointer; do
-                    // not let the preview come back when it turns into a box.
-                    if hoveredSubspaceDoneToggleID == row.id {
-                        hoveredSubspaceDoneToggleID = nil
-                    }
-                }
-        }
     }
 
-    /// The row's merge menu items: both merge actions while the pull request
-    /// is open, a disabled progress item while the agent merges it, and the
-    /// retry and dismiss items for a pending or failed cleanup.
+    /// The row's task items: the stage moves, the action its button runs,
+    /// Retry and Dismiss for a script that stopped, and Close Task.
     @ViewBuilder
-    private func subspaceMergeMenuItems(
-        _ row: SidebarSubspacePresentation.Row,
-        presentation: WorkspaceMergePresentation
-    ) -> some View {
-        switch presentation {
-        case .ready(let pullRequest, let currentMode):
-            ForEach(WorkspaceMergeMode.allCases, id: \.self) { mode in
-                let title = WorkspaceMergePresentation.actionTitle(mode: mode, pullRequest: pullRequest)
-                // The shortcut runs the mode selected in the top bar button menu.
-                Button(mode == currentMode ? ToasttyKeyboardShortcuts.mergeWorkspacePullRequest.menuTitle(title) : title) {
-                    requestWorkspaceMerge(row.id, mode)
+    private func subspaceTaskMenuItems(_ row: SidebarSubspacePresentation.Row) -> some View {
+        let button = SidebarSubspacePresentation.taskButton(row)
+        if let button {
+            switch button {
+            case .finish:
+                Button("Finish Task") { requestFinishSubspaceTask(row) }
+                    .help(button.help)
+            case .cleanUp:
+                Button("Clean Up Task…") { requestSubspaceTaskScript(.cleanup, row: row) }
+                    .help(button.help)
+            case .running:
+                Button(button.title) {}
+                    .disabled(true)
+            case .skipped(let kind, let detail), .failed(let kind, let detail):
+                Button("\(button.title): \(detail)") {}
+                    .disabled(true)
+                Button("Retry \(WorkspaceTaskHookPresentation.title(kind))…") { requestSubspaceTaskScript(kind, row: row) }
+                Button("Dismiss") {
+                    sessionRuntimeStore.workspaceTaskHookRunner?.dismissScriptResult(workspaceID: row.id)
                 }
             }
-            Button(WorkspaceMergePresentation.closeWithoutMergingTitle) {
-                requestWorkspaceClose(row.id)
-            }
-        case .cleanupFailed:
-            Button(presentation.title) {}
-                .disabled(true)
-            Button("Retry Clean Up") {
-                sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: row.id)
-            }
-            Button("Don't Clean Up") {
-                sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)
-            }
-        case .merging, .cleaningUp, .closing, .done:
-            Button(presentation.title) {}
-                .disabled(true)
+            Divider()
         }
-    }
-
-    /// The row's merge state for its context menu; `nil` once the row is
-    /// done with nothing left to clean up.
-    private func subspaceMergeMenuPresentation(
-        _ row: SidebarSubspacePresentation.Row
-    ) -> WorkspaceMergePresentation? {
-        guard store.isWorkspaceMergeEnabled,
-              let workspace = store.state.workspacesByID[row.id],
-              let presentation = WorkspaceMergePresentation.make(
-                workspace: workspace,
-                request: sessionRuntimeStore.workspaceMergeRequests[row.id],
-                mode: store.workspaceMergeMode
-              ) else {
-            return nil
+        ForEach(SidebarSubspacePresentation.stageActions(for: row.taskStage), id: \.self) { action in
+            Button(action.title) { setSubspaceTaskStage(row, stage: action.stage) }
         }
-        if case .done = presentation {
-            return nil
+        if let closeHook = row.taskHooks.close, button?.retryKind != .close {
+            Divider()
+            Button(WorkspaceTaskHookPresentation.title(.close) + "…") { requestSubspaceTaskScript(.close, row: row) }
+                .help(WorkspaceTaskHookPresentation.scriptHelp(closeHook))
         }
-        return presentation
-    }
-
-    private func toggleSubspaceDone(_ row: SidebarSubspacePresentation.Row) {
-        let isDone = store.state.workspacesByID[row.id]?.doneAt != nil
-        _ = store.send(
-            .setWorkspaceDone(workspaceID: row.id, doneAt: isDone ? nil : Date()),
-            source: .ui("sidebar_subspace_toggle_done")
-        )
+        Divider()
     }
 
     /// Selecting a subspace whose row is collapsed or filtered away would
