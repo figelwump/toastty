@@ -429,6 +429,7 @@ final class RemoteAccessService: ObservableObject {
     private let deviceStore: RemoteDeviceStore
     private let pushConfiguration: RemotePushConfiguration?
     private let pushRelay: any RemotePushRelaying
+    private let pushMacPresence: @MainActor () -> RemotePushMacPresence
     private var pushTasksByEventID: [UUID: Task<Void, Never>] = [:]
     private var pushCleanupTask: Task<Void, Never>?
     private var nextPushCleanupIndex = 0
@@ -573,6 +574,7 @@ final class RemoteAccessService: ObservableObject {
         localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pushConfiguration: RemotePushConfiguration? = .configured(),
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
+        pushMacPresence: @escaping @MainActor () -> RemotePushMacPresence = { .current() },
         tailnetServeSetup: @escaping TailnetServeSetup = { port, configuredOrigin, configureIfNeeded in
             try await TailscaleServeSetup().run(
                 port: port,
@@ -597,6 +599,7 @@ final class RemoteAccessService: ObservableObject {
         self.localDraftEpochBroadcastInterval = localDraftEpochBroadcastInterval
         self.pushConfiguration = pushConfiguration
         self.pushRelay = pushRelay
+        self.pushMacPresence = pushMacPresence
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
         self.deviceStore = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
         self.auditLog = RemoteAccessAuditLog(fileURL: runtimePaths.remoteAccessAuditFileURL)
@@ -1185,6 +1188,9 @@ final class RemoteAccessService: ObservableObject {
               let record = sessionRuntimeStore.sessionRegistry.sessionsByID[event.sessionID], record.isActive, record.agent == event.agent,
               let panel = store.state.workspacesByID.values.compactMap({ $0.allPanelsByID[event.panelID] }).first,
               case .terminal(let terminal) = panel else { return }
+        // SessionRuntimeStore has already accepted and deduplicated the event.
+        // Drop it now while the Mac is in use; becoming idle must not replay it.
+        guard pushMacPresence().allowsPush else { return }
         if terminal.remoteConversationID == nil {
             guard store.send(.updateTerminalPanelRemoteConversationID(panelID: event.panelID, remoteConversationID: RemoteConversationID())) else { return }
         }

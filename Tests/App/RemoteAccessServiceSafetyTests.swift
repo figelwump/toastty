@@ -598,6 +598,52 @@ private actor RemoteAccessTailnetSetupSpy {
 
 struct RemoteAccessServiceSafetyTests {
     @MainActor
+    @Test func activeMacDropsEventsWithoutReplayingThemWhenAway() async throws {
+        let relay = RemotePushRelaySpy()
+        let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
+        var presence = RemotePushMacPresence(screenIsLocked: false, idleSeconds: 0)
+        let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration,
+            pushRelay: relay, pushMacPresence: { presence })
+        defer { fixture.removeRuntimeFiles() }
+        try fixture.setPushRegistration(.init(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID))
+        let pushHandler = fixture.sessionRuntimeStore.onActionableEvent
+        var acceptedEvents: [ManagedSessionActionableEvent] = []
+        fixture.sessionRuntimeStore.onActionableEvent = { event in
+            acceptedEvents.append(event)
+            pushHandler?(event)
+        }
+        func status(_ kind: SessionStatusKind, at offset: TimeInterval) {
+            fixture.sessionRuntimeStore.updateStatus(sessionID: fixture.sessionID,
+                status: .init(kind: kind, summary: kind.rawValue), at: fixture.confirmedAt.addingTimeInterval(offset))
+        }
+        status(.working, at: 1)
+        status(.ready, at: 2)
+        presence = .init(screenIsLocked: false, idleSeconds: 120)
+        status(.ready, at: 3) // A duplicate after walking away must not replay the dropped event.
+        status(.working, at: 4)
+        status(.ready, at: 5)
+        let readyEvent = try #require(acceptedEvents.first { $0.timestamp == fixture.confirmedAt.addingTimeInterval(5) })
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.contains { $0.eventID == readyEvent.eventID } }
+        #expect(acceptedEvents.map(\.timestamp) == [2.0, 5.0].map { fixture.confirmedAt.addingTimeInterval($0) })
+        #expect(relay.notifications.map(\.eventID) == [readyEvent.eventID])
+
+        presence = .init(screenIsLocked: false, idleSeconds: 0)
+        status(.working, at: 6)
+        status(.needsApproval, at: 7)
+        presence = .init(screenIsLocked: true, idleSeconds: 0)
+        status(.needsApproval, at: 8)
+        status(.working, at: 9)
+        status(.needsApproval, at: 10)
+        let approvalEvent = try #require(acceptedEvents.first { $0.timestamp == fixture.confirmedAt.addingTimeInterval(10) })
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.contains { $0.eventID == approvalEvent.eventID } }
+        // Allow already-scheduled sends to finish before checking for unexpected delivery.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(acceptedEvents.map(\.timestamp) == [2.0, 5.0, 7.0, 10.0].map { fixture.confirmedAt.addingTimeInterval($0) })
+        #expect(relay.notifications.map(\.eventID) == [readyEvent.eventID, approvalEvent.eventID])
+        #expect(relay.notifications.map(\.status) == [.ready, .needsApproval])
+    }
+
+    @MainActor
     @Test func acceptedSessionEventSendsDurableConversationAndCurrentTitle() async throws {
         let relay = RemotePushRelaySpy()
         let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
@@ -2478,6 +2524,7 @@ private final class RemoteBootstrapFixture {
         pairNativeDevice: Bool = false,
         pushConfiguration: RemotePushConfiguration? = nil,
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
+        pushMacPresence: @escaping @MainActor () -> RemotePushMacPresence = { .init(screenIsLocked: false, idleSeconds: 120) },
         pendingPushCleanupCount: Int = 0
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
@@ -2550,6 +2597,7 @@ private final class RemoteBootstrapFixture {
             localDraftEpochBroadcastInterval: localDraftEpochBroadcastInterval,
             pushConfiguration: pushConfiguration,
             pushRelay: pushRelay,
+            pushMacPresence: pushMacPresence,
             gatewayServerFactory: { handler in
                 capturedHandler = handler
                 return gatewayServer
