@@ -380,6 +380,12 @@ may summarize your prompt. Titles can also appear on the Lock Screen, depending
 on iOS preview settings. Notification delivery sends no message bodies, tool
 output, or attached files to the relay.
 
+Before sending a session alert, the Mac reads its screen-lock state and elapsed
+time since keyboard or pointer input. These one-time checks need no Accessibility
+or Input Monitoring permission. They do not read keystrokes, pointer positions,
+or other input contents. Presence data is not stored, logged, or sent to the
+relay. Alerts suppressed during active Mac use are discarded, not queued.
+
 The relay retains the APNs device token and its hash, registration and pairing
 IDs, hashes of the management and send credentials and verification nonce,
 enrollment state with expiry and last-use times, and bounded event IDs, delivery

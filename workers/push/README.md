@@ -10,6 +10,11 @@ The paired-device relay uses `wrangler.relay.jsonc` and a separate Worker,
 `toastty-push-dev`. Unconfigured app builds do not expose notifications.
 The operator probe remains separate from automatic enrollment.
 
+The Mac sends Ready and Needs approval events only while locked or after two
+minutes without input. Events suppressed during active Mac use are discarded,
+even if approval remains pending after the user leaves. This host rule does not
+apply to enrollment verification alerts. See [iPhone notifications](../../docs/remote-access.md#iphone-notifications).
+
 ## Local checks
 
 From the repository root:

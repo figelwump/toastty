@@ -139,6 +139,15 @@ pairing. The Mac must remain running with Remote Access enabled to send new
 alerts. The phone does not need an open connection to receive Apple's alert, but
 opening the conversation still requires access to the Mac through Tailscale.
 
+The Mac sends these session alerts only when its screen is locked or there has
+been no keyboard or pointer input for at least two minutes. This uses activity
+across the Mac, regardless of which app or Toastty panel has focus. Remote-control
+and automation input can also count as activity. An alert
+suppressed while you use the Mac is discarded. Walking away later does not
+resend it, including a request that still needs approval. There is no new setting
+or Mac permission prompt. If presence data is unavailable, delivery continues;
+if lock detection is unavailable, the two-minute idle rule still applies.
+
 Interrupted setup resumes when the app returns to the foreground. A failure shows
 a small Retry message. Off and unpairing retain pending notification revocation
 until the service accepts it. Settings shows when turning off is still pending;

@@ -20,6 +20,20 @@ The service verifies that the registering app receives notifications before auth
 - The Mac stores a send credential for each enrolled native device. It uses the accepted session-event callback, independent of desktop focus and optional shell hooks. It sends only for an active native device with read permission, while remote access is enabled.
 - A separate Worker and one SQLite Durable Object hold registrations, credential hashes, rate limits, short-lived event deduplication records, and the cached APNs provider token. The existing operator probe remains separate. Production uses separate resources and configuration.
 
+The Mac samples presence once per accepted Ready or Needs approval event, before
+starting relay delivery. It permits delivery when the screen is locked or global
+input idle time is at least 120 seconds. Active-use events are discarded and are
+not replayed after the user leaves, even if approval is still pending. Desktop
+notification and shell-hook behavior stay independent. Enrollment verification
+alerts originate at the relay and are not subject to this host gate.
+
+Presence uses `CGSessionCopyCurrentDictionary` and
+`CGEventSource.secondsSinceLastEventType(.combinedSessionState, ...)`, without
+input monitors or permission requests. The lock key `CGSSessionScreenIsLocked`
+is undocumented; an absent or unrecognized key falls back to the idle rule.
+Missing GUI session data, an off-console session, or invalid idle time permits
+delivery. No presence data is persisted or included in the relay payload.
+
 The Mac and iPhone use configured HTTPS relay origins. Native registration never accepts an arbitrary relay URL. Private active and cleanup records retain the trusted origin used at registration so a later configuration change does not redirect credentials.
 
 ## Contract v1
