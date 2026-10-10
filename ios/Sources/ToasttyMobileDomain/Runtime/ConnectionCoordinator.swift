@@ -833,6 +833,26 @@ public actor ConnectionCoordinator {
         return response
     }
 
+    /// Reopens a prompt a Mac draft holds closed, naming the draft epoch this
+    /// device saw. `nil` means the host does not offer draft release or the
+    /// connection is not live. The host broadcasts a fresh session list after
+    /// any outcome that changes what the composer should show.
+    public func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.localDraftRelease),
+              deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return nil
+        }
+        let response = try await gateway.releaseLocalDraft(request)
+        if response.result == .rejected(reason: .sendScopeDenied) {
+            sendScopeDeniedByHost = true
+            await publishComposerAuthorities()
+        }
+        return response
+    }
+
     /// Asks what this device can start in a workspace, only while live
     /// against a host that advertises session starts. `nil` is a
     /// capability/lifecycle refusal, not a transport failure.

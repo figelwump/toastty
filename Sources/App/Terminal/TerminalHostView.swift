@@ -1057,9 +1057,9 @@ final class TerminalHostView: NSView {
     override func keyDown(with event: NSEvent) {
         let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
         notifyLocalInterruptIfNeeded(event, action: action)
-        if action == GHOSTTY_ACTION_PRESS {
-            handleLocalInput?()
-        }
+        // Repeats count too: a held key keeps changing the composer, and each
+        // change must advance the remote draft epoch.
+        handleLocalInput?()
         guard let ghosttySurface else {
             super.keyDown(with: event)
             return

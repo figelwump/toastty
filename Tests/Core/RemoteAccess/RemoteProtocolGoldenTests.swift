@@ -358,6 +358,18 @@ private extension RemoteProtocolGoldenTests {
                 "interrupt-response-rejected-turn_mismatch.json",
                 RemoteConversationInterruptResponse(result: .rejected(reason: .turnMismatch))
             ),
+            try fixture(
+                "draft-release-request.json",
+                RemoteConversationLocalDraftReleaseRequest(conversationID: conversationID, expectedDraftEpoch: epoch)
+            ),
+            try fixture(
+                "draft-release-response-released.json",
+                RemoteConversationLocalDraftReleaseResponse(result: .released)
+            ),
+            try fixture(
+                "draft-release-response-rejected-draft_changed.json",
+                RemoteConversationLocalDraftReleaseResponse(result: .rejected(reason: .draftChanged))
+            ),
         ]
 
         let rejectionReasons: [RemoteMessageRejectionReason] = [

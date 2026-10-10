@@ -17,7 +17,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
 
         XCTAssertEqual(
             fixtureURLs.count,
-            51,
+            54,
             "Adding or removing canonical v1 fixtures requires an intentional iOS harness update."
         )
 
@@ -46,6 +46,9 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
 
     func testEveryCanonicalHostFixtureDecodesThroughItsStrictSharedModel() throws {
         let decoders: [String: (Data) throws -> Void] = [
+            "draft-release-request": decode(RemoteConversationLocalDraftReleaseRequest.self),
+            "draft-release-response-rejected-draft_changed": decode(RemoteConversationLocalDraftReleaseResponse.self),
+            "draft-release-response-released": decode(RemoteConversationLocalDraftReleaseResponse.self),
             "error-response": decode(RemoteGatewayErrorResponse.self),
             "events-request-backward-before": decode(RemoteGatewayEventsRequest.self),
             "events-request-backward-latest": decode(RemoteGatewayEventsRequest.self),
@@ -87,7 +90,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
 
         // APNs session and verification fixtures have an outer aps envelope;
         // PushPayloadFixtureTests decodes their nested strict push model.
-        XCTAssertEqual(decoders.count, 37)
+        XCTAssertEqual(decoders.count, 40)
         for (name, decoder) in decoders {
             try decoder(fixtureData(named: name))
         }

@@ -456,6 +456,47 @@ final class ConnectionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testDraftReleaseIsSentOnlyToAHostThatAdvertisesIt() async throws {
+        let run = runID(4)
+        let release = RemoteConversationLocalDraftReleaseRequest(
+            conversationID: conversationID,
+            expectedDraftEpoch: RemoteInputEpoch(bindingID: UUID(), counter: 5)
+        )
+        for (capabilities, expectsRequest) in [
+            ([RemoteGatewayCapability.conversationInputControl], false),
+            ([.localDraftRelease], true),
+        ] {
+            let operations = OperationLog()
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse(capabilities: capabilities))],
+                sessions: [.success(snapshot(runID: run, title: "Seed"))],
+                events: []
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(
+                    operations: operations,
+                    connections: [.success(subscription)]
+                ),
+                deviceScopes: [.read, .send]
+            )
+            let early = try await coordinator.releaseLocalDraft(release)
+            XCTAssertNil(early)
+
+            await coordinator.connectIfNeeded()
+            await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh")))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            let response = try await coordinator.releaseLocalDraft(release)
+
+            XCTAssertEqual(response?.result, expectsRequest ? .released : nil)
+            let sent = await gateway.recordedLocalDraftReleaseRequests()
+            XCTAssertEqual(sent, expectsRequest ? [release] : [])
+            await coordinator.suspend()
+        }
+    }
+
     func testWorkingTurnQueuesSendsWithoutReservingAndSurvivesQueueSnapshots() async throws {
         let operations = OperationLog()
         let run = runID(1)
@@ -2613,6 +2654,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var conversationFlagRequests: [RemoteConversationFlagRequest] = []
     private var queueUpdateRequests: [RemoteConversationQueueUpdateRequest] = []
     private var interruptRequests: [RemoteConversationInterruptRequest] = []
+    private var localDraftReleaseRequests: [RemoteConversationLocalDraftReleaseRequest] = []
     private var sessionStartRequests: [RemoteSessionStartRequest] = []
 
     init(
@@ -2718,6 +2760,13 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return RemoteConversationInterruptResponse(result: .accepted)
     }
 
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) async throws -> RemoteConversationLocalDraftReleaseResponse {
+        localDraftReleaseRequests.append(request)
+        return RemoteConversationLocalDraftReleaseResponse(result: .released)
+    }
+
     func sessionStartOptions(
         _ request: RemoteSessionStartOptionsRequest
     ) async throws -> RemoteSessionStartOptionsResponse {
@@ -2734,6 +2783,9 @@ private actor ScriptedGateway: GatewayClientProtocol {
     func recordedConversationFlagRequests() -> [RemoteConversationFlagRequest] { conversationFlagRequests }
     func recordedQueueUpdateRequests() -> [RemoteConversationQueueUpdateRequest] { queueUpdateRequests }
     func recordedInterruptRequests() -> [RemoteConversationInterruptRequest] { interruptRequests }
+    func recordedLocalDraftReleaseRequests() -> [RemoteConversationLocalDraftReleaseRequest] {
+        localDraftReleaseRequests
+    }
     func recordedSessionStartRequests() -> [RemoteSessionStartRequest] { sessionStartRequests }
     func recordedWorkspaceDoneRequests() -> [RemoteWorkspaceDoneRequest] { workspaceDoneRequests }
     func helloCallCount() -> Int { helloCalls }

@@ -29,6 +29,58 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertEqual(outcome, .enqueued(clientRequestID: "attachment-request"))
     }
 
+    func testDraftReleaseNamesTheSeenDraftAndShowsWhyTheMacKeptTheLock() async {
+        let recorder = DraftReleaseRecorder(outcomes: [
+            .success(.rejected(reason: .draftChanged)),
+            .failure(GatewayFailure.invalidResponse),
+            .success(.released),
+        ])
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID),
+            releaseLocalDraft: { request in try await recorder.release(request) }
+        )
+        let seen = RemoteInputEpoch(bindingID: UUID(), counter: 5)
+        func locked(_ epoch: RemoteInputEpoch) -> ConversationRuntime.State {
+            state(runID: runID(1), events: [event(1)], phase: .live, composerAuthority: ConversationComposerAuthority(
+                inputAvailability: .localDraft(epoch: epoch), gateFailure: .inputUnavailable
+            ))
+        }
+        subject.consume(locked(seen))
+
+        // A host without the capability is never asked.
+        let unsupported = await subject.releaseLocalDraft(expectedDraftEpoch: seen)
+        XCTAssertNil(unsupported)
+        XCTAssertNil(subject.releasableLocalDraftEpoch)
+        subject.consumeConnectionState(.init(phase: .live, capabilities: [.localDraftRelease]))
+        XCTAssertEqual(subject.releasableLocalDraftEpoch, seen)
+
+        // The user confirmed the draft they saw; Mac typing meanwhile brought
+        // a newer epoch. The request still names the confirmed one.
+        let current = seen.next()
+        subject.consume(locked(current))
+        let refused = await subject.releaseLocalDraft(expectedDraftEpoch: seen)
+        XCTAssertEqual(refused, .rejected(reason: .draftChanged))
+        XCTAssertEqual(subject.localDraftReleaseRefusal, .macTypedAgain)
+        // A later snapshot of the same lock keeps the refusal visible.
+        subject.consume(locked(current))
+        XCTAssertEqual(subject.localDraftReleaseRefusal, .macTypedAgain)
+
+        let failed = await subject.releaseLocalDraft(expectedDraftEpoch: current)
+        XCTAssertNil(failed)
+        XCTAssertEqual(subject.localDraftReleaseRefusal, .failed)
+
+        let released = await subject.releaseLocalDraft(expectedDraftEpoch: current)
+        XCTAssertEqual(released, .released)
+        XCTAssertNil(subject.localDraftReleaseRefusal)
+        let requests = await recorder.requests()
+        XCTAssertEqual(requests.map(\.expectedDraftEpoch), [seen, current, current])
+
+        subject.consume(state(runID: runID(1), events: [event(1)], phase: .live,
+                              composerAuthority: enabledComposerAuthority()))
+        XCTAssertNil(subject.releasableLocalDraftEpoch)
+    }
+
     func testPublishesOrderedValuesAndClassifiesAppendAndRebuild() {
         let subject = LiveConversationController(
             conversationID: conversationID.rawValue,
@@ -1296,4 +1348,22 @@ private actor CancellableLiveConversationRuntime: LiveConversationRuntime {
     }
 
     func terminationCount() -> Int { streamTerminations }
+}
+
+private actor DraftReleaseRecorder {
+    private var outcomes: [Result<RemoteConversationLocalDraftReleaseResult, any Error>]
+    private var recorded: [RemoteConversationLocalDraftReleaseRequest] = []
+
+    init(outcomes: [Result<RemoteConversationLocalDraftReleaseResult, any Error>]) {
+        self.outcomes = outcomes
+    }
+
+    func release(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) throws -> RemoteConversationLocalDraftReleaseResponse {
+        recorded.append(request)
+        return RemoteConversationLocalDraftReleaseResponse(result: try outcomes.removeFirst().get())
+    }
+
+    func requests() -> [RemoteConversationLocalDraftReleaseRequest] { recorded }
 }

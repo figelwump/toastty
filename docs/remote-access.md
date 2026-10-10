@@ -308,6 +308,30 @@ Bearer authentication and send scope. Older hosts omit the capability, and the
 phone keeps today's locked composer while the agent works. Older clients ignore
 the new fields.
 
+### Release a Mac draft from iOS
+
+When local typing leaves the prompt locked as a Mac draft, the composer shows
+**Paused — draft on the Mac** with a **Release** button. Use it after you
+cleared the draft on the Mac. Release asks for confirmation, then asks the Mac
+to reopen the prompt. It sends no keys to the terminal. If text is still in
+the Mac composer, the next phone message is typed after it and both are sent.
+
+Every Mac keystroke in a draft advances its draft epoch, and the Mac publishes
+the current epoch to phones about twice a second while someone types. A
+release names the epoch the phone saw, so a release decided before newer Mac
+typing is refused, and the phone shows **Mac was typed on again — still
+paused**. Tap Release again to retry with the current epoch. The prompt
+reopens at the agent's own prompt epoch, so a queued message can deliver right
+away and the next agent prompt opens as usual.
+
+Protocol: `POST /api/conversation.draft.release` takes
+`RemoteConversationLocalDraftReleaseRequest` (`conversationID`,
+`expectedDraftEpoch`) and returns `released` or a rejection reason:
+`send_scope_denied`, `session_writes_disabled`, `not_bound`, `no_local_draft`,
+`draft_changed`, or `unsupported`. It needs native Bearer authentication and
+send scope. Hosts advertise `local_draft_release`; the phone hides Release on
+older hosts.
+
 ### Photos and files from iOS
 
 Use the **Attach** paperclip inside the message field to choose **Photo Library**,

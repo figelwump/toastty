@@ -260,6 +260,7 @@ struct RemoteGatewayRequestHandlerTests {
         conversationFlagHandler: RemoteGatewayRequestHandler.ConversationFlagHandler? = nil,
         queueUpdateHandler: RemoteGatewayRequestHandler.QueueUpdateHandler? = nil,
         interruptHandler: RemoteGatewayRequestHandler.InterruptHandler? = nil,
+        localDraftReleaseHandler: RemoteGatewayRequestHandler.LocalDraftReleaseHandler? = nil,
         nativeIdentityForTesting: String? = nil
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
         let audit = RemoteAccessAuditLog(fileURL: nil)
@@ -285,6 +286,7 @@ struct RemoteGatewayRequestHandlerTests {
             conversationFlagHandler: conversationFlagHandler,
             queueUpdateHandler: queueUpdateHandler,
             interruptHandler: interruptHandler,
+            localDraftReleaseHandler: localDraftReleaseHandler,
             nativeIdentityForTesting: nativeIdentityForTesting,
             pairingRateLimiter: pairingLimiter,
             authRateLimiter: authLimiter
@@ -404,6 +406,7 @@ struct RemoteGatewayRequestHandlerTests {
             .conversationFlag,
             .sessionStart,
             .conversationInputControl,
+            .localDraftRelease,
         ])
 
         let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
@@ -2112,6 +2115,55 @@ extension RemoteGatewayRequestHandlerTests {
         #expect(denied.status == 403)
         #expect(try result(denied) == .rejected(reason: .sendScopeDenied))
         #expect(audit.entries.last?.action == .remoteInterruptRejected)
+        #expect(audit.entries.last?.detail == "send_scope_denied")
+        #expect(requests.count == handled)
+    }
+
+    @Test func draftReleaseNeedsNativeSendAccessAndAuditsEveryDecision() throws {
+        var requests: [RemoteConversationLocalDraftReleaseRequest] = []
+        var nextResult = RemoteConversationLocalDraftReleaseResult.released
+        let (handler, store, audit) = Self.makeHandler(localDraftReleaseHandler: { request, _ in
+            requests.append(request)
+            return nextResult
+        })
+        let native = try Self.nativeCredential(handler: handler, store: store)
+        let headers = [("authorization", "Bearer \(native.credential)"), ("tailscale-user-login", "owner@example.com")]
+        let release = RemoteConversationLocalDraftReleaseRequest(
+            conversationID: RemoteConversationID(),
+            expectedDraftEpoch: RemoteInputEpoch(bindingID: UUID(), counter: 9)
+        )
+        let body = try ConversationEventCoding.makeEncoder().encode(release)
+        func response(_ headers: [(String, String)], body: Data) throws -> RemoteGatewayHTTPResponse {
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/api/conversation.draft.release", headerFields: headers, body: body), at: Self.now
+            ) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            return response
+        }
+        func result(_ response: RemoteGatewayHTTPResponse) throws -> RemoteConversationLocalDraftReleaseResult {
+            try ConversationEventCoding.makeDecoder()
+                .decode(RemoteConversationLocalDraftReleaseResponse.self, from: response.body).result
+        }
+
+        let released = try response(headers, body: body)
+        #expect(released.status == 200)
+        #expect(try result(released) == .released)
+        #expect(requests == [release])
+        #expect(audit.entries.last?.action == .remoteLocalDraftReleased)
+
+        nextResult = .rejected(reason: .draftChanged)
+        #expect(try result(try response(headers, body: body)) == .rejected(reason: .draftChanged))
+        #expect(audit.entries.last?.action == .remoteLocalDraftReleaseRejected)
+        #expect(audit.entries.last?.detail == "draft_changed")
+
+        let handled = requests.count
+        #expect(try response([headers[0]], body: body).status == 401)
+        #expect(try response(headers, body: Data("{}".utf8)).status == 400)
+        #expect(try store.setScopes([.read], forDevice: native.device.id))
+        let denied = try response(headers, body: body)
+        #expect(denied.status == 403)
+        #expect(try result(denied) == .rejected(reason: .sendScopeDenied))
         #expect(audit.entries.last?.detail == "send_scope_denied")
         #expect(requests.count == handled)
     }

@@ -68,10 +68,11 @@ public enum RemoteInputAvailability: Equatable, Sendable {
     /// `pendingInteractions`, which is the single mutable source of truth.
     case pendingInteraction(interactionIDs: [RemotePendingInteraction.ID])
     /// Local input has touched the prompt. The associated epoch is the current
-    /// (already advanced) draft-window epoch, published for observability only:
-    /// remote sends are rejected in this state regardless of the epoch they
-    /// present. Remote input resumes only when a later provider transition
-    /// establishes a new `openPrompt` epoch.
+    /// draft epoch; every local keystroke advances it. Remote sends are
+    /// rejected in this state regardless of the epoch they present. Remote
+    /// input resumes when a later provider transition establishes a new
+    /// `openPrompt` epoch, or when a client releases the draft by naming the
+    /// current draft epoch (`RemoteConversationLocalDraftReleaseRequest`).
     case localDraft(epoch: RemoteInputEpoch)
 
     public var allowsRemoteSend: Bool {

@@ -137,8 +137,8 @@ public struct ConversationToolFinishedPayload: Codable, Equatable, Sendable {
 /// state or the availability *case* changes, or when a new `openPrompt` epoch
 /// is established. Epoch churn while already in `localDraft` (every local
 /// keystroke advances the counter) must not emit events — the live epoch is
-/// only observable through snapshots, and remote sends are rejected in
-/// `localDraft` regardless.
+/// only observable through session-list snapshots, which is where a draft
+/// release reads it, and remote sends are rejected in `localDraft` regardless.
 public struct ConversationStatusChangedPayload: Codable, Equatable, Sendable {
     public var state: RemoteSessionState
     public var inputAvailability: RemoteInputAvailability

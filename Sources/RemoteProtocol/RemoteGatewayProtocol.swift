@@ -51,6 +51,9 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// the next prompt, steer the running turn, stop it, and manage the
     /// queue. Each summary then carries `inputControl`.
     case conversationInputControl = "conversation_input_control"
+    /// A client may reopen a prompt that a Mac draft holds closed, after the
+    /// user says the Mac composer is empty.
+    case localDraftRelease = "local_draft_release"
     /// A configured host accepts a native device's verified notification grant.
     case pushNotifications = "push_notifications"
 }
@@ -78,6 +81,7 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .conversationFlag,
             .sessionStart,
             .conversationInputControl,
+            .localDraftRelease,
         ]
     ) {
         self.protocolVersion = protocolVersion

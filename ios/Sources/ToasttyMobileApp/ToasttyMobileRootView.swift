@@ -18,6 +18,7 @@ struct ToasttyMobileRootView: View {
     @State private var fixtureQueueSubmissionCount = 0
     @State private var fixtureQueuePaused = false
     @State private var fixtureTurnStopped = false
+    @State private var fixtureLocalDraftReleaseAttempts = 0
 #if DEBUG
     @State private var controlledFixtureSubmission: ControlledFixtureSubmission?
     @State private var fixtureSentText: String?
@@ -405,6 +406,7 @@ struct ToasttyMobileRootView: View {
             loadOlder: conversationLoadOlderAction(for: conversationID),
             submitDraft: conversationSubmitAction(for: conversationID),
             interrupt: conversationInterruptAction(for: conversationID),
+            releaseLocalDraft: conversationReleaseLocalDraftAction(for: conversationID),
             dismissSendReceipt: conversationReceiptDismissAction(for: conversationID),
             queuedMessageAction: conversationQueuedMessageAction(for: conversationID),
             sendFeedback: conversationSendFeedback(for: conversationID),
@@ -510,6 +512,8 @@ struct ToasttyMobileRootView: View {
                 )
             }
             return ToasttyConversationFixture.presentation(for: conversationID)
+        case .localDraftRelease:
+            return ToasttyConversationFixture.presentation(for: conversationID)
         case .transcriptPerformance:
             return ToasttyConversationFixture.performancePresentation(for: conversationID)
         case .transcriptResyncing:
@@ -608,7 +612,9 @@ struct ToasttyMobileRootView: View {
         }
         return ToasttyComposerPresentation.make(
             agentDisplayName: conversation.agent.displayName.capitalized,
-            authority: controller.presentedComposerAuthority
+            authority: controller.presentedComposerAuthority,
+            releasableLocalDraftEpoch: controller.releasableLocalDraftEpoch,
+            localDraftReleaseRefusal: controller.localDraftReleaseRefusal
         )
     }
 
@@ -659,6 +665,21 @@ struct ToasttyMobileRootView: View {
                 return
             }
             Task { await controller.interrupt() }
+        }
+    }
+
+    private func conversationReleaseLocalDraftAction(
+        for conversationID: UUID
+    ) -> (RemoteInputEpoch) -> Void {
+        { epoch in
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+#if DEBUG
+                fixtureReleaseLocalDraft(conversationID)
+#endif
+                return
+            }
+            Task { await controller.releaseLocalDraft(expectedDraftEpoch: epoch) }
         }
     }
 
@@ -833,6 +854,46 @@ struct ToasttyMobileRootView: View {
         return ToasttyComposerPresentation.make(agentDisplayName: "Codex", authority: authority)
     }
 
+    private func fixtureReleaseLocalDraft(_ conversationID: UUID) {
+        guard fixtureScenario == .localDraftRelease,
+              conversationID == Self.fixtureLocalDraftConversationID else { return }
+        fixtureLocalDraftReleaseAttempts += 1
+    }
+
+    private func fixtureLocalDraftComposer() -> ToasttyComposerPresentation {
+        let epoch = RemoteInputEpoch(
+            bindingID: UUID(uuidString: "F1000000-0000-0000-0000-000000000008")!,
+            counter: 6
+        )
+        guard fixtureLocalDraftReleaseAttempts >= 2 else {
+            return ToasttyComposerPresentation.make(
+                agentDisplayName: "Claude",
+                authority: ConversationComposerAuthority(
+                    inputAvailability: .localDraft(epoch: epoch.next()),
+                    gateFailure: .inputUnavailable
+                ),
+                releasableLocalDraftEpoch: epoch.next(),
+                localDraftReleaseRefusal: fixtureLocalDraftReleaseAttempts == 1 ? .macTypedAgain : nil
+            )
+        }
+        return ToasttyComposerPresentation.make(
+            agentDisplayName: "Claude",
+            authority: ConversationComposerAuthority(
+                stamp: ConversationComposerStamp(
+                    connectionGeneration: 1,
+                    streamSnapshotOrdinal: 1,
+                    projectionRunID: RemoteProjectionRunID(
+                        rawValue: UUID(uuidString: "F2000000-0000-0000-0000-000000000008")!
+                    ),
+                    projectionGeneration: 1,
+                    latestSequence: 13,
+                    inputEpoch: epoch
+                ),
+                inputAvailability: .openPrompt(epoch: epoch)
+            )
+        )
+    }
+
     private func fixtureInterrupt(_ conversationID: UUID) {
         guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
         fixtureTurnStopped = true
@@ -865,6 +926,9 @@ struct ToasttyMobileRootView: View {
 #if DEBUG
         if fixtureScenario == .queueSteer {
             return conversationID == Self.fixtureWorkingConversationID ? fixtureQueueSteerComposer() : nil
+        }
+        if fixtureScenario == .localDraftRelease {
+            return conversationID == Self.fixtureLocalDraftConversationID ? fixtureLocalDraftComposer() : nil
         }
         guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
               conversationID == Self.fixtureOpenPromptConversationID else { return nil }
@@ -1059,6 +1123,11 @@ struct ToasttyMobileRootView: View {
         uuidString: "B1000000-0000-0000-0000-000000000002"
     )!
 
+    /// The fixture home's Claude session paused by a Mac draft ("Smoke test triage").
+    private static let fixtureLocalDraftConversationID = UUID(
+        uuidString: "B1000000-0000-0000-0000-000000000008"
+    )!
+
     private func resetComposerPresentation() {
         composerDraftState.reset()
 #if DEBUG
@@ -1069,6 +1138,7 @@ struct ToasttyMobileRootView: View {
         fixtureQueuedMessages.removeAll(keepingCapacity: false)
         fixtureQueuePaused = false
         fixtureTurnStopped = false
+        fixtureLocalDraftReleaseAttempts = 0
     }
 
     private func observeSessionState(_ state: AppSessionState) {

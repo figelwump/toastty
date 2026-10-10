@@ -125,6 +125,23 @@ public struct ConversationComposerAuthority: Equatable, Sendable {
             return false
         }
     }
+
+    /// The Mac draft epoch a release would name, while a Mac draft holds the
+    /// prompt closed and this device's live snapshot and send access allow a
+    /// release. Releasing sends no text, so transcript catch-up does not
+    /// block it.
+    public var releasableLocalDraftEpoch: RemoteInputEpoch? {
+        guard case .localDraft(let epoch) = inputAvailability else { return nil }
+        switch gateFailure {
+        case nil, .inputUnavailable, .transcriptNotCaughtUp:
+            return epoch
+        case .coordinatorNotLive, .deviceSendScopeDenied, .conversationNotOpen, .conversationMissing,
+             .staleComposerAuthority, .conversationNotLive, .sendAlreadyReserved, .tooManyUnresolvedSends,
+             .emptyText, .messageTooLarge, .requestEncodingFailed, .cancelled, .attachmentsUnsupported,
+             .invalidAttachments:
+            return nil
+        }
+    }
 }
 
 public enum ConversationSendOutcome: Equatable, Sendable {

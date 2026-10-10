@@ -417,6 +417,118 @@ extension RemoteInputCoordinatorTests {
             == .reject(.notBound))
     }
 
+    // MARK: - Local draft release
+
+    static func release(
+        _ coordinator: inout RemoteInputCoordinator,
+        draftEpoch: RemoteInputEpoch,
+        context: RemoteInputCoordinator.DeliveryContext = readyContext()
+    ) -> RemoteInputCoordinator.LocalDraftReleaseDecision {
+        coordinator.releaseLocalDraft(for: conversationID, expectedDraftEpoch: draftEpoch, context: context)
+    }
+
+    @Test func releasingTheCurrentDraftReopensTheProviderPrompt() {
+        let prompt = Self.openEpoch(4)
+        var coordinator = Self.openCoordinator(epoch: prompt)
+        coordinator.noteLocalInput(for: Self.conversationID)
+        coordinator.noteLocalInput(for: Self.conversationID)
+        guard case .localDraft(let draftEpoch) = coordinator.availability(for: Self.conversationID) else {
+            Issue.record("Expected a local draft")
+            return
+        }
+
+        #expect(Self.release(&coordinator, draftEpoch: draftEpoch) == .released(openEpoch: prompt))
+        #expect(coordinator.availability(for: Self.conversationID) == .openPrompt(epoch: prompt))
+        // The provider keeps republishing the same prompt; it stays open.
+        coordinator.setProviderAvailability(.openPrompt(epoch: prompt), for: Self.conversationID)
+        let send = Self.request(epoch: prompt)
+        #expect(coordinator.evaluate(send, context: Self.readyContext()) == .accept(epoch: prompt))
+
+        // A delivery consumes it, and the next provider prompt opens as usual.
+        coordinator.markDelivered(send)
+        coordinator.setProviderAvailability(.openPrompt(epoch: prompt), for: Self.conversationID)
+        #expect(coordinator.availability(for: Self.conversationID) == .unavailable(reason: .working))
+        let next = prompt.next()
+        coordinator.setProviderAvailability(.openPrompt(epoch: next), for: Self.conversationID)
+        #expect(coordinator.availability(for: Self.conversationID) == .openPrompt(epoch: next))
+    }
+
+    @Test func macTypingAfterTheClientSawTheDraftRefusesTheRelease() {
+        let prompt = Self.openEpoch(4)
+        var coordinator = Self.openCoordinator(epoch: prompt)
+        coordinator.noteLocalInput(for: Self.conversationID)
+        guard case .localDraft(let seen) = coordinator.availability(for: Self.conversationID) else {
+            Issue.record("Expected a local draft")
+            return
+        }
+        coordinator.noteLocalInput(for: Self.conversationID)
+
+        #expect(Self.release(&coordinator, draftEpoch: seen) == .reject(.draftChanged))
+        #expect(coordinator.availability(for: Self.conversationID).allowsRemoteSend == false)
+        // A release naming the current draft epoch succeeds.
+        guard case .localDraft(let current) = coordinator.availability(for: Self.conversationID) else {
+            Issue.record("Expected a local draft")
+            return
+        }
+        #expect(current != seen)
+        #expect(Self.release(&coordinator, draftEpoch: current) == .released(openEpoch: prompt))
+    }
+
+    @Test func aDraftAfterAReleaseNeverReusesAnEarlierDraftEpoch() {
+        let prompt = Self.openEpoch(4)
+        var coordinator = Self.openCoordinator(epoch: prompt)
+        coordinator.noteLocalInput(for: Self.conversationID)
+        let firstDraft = prompt.next()
+        #expect(Self.release(&coordinator, draftEpoch: firstDraft) == .released(openEpoch: prompt))
+
+        // The Mac is typed on again. A second phone's delayed release of the
+        // first draft must not unlock this new one.
+        coordinator.noteLocalInput(for: Self.conversationID)
+        guard case .localDraft(let secondDraft) = coordinator.availability(for: Self.conversationID) else {
+            Issue.record("Expected a local draft")
+            return
+        }
+        #expect(secondDraft != firstDraft)
+        #expect(Self.release(&coordinator, draftEpoch: firstDraft) == .reject(.draftChanged))
+        #expect(coordinator.availability(for: Self.conversationID) == .localDraft(epoch: secondDraft))
+    }
+
+    @Test func releaseNeedsADraftAndTheSendGates() {
+        let prompt = Self.openEpoch(4)
+        var coordinator = Self.openCoordinator(epoch: prompt)
+        #expect(Self.release(&coordinator, draftEpoch: prompt) == .reject(.noLocalDraft))
+
+        coordinator.noteLocalInput(for: Self.conversationID)
+        let draft = prompt.next()
+        #expect(Self.release(&coordinator, draftEpoch: draft, context: Self.readyContext(sendScope: false))
+            == .reject(.sendScopeDenied))
+        #expect(Self.release(&coordinator, draftEpoch: draft, context: Self.readyContext(writesEnabled: false))
+            == .reject(.sessionWritesDisabled))
+        #expect(Self.release(&coordinator, draftEpoch: draft, context: Self.readyContext(bound: false))
+            == .reject(.notBound))
+        #expect(coordinator.availability(for: Self.conversationID) == .localDraft(epoch: draft))
+
+        // The Mac user submitted the draft: the agent is working now.
+        coordinator.setProviderAvailability(.unavailable(reason: .working), for: Self.conversationID)
+        #expect(Self.release(&coordinator, draftEpoch: draft) == .reject(.noLocalDraft))
+
+        var unknown = RemoteInputCoordinator()
+        #expect(Self.release(&unknown, draftEpoch: draft) == .reject(.notBound))
+    }
+
+    @Test func releasingADraftTypedDuringTheTurnReopensTheNextPrompt() {
+        var coordinator = Self.workingCoordinator()
+        coordinator.noteLocalInput(for: Self.conversationID)
+        coordinator.setTurnEpoch(nil, for: Self.conversationID)
+        let next = Self.openEpoch(4)
+        coordinator.setProviderAvailability(.openPrompt(epoch: next), for: Self.conversationID)
+
+        #expect(Self.release(&coordinator, draftEpoch: next.next()) == .released(openEpoch: next))
+        coordinator.setProviderAvailability(.openPrompt(epoch: next), for: Self.conversationID)
+        #expect(coordinator.evaluate(Self.request(epoch: next), context: Self.readyContext())
+            == .accept(epoch: next))
+    }
+
     @Test func queueAndSteerSendResultsRoundTripOnTheWire() throws {
         let encoder = ConversationEventCoding.makeEncoder()
         let decoder = ConversationEventCoding.makeDecoder()
