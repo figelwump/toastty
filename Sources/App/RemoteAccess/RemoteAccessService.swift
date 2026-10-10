@@ -285,6 +285,16 @@ struct RemotePendingSendCorrelator: Sendable {
         pendingSendsByConversationID.removeValue(forKey: conversationID)
     }
 
+    mutating func discard(clientRequestID: String, for conversationID: RemoteConversationID) {
+        guard var pending = pendingSendsByConversationID[conversationID] else { return }
+        pending.removeAll { $0.clientRequestID == clientRequestID }
+        if pending.isEmpty {
+            pendingSendsByConversationID.removeValue(forKey: conversationID)
+        } else {
+            pendingSendsByConversationID[conversationID] = pending
+        }
+    }
+
     mutating func stamp(
         _ observations: [ProviderTranscriptObservation],
         for conversationID: RemoteConversationID
@@ -3371,6 +3381,7 @@ final class RemoteAccessService: ObservableObject {
                   let work = self.pendingSendConfirmationWork.removeValue(forKey: key) else {
                 return
             }
+            self.pendingSendCorrelator.discard(clientRequestID: clientRequestID, for: conversationID)
             let emitted = self.projectionStore.noteSendDeliveryUnconfirmed(
                 for: conversationID,
                 clientRequestID: clientRequestID,

@@ -4,6 +4,36 @@ import Testing
 @testable import CoreState
 
 struct ConversationProjectorTests {
+    @Test func delayedMidTurnReceiptPreservesCompletedClaudePrompt() throws {
+        var projector = Self.makeClaudeProjector()
+        projector.ingest(.init(timestamp: Self.epochDate.addingTimeInterval(1), fingerprint: "start",
+                               payload: .turnStarted(turnID: "running-turn")))
+        let runningEpoch = projector.turnEpoch
+        var parser = ClaudeTranscriptParser()
+        let lines = ["mid-turn-first", "mid-turn-delayed"].map { id in
+            #"{"type":"attachment","uuid":"\#(id)","timestamp":"2026-08-07T10:00:05.000Z","attachment":{"type":"queued_command","prompt":"Continue","source_uuid":"\#(id)","commandMode":"prompt","origin":{"kind":"human"}}}"#
+        }
+        let first = try #require(parser.parseLine(lines[0]).last)
+        projector.ingest(first)
+        #expect(projector.turnEpoch == runningEpoch)
+        projector.ingest(.init(timestamp: Self.epochDate.addingTimeInterval(2), fingerprint: "stop",
+                               payload: .turnEnded(turnID: "running-turn", reason: .completed)))
+        let token = try #require(projector.pendingPromptStabilizationToken)
+        let delayed = try #require(parser.parseLine(lines[1]).last)
+        let receipt = projector.ingest(delayed)
+        #expect(receipt.count == 1)
+        #expect(receipt.first?.kind == .userMessage)
+        #expect(projector.pendingPromptStabilizationToken == token)
+        projector.completePromptStabilization(token: token, at: Self.epochDate.addingTimeInterval(3))
+        let openPrompt = projector.inputAvailability
+        #expect(openPrompt.allowsRemoteSend)
+        var nextReceipt = delayed
+        nextReceipt.fingerprint = "another-delayed-receipt"
+        projector.ingest(nextReceipt)
+        #expect(projector.inputAvailability == openPrompt)
+        #expect(projector.turnEpoch == nil)
+    }
+
     @Test func questionChannelExpiryKeepsNativeQuestionAndCompletionEnrichesAnswers() throws {
         var projector = Self.makeClaudeProjector()
         let question = RemoteInteractionQuestion(id: "q", header: "Choice", question: "Pick one", options: [

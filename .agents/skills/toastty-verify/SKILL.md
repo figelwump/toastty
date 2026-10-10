@@ -73,6 +73,11 @@ Do not boot or interact with a local iOS Simulator when the user has requested r
 
 ### UI, Runtime, Menu, Or Shortcut Changes
 
+For remote-access input changes (send, queue, steer, stop, or send confirmation),
+run the live check against each changed provider's real CLI. Synthetic feeds
+do not verify provider transcript formats. See **Remote input control** in
+`docs/agents/automation.md` for commands and prerequisites.
+
 Start with remote smoke validation through the wrapper:
 
 ```bash

@@ -281,6 +281,10 @@ transcript, not under the field.
   calls finish. If it has no earlier opportunity to read the message, it sends
   it after the turn ends. Toastty's **Queue** holds the message until the turn
   ends and the next prompt opens. See Claude Code's [interrupt and steer documentation](https://code.claude.com/docs/en/how-claude-code-works#interrupt-and-steer).
+  A Claude steer leaves **Sending…** when Claude reads it. The message appears
+  in the transcript within the running turn, or as a new turn if Claude reads
+  it after the current turn ends. Input submitted on the Mac within a running
+  turn also appears when Claude reads it.
   The chip returns to Queue after each send.
 - **Stop** sends the agent's interrupt key (Escape) for the turn the phone saw.
   A stop names that turn, so a late tap cannot stop a later one. After a stop

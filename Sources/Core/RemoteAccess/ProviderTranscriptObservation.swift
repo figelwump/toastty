@@ -129,6 +129,9 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
     /// Historical provider snapshots are readable but must never reopen a live
     /// prompt. Only launch-bound lifecycle observations set this to true.
     public var mayAuthorizeCurrentRuntime: Bool
+    /// Input absorbed within an existing turn is a transcript receipt, not a
+    /// new turn. It must not close a prompt if the turn-end hook arrived first.
+    public var isMidTurnInput: Bool
 
     public init(
         timestamp: Date,
@@ -136,7 +139,8 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
         providerIdentity: String? = nil,
         fingerprint: String,
         payload: ProviderObservationPayload,
-        mayAuthorizeCurrentRuntime: Bool = true
+        mayAuthorizeCurrentRuntime: Bool = true,
+        isMidTurnInput: Bool = false
     ) {
         self.timestamp = timestamp
         self.turnID = turnID
@@ -144,6 +148,7 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
         self.fingerprint = fingerprint
         self.payload = payload
         self.mayAuthorizeCurrentRuntime = mayAuthorizeCurrentRuntime
+        self.isMidTurnInput = isMidTurnInput
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -154,6 +159,7 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
         case payloadKind
         case payload
         case mayAuthorizeCurrentRuntime
+        case isMidTurnInput
     }
 
     private enum PayloadKind: String, Codable {
@@ -185,6 +191,7 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .mayAuthorizeCurrentRuntime
         ) ?? true
+        isMidTurnInput = try container.decodeIfPresent(Bool.self, forKey: .isMidTurnInput) ?? false
 
         switch try container.decode(PayloadKind.self, forKey: .payloadKind) {
         case .transcript:
@@ -230,6 +237,7 @@ public struct ProviderTranscriptObservation: Codable, Equatable, Sendable {
         try container.encodeIfPresent(providerIdentity, forKey: .providerIdentity)
         try container.encode(fingerprint, forKey: .fingerprint)
         try container.encode(mayAuthorizeCurrentRuntime, forKey: .mayAuthorizeCurrentRuntime)
+        if isMidTurnInput { try container.encode(true, forKey: .isMidTurnInput) }
 
         switch payload {
         case .transcript(let value):

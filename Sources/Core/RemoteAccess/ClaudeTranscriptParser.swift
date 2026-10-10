@@ -13,6 +13,9 @@ import CryptoKit
 ///   text/image blocks. `tool_result` blocks arriving as `user` records are
 ///   tool completions, not user turns. Missing or malformed `origin` values
 ///   preserve the normal user-record behavior.
+/// - Mid-turn user input comes from `attachment` records whose attachment is
+///   a `queued_command` with `commandMode: prompt` and `origin.kind: human`.
+///   Queue bookkeeping, peer replies, and task notifications are not input.
 /// - Assistant turns come from `assistant` records' `text` blocks; `tool_use`
 ///   blocks become tool starts, `thinking` blocks are dropped.
 /// - Tool completion state comes from the matching `tool_result`'s `is_error`.
@@ -80,6 +83,8 @@ public struct ClaudeTranscriptParser: Sendable {
             observations.append(contentsOf: parseUserRecord(object, timestamp: timestamp))
         case "assistant":
             observations.append(contentsOf: parseAssistantRecord(object, timestamp: timestamp))
+        case "attachment":
+            observations.append(contentsOf: parseQueuedCommand(object, timestamp: timestamp))
         default:
             break
         }
@@ -97,6 +102,24 @@ public struct ClaudeTranscriptParser: Sendable {
 }
 
 private extension ClaudeTranscriptParser {
+    mutating func parseQueuedCommand(_ object: [String: Any], timestamp: Date) -> [ProviderTranscriptObservation] {
+        guard let attachment = object["attachment"] as? [String: Any],
+              attachment["type"] as? String == "queued_command",
+              attachment["commandMode"] as? String == "prompt",
+              let origin = attachment["origin"] as? [String: Any],
+              origin["kind"] as? String == "human",
+              let text = Self.nonEmptyString(attachment["prompt"]) else { return [] }
+        // Claude logs an absorbed command here instead of as a user record.
+        // Its source identity survives transcript replay; attachment UUIDs
+        // describe the wrapper rather than the submitted command.
+        let commandID = Self.nonEmptyString(attachment["source_uuid"])
+            ?? Self.nonEmptyString(attachment["delivery_id"])
+            ?? Self.nonEmptyString(object["uuid"])
+        var observation = userMessageObservation(text: text, recordUUID: commandID, timestamp: timestamp)
+        observation.isMidTurnInput = true
+        return [observation]
+    }
+
     mutating func sessionIdentityObservation(_ object: [String: Any], timestamp: Date) -> [ProviderTranscriptObservation] {
         guard sawSessionIdentity == false,
               let sessionID = Self.nonEmptyString(object["sessionId"]) else {
