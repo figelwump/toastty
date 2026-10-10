@@ -633,6 +633,17 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(ahead.exists() and merged.exists() and dirty.exists())
         self.assertEqual(self.closed(), [])
 
+    def test_close_workspace_refuses_a_workspace_showing_another_pr(self):
+        _, path = self.task(1, state="OPEN")
+        self.workspaces[-1]["annotations"] = [
+            {"key": "github-pr", "text": "PR #9", "url": "https://github.com/test/repo/pull/9"}]
+        status, detail = self.close_workspace(self.workspaces[0]["workspaceID"], cwd=path)
+        self.assertEqual(status, 3, detail)
+        self.assertIn("different PR", detail)
+        self.assertTrue(path.exists())
+        self.assertNotIn("pr close", self.gh_log())
+        self.assertEqual(self.closed(), [])
+
     def test_close_workspace_without_a_pr_removes_a_pushed_branch(self):
         branch, path = self.root / "no-pr", self.root / "no-pr"
         self.git("worktree", "add", "-q", "-b", "no-pr", str(path))

@@ -585,8 +585,8 @@ final class WorkspaceTaskHookRunner {
 
     private func finishScript(_ kind: WorkspaceTaskHooks.ScriptKind, workspaceID: UUID, title: String, outcome: ScriptOutcome) {
         scriptTasks[workspaceID] = nil
-        let workspaceIsOpen = store?.state.workspacesByID[workspaceID] != nil
-        let run: WorkspaceTaskScriptRun?
+        let workspace = store?.state.workspacesByID[workspaceID]
+        var run: WorkspaceTaskScriptRun?
         switch outcome {
         case .cleaned:
             run = nil
@@ -595,7 +595,13 @@ final class WorkspaceTaskHookRunner {
         case .failed(let detail):
             run = WorkspaceTaskScriptRun(kind: kind, phase: .failed(detail: detail))
         }
-        if workspaceIsOpen {
+        if let workspace {
+            // The task may have moved on while the script ran (reopened,
+            // hook replaced); a result that no longer belongs to its stage
+            // must not cover the stage's button. Same rule as the observer.
+            if run != nil, Self.resultApplies(kind, to: workspace) == false {
+                run = nil
+            }
             sessionRuntimeStore?.setWorkspaceTaskScriptRun(run, for: workspaceID)
         } else {
             // The script closed the workspace, so there is no row to show
@@ -625,12 +631,15 @@ final class WorkspaceTaskHookRunner {
         guard let sessionRuntimeStore else { return }
         for (workspaceID, run) in sessionRuntimeStore.workspaceTaskScriptRuns where run.phase != .running {
             guard let workspace = state.workspacesByID[workspaceID],
-                  workspace.taskHooks.script(run.kind) != nil,
-                  run.kind == .close || workspace.taskStage == .done else {
+                  Self.resultApplies(run.kind, to: workspace) else {
                 sessionRuntimeStore.setWorkspaceTaskScriptRun(nil, for: workspaceID)
                 continue
             }
         }
+    }
+
+    static func resultApplies(_ kind: WorkspaceTaskHooks.ScriptKind, to workspace: WorkspaceState) -> Bool {
+        workspace.taskHooks.script(kind) != nil && (kind == .close || workspace.taskStage == .done)
     }
 
     /// A script runs through its interpreter when it has one in its name

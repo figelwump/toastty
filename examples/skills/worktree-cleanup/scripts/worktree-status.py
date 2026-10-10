@@ -581,11 +581,14 @@ def close_one_workspace(workspace_id: str, rows: list[Row], without_pr: list[Row
     others = [w.path for w in worktrees if w.path != row.worktree]
     if any(inside(cwd, other) for cwd in workspace.cwds for other in others):
         finish(CLEANUP_SKIPPED_EXIT, f"{workspace.label} also has a terminal in another worktree")
+    if row.pr and other_pr_chip(workspace, row.pr, repo_slug):
+        finish(CLEANUP_SKIPPED_EXIT, f"{workspace.label} carries a chip for a different PR")
     if worktree.locked:
         finish(CLEANUP_SKIPPED_EXIT, "the worktree is locked")
     head = worktree.head
-    if run(["git", "status", "--porcelain"], cwd=worktree.path, check=False).strip():
-        finish(CLEANUP_SKIPPED_EXIT, "the worktree has uncommitted changes")
+    problem = recheck(worktree, head)
+    if problem:
+        finish(CLEANUP_SKIPPED_EXIT, f"the {problem}")
     # The local branch goes, so the work must survive on GitHub at exactly this
     # commit, or the branch must have nothing of its own to lose.
     remote = run(["git", "ls-remote", "--heads", "origin", worktree.branch], cwd=repo, check=False).split()

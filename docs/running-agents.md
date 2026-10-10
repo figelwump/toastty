@@ -555,8 +555,9 @@ workflow has the task session set `review` when its PR is ready, and
 menu (Mark Ready for Review, Mark Done, Reopen Task) or the arrow beside the
 header button. Toastty moves a task back to open when an agent in it starts
 new work, so you review each new version before finishing it. The stage shows
-on the row: "ready for review" in the summary, a check in the rail once done,
-and `taskStage` in `workspace.list` and `workspace.snapshot`.
+as the header button (Finish Task in review, Clean Up when done), a check in
+the row's rail once done, "ready for review" in the row's spoken label, and
+`taskStage` in `workspace.list` and `workspace.snapshot`.
 
 Whoever creates a task space chooses how it is finished, cleaned up, and
 closed, and Toastty shows a button for each. `worktree-create` sets the hooks

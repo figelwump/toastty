@@ -80,6 +80,10 @@ struct WorkspaceHeaderTaskControl: View {
                     .disabled(true)
                 Button("Retry \(WorkspaceTaskHookPresentation.title(kind))…") { retry(kind) }
                 Button("Dismiss", action: dismiss)
+                Divider()
+                ForEach(stageActions, id: \.self) { action in
+                    Button(action.title) { setStage(action.stage) }
+                }
                 if let closeHook, kind != .close {
                     Divider()
                     Button(WorkspaceTaskHookPresentation.title(.close) + "…", action: close)

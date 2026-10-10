@@ -214,9 +214,16 @@ public struct AppReducer {
             // Only a subspace row shows the mark, so a top-level workspace
             // cannot hold one.
             guard doneAt == nil || workspace.parentWorkspaceID != nil else { return false }
-            // Marking an already-done workspace keeps its original time.
-            guard (workspace.doneAt == nil) != (doneAt == nil) else { return false }
-            workspace.doneAt = doneAt
+            if let doneAt {
+                // Marking an already-done workspace keeps its original time.
+                guard workspace.doneAt == nil else { return false }
+                workspace.doneAt = doneAt
+            } else {
+                // Clearing is the open stage: the review mark goes too.
+                guard workspace.doneAt != nil || workspace.reviewReadyAt != nil else { return false }
+                workspace.doneAt = nil
+                workspace.reviewReadyAt = nil
+            }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 

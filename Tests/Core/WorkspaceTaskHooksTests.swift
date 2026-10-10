@@ -172,11 +172,16 @@ struct WorkspaceTaskHooksTests {
         #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[1], doneAt: t1), state: &fixture.state))
         #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .done)
 
-        // Reopen clears both marks at once.
-        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .open, at: t1), state: &fixture.state))
+        // Reopen clears both marks at once, through either form.
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[1], doneAt: nil), state: &fixture.state))
         #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .open)
         #expect(fixture.state.workspacesByID[ids[1]]?.reviewReadyAt == nil)
         #expect(fixture.state.workspacesByID[ids[1]]?.doneAt == nil)
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .review, at: t1), state: &fixture.state))
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[1], doneAt: nil), state: &fixture.state), "clear-done reopens a task in review")
+        #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .open)
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .open, at: t1), state: &fixture.state) == false)
+
 
         // Leaving the parent drops the stage with the hooks.
         #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[1], stage: .review, at: t1), state: &fixture.state))
@@ -185,6 +190,13 @@ struct WorkspaceTaskHooksTests {
             state: &fixture.state
         ))
         #expect(fixture.state.workspacesByID[ids[1]]?.taskStage == .open)
+
+        // Closing the parent drops a review mark with the hooks.
+        let didNestOther = fixture.nest(2, under: 0)
+        #expect(didNestOther)
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskStage(workspaceID: ids[2], stage: .review, at: t1), state: &fixture.state))
+        #expect(AppReducer.reduce(action: .closeWorkspace(workspaceID: ids[0]), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[ids[2]]?.taskStage == .open)
     }
 
     @Test

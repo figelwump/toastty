@@ -461,6 +461,9 @@ struct WorkspaceTaskHooksAppControlTests {
             exitCode: 3, output: "checking\nPR #7 is open: still running: CI gate\n", failure: nil
         ))
         let task = try fixture.makeTask()
+        // A cleanup result belongs to a done task; on an open one it would
+        // cover Finish Task, so the runner drops it (the CLI still returns it).
+        _ = try fixture.run(.workspaceSetDone, ["workspaceID": .string(task.uuidString)])
 
         let skipped = try await fixture.runAsync(.workspaceTaskCleanup, ["workspaceID": .string(task.uuidString)])
         #expect(skipped.result?["outcome"] == .string("skipped"))

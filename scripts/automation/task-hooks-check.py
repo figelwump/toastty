@@ -4,14 +4,17 @@
 Run through `scripts/remote/validate.sh --validation-command 'python3
 scripts/automation/task-hooks-check.py'`. It installs a throwaway user skill
 in the run's runtime home, creates a background workspace with one subspace,
-sets the subspace's hooks through the CLI, and runs the cleanup actions over
-the automation socket. The fake cleanup script records the environment it
-got and exits 3 the first time, then closes its workspace and exits 0. The
-check verifies the skipped and cleaned outcomes, the recorded environment
-(workspace ID and CLI path present, no session identity), and that the
-subspace is gone afterwards. It never selects a workspace or moves focus, and
-it does not launch an agent, so Finish Task is covered by the app tests only.
-Writes task-hooks-check.json under the run's artifacts directory.
+sets the subspace's hooks through the CLI, moves the task through its stages
+with workspace.set-task-stage, and runs the close and cleanup actions over the
+automation socket. The fake hook script records the environment it got and
+exits 3 the first time it runs with a given marker, then closes its workspace
+and exits 0. The check verifies the stage reported by workspace.snapshot, the
+skipped close outcome and the skipped and cleaned cleanup outcomes, the
+recorded environment (workspace ID and CLI path present, no session
+identity), and that the subspace is gone afterwards. It never selects a
+workspace or moves focus, and it does not launch an agent, so Finish Task is
+covered by the app tests only. Writes task-hooks-check.json under the run's
+artifacts directory.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -59,6 +63,17 @@ class Toastty:
         if expect_ok:
             require(response.get("ok") is True, f"{command} failed: {response}")
         return response
+
+    def wait_for_socket(self, timeout: float = 30.0) -> dict:
+        """instance.json lands before the socket listens; give the app a moment."""
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                return self.query("workspace.list")
+            except CheckFailure:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.5)
 
     def action(self, command: str, *args: str, expect_ok: bool = True) -> dict:
         return self.run("action", command, *args, expect_ok=expect_ok)
@@ -102,7 +117,7 @@ def main() -> int:
         script.chmod(0o755)
         marker = artifacts / "hook-check-marker"
 
-        windows = app.query("workspace.list")["workspaces"]
+        windows = app.wait_for_socket()["workspaces"]
         require(bool(windows), "workspace.list returned nothing")
         window_id = windows[0]["windowID"]
         parent = app.action("workspace.create", "--window", window_id, "title=hook-check-parent", "activate=false")["result"]
@@ -112,19 +127,48 @@ def main() -> int:
         child_id = child["workspaceID"]
         report["steps"].append({"created": {"parent": parent_id, "child": child_id}})
 
+        close_marker = artifacts / "hook-check-close-marker"
         hooks = app.action("workspace.task.set-hooks", "--workspace", child_id, "finishSkill=worktree-done",
                            f"cleanupSkill={SKILL_NAME}", "cleanupScript=scripts/cleanup.sh",
-                           f"cleanupArgs={marker}")["result"]
+                           f"cleanupArgs={marker}",
+                           f"closeSkill={SKILL_NAME}", "closeScript=scripts/cleanup.sh",
+                           f"closeArgs={close_marker}")["result"]
         require(hooks["cleanup"]["skill"] == SKILL_NAME, f"hooks not recorded: {hooks}")
+        require(hooks["close"]["args"] == [str(close_marker)], f"close hook not recorded: {hooks}")
         snapshot = app.query("workspace.snapshot", "--workspace", child_id)
         require(snapshot["taskHooks"]["cleanup"]["script"] == "scripts/cleanup.sh", f"snapshot lacks hooks: {snapshot}")
+        require(snapshot["taskStage"] == "open", f"a new task is open: {snapshot}")
         report["steps"].append({"hooks": hooks})
 
-        # A top-level workspace cannot hold hooks.
+        # A top-level workspace cannot hold hooks or leave the open stage.
         refused = app.action("workspace.task.set-hooks", "--workspace", parent_id, "finishSkill=worktree-done", expect_ok=False)
         require(refused.get("ok") is False, f"top-level set-hooks was accepted: {refused}")
+        refused = app.action("workspace.set-task-stage", "--workspace", parent_id, "stage=review", expect_ok=False)
+        require(refused.get("ok") is False, f"top-level set-task-stage was accepted: {refused}")
+
+        # open -> review -> done, and back to open, as an agent would move it.
+        def stage() -> str:
+            return app.query("workspace.snapshot", "--workspace", child_id)["taskStage"]
+
+        app.action("workspace.set-task-stage", "--workspace", child_id, "stage=review")
+        require(stage() == "review", "set-task-stage review did not take")
+        app.action("workspace.set-task-stage", "--workspace", child_id, "stage=done")
+        require(stage() == "done", "set-task-stage done did not take")
+        require(app.query("workspace.snapshot", "--workspace", child_id)["done"] is True, "done keeps the done flag")
+        app.action("workspace.set-task-stage", "--workspace", child_id, "stage=open")
+        require(stage() == "open", "set-task-stage open did not reopen the task")
+        report["steps"].append({"stages": "open -> review -> done -> open"})
+
+        # Close Task runs at any stage; the script skips the first time.
+        closed = app.action("workspace.task.close", "--workspace", child_id)["result"]
+        require(closed["outcome"] == "skipped", f"first close should skip: {closed}")
+        close_env = dict(line.split("=", 1) for line in Path(f"{close_marker}.env").read_text().splitlines())
+        require(close_env["workspace"] == child_id, f"close script saw workspace {close_env['workspace']!r}")
+        require(child_id in {w["workspaceID"] for w in app.query("workspace.list")["workspaces"]}, "a skipped close keeps the workspace")
+        report["steps"].append({"close": closed, "closeEnv": close_env})
 
         app.action("workspace.set-done", "--workspace", child_id)
+        require(stage() == "done", "set-done is the done stage")
         first = app.action("workspace.task.cleanup", "--workspace", child_id)["result"]
         require(first["outcome"] == "skipped", f"first cleanup should skip: {first}")
         require(first["detail"] == "first run: pretending the merge has not landed", f"detail is not the last line: {first}")
