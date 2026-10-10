@@ -5,6 +5,7 @@ import ToasttyMobileDomain
 
 enum ToasttyPushFixtureMode: String, Equatable, Sendable {
     case intro, pending, error, enabled, denied
+    case systemIntro = "system-intro"
     case turningOff = "turning-off"
 }
 
@@ -15,9 +16,10 @@ enum ToasttyPushFixtures {
         let config = ToasttyPushConfiguration(relayURL: URL(string: "https://fixture-push.example.com")!,
             relayID: "toastty-push-dev-v1", apnsEnvironment: .development)
         var state = MobilePushState()
+        let introducesNotifications = mode == .intro || mode == .systemIntro
         // Disabled alert settings can precede push opt-in on a badge-only install.
-        state.desired = mode != .intro && mode != .turningOff && mode != .denied
-        state.introHandled = mode != .intro
+        state.desired = !introducesNotifications && mode != .turningOff && mode != .denied
+        state.introHandled = !introducesNotifications
         let registration = MobilePushRegistration(pairingID: credential.device.id, gatewayURL: credential.gatewayURL,
             relayURL: config.relayURL, relayID: config.relayID, deviceToken: String(repeating: "ab", count: 32),
             managementToken: String(repeating: "A", count: 43), sendToken: String(repeating: "A", count: 43),
@@ -26,8 +28,12 @@ enum ToasttyPushFixtures {
         if mode == .enabled { state.active = registration }
         if mode == .pending || mode == .error { state.pending = registration }
         if mode == .turningOff { state.cleanup = [registration] }
+        // Only the clean-simulator badge test uses real system permissions.
+        // Mac, relay, and APNs registration remain inactive fixtures.
+        let notifications: any ToasttyPushNotificationClient = mode == .systemIntro
+            ? ToasttySystemPushNotificationClient() : FixturePushNotifications(mode: mode)
         let controller = ToasttyPushController(configuration: config, vault: vault,
-            store: FixturePushStateStore(state), notifications: FixturePushNotifications(mode: mode),
+            store: FixturePushStateStore(state), notifications: notifications,
             installation: FixturePushInstallation(state.installationID),
             relayFactory: { _ in FixturePushRelay(mode: mode) },
             nativeFactory: { _, _ in FixtureNativePush(mode: mode, registrationID: registration.registrationID) },

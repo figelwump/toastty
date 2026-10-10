@@ -19,7 +19,7 @@ final class AppIconBadgeControllerTests: XCTestCase {
         let count = try XCTUnwrap(session.appIconBadgeCount)
         XCTAssertGreaterThan(count, 0)
         let client = BadgeClientSpy(authorizationStatus: .notDetermined, badgesEnabled: false)
-        let controller = AppIconBadgeController(client: client, requestsAuthorization: false)
+        let controller = AppIconBadgeController(client: client)
         let initialRead = expectation(description: "Initial badge settings read")
         client.onSettingsRead = { initialRead.fulfill() }
         let host = UIHostingController(rootView: AppIconBadgeSync(sessionController: session, controller: controller)
@@ -40,108 +40,84 @@ final class AppIconBadgeControllerTests: XCTestCase {
         await fulfillment(of: [written], timeout: 3)
         XCTAssertEqual(session.appIconBadgeCount, count)
         XCTAssertEqual(client.writes.last, count)
-        XCTAssertEqual(client.permissionRequests, 0)
     }
 #endif
 
-    // Failure modes: bootstrap clears a retained badge; permission is requested
-    // in the background; a stale permission/write result restores a cleared
-    // count; disabled badges or transient failures prevent later recovery.
-    func testUnknownCountPreservesBadgeAndDoesNotRequestPermission() async {
+    // Failure modes: bootstrap clears a retained badge; attention writes before
+    // an explicit permission grant; a stale settings/write result restores a
+    // cleared count; disabled badges or transient failures prevent recovery.
+    func testUnknownCountPreservesBadge() async {
         let client = BadgeClientSpy()
         let controller = AppIconBadgeController(client: client)
-        await controller.update(count: nil, isActive: true)?.value
+        await controller.update(count: nil)?.value
         XCTAssertTrue(client.writes.isEmpty)
-        XCTAssertEqual(client.permissionRequests, 0)
 
-        await controller.update(count: 7, isActive: true)?.value
-        await controller.update(count: nil, isActive: false)?.value
+        await controller.update(count: 7)?.value
+        await controller.update(count: nil)?.value
         XCTAssertEqual(client.writes.last, 7)
         XCTAssertFalse(client.writes.contains(0))
-    }
-
-    func testPermissionWaitsForActiveSceneAndAttention() async {
-        let client = BadgeClientSpy(authorizationStatus: .notDetermined)
-        let controller = AppIconBadgeController(client: client)
-        await controller.update(count: 0, isActive: true)?.value
-        await controller.update(count: 3, isActive: false)?.value
-        XCTAssertEqual(client.permissionRequests, 0)
-        XCTAssertFalse(client.writes.contains(3))
-
-        await controller.update(count: 3, isActive: true)?.value
-        XCTAssertEqual(client.permissionRequests, 1)
-        XCTAssertEqual(client.writes.last, 3)
     }
 
     func testDeniedOrDisabledBadgesDoNotWriteAttentionCount() async {
         for status: UNAuthorizationStatus in [.denied, .authorized] {
             let client = BadgeClientSpy(authorizationStatus: status, badgesEnabled: false)
             let controller = AppIconBadgeController(client: client)
-            await controller.update(count: 4, isActive: true)?.value
+            await controller.update(count: 4)?.value
             XCTAssertFalse(client.writes.contains(4))
-            XCTAssertEqual(client.permissionRequests, 0)
         }
     }
 
-    func testSharedPermissionFlowDefersBadgePromptAndAppliesCountAfterGrant() async {
+    func testAttentionWaitsForPermissionAndAppliesCountAfterGrant() async {
         let client = BadgeClientSpy(authorizationStatus: .notDetermined, badgesEnabled: false)
-        let controller = AppIconBadgeController(client: client, requestsAuthorization: false)
-        await controller.update(count: 7, isActive: true)?.value
-        await controller.update(count: 7, isActive: false)?.value
-        await controller.update(count: 7, isActive: true)?.value
-        XCTAssertEqual(client.permissionRequests, 0)
+        let controller = AppIconBadgeController(client: client)
+        await controller.update(count: nil)?.value
+        await controller.update(count: 7)?.value
+        await controller.update(count: 7)?.value
         XCTAssertTrue(client.writes.isEmpty)
 
         // Continue grants permission while the count and scene stay unchanged.
         client.settings = AppIconBadgeSettings(authorizationStatus: .authorized, badgesEnabled: true)
-        await controller.update(count: 7, isActive: true)?.value
+        await controller.update(count: 7)?.value
         XCTAssertEqual(client.writes, [7])
-        XCTAssertEqual(client.permissionRequests, 0)
 
-        await controller.update(count: 0, isActive: false)?.value
+        await controller.update(count: 0)?.value
         XCTAssertEqual(client.writes, [7, 0])
     }
 
     func testForegroundRechecksSettingsAndAppliesRetainedCount() async {
         let client = BadgeClientSpy(authorizationStatus: .denied, badgesEnabled: false)
         let controller = AppIconBadgeController(client: client)
-        await controller.update(count: 4, isActive: true)?.value
-        await controller.update(count: nil, isActive: false)?.value
+        await controller.update(count: 4)?.value
+        await controller.update(count: nil)?.value
         client.settings = AppIconBadgeSettings(authorizationStatus: .authorized, badgesEnabled: true)
-        await controller.update(count: nil, isActive: true)?.value
+        await controller.update(count: nil)?.value
         XCTAssertEqual(client.writes.last, 4)
-        XCTAssertEqual(client.permissionRequests, 0)
     }
 
-    func testUnpairWhilePermissionIsPendingNeverWritesOldCount() async {
-        let client = BadgeClientSpy(authorizationStatus: .notDetermined)
-        client.holdsPermission = true
-        let requested = expectation(description: "Permission requested")
-        client.onPermissionRequest = { requested.fulfill() }
+    func testUnpairWhileSettingsArePendingNeverWritesOldCount() async {
+        let client = BadgeClientSpy()
+        client.holdsFirstSettingsRead = true
+        let reading = expectation(description: "Settings read started")
+        client.onSettingsRead = { reading.fulfill() }
         let controller = AppIconBadgeController(client: client)
-        let pending = controller.update(count: 7, isActive: true)
-        await fulfillment(of: [requested], timeout: 2)
+        let pending = controller.update(count: 7)
+        await fulfillment(of: [reading], timeout: 2)
 
-        controller.update(count: 0, isActive: false)
-        client.finishPermission()
+        controller.update(count: 0)
+        client.finishSettingsRead()
         await pending?.value
         XCTAssertEqual(client.writes, [0])
     }
 
-    func testPermissionAlertSceneChangesDoNotLoseGrantedBadge() async {
-        let client = BadgeClientSpy(authorizationStatus: .notDetermined)
-        client.holdsPermission = true
-        let requested = expectation(description: "Permission requested")
-        client.onPermissionRequest = { requested.fulfill() }
+    func testUnpairWhileDeniedStaysClearWhenPermissionIsEnabled() async {
+        let client = BadgeClientSpy(authorizationStatus: .denied, badgesEnabled: false)
         let controller = AppIconBadgeController(client: client)
-        let pending = controller.update(count: 7, isActive: true)
-        await fulfillment(of: [requested], timeout: 2)
-
-        controller.update(count: 7, isActive: false)
-        client.finishPermission()
-        await pending?.value
-        XCTAssertEqual(client.writes.last, 7)
-        XCTAssertEqual(client.permissionRequests, 1)
+        await controller.update(count: 7)?.value
+        await controller.update(count: 0)?.value
+        client.settings = AppIconBadgeSettings(authorizationStatus: .authorized, badgesEnabled: true)
+        await controller.update(count: nil)?.value
+        XCTAssertFalse(client.writes.contains(7))
+        XCTAssertEqual(client.writes.last, 0)
     }
 
     func testWritesStayOrderedWhenCountChangesDuringSystemWrite() async {
@@ -150,11 +126,11 @@ final class AppIconBadgeControllerTests: XCTestCase {
         let writing = expectation(description: "First write started")
         client.onFirstWrite = { writing.fulfill() }
         let controller = AppIconBadgeController(client: client)
-        let pending = controller.update(count: 7, isActive: true)
+        let pending = controller.update(count: 7)
         await fulfillment(of: [writing], timeout: 2)
 
-        controller.update(count: 3, isActive: true)
-        controller.update(count: 0, isActive: false)
+        controller.update(count: 3)
+        controller.update(count: 0)
         XCTAssertEqual(client.writes, [7])
         client.finishWrite()
         await pending?.value
@@ -165,11 +141,11 @@ final class AppIconBadgeControllerTests: XCTestCase {
         let client = BadgeClientSpy()
         client.failsWrites = true
         let controller = AppIconBadgeController(client: client)
-        await controller.update(count: 2, isActive: true)?.value
+        await controller.update(count: 2)?.value
         XCTAssertEqual(client.writes, [2])
 
         client.failsWrites = false
-        await controller.update(count: nil, isActive: true)?.value
+        await controller.update(count: nil)?.value
         XCTAssertEqual(client.writes, [2, 2])
     }
 }
@@ -178,15 +154,14 @@ final class AppIconBadgeControllerTests: XCTestCase {
 private final class BadgeClientSpy: AppIconBadgeClient {
     var settings: AppIconBadgeSettings
     var writes: [Int] = []
-    var permissionRequests = 0
-    var holdsPermission = false
+    var holdsFirstSettingsRead = false
+    private var settingsReads = 0
     var holdsFirstWrite = false
     var failsWrites = false
-    var onPermissionRequest: (() -> Void)?
     var onFirstWrite: (() -> Void)?
     var onSettingsRead: (() -> Void)?
     var onWrite: (() -> Void)?
-    private var permissionContinuation: CheckedContinuation<Void, Never>?
+    private var settingsContinuation: CheckedContinuation<Void, Never>?
     private var writeContinuation: CheckedContinuation<Void, Never>?
 
     init(authorizationStatus: UNAuthorizationStatus = .authorized, badgesEnabled: Bool = true) {
@@ -194,19 +169,16 @@ private final class BadgeClientSpy: AppIconBadgeClient {
     }
 
     func notificationSettings() async -> AppIconBadgeSettings {
-        onSettingsRead?()
-        return settings
-    }
-
-    func requestBadgeAuthorization() async throws {
-        permissionRequests += 1
-        if holdsPermission {
+        settingsReads += 1
+        if holdsFirstSettingsRead, settingsReads == 1 {
             await withCheckedContinuation { continuation in
-                permissionContinuation = continuation
-                onPermissionRequest?()
+                settingsContinuation = continuation
+                onSettingsRead?()
             }
+        } else {
+            onSettingsRead?()
         }
-        settings = AppIconBadgeSettings(authorizationStatus: .authorized, badgesEnabled: true)
+        return settings
     }
 
     func setBadgeCount(_ count: Int) async throws {
@@ -221,9 +193,9 @@ private final class BadgeClientSpy: AppIconBadgeClient {
         if failsWrites { throw CocoaError(.fileWriteUnknown) }
     }
 
-    func finishPermission() {
-        permissionContinuation?.resume()
-        permissionContinuation = nil
+    func finishSettingsRead() {
+        settingsContinuation?.resume()
+        settingsContinuation = nil
     }
 
     func finishWrite() {

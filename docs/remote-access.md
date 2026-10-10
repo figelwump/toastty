@@ -142,7 +142,8 @@ opening the conversation still requires access to the Mac through Tailscale.
 Interrupted setup resumes when the app returns to the foreground. A failure shows
 a small Retry message. Off and unpairing retain pending notification revocation
 until the service accepts it. Settings shows when turning off is still pending;
-alerts already sent can still arrive. Unconfigured builds hide these controls.
+alerts already sent can still arrive. Unconfigured builds hide these controls
+and do not request notification permission.
 See [development setup](../workers/push/README.md) for the current opt-in relay.
 
 ## Reading and replying
@@ -232,9 +233,10 @@ Reading an error does not dismiss it; it counts until the session leaves its
 error state or is removed on the Mac.
 
 Notification-enabled builds request badge permission with alerts and sound when
-you choose Continue. They do not show a separate badge prompt. Builds without
-push configuration ask for badge permission only when attention first appears
-while the app is active. You can change this permission in iOS Settings.
+you choose Continue. Badge updates never open a permission prompt. Builds without
+push configuration can update badges only if permission was already granted.
+New installs of those builds wait for a notification-enabled build to offer
+permission. You can change an existing permission choice in iOS Settings.
 The badge keeps its last count during a connection loss or while the app is
 suspended. Session push alerts do not carry a badge count, so new activity cannot
 update the badge until the app reconnects. Unpairing, losing access, or a pairing that
