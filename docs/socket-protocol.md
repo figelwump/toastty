@@ -259,9 +259,9 @@ Notable action-specific behavior:
     the visible workspace selection.
   - Optional `args.parent` is a workspace UUID in the target window or uses
     `"none"` for a top-level workspace. When omitted, a managed caller creates
-    a subspace under its own workspace's root if that workspace is in the
+    a task space under its own workspace's root if that workspace is in the
     target window; otherwise the new workspace is top level.
-  - Parent links stay one level deep. A parent that is itself a subspace
+  - Parent links stay one level deep. A parent that is itself a task space
     resolves to its root. A scoped caller needs access to both the requested
     parent and that root.
   - Background-created workspaces remain marked as new until selected once.
@@ -269,12 +269,12 @@ Notable action-specific behavior:
     `parentWorkspaceID`.
 - `workspace.set-parent`
   - requires `args.parent`, a workspace UUID in the same window or `"none"`
-    to detach the target workspace. A subspace parent resolves to its root;
+    to detach the target workspace. A task space parent resolves to its root;
     self-parenting and cycles are rejected.
   - The caller needs access to the target workspace, requested parent, and root.
     Reparenting retains the original spawning session when present; otherwise
     it records the managed caller. Detaching clears the spawner and done mark.
-    Any subspaces of the target workspace move under the same root.
+    Any task spaces of the target workspace move under the same root.
 - `workspace.set-done`, `workspace.clear-done`
   - With no workspace or window selector, a managed caller targets its own
     workspace. A caller whose session has ended must name the workspace.
@@ -304,8 +304,8 @@ Notable action-specific behavior:
   - Run through `app_control.run_action` only; they wait for the script.
     `cleanup` and `close` return `outcome` (`cleaned`/`closed`, `skipped`, or
     `failed`) and `detail` for one workspace and refuse a caller inside that
-    workspace. `cleanup-finished` returns `results`, one per done subspace
-    with a cleanup hook under the named workspace (a subspace names its
+    workspace. `cleanup-finished` returns `results`, one per done task space
+    with a cleanup hook under the named workspace (a task space names its
     parent's group), skipping the caller's own workspace.
 - `workspace.select`
   - requires `args.workspaceID` or `args.index` (1-based).
@@ -566,7 +566,7 @@ the caller's scope are omitted, either as null fields or absent array entries.
 For a scoped caller, a null `parentWorkspaceID` does not prove the workspace
 is top level.
 Its `annotations` entries include `primary`, which identifies the annotation
-chosen for the subspace row.
+chosen for the task space row.
 
 `annotation.keys` takes no selectors or arguments and returns
 `{keys: [String]}` in bytewise order. It lists every annotation key previously
@@ -717,8 +717,8 @@ Supported action IDs:
     panel, and active window
   - `args.windowID` is required when multiple windows exist
   - first targets unread panels; within each priority group, navigation follows sidebar order downward from the current session row
-  - workspace order places each parent before its subspaces and follows the displayed subspace order, including pinned or frozen rows; session order uses the sidebar's stable creation order and any custom row order, including sessions in other tabs or collapsed subspaces
-  - when a sidebar has not rendered, subspaces use stored workspace order; hidden or newly added subspaces remain reachable after the recorded rows
+  - workspace order places each parent before its task spaces and follows the displayed task space order, including pinned or frozen rows; session order uses the sidebar's stable creation order and any custom row order, including sessions in other tabs or collapsed task spaces
+  - when a sidebar has not rendered, task spaces use stored workspace order; hidden or newly added task spaces remain reachable after the recorded rows
   - traversal visits rows below the current focus, then other windows in stored window order starting after the current window, then wraps to rows above the focus in the current window
   - panels without session rows remain reachable in tab and layout order after the workspace's session rows; a focused plain terminal anchors at the workspace header when session rows exist, or at its layout position otherwise
   - a `ready` session only participates while unread; once visited it collapses back to `idle`

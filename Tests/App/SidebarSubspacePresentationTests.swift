@@ -207,7 +207,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             SidebarSubspacePresentation.rowAccessibilityLabel(row, showsSpawnerTag: false),
-            "website-redesign, subspace, waiting, PR #58, Review still running"
+            "website-redesign, task space, waiting, PR #58, Review still running"
         )
         let hover = SidebarSubspacePresentation.hoverTipModel(row) { _ in .named(.green) }
         XCTAssertTrue(hover.sessions[0].isWaiting)
@@ -451,7 +451,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         let confirmation = SidebarSubspacePresentation.cleanupFinishedConfirmation(rows: [done], skippedCount: 3)
         XCTAssertEqual(confirmation.title, "Clean up 1 done task?")
         XCTAssertTrue(confirmation.message.contains("• a-done"))
-        XCTAssertTrue(confirmation.message.contains("3 other subspaces"))
+        XCTAssertTrue(confirmation.message.contains("3 other task spaces"))
     }
 
     func testFrozenOrderHoldsExistingRowsAndAppendsNewOnes() {

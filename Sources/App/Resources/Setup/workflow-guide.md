@@ -12,7 +12,7 @@ Write the skill as intended behavior and constraints, not as a fixed script of c
 
 ## Building blocks
 
-- **Workspaces and subspaces**: `workspace.create` makes a workspace for a project or task. `workspace.set-parent` nests it under the workspace that started it, so it shows as a subspace in the sidebar. `workspace.set-task-stage` moves a task to review (ready for the user) or done. `workspace.task.set-hooks` names the skill that finishes the task and the scripts that clean it up or close it, which the workspace header shows as Finish Task, Clean Up, and Close Task.
+- **Workspaces and task spaces**: `workspace.create` makes a workspace for a project or task. `workspace.set-parent` nests it under the workspace that started it, so it shows as a task space in the sidebar. `workspace.set-task-stage` moves a task to review (ready for the user) or done. `workspace.task.set-hooks` names the skill that finishes the task and the scripts that clean it up or close it, which the workspace header shows as Finish Task, Clean Up, and Close Task.
 - **Tabs and splits**: `workspace.tab.create` and `workspace.split.right` arrange terminals.
 - **Agents**: `agent.launch` starts a managed agent in a pane. It can pick a model and reasoning effort, and for Codex and Claude it can fork the current conversation with `forkFromSessionID`.
 - **Right panel**: `panel.create.local-document` opens Markdown, code, and logs beside the terminal. `panel.create.browser` opens previews, PRs, and dashboards. Scratchpad pages for plans, mockups, and reports come from the shipped `toastty-scratchpad` skill.
@@ -33,10 +33,10 @@ The shipped `toastty-capabilities` skill covers these actions in more depth, inc
 
 Match these to what the user works on and which tools they use. Issue trackers, documents, and monitoring are reached through the agent's own tools, such as MCP servers or the `gh` CLI; Toastty provides the workspace around them. If a workflow needs a tool the user's agent lacks, say so.
 
-- **Worktree handoff** ("hand this off"): packages the conversation into a handoff, opens a Git worktree in a new subspace, and comes back with a screenshot report and a PR chip. Toastty bundles it; see below.
+- **Worktree handoff** ("hand this off"): packages the conversation into a handoff, opens a Git worktree in a new task space, and comes back with a screenshot report and a PR chip. Toastty bundles it; see below.
 - **Issue to PR** ("start ENG-412"): reads a Linear or GitHub issue, names a workspace after it with a chip linking back, drafts the plan in a Scratchpad, and links the PR on the issue when it is up.
-- **Review queue** ("review my PRs"): opens a subspace per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies the user as each one is ready.
-- **Spec to tasks** ("build from this spec"): opens a spec from Google Docs, Notion, or a Markdown file beside the terminal, splits it into tasks, starts a subspace for each, and keeps a progress page current.
+- **Review queue** ("review my PRs"): opens a task space per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies the user as each one is ready.
+- **Spec to tasks** ("build from this spec"): opens a spec from Google Docs, Notion, or a Markdown file beside the terminal, splits it into tasks, starts a task space for each, and keeps a progress page current.
 - **Crash to fix** ("fix this crash"): reproduces a Sentry report or log error in a worktree with the dev server in a split the agent can read, then shows before and after screenshots.
 - **Second opinion** ("ask another model"): runs two agents side by side on the same question and compares their answers in a Scratchpad.
 
@@ -48,7 +48,7 @@ Toastty bundles example workflow skills, read-only, at:
 {{WORKFLOW_EXAMPLES_DIR}}
 ```
 
-The worktree handoff is three packages there that work together. `worktree-create` hands a task to its own Git worktree and subspace, forking the conversation when the task was already discussed. `worktree-done` accepts the reviewed PR and turns on auto-merge. `worktree-cleanup` reports which task PRs are ready and removes merged worktrees. The PR steps need an authenticated `gh` CLI, and `worktree-done` relies on the repository's auto-merge setting. The `README.md` beside them explains the flow.
+The worktree handoff is three packages there that work together. `worktree-create` hands a task to its own Git worktree and task space, forking the conversation when the task was already discussed. `worktree-done` accepts the reviewed PR and turns on auto-merge. `worktree-cleanup` reports which task PRs are ready and removes merged worktrees. The PR steps need an authenticated `gh` CLI, and `worktree-done` relies on the repository's auto-merge setting. The `README.md` beside them explains the flow.
 
 To set it up for the user:
 

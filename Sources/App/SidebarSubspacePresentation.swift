@@ -143,7 +143,7 @@ enum SidebarSubspacePresentation {
     }
 
     nonisolated static let annotationKeyPullRequest = "github-pr"
-    static let groupTitle = "Subspaces"
+    static let groupTitle = "Task Spaces"
 
     /// The done mark replaces a quiet status (idle, or a finished turn not
     /// yet read, such as the one that set the mark). A session that is
@@ -475,27 +475,27 @@ enum SidebarSubspacePresentation {
         if skippedCount > 0 {
             lines.append("")
             lines.append(skippedCount == 1
-                ? "1 other subspace is not done or has no cleanup hook."
-                : "\(skippedCount) other subspaces are not done or have no cleanup hook.")
+                ? "1 other task space is not done or has no cleanup hook."
+                : "\(skippedCount) other task spaces are not done or have no cleanup hook.")
         }
         return (title, lines.joined(separator: "\n"))
     }
 
     static func spawnerFilterActionTitle(_ chip: SpawnerChip) -> String {
         switch (chip.isFilterActive, chip.targetWorkspaceTitle) {
-        case (true, nil): return "Show all subspaces"
-        case let (true, title?): return "Show all subspaces in \(title)"
-        case (false, nil): return "Show only its subspaces"
-        case let (false, title?): return "Show its subspaces in \(title)"
+        case (true, nil): return "Show all task spaces"
+        case let (true, title?): return "Show all task spaces in \(title)"
+        case (false, nil): return "Show only its task spaces"
+        case let (false, title?): return "Show its task spaces in \(title)"
         }
     }
 
     static func filterBarLabel(spawnerName: String) -> String {
-        "Only subspaces from \(spawnerName)"
+        "Only task spaces from \(spawnerName)"
     }
 
     static func groupAccessibilityLabel(rowCount: Int, isExpanded: Bool, tally: Tally) -> String {
-        var components = ["\(rowCount) \(rowCount == 1 ? "subspace" : "subspaces")"]
+        var components = ["\(rowCount) \(rowCount == 1 ? "task space" : "task spaces")"]
         components.append(isExpanded ? "expanded" : "collapsed")
         if tally.ready > 0 { components.append("\(tally.ready) ready") }
         if tally.needsApproval > 0 { components.append("\(tally.needsApproval) need approval") }
@@ -504,7 +504,7 @@ enum SidebarSubspacePresentation {
     }
 
     static func rowAccessibilityLabel(_ row: Row, showsSpawnerTag: Bool) -> String {
-        var components = [row.title, "subspace"]
+        var components = [row.title, "task space"]
         switch row.status {
         case .ready: components.append("ready")
         case .needsApproval: components.append("needs approval")
@@ -532,7 +532,7 @@ enum SidebarSubspacePresentation {
     }
 
     static func spawnerChipAccessibilityLabel(_ chip: SpawnerChip) -> String {
-        var label = chip.count == 1 ? "1 subspace" : "\(chip.count) subspaces"
+        var label = chip.count == 1 ? "1 task space" : "\(chip.count) task spaces"
         if let targetWorkspaceTitle = chip.targetWorkspaceTitle {
             label += " in \(targetWorkspaceTitle)"
         }
@@ -542,7 +542,7 @@ enum SidebarSubspacePresentation {
         case .neutral: break
         }
         if chip.isFilterActive {
-            label += ", filtering the Subspaces list"
+            label += ", filtering the Task Spaces list"
         }
         return label
     }

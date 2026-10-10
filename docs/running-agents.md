@@ -542,16 +542,16 @@ The user's `worktree-done` request, made in the task workspace, accepts the
 reviewed version. The skill checks that the worktree is clean at exactly the PR
 head, then enables GitHub auto-merge so the PR lands when required checks pass,
 and marks the workspace done with `workspace.set-done`, which shows as a check
-on its subspace row. New work in the workspace clears the check; new commits
+on its task space row. New work in the workspace clears the check; new commits
 need the user's review and a new `worktree-done` request.
 
 ### Task stages, Finish Task, Clean Up, and Close Task
 
-A subspace's task is in one of three stages: **open** (being worked on),
+A task space is in one of three stages: **open** (being worked on),
 **ready for review** (the agent published its work for your testing), or
 **done** (accepted). Agents move it with `workspace.set-task-stage`; the task
 workflow has the task session set `review` when its PR is ready, and
-`worktree-done` sets `done`. You can move it from the subspace row's context
+`worktree-done` sets `done`. You can move it from the task space row's context
 menu (Mark Ready for Review, Mark Done, Reopen Task) or the arrow beside the
 header button. Toastty moves a task back to open when an agent in it starts
 new work, so you review each new version before finishing it. The stage shows
@@ -567,7 +567,7 @@ and close hooks name a script inside an installed user skill, and Toastty runs
 them.
 
 The workspace header shows the task's button under the title, in the slot the
-Merge button used, and the subspace row shows the same button while the
+Merge button used, and the task space row shows the same button while the
 pointer is on it. Its tooltip names what a click runs.
 
 - **Finish Task** appears once the task is ready for review. It sends the
@@ -598,8 +598,8 @@ pointer is on it. Its tooltip names what a click runs.
   then with cleanup's guards closes the workspace, removes the worktree, and
   deletes the local branch, keeping the branch on GitHub so the pull request
   can be reopened.
-- The **Subspaces** header shows a clean-up icon with a count while any done
-  subspace has a cleanup hook. It confirms once, listing the tasks it will run
+- The **Task Spaces** header shows a clean-up icon with a count while any done
+  task space has a cleanup hook. It confirms once, listing the tasks it will run
   and how many it skips, then runs each script in turn. A task whose script
   skips, such as one whose merge has not landed yet, stays a candidate for the
   next click.
@@ -850,7 +850,7 @@ two marks are mutually exclusive, because a watched process cannot be flagged.
 
 Every session row reads as two lines. The first is the name, then the row's
 state: an approval or error badge, a waiting chip, and the elapsed time. The
-second is the latest summary, then a parent label and the subspace and
+second is the latest summary, then a parent label and the task space and
 sub-agent controls. Until the provider names a session, the agent's name (such
 as "Claude Code" or "Codex") stands in as the title, so naming a session changes
 only the first line's text. In a narrow sidebar the waiting chip drops out
@@ -867,7 +867,7 @@ A row that wants you — an unread reply, an approval request, or an error — g
 a faint fill in its status color and a heavier name. Approval and error keep a
 short badge so the state is not carried by color alone; the spelled-out wording
 ("needs approval") stays in the row's accessibility label. Every agent summary
-in the sidebar, on session rows, subspace rows, and sub-agent rows alike, uses
+in the sidebar, on session rows, task space rows, and sub-agent rows alike, uses
 the same small monospaced face.
 
 Working rows count up from the start of the current turn. A turn starts when the

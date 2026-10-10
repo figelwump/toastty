@@ -146,7 +146,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Create a workspace in a window. When a managed session calls this, the new workspace nests under the caller's workspace as a subspace unless parent=none.",
+                summary: "Create a workspace in a window. When a managed session calls this, the new workspace nests under the caller's workspace as a task space unless parent=none.",
                 selectors: [.windowID],
                 parameters: [.title(required: false), .activate(required: false), .workspaceParent(required: false)],
                 aliases: aliases
@@ -207,7 +207,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Nest a workspace under a top-level workspace in the same window as a subspace, or detach it with parent=none. Nesting stays one level deep, so a parent that is itself a subspace resolves to its root.",
+                summary: "Nest a workspace under a top-level workspace in the same window as a task space, or detach it with parent=none. Nesting stays one level deep, so a parent that is itself a task space resolves to its root.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.workspaceParent(required: true)]
             )
@@ -215,7 +215,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Mark a subspace's task done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected. An agent in the workspace starting new work clears the mark.",
+                summary: "Mark a task space done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected. An agent in the workspace starting new work clears the mark.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClearDone:
@@ -229,7 +229,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Move a subspace's task to a stage: open (being worked on), review (ready for the user to review and test; the row shows Finish Task), or done (accepted; the row shows Clean Up). Set review once the task's pull request is published for the user. An agent in the workspace starting new work moves it back to open. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is always open. workspace.set-done and workspace.clear-done are the done and open forms.",
+                summary: "Move a task space to a stage: open (being worked on), review (ready for the user to review and test; the row shows Finish Task), or done (accepted; the row shows Clean Up). Set review once the task's pull request is published for the user. An agent in the workspace starting new work moves it back to open. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is always open. workspace.set-done and workspace.clear-done are the done and open forms.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.taskStage(required: true)]
             )
@@ -237,7 +237,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Set how a subspace's task is finished, cleaned up, and closed. finishSkill names a skill the task's agent runs when the user clicks Finish Task. cleanupSkill, cleanupScript, and cleanupArgs name a script inside an installed user skill that Clean Up runs without an agent; closeSkill, closeScript, and closeArgs name the script Close Task runs to abandon the task. For a script: cwd is the task directory, TOASTTY_CLI_PATH and TOASTTY_WORKSPACE_ID are set, exit 0 means it changed the task, exit 3 means skipped with the last output line as the reason, and the script closes the workspace itself. Omitting every parameter clears the hooks. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected.",
+                summary: "Set how a task space is finished, cleaned up, and closed. finishSkill names a skill the task's agent runs when the user clicks Finish Task. cleanupSkill, cleanupScript, and cleanupArgs name a script inside an installed user skill that Clean Up runs without an agent; closeSkill, closeScript, and closeArgs name the script Close Task runs to abandon the task. For a script: cwd is the task directory, TOASTTY_CLI_PATH and TOASTTY_WORKSPACE_ID are set, exit 0 means it changed the task, exit 3 means skipped with the last output line as the reason, and the script closes the workspace itself. Omitting every parameter clears the hooks. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [
                     .taskFinishSkill(required: false),
@@ -253,32 +253,32 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Run a subspace's finish hook, as the Finish Task button does: sends the finish skill to the workspace's most recently active agent session, or launches one with it when none is running. Returns the sessionID and panelID that received it.",
+                summary: "Run a task space's finish hook, as the Finish Task button does: sends the finish skill to the workspace's most recently active agent session, or launches one with it when none is running. Returns the sessionID and panelID that received it.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceTaskCleanup:
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Run a subspace's cleanup script, as the Clean Up button does, and wait for it. Returns outcome (cleaned, skipped, or failed) and the script's detail. The script must not be run from inside the workspace it cleans.",
+                summary: "Run a task space's cleanup script, as the Clean Up button does, and wait for it. Returns outcome (cleaned, skipped, or failed) and the script's detail. The script must not be run from inside the workspace it cleans.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceTaskCleanupFinished:
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Run the cleanup script of every subspace under a workspace that is marked done and has a cleanup hook, one at a time, as the Subspaces header's clean-up button does. Returns one result per subspace.",
+                summary: "Run the cleanup script of every task space under a workspace that is marked done and has a cleanup hook, one at a time, as the Task Spaces header's clean-up button does. Returns one result per task space.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceTaskClose:
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Run a subspace's close script, as the Close Task menu item does, and wait for it. Returns outcome (closed, skipped, or failed) and the script's detail. The script must not be run from inside the workspace it closes.",
+                summary: "Run a task space's close script, as the Close Task menu item does, and wait for it. Returns outcome (closed, skipped, or failed) and the script's detail. The script must not be run from inside the workspace it closes.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClose:
-            return .init(id: rawValue, kind: .action, summary: "Close a workspace. Its subspaces stay open as top-level workspaces.", selectors: [.windowID, .workspaceID])
+            return .init(id: rawValue, kind: .action, summary: "Close a workspace. Its task spaces stay open as top-level workspaces.", selectors: [.windowID, .workspaceID])
         case .workspaceTabCreate:
             return .init(id: rawValue, kind: .action, summary: "Create a terminal tab and return workspaceID, tabID and panelID. Managed callers default to their own workspace.", selectors: [.windowID, .workspaceID], parameters: [.terminalCreationActivation(required: false)], aliases: aliases)
         case .workspaceTabSelect:
@@ -577,7 +577,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 selectors: [.windowID]
             )
         case .workspaceSnapshot:
-            return .init(id: rawValue, kind: .query, summary: "Return workspace structure, subspace links, done mark, and tab metadata without selecting the workspace or changing focus. Panel details cover its selected tab.", selectors: [.windowID, .workspaceID])
+            return .init(id: rawValue, kind: .query, summary: "Return workspace structure, task space links, done mark, and tab metadata without selecting the workspace or changing focus. Panel details cover its selected tab.", selectors: [.windowID, .workspaceID])
         case .terminalState:
             return .init(id: rawValue, kind: .query, summary: "Return terminal state metadata.", selectors: [.windowID, .workspaceID, .panelID])
         case .terminalVisibleText:
@@ -625,7 +625,7 @@ private extension AppControlParameterDescriptor {
     static func workspaceParent(required: Bool) -> Self {
         .init(
             name: "parent",
-            summary: "Workspace ID to nest under as a subspace, or none for a top-level workspace. Sidebar shows subspaces in a Subspaces group inside the parent card.",
+            summary: "Workspace ID to nest under as a task space, or none for a top-level workspace. Sidebar shows task spaces in a Task Spaces group inside the parent card.",
             valueType: .string,
             required: required
         )
@@ -693,7 +693,7 @@ private extension AppControlParameterDescriptor {
     static func annotationPrimary(required: Bool) -> Self {
         .init(
             name: "primary",
-            summary: "true makes this the workspace's one primary annotation, replacing any other; false removes that role from this key; omit to leave it unchanged. A subspace's row in its parent's Subspaces group shows its primary annotation, or its github-pr annotation when none is primary; the row truncates long text, so keep primary text short, such as PR #1234 or ENG-512. Use PR #<number> for all pull request chips, including primary annotations.",
+            summary: "true makes this the workspace's one primary annotation, replacing any other; false removes that role from this key; omit to leave it unchanged. A task space's row in its parent's Task Spaces group shows its primary annotation, or its github-pr annotation when none is primary; the row truncates long text, so keep primary text short, such as PR #1234 or ENG-512. Use PR #<number> for all pull request chips, including primary annotations.",
             valueType: .boolean,
             required: required
         )

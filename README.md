@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://toastty.dev">
-    <img src="docs/assets/toastty-hero.png" alt="Toastty with a checkout-redesign subspace ready for review in the sidebar, its PR #128 chip, and a docs preview in the right panel" width="900">
+    <img src="docs/assets/toastty-hero.png" alt="Toastty with a checkout-redesign task space ready for review in the sidebar, its PR #128 chip, and a docs preview in the right panel" width="900">
   </a>
 </p>
 
@@ -42,29 +42,29 @@ To build from source, see [Building and Releasing](docs/building-and-releasing.m
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/assets/readme/workflow-1.png" alt="The sidebar zoomed in as a checkout-redesign subspace appears under the session that handed it off"></td>
-    <td width="33%"><img src="docs/assets/readme/workflow-2.png" alt="The checkout-redesign subspace row turns green with a PR #128 chip, and a notification says it is ready for review"></td>
-    <td width="33%"><img src="docs/assets/readme/workflow-3.png" alt="The subspace open, with its PR loaded in the right panel next to the agent's terminal output"></td>
+    <td width="33%"><img src="docs/assets/readme/workflow-1.png" alt="The sidebar zoomed in as a checkout-redesign task space appears under the session that handed it off"></td>
+    <td width="33%"><img src="docs/assets/readme/workflow-2.png" alt="The checkout-redesign task space row turns green with a PR #128 chip, and a notification says it is ready for review"></td>
+    <td width="33%"><img src="docs/assets/readme/workflow-3.png" alt="The task space open, with its PR loaded in the right panel next to the agent's terminal output"></td>
   </tr>
   <tr>
-    <td>Hand a task off, and it becomes a subspace. Claude Code and Codex sessions fork the conversation into it.</td>
+    <td>Hand a task off, and it becomes a task space. Claude Code and Codex sessions fork the conversation into it.</td>
     <td>Keep working elsewhere. The row turns green when it's ready.</td>
     <td>The handoff, a screenshot report, and the PR are one click away.</td>
   </tr>
 </table>
 
-A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toastty's pieces to use and when. Toastty delivers those skills to managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches. The [worktree handoff examples](examples/skills/README.md) (`worktree-create`, `worktree-done`, and `worktree-cleanup`) package a conversation into a new Git worktree and subspace, open the handoff and a verification report beside it, and pin the PR to the sidebar. Other ideas to describe to your agent: start a workspace from a Linear or GitHub issue, open a subspace per PR to review, or split a spec into tasks.
+A workflow is a skill in `~/.toastty/skills` that tells your agent which of Toastty's pieces to use and when. Toastty delivers those skills to managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches. The [worktree handoff examples](examples/skills/README.md) (`worktree-create`, `worktree-done`, and `worktree-cleanup`) package a conversation into a new Git worktree and task space, open the handoff and a verification report beside it, and pin the PR to the sidebar. Other ideas to describe to your agent: start a workspace from a Linear or GitHub issue, open a task space per PR to review, or split a spec into tasks.
 
 ## Features
 
 ### Sidebar and agents
 
-<img src="docs/assets/readme/sidebar.png" alt="Toastty sidebar: a lumen workspace with idle and working sessions and a Subspaces group holding a ready checkout-redesign row with a PR #128 chip, a working subspace, and a done one; below, a docs-site session with an unread reply and an infra session waiting for approval" width="300" align="right">
+<img src="docs/assets/readme/sidebar.png" alt="Toastty sidebar: a lumen workspace with idle and working sessions and a Task Spaces group holding a ready checkout-redesign row with a PR #128 chip, a working task space, and a done one; below, a docs-site session with an unread reply and an infra session waiting for approval" width="300" align="right">
 
 - **Live status** for Claude Code, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi. Type `claude`, `codex`, `cursor-agent`, `grok`, `opencode`, `mimo`, or `pi` as usual, or launch from the `Agent` menu, top bar, or command palette. Any other CLI runs in a normal pane.
 - **Automatic program status:** programs that report OSC 7501 get one sidebar row per terminal, with progress and specific approval, input, or login labels. Managed agent hooks remain primary.
 - **Rows that need you are tinted:** green when ready, amber when waiting for approval, red on an error.
-- **Subspaces** nest task workspaces under the session that started them, each with its own status and chips such as `PR #128`.
+- **Task spaces** nest task workspaces under the session that started them, each with its own status and chips such as `PR #128`.
 - Sessions that start their own subagents or background work show them as expandable rows.
 - **Jump to what's next:** `Cmd+Shift+A` cycles through unread, approval, and active sessions. `Cmd+Shift+L` marks a session for later; the flag clears when the session moves forward.
 - **Watch any command:** `Cmd+Shift+M` gives a long build or test run its own row and a notification when it exits.
@@ -108,11 +108,11 @@ See [Right Panel](docs/right-panel.md) for shortcuts, Recently Opened, and link 
 
 ### Toastty Mobile (TestFlight)
 
-<img src="docs/assets/readme/mobile.png" alt="Toastty Mobile on an iPhone: the Home screen lists the lumen workspace's sessions with live status, a Subspaces group with the checkout-redesign subspace ready for review and its PR #128 chip, and a docs-site session" width="260" align="right">
+<img src="docs/assets/readme/mobile.png" alt="Toastty Mobile on an iPhone: the Home screen lists the lumen workspace's sessions with live status, a Task Spaces group with the checkout-redesign task space ready for review and its PR #128 chip, and a docs-site session" width="260" align="right">
 
 The same sidebar, on your iPhone, over your private tailnet.
 
-- **Every session, live:** workspaces and subspaces with the same green, amber, and red tints as on the Mac.
+- **Every session, live:** workspaces and task spaces with the same green, amber, and red tints as on the Mac.
 - **Answer your agents' questions:** pick an option or type a custom answer. It lands in the terminal on your Mac as if you were there.
 - **Reply from anywhere** with photos and files attached. While the agent works, queue a follow-up for the next turn, steer a Codex turn, or stop it.
 - **Scratchpads and files:** open the pages, documents, and previews your agents published, and tap a PR chip to read the pull request.

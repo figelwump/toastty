@@ -174,14 +174,14 @@ These behaviors are current reducer contract, but `StateValidator` does not chec
 - Workspace commits normalize `sidebarSessionPanelOrder`, removing closed or
   moved-out terminal panels without changing tab or pane layout order.
 - Setting a workspace parent resolves it to a top-level workspace in the same
-  window and rejects self-links and cycles. Existing subspaces of that
+  window and rejects self-links and cycles. Existing task spaces of that
   workspace move under the same root. Detaching clears `spawningSessionID`
-  and `doneAt`. Closing a parent keeps its subspaces open at the top level
+  and `doneAt`. Closing a parent keeps its task spaces open at the top level
   and clears their `spawningSessionID` and `doneAt`.
 - `primaryAnnotationKey` must name a retained annotation or be `nil`. Removing
   that annotation clears the primary key.
-- Only subspaces can receive a non-null `doneAt`. Marking an already-done
-  subspace keeps its original timestamp.
+- Only task spaces can receive a non-null `doneAt`. Marking an already-done
+  task space keeps its original timestamp.
 - Closing the last panel in a workspace removes the workspace, and removing the last
   workspace in a window removes the window for valid reducer-managed state.
 - Reducer paths generally keep `selectedWindowID` pointing at a live window for valid

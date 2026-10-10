@@ -172,7 +172,7 @@ struct ToasttyWorkspaceDetailHeader: View {
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .accessibilityLabel("Subspace of \(parentTitle)")
+                    .accessibilityLabel("Task space of \(parentTitle)")
                     .accessibilityIdentifier("toastty-mobile-workspace-breadcrumb")
             }
             ForEach(annotations) { annotation in

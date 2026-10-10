@@ -104,13 +104,13 @@ struct ToasttyHiddenCounts: Equatable {
     var idleSubspaces = 0
     var doneSubspaces = 0
 
-    /// For example "3 idle sessions and 1 done subspace hidden"; `nil` when
+    /// For example "3 idle sessions and 1 done task space hidden"; `nil` when
     /// nothing is hidden.
     var label: String? {
         let parts = [
             Self.part(idleSessions, "idle session"),
-            Self.part(idleSubspaces, "idle subspace"),
-            Self.part(doneSubspaces, "done subspace"),
+            Self.part(idleSubspaces, "idle task space"),
+            Self.part(doneSubspaces, "done task space"),
         ].compactMap { $0 }
         guard let last = parts.last else { return nil }
         let list = parts.count == 1
@@ -142,7 +142,7 @@ struct ToasttySpawnerChip: Equatable {
     let otherWorkspaceTitle: String?
 
     var accessibilityLabel: String {
-        let noun = count == 1 ? "subspace" : "subspaces"
+        let noun = count == 1 ? "task space" : "task spaces"
         return otherWorkspaceTitle.map { "\(count) \(noun) in \($0)" } ?? "\(count) \(noun)"
     }
 

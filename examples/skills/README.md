@@ -24,7 +24,7 @@ abandons the task through the same script.
 The task session designs, implements, verifies, and publishes a PR in its own
 workspace. After testing or reviewing the result there, invoke `worktree-done` in
 that workspace. It checks that the worktree matches the PR, enables auto-merge,
-and marks the workspace done, which its subspace row shows as a check; it never
+and marks the workspace done, which its task space row shows as a check; it never
 closes its own workspace.
 
 Later, from the project workspace, invoke `worktree-cleanup`. It lists ready,
