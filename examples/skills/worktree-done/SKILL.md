@@ -1,6 +1,6 @@
 ---
 name: worktree-done
-description: Use when the user says they are done reviewing or testing this worktree or subspace and want its pull request merged. Verifies the worktree matches the PR, then enables auto-merge so GitHub merges it once required checks pass. Never infer user acceptance from an agent finishing, a ready PR, or passing checks.
+description: Use when the user says they are done reviewing or testing this worktree or task space and want its pull request merged. Verifies the worktree matches the PR, then enables auto-merge so GitHub merges it once required checks pass. Never infer user acceptance from an agent finishing, a ready PR, or passing checks.
 ---
 
 # Worktree Done
@@ -52,7 +52,7 @@ Stop and report, without merging, when:
    `"$TOASTTY_CLI_PATH" action run workspace.set-done`; with no workspace given it
    marks the calling agent's own workspace. If the running Toastty does not list
    `workspace.set-done` in `action list`, or rejects it because this workspace is
-   top-level rather than a subspace, set the `task-status` annotation with text
+   top-level rather than a task space, set the `task-status` annotation with text
    `DONE` and no URL instead, following the workspace annotation rules in the
    toastty-capabilities skill. Skip this when an earlier step stopped without
    merging or enabling auto-merge.

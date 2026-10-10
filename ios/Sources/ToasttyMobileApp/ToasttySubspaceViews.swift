@@ -145,7 +145,7 @@ struct ToasttySubspaceGroup: View {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .imageScale(.small)
                     .frame(width: 12)
-                Text("SUBSPACES")
+                Text("TASK SPACES")
                     .tracking(0.8)
                 Text(ToasttySubspaceGroupPresentation.countLabel(shown: shown, total: total))
                 Spacer(minLength: 8)
@@ -184,7 +184,7 @@ struct ToasttySubspaceGroup: View {
     }
 
     private func headerAccessibilityLabel(shown: Int) -> String {
-        (["Subspaces", ToasttySubspaceGroupPresentation.countLabel(shown: shown, total: total)]
+        (["Task Spaces", ToasttySubspaceGroupPresentation.countLabel(shown: shown, total: total)]
             + tallyCounts.map { "\($0.count) \(ToasttySubspaceGroupPresentation.statusLabel($0.status))" })
             .joined(separator: ", ")
     }
@@ -196,7 +196,7 @@ struct ToasttySubspaceGroup: View {
             spawnerFilter = nil
         } label: {
             HStack(spacing: 6) {
-                Text("Only subspaces from \(name)")
+                Text("Only task spaces from \(name)")
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
@@ -211,8 +211,8 @@ struct ToasttySubspaceGroup: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Only subspaces from \(name)")
-        .accessibilityHint("Shows all subspaces")
+        .accessibilityLabel("Only task spaces from \(name)")
+        .accessibilityHint("Shows all task spaces")
         .accessibilityIdentifier("toastty-subspaces-filter-clear")
     }
 }
@@ -314,7 +314,7 @@ struct ToasttySubspaceRow: View {
             }
             .buttonStyle(ToasttySessionRowButtonStyle(tint: ToasttySubspaceStatusStyle.rowTint(row.status)))
             .accessibilityLabel(accessibilityLabel)
-            .accessibilityHint("Opens the subspace. Touch and hold for details.")
+            .accessibilityHint("Opens the task space. Touch and hold for details.")
             .accessibilityIdentifier("toastty-subspace-row-\(row.id.uuidString)")
             if showsDoneToggle {
                 // The box is small; its button covers the row's leading
@@ -331,7 +331,7 @@ struct ToasttySubspaceRow: View {
             }
         }
         .contextMenu {
-            Button("Open Subspace", systemImage: "arrow.up.right") {
+            Button("Open Task Space", systemImage: "arrow.up.right") {
                 openWorkspace(row.id)
             }
             if showsDoneToggle {
@@ -472,7 +472,7 @@ struct ToasttySubspaceRow: View {
         let status = controller.freshness == .live
             ? ToasttySubspaceGroupPresentation.statusLabel(row.status)
             : "last seen \(ToasttySubspaceGroupPresentation.statusLabel(row.status))"
-        return ([row.workspace.title, "subspace", status, row.summary]
+        return ([row.workspace.title, "task space", status, row.summary]
             + [row.chip.map(ToasttyWorkspaceAnnotationAccessibility.label(for:))])
             .compactMap { $0 }
             .filter { $0.isEmpty == false }
@@ -501,7 +501,7 @@ struct ToasttySubspaceDetailCard: View {
                     .font(.headline)
                     .foregroundStyle(ToasttyDesignTokens.primaryText)
                     .lineLimit(2)
-                Text("subspace")
+                Text("task space")
                     .font(.caption2.monospaced())
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
             }

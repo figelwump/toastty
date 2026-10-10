@@ -207,7 +207,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             SidebarSubspacePresentation.rowAccessibilityLabel(row, showsSpawnerTag: false),
-            "website-redesign, subspace, waiting, PR #58, Review still running"
+            "website-redesign, task space, waiting, PR #58, Review still running"
         )
         let hover = SidebarSubspacePresentation.hoverTipModel(row) { _ in .named(.green) }
         XCTAssertTrue(hover.sessions[0].isWaiting)

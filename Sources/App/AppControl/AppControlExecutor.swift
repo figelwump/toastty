@@ -245,7 +245,7 @@ final class AppControlExecutor {
             if action == .workspaceSetDone,
                try requiredStore().state.workspacesByID[workspaceID]?.parentWorkspaceID == nil {
                 throw AutomationSocketError.invalidPayload(
-                    "workspace.set-done applies to subspaces; this workspace is top-level"
+                    "workspace.set-done applies to task spaces; this workspace is top-level"
                 )
             }
             let doneAt: Date? = action == .workspaceSetDone ? Date() : nil

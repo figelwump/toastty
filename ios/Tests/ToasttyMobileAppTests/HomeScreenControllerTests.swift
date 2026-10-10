@@ -148,11 +148,11 @@ final class ToasttySubspacePresentationTests: XCTestCase {
         XCTAssertEqual(ToasttyHiddenCounts(idleSessions: 1).label, "1 idle session hidden")
         XCTAssertEqual(
             ToasttyHiddenCounts(idleSessions: 3, doneSubspaces: 1).label,
-            "3 idle sessions and 1 done subspace hidden"
+            "3 idle sessions and 1 done task space hidden"
         )
         XCTAssertEqual(
             ToasttyHiddenCounts(idleSessions: 2, idleSubspaces: 1, doneSubspaces: 2).label,
-            "2 idle sessions, 1 idle subspace and 2 done subspaces hidden"
+            "2 idle sessions, 1 idle task space and 2 done task spaces hidden"
         )
     }
 
@@ -175,7 +175,7 @@ final class ToasttySubspacePresentationTests: XCTestCase {
         XCTAssertEqual(ownChip.tone, .needsApproval)
         XCTAssertEqual(ownChip.parentWorkspaceID, parentID)
         XCTAssertNil(ownChip.otherWorkspaceTitle)
-        XCTAssertEqual(ownChip.accessibilityLabel, "2 subspaces")
+        XCTAssertEqual(ownChip.accessibilityLabel, "2 task spaces")
 
         // With none of its own, the chip points at the workspace that holds one.
         let otherChip = try XCTUnwrap(ToasttySpawnerChip.chip(
@@ -186,7 +186,7 @@ final class ToasttySubspacePresentationTests: XCTestCase {
         XCTAssertEqual(otherChip.count, 1)
         XCTAssertEqual(otherChip.tone, .error)
         XCTAssertEqual(otherChip.parentWorkspaceID, otherParentID)
-        XCTAssertEqual(otherChip.accessibilityLabel, "1 subspace in other")
+        XCTAssertEqual(otherChip.accessibilityLabel, "1 task space in other")
 
         XCTAssertNil(ToasttySpawnerChip.chip(
             for: spawner, in: MobileHomeSnapshot(hostName: "Mac", workspaces: parents), filter: .all
@@ -472,7 +472,7 @@ final class SubspaceDoneControllerTests: XCTestCase {
         // The Mac still shows the task open, which must not be mistaken for
         // the undo having arrived: the first request is still on its way.
         controller.update(snapshot: snapshot(isDone: false, generation: 1), connectionState: .live, freshness: .live)
-        XCTAssertEqual(requests, [true], "Requests for one subspace go out one at a time")
+        XCTAssertEqual(requests, [true], "Requests for one task space go out one at a time")
 
         replies[0].continuation.yield(.applied)
         try await waitUntil { requests == [true, false] }

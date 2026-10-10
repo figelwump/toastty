@@ -308,19 +308,19 @@ changing the currently visible selection, returns the created `workspaceID`,
 `New` in the sidebar until the user visits it once.
 
 When a managed agent session calls `workspace.create`, the new workspace nests
-under the caller's workspace as a **subspace** and records the caller as its
+under the caller's workspace as a **task space** and records the caller as its
 spawning session. Pass `parent=none` for a top-level workspace, or
 `parent=<workspaceID>` to nest under a specific workspace in the same window.
-Subspaces do not appear as their own sidebar cards; they render as compact rows
-in a Subspaces group inside the parent card, sorted ready, needs approval,
-error, working, idle, then done. Within each status, subspaces sort by the
+Task spaces do not appear as their own sidebar cards; they render as compact rows
+in a Task Spaces group inside the parent card, sorted ready, needs approval,
+error, working, idle, then done. Within each status, task spaces sort by the
 latest status update from any of their sessions, newest first. Equal times use
-workspace order; subspaces with no update time follow those with an update time.
+workspace order; task spaces with no update time follow those with an update time.
 Hovering over the list holds its order, and the selected row keeps its slot
 until selection changes. The spawning session's row shows a ⑂ chip that filters
-the group to its subspaces. Nesting stays one level deep, so a parent that is
-itself a subspace resolves to its root. Closing a parent keeps its
-subspaces open as top-level workspaces.
+the group to its task spaces. Nesting stays one level deep, so a parent that is
+itself a task space resolves to its root. Closing a parent keeps its
+task spaces open as top-level workspaces.
 
 An explicit `parent` that is not a workspace in the target window is rejected
 before anything is created. A scoped caller needs automation access to the
@@ -331,18 +331,18 @@ in the same window (`parent=<workspaceID>`) or detaches it (`parent=none`);
 `parent` is required. The caller needs automation access to the workspace, the
 requested parent, and the root it resolves to. Reparenting keeps the workspace's
 original spawning session; a workspace that had none records the caller. The
-sidebar offers the same detach through "Move to top level" on a subspace row.
+sidebar offers the same detach through "Move to top level" on a task space row.
 
 `workspace.snapshot` reports `parentWorkspaceID`, `spawningSessionID`, and
 `subspaceWorkspaceIDs`; related workspaces outside the caller's scope are
 omitted (`null` or left out of the array).
 
-`workspace.set-done` marks a subspace's task done, and `workspace.clear-done`
+`workspace.set-done` marks a task space's task done, and `workspace.clear-done`
 clears the mark. With no `workspaceID` or `windowID`, a managed agent's call
 targets its own workspace rather than the selected one; a caller whose session
-Toastty no longer runs must name the workspace. Only subspaces hold the mark:
-`workspace.set-done` rejects a top-level workspace, and moving a subspace to top
-level drops it. The sidebar shows a done subspace with a check in place of its
+Toastty no longer runs must name the workspace. Only task spaces hold the mark:
+`workspace.set-done` rejects a top-level workspace, and moving a task space to top
+level drops it. The sidebar shows a done task space with a check in place of its
 idle box and sorts it last; the box also toggles the mark by click. The mark
 clears itself when an agent in the workspace starts new work: a newly launched
 agent, or a turn that begins from idle, ready, or error. The rest of the turn
@@ -356,8 +356,8 @@ it as `done`.
 
 `workspace.select` accepts a `workspaceID` selector or a 1-based `index`
 argument. The index counts every workspace in the window's order, including
-subspaces; the sidebar's numbered shortcuts count only top-level cards, so
-prefer `workspaceID` for subspaces. By default it changes only the selected
+task spaces; the sidebar's numbered shortcuts count only top-level cards, so
+prefer `workspaceID` for task spaces. By default it changes only the selected
 workspace and preserves that workspace's selected tab and focused panel. Set `focusUnreadSessionPanel=true`
 when foreground navigation should also focus the newest unread managed-session
 panel visible in the selected workspace tab.
@@ -378,7 +378,7 @@ example:
   when available.
 - GitHub pull request: `key=github-pr`, `text="PR #1931"`, plus its verified pull
   URL when available. Use `PR #<number>` for all pull request chips, including
-  primary annotations in subspace rows.
+  primary annotations in task space rows.
 - GitHub issue: `key=github-issue`, `text="Issue #482"`, plus its verified issue
   URL when available.
 - Git branch: `key=git-branch`, `text=feat/hooks-chips`; a URL is usually
@@ -442,7 +442,7 @@ was supplied or verified; do not guess one from the label. Validation rules:
 - Setting an identical annotation again reports `didMutateState=false`, unless
   `primary` changes which annotation is primary.
 
-A subspace's row in its parent's Subspaces group shows one annotation chip:
+A task space's row in its parent's Task Spaces group shows one annotation chip:
 the workspace's primary annotation, or its `github-pr` annotation when
 none is marked primary. Pass `primary=true` to make an annotation primary; a
 workspace has at most one, so this replaces any earlier choice. `primary=false`
@@ -451,7 +451,7 @@ unchanged. Clearing the primary annotation clears the role. The row chip
 truncates past about 12 characters, so keep primary text short, such as
 `PR #1234` or `ENG-512`; the chip's tooltip shows the full text.
 
-When all working sessions in a subspace are waiting on background work, its row
+When all working sessions in a task space are waiting on background work, its row
 shows a `waiting` status pill. At narrow widths, the row drops the annotation
 before the waiting pill to keep room for the title. The hover card keeps both
 the session's waiting status and every annotation.
@@ -716,7 +716,7 @@ returns `PANEL_READ_DENIED` to every session except its own.
 `workspace.list` returns `workspaces`, one entry per workspace in window
 order, without selecting or focusing anything. Each entry has `windowID`,
 `workspaceID`, 1-based `index` within its window, `title`, `isSelected`,
-`annotations` (the same shape as `workspace.snapshot`), `done` (the subspace
+`annotations` (the same shape as `workspace.snapshot`), `done` (the task space
 done mark), and `terminalCwds`,
 the sorted working directories of the workspace's terminal panels across all
 tabs. `activeSessions` lists each managed agent session in the workspace as
