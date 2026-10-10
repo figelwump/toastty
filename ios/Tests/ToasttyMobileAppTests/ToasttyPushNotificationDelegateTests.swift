@@ -8,7 +8,7 @@ import XCTest
 final class ToasttyPushNotificationDelegateTests: XCTestCase {
     // Exercise the system delegate boundary: completion must run once on the
     // main thread after routing, including ignored actions and invalid payloads.
-    func testBackgroundCallbackRoutesBeforeCompletingOnMainThread() async throws {
+    func testBackgroundCallbackRoutesBeforeCompletingOnMainThread() async {
         let delegate = ToasttyMobileApplicationDelegate()
         let payload = sessionPayload()
         let recorder = CallbackRecorder()
@@ -17,13 +17,13 @@ final class ToasttyPushNotificationDelegateTests: XCTestCase {
             XCTAssertTrue(Thread.isMainThread)
             recorder.record("routed")
         }
-        try await deliver(action: UNNotificationDefaultActionIdentifier, payload: payload,
+        await deliver(action: UNNotificationDefaultActionIdentifier, payload: payload,
                           to: delegate, recorder: recorder)
 
         XCTAssertEqual(recorder.events, ["routed", "completed"])
     }
 
-    func testIgnoredActionsAndInvalidPayloadStillCompleteOnceOnMainThread() async throws {
+    func testIgnoredActionsAndInvalidPayloadStillCompleteOnceOnMainThread() async {
         let delegate = ToasttyMobileApplicationDelegate()
         delegate.pushBridge.onTap = { _ in XCTFail("Ignored response must not route") }
         for (action, payload) in [
@@ -32,17 +32,17 @@ final class ToasttyPushNotificationDelegateTests: XCTestCase {
             (UNNotificationDefaultActionIdentifier, nil),
         ] {
             let recorder = CallbackRecorder()
-            try await deliver(action: action, payload: payload, to: delegate, recorder: recorder)
+            await deliver(action: action, payload: payload, to: delegate, recorder: recorder)
 
             XCTAssertEqual(recorder.events, ["completed"])
         }
     }
 
-    func testTapBeforeSessionSetupCompletesAndRemainsBuffered() async throws {
+    func testTapBeforeSessionSetupCompletesAndRemainsBuffered() async {
         let delegate = ToasttyMobileApplicationDelegate()
         let payload = sessionPayload()
         let recorder = CallbackRecorder()
-        try await deliver(action: UNNotificationDefaultActionIdentifier, payload: payload,
+        await deliver(action: UNNotificationDefaultActionIdentifier, payload: payload,
                           to: delegate, recorder: recorder)
 
         var received: [RemotePushPayload] = []
@@ -53,18 +53,23 @@ final class ToasttyPushNotificationDelegateTests: XCTestCase {
 
     private func deliver(action: String, payload: RemotePushPayload?,
                          to delegate: ToasttyMobileApplicationDelegate,
-                         recorder: CallbackRecorder) async throws {
+                         recorder: CallbackRecorder) async {
         let completed = expectation(description: "Notification response completed")
-        try await Task.detached {
+        DispatchQueue.global().async {
             XCTAssertFalse(Thread.isMainThread)
-            let response = try Self.makeResponse(action: action, payload: payload)
-            let systemDelegate: any UNUserNotificationCenterDelegate = delegate
-            systemDelegate.userNotificationCenter?(.current(), didReceive: response) {
-                XCTAssertTrue(Thread.isMainThread)
-                recorder.record("completed")
+            do {
+                let response = try Self.makeResponse(action: action, payload: payload)
+                let systemDelegate: any UNUserNotificationCenterDelegate = delegate
+                systemDelegate.userNotificationCenter?(.current(), didReceive: response) {
+                    XCTAssertTrue(Thread.isMainThread)
+                    recorder.record("completed")
+                    completed.fulfill()
+                }
+            } catch {
+                XCTFail("Notification response fixture failed: \(error)")
                 completed.fulfill()
             }
-        }.value
+        }
         await fulfillment(of: [completed], timeout: 3)
     }
 
