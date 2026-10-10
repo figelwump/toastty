@@ -135,10 +135,16 @@ final class ToasttyMobileApplicationDelegate: NSObject, UIApplicationDelegate, U
         return suppress ? [] : [.banner, .list, .sound]
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              let payload = ToasttyPushNotificationBridge.payload(response.notification.request.content.userInfo) else { return }
-        await pushBridge.receivedTap(payload)
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
+        let payload = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            ? ToasttyPushNotificationBridge.payload(response.notification.request.content.userInfo) : nil
+        // UIKit updates its snapshot when this callback finishes. The async
+        // delegate form can invoke its generated completion off the main thread.
+        Task { @MainActor in
+            if let payload { pushBridge.receivedTap(payload) }
+            completionHandler()
+        }
     }
     private func handleForeground(_ payload: RemotePushPayload) async -> Bool {
         await pushBridge.receivedForeground(payload)
