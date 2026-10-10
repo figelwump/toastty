@@ -1,29 +1,28 @@
 #!/usr/bin/env python3
-"""Queue, steer, and stop a real Codex turn through the Remote Access gateway.
+"""Check real provider input through a paired-device Remote Access gateway.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
-'python3 scripts/automation/remote-queue-steer-check.py'.
+'python3 scripts/automation/remote-queue-steer-check.py --provider claude'.
+The default provider is codex. Both checks start and stop their own isolated
+Toastty instance from the wrapper's build. They use loopback HTTP and socket
+queries, without moving focus or changing the installed production app.
+When Claude shows its directory trust dialog, the operator must select Yes
+in the isolated test window. The runner prints that window's PID and cwd.
 
-The wrapper builds Toastty and exports TOASTTY_APP_BUNDLE. Like the session
-start check, this starts its own second instance of that build so Remote
-Access and a paired device exist before launch. Unlike it, this check starts
-the real Codex CLI from the host user's own configuration, through the
-gateway's session start so the first prompt runs at once, because the point is
-to verify what the live provider does with text typed into a running turn and
-with the interrupt key. The check acts as a paired phone over HTTP and reads
-the terminal through the app's automation socket. It never moves focus. It
-stops its own instance; the wrapper owns everything else.
-
-Needs a working `codex` login on the remote host, and the workspace's working
-directory (the host user's home) must be a trusted Codex project, or Codex
-blocks on its trust prompt. Evidence goes to remote-queue-steer.json under the
-run's artifacts directory.
+The remote host needs an installed, authenticated provider CLI. Codex uses
+its existing profile and a trusted directory under the host user's home.
+Claude uses a temporary launch profile, permits only Bash sleep commands,
+and trusts only its run-owned temporary working directory. Subscription
+usage is consumed. Evidence includes the CLI version and is written to
+remote-queue-steer-<provider>.json under the wrapper's artifacts directory.
 """
 
+import argparse
 import base64
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -153,58 +152,110 @@ class App:
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--provider', choices=('codex', 'claude'), default='codex')
+    provider = parser.parse_args().provider
     bundle = Path(os.environ['TOASTTY_APP_BUNDLE'])
     artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR'])
     binary = bundle / 'Contents/MacOS/Toastty'
     require(binary.is_file(), f'No Toastty binary at {binary}')
 
-    root = Path(tempfile.mkdtemp(prefix='toastty-queue-steer-')).resolve()
-    runtime_home = root / 'runtime-home'
-    (runtime_home / 'remote-access').mkdir(parents=True)
-
-    device = dict(id=str(uuid.uuid4()).upper(), name='Check phone', scopes=['read', 'send'],
-                  authKind='native', tailscaleLogin=IDENTITY, createdAt=0)
-    credential = dict(credentialHash=hashlib.sha256(TOKEN.encode()).hexdigest(),
-                      deviceID=device['id'], issuedAt=0)
-    (runtime_home / 'remote-access/devices.json').write_text(json.dumps(dict(
-        devices=[device], credentials=[credential], nativePairingFailures=[])))
-
-    port = free_port()
-    socket_path = f'/tmp/toastty-qs-{os.getpid()}.sock'
+    evidence = dict(status='failed', provider=provider, cliVersion=None, steps=[], captures={})
+    prefix = f'remote-queue-steer-{provider}'
+    root = Path(tempfile.mkdtemp(prefix='toastty-queue-steer-', dir='/tmp')).resolve()
+    app = None
+    log = None
+    work = None
     environment = dict(os.environ)
     for key in list(environment):
-        if key.startswith('TOASTTY_'):
+        if key.startswith('TOASTTY_') or key in ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT'):
             del environment[key]
-    environment.update(
-        TOASTTY_RUNTIME_HOME=str(runtime_home),
-        TOASTTY_USER_SKILLS_ROOT=str(runtime_home / 'skills'),
-        TOASTTY_RUNTIME_LABEL='remote-queue-steer-check',
-        TOASTTY_SOCKET_PATH=socket_path,
-    )
-    evidence = dict(status='failed', gatewayPort=port, steps=[], captures={})
-    log = open(artifacts / 'remote-queue-steer-app.log', 'w')
-    app = subprocess.Popen(
-        [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port)],
-        env=environment, stdout=log, stderr=subprocess.STDOUT)
     try:
-        run(app, Gateway(port), App(bundle, socket_path), runtime_home, evidence)
+        runtime_home = root / 'runtime-home'
+        (runtime_home / 'remote-access').mkdir(parents=True)
+
+        device = dict(id=str(uuid.uuid4()).upper(), name='Check phone', scopes=['read', 'send'],
+                      authKind='native', tailscaleLogin=IDENTITY, createdAt=0)
+        credential = dict(credentialHash=hashlib.sha256(TOKEN.encode()).hexdigest(),
+                          deviceID=device['id'], issuedAt=0)
+        (runtime_home / 'remote-access/devices.json').write_text(json.dumps(dict(
+            devices=[device], credentials=[credential], nativePairingFailures=[])))
+
+        user_home = None
+        version = None
+        if provider == 'claude':
+            cli = shutil.which('claude')
+            if not cli:
+                candidate = Path.home() / '.local/bin/claude'
+                cli = str(candidate) if candidate.is_file() else None
+            require(cli, 'Claude CLI is not installed; install and authenticate it on the remote host')
+            version = subprocess.check_output([cli, '--version'], text=True, timeout=30, env=environment).strip()
+            auth = subprocess.run([cli, '--safe-mode', '--setting-sources', '', 'auth', 'status', '--json'],
+                                  capture_output=True, text=True, timeout=30, env=environment)
+            require(auth.returncode == 0, f'Claude auth status failed with exit {auth.returncode}; check CLI flag support')
+            require(json.loads(auth.stdout).get('loggedIn'), 'Claude CLI needs an interactive login on the remote host')
+            # Only this disposable app sees the test profile. The CLI keeps the
+            # host subscription login; no credential files are copied.
+            user_home = root / 'user-home'
+            (user_home / '.toastty').mkdir(parents=True)
+            # Toastty profiles reject empty argv entries. The equals form
+            # disables inherited Claude settings without an empty argument.
+            argv = [cli, '--setting-sources=', '--allowedTools', 'Bash(sleep:*)', '--tools', 'Bash', '--strict-mcp-config']
+            (user_home / '.toastty/agents.toml').write_text(
+                '[claude]\ndisplayName = "Claude Code"\nargv = ' + json.dumps(argv) + '\n')
+            work = root / 'work'
+            work.mkdir()
+            (work / 'README.md').write_text('# Disposable Claude input check\n')
+
+        port = free_port()
+        socket_path = str(root / 'socket.sock')
+        environment.update(
+            TOASTTY_RUNTIME_HOME=str(runtime_home),
+            TOASTTY_USER_SKILLS_ROOT=str(runtime_home / 'skills'),
+            TOASTTY_RUNTIME_LABEL='remote-queue-steer-check',
+            TOASTTY_SOCKET_PATH=socket_path,
+        )
+        if user_home:
+            environment['CFFIXED_USER_HOME'] = str(user_home)
+            environment['DISABLE_AUTOUPDATER'] = '1'
+        evidence.update(cliVersion=version, gatewayPort=port)
+        log = open(artifacts / f'{prefix}-app.log', 'w')
+        app = subprocess.Popen(
+            [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port)],
+            env=environment, stdout=log, stderr=subprocess.STDOUT)
+        if provider == 'claude':
+            run_claude(app, Gateway(port), App(bundle, socket_path), runtime_home, work, evidence)
+        else:
+            evidence['cliVersion'] = subprocess.check_output(['codex', '--version'], text=True, timeout=30).strip()
+            run(app, Gateway(port), App(bundle, socket_path), runtime_home, evidence)
         evidence['status'] = 'passed'
-    except Exception as error:  # noqa: BLE001 - the evidence file must say what failed
+    except Exception as error:  # noqa: BLE001 - always preserve failure evidence
         evidence['failure'] = repr(error)
         raise
     finally:
-        (artifacts / 'remote-queue-steer.json').write_text(json.dumps(evidence, indent=2, sort_keys=True))
-        instance_log = runtime_home / 'logs' / 'toastty.log'
+        if app is not None:
+            app.send_signal(signal.SIGTERM)
+            try:
+                app.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                app.kill()
+                app.wait(timeout=5)
+        if log is not None:
+            log.close()
+        instance_log = root / 'runtime-home/logs/toastty.log'
         if instance_log.exists():
-            shutil.copyfile(instance_log, artifacts / 'remote-queue-steer-instance.log')
-        app.send_signal(signal.SIGTERM)
-        try:
-            app.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            app.kill()
-        log.close()
-        if os.path.exists(socket_path):
-            os.unlink(socket_path)
+            shutil.copyfile(instance_log, artifacts / f'{prefix}-instance.log')
+        if provider == 'claude' and work is not None:
+            project = claude_project_directory(work)
+            if project.is_dir():
+                capture = artifacts / f'{prefix}-transcripts'
+                capture.mkdir(exist_ok=True)
+                for path in project.glob('*.jsonl'):
+                    shutil.copyfile(path, capture / path.name)
+                # Only the project for this run's unique temporary cwd.
+                shutil.rmtree(project, ignore_errors=True)
+        (artifacts / f'{prefix}.json').write_text(json.dumps(evidence, indent=2, sort_keys=True))
+        shutil.rmtree(root, ignore_errors=True)
     print(json.dumps(evidence, indent=2, sort_keys=True))
 
 
@@ -261,7 +312,7 @@ def run(app, gateway, app_socket, runtime_home, evidence):
             raise
 
     launch = wait_for('a terminal at an interactive prompt to launch Codex in', launched, timeout=60, interval=1)
-    evidence['launch'] = {key: launch.get(key) for key in ('sessionID', 'panelID', 'cwd', 'command')}
+    evidence['launch'] = {key: launch.get(key) for key in ('sessionID', 'panelID', 'cwd')}
     step(evidence, 'launched', sessionID=launch.get('sessionID'))
     panel_id = launch['panelID']
 
@@ -278,17 +329,19 @@ def run(app, gateway, app_socket, runtime_home, evidence):
 
     def composer_ready():
         text = app_socket.visible_text(panel_id)
+        evidence['captures']['startup'] = text
         # Codex may open an update prompt first; "Skip until next version"
         # is its third option. The trust prompt would mean the directory is
         # not a trusted project, which this check does not work around.
         if 'Update available' in text:
             if 'update' not in dismissed_dialogs:
+                step(evidence, 'update-dialog', terminalText=text)
                 dismissed_dialogs.append('update')
                 app_socket.run('action', 'terminal.send-text', 'text=3', 'submit=true', panel=panel_id)
             return None
         require('Do you trust' not in text and 'trust this' not in text, f'Codex trust prompt: {text[-600:]}')
         # The composer line starts with › once the TUI is up.
-        return text if '›' in text and 'shortcuts' in text else None
+        return text if '›' in text else None
 
     wait_for("Codex's composer", composer_ready, timeout=120)
     evidence['dismissedDialogs'] = dismissed_dialogs
@@ -360,6 +413,7 @@ def run(app, gateway, app_socket, runtime_home, evidence):
     steer_echo = find(user_with('steer-1'), 'the steer echo in the transcript', 120)[0]
     step(evidence, 'steer-echo', payload=steer_echo['payload'], sequence=steer_echo['sequence'])
     require(steer_echo['payload'].get('deliveryMode') == 'steer', f'Steer echo lacks its mode: {steer_echo}')
+    require(steer_echo['payload'].get('origin') == 'remote', f'Steer echo lacks its origin: {steer_echo}')
     steered_reply = find(assistant_containing('STEERED-OK'), 'Codex to act on the steer', 180)[0]
     step(evidence, 'steered-reply', sequence=steered_reply['sequence'], text=steered_reply['payload']['text'][:200])
     require(not any(assistant_containing('ALL-EIGHT-DONE')(e) for e in message_events()),
@@ -368,6 +422,7 @@ def run(app, gateway, app_socket, runtime_home, evidence):
     queued_echo = find(user_with('queued-1'), 'the queued message to be typed at the next prompt', 120)[0]
     step(evidence, 'queued-echo', payload=queued_echo['payload'], sequence=queued_echo['sequence'])
     require(queued_echo['payload'].get('deliveryMode') == 'queue', f'Queued echo lacks its mode: {queued_echo}')
+    require(queued_echo['payload'].get('origin') == 'remote', f'Queue echo lacks its origin: {queued_echo}')
     require(queued_echo['sequence'] > steered_reply['sequence'],
             'The queued message was typed before the steered turn finished')
     queued_reply = find(assistant_containing('QUEUED-OK'), 'Codex to answer the queued message', 180)[0]
@@ -413,6 +468,8 @@ def run(app, gateway, app_socket, runtime_home, evidence):
         expectedInputEpoch=reopened_after_stop['inputAvailability']['epoch'], text=AFTER_STOP_TEXT))
     step(evidence, 'send-after-stop', result=final)
     require(final.get('status') == 'accepted', f'Send after stop was not accepted: {final}')
+    final_echo = find(user_with('after-stop-1'), 'the direct send after Stop to be confirmed', 120)[0]
+    require(final_echo['payload'].get('origin') == 'remote', f'Direct echo lacks its origin: {final_echo}')
     find(assistant_containing('AFTER-STOP-OK'), 'Codex to answer after the stop', 120)
     evidence['captures']['final'] = app_socket.visible_text(panel_id)
 
@@ -422,6 +479,198 @@ def run(app, gateway, app_socket, runtime_home, evidence):
     require(('remote_interrupt_accepted', None) in evidence['auditActions'], 'No interrupt audit entry')
     require(all(marker not in json.dumps(audit) for marker in ('STEERED', 'QUEUED-OK')),
             'The audit log holds message text')
+
+
+def claude_project_directory(work):
+    return Path.home() / '.claude/projects' / re.sub(r'[^A-Za-z0-9]', '-', str(work))
+
+
+def claude_content_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return '\n'.join(block['text'] for block in content
+                         if isinstance(block, dict) and block.get('type') == 'text'
+                         and isinstance(block.get('text'), str))
+    return ''
+
+
+def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
+    """Exercise real Claude transcript receipts, including its dequeue path."""
+    wait_for('the check instance', lambda: (runtime_home / 'instance.json').is_file())
+    wait_for('the check socket', lambda: os.path.exists(app_socket.socket_path))
+    require(app.poll() is None, 'The check instance exited')
+    def gateway_ready():
+        try:
+            return gateway.call('GET', '/api/hello', token=None)[0] == 200
+        except (urllib.error.URLError, ConnectionError):
+            return False
+    wait_for('the gateway', gateway_ready)
+    profile = app_socket.run('query', 'agent.profile.state', 'profileID=claude')
+    require(profile.get('resolved'), f'Claude profile is not resolvable: {profile}')
+    require(profile.get('source') == 'configured' and profile.get('argumentCount') == 6,
+            f'The disposable Claude launch profile was not loaded: {profile}')
+    _, sessions = gateway.call('GET', '/api/sessions')
+    workspace_id = sessions['snapshot']['workspaces'][0]['id']
+    app_socket.run('action', 'workspace.rename', 'title=Claude E2E (disposable)', workspace=workspace_id)
+
+    def launch_when_ready():
+        try:
+            return app_socket.run('action', 'agent.launch', 'profileID=claude', f'cwd={work}',
+                                  workspace=workspace_id)
+        except AssertionError as error:
+            if 'interactive prompt' in str(error):
+                return None
+            raise
+
+    launch = wait_for('the terminal to launch Claude', launch_when_ready, timeout=60)
+    panel_id = launch['panelID']
+    evidence['launch'] = {key: launch.get(key) for key in ('sessionID', 'panelID', 'cwd')}
+    trusted = False
+
+    def composer():
+        nonlocal trusted
+        text = app_socket.visible_text(panel_id)
+        evidence['captures']['startup'] = text
+        require('sign in' not in text.lower() and '/login' not in text.lower(),
+                'Claude needs an interactive subscription login')
+        # Trust only this run-owned temporary directory, never another project.
+        if 'No, exit' in text and 'Yes, I trust this folder' in text:
+            require(str(work) in text, f'Unexpected trust target: {text[-600:]}')
+            if not trusted:
+                step(evidence, 'waiting-for-trust', cwd=str(work), instancePID=app.pid)
+                print('Select Yes in this isolated test window to continue.', flush=True)
+                trusted = True
+            return None
+        return text if '❯' in text and 'for shortcuts' in text else None
+
+    wait_for('the Claude composer (accept trust in the test window)', composer, timeout=600)
+    step(evidence, 'composer-ready')
+    app_socket.run('action', 'terminal.send-text', f'text={BUSY_PROMPT}', 'submit=true',
+                   f"expectedSessionID={launch['sessionID']}", panel=panel_id)
+
+    def listed():
+        _, body = gateway.call('GET', '/api/sessions')
+        return next((c for c in body['snapshot']['conversations']
+                     if c['provider'] == 'claude' and c['placement'].get('panelID') == panel_id), None)
+
+    conversation = wait_for('the Claude conversation', listed, timeout=60)
+    conversation_id = conversation['conversationID']
+    evidence['conversationID'] = conversation_id
+
+    def events():
+        return gateway.events(conversation_id)[0]
+
+    def find(predicate, description, timeout=150):
+        try:
+            return wait_for(description, lambda: next((e for e in events() if predicate(e)), None),
+                            timeout=timeout, interval=0.2)
+        except AssertionError:
+            evidence['lastEvents'] = events()[-20:]
+            evidence['captures']['failed'] = app_socket.visible_text(panel_id)
+            raise
+
+    def receipt(request_id, mode):
+        event = find(lambda e: e['kind'] == 'user_message'
+                     and e['payload'].get('clientRequestID') == request_id, f'{request_id} receipt')
+        require(event['payload'].get('origin') == 'remote', f'Unstamped receipt: {event}')
+        require(event['payload'].get('deliveryMode') == mode, f'Incorrect delivery mode: {event}')
+        step(evidence, 'confirmed', requestID=request_id, payload=event['payload'], sequence=event['sequence'])
+        return event
+
+    def reply(marker):
+        return find(lambda e: e['kind'] == 'assistant_message' and marker in e['payload'].get('text', ''),
+                    f'Claude reply {marker}')
+
+    def prompt():
+        current = gateway.conversation(conversation_id)
+        return current if current and current['inputAvailability'].get('kind') == 'open_prompt' else None
+
+    def send(request_id, text, mode='prompt', epoch=None):
+        if epoch is None:
+            epoch = wait_for('an open Claude prompt', prompt, timeout=120)['inputAvailability']['epoch']
+        status, result = gateway.call('POST', '/api/conversation.message.send', dict(
+            conversationID=conversation_id, clientRequestID=request_id, deliveryMode=mode,
+            expectedInputEpoch=epoch, text=text))
+        require(status == 200, f'Send failed: {status} {result}')
+        require(result.get('status') == ('queued' if mode == 'queue' else 'accepted'),
+                f'Send rejected: {result}')
+        step(evidence, 'send', requestID=request_id, mode=mode, result=result)
+
+    def working():
+        current = gateway.conversation(conversation_id)
+        return current if ((current or {}).get('inputControl') or {}).get('canSteer') else None
+
+    # An actual Bash call proves this lands inside a tool window, rather than
+    # merely while the host summary still says working.
+    find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == 'Bash',
+         'Claude to start its sleep tool')
+    busy = wait_for('Claude steer availability', working)
+    turn_epoch = busy['inputControl']['turnEpoch']
+    send('queued-1', QUEUED_TEXT, 'queue', turn_epoch)
+    send('steer-1', STEER_TEXT, 'steer', turn_epoch)
+    receipt('steer-1', 'steer')
+    steered_reply = reply('STEERED-OK')
+    queued_echo = receipt('queued-1', 'queue')
+    require(queued_echo['sequence'] > steered_reply['sequence'], 'Queue was delivered during the steered turn')
+    reply('QUEUED-OK')
+    send('direct-1', 'Reply with exactly: DIRECT-OK')
+    receipt('direct-1', None)
+    reply('DIRECT-OK')
+
+    # No tool follows this boundary. Claude must dequeue a steer into an
+    # ordinary next user turn. Long final output gives the gateway a window.
+    before = max(e['sequence'] for e in events())
+    late_prompt = ('Run Bash `sleep 4` exactly once. Then use no more tools. '
+                   'Print a numbered list of 400 separate lines, each with the word complete. '
+                   'Do not abbreviate the list. End with FINAL-END.')
+    send('late-busy', late_prompt)
+    receipt('late-busy', None)
+    find(lambda e: e['sequence'] > before and e['kind'] == 'tool_finished', 'the last tool boundary')
+    busy = wait_for('the final Claude generation to still allow steer', working, timeout=10, interval=0.1)
+    late_text = 'After the current answer, reply with exactly: LATE-STEER-OK'
+    send('late-steer', late_text, 'steer', busy['inputControl']['turnEpoch'])
+    receipt('late-steer', 'steer')
+    late_reply = reply('LATE-STEER-OK')
+    final_reply = reply('FINAL-END')
+    require(late_reply['sequence'] > final_reply['sequence'], 'Late steer answered before the first turn ended')
+    wait_for('the final Claude prompt', prompt, timeout=120)
+
+    # Read only the transcript for the run-owned directory, never unrelated
+    # host sessions. Capture structural proof of both provider delivery paths.
+    project = claude_project_directory(work)
+    files = sorted(project.glob('*.jsonl'))
+    require(files, f'No Claude transcript for the test working directory: {project}')
+    records = []
+    for path in files:
+        for line in path.read_text().splitlines():
+            record = json.loads(line)
+            require(record.get('cwd', str(work)) == str(work), 'Transcript belongs to another working directory')
+            records.append(record)
+    attachments = [r['attachment'] for r in records if r.get('type') == 'attachment'
+                   and r.get('attachment', {}).get('type') == 'queued_command']
+    require(sum(a.get('prompt') == STEER_TEXT for a in attachments) == 1,
+            'Live steer did not produce one queued_command attachment')
+    ordinary = [claude_content_text(r['message'].get('content')) for r in records if r.get('type') == 'user']
+    require(not any(STEER_TEXT in text for text in ordinary), 'Mid-turn steer also produced an ordinary user record')
+    require(sum(text == late_text for text in ordinary) == 1,
+            'Late steer did not exercise the ordinary user-record path')
+    require(not any(a.get('prompt') == late_text for a in attachments),
+            'Late steer was absorbed mid-turn; required end-of-turn path was not exercised')
+    require(any(r.get('type') == 'queue-operation' and r.get('operation') == 'dequeue'
+                and r.get('content') == late_text for r in records), 'No late-steer dequeue record')
+    require(ordinary.count(QUEUED_TEXT) == 1 and not any(a.get('prompt') == QUEUED_TEXT for a in attachments),
+            'Queued input must start an ordinary next user turn')
+    evidence['midTurnCommand'] = next(a for a in attachments if a.get('prompt') == STEER_TEXT)
+    evidence['endOfTurnDequeue'] = next(r for r in records if r.get('type') == 'queue-operation'
+                                     and r.get('operation') == 'dequeue' and r.get('content') == late_text)
+    final_events = events()
+    for request_id in ('steer-1', 'queued-1', 'direct-1', 'late-busy', 'late-steer'):
+        require(sum(e['kind'] == 'user_message' and e['payload'].get('clientRequestID') == request_id
+                    for e in final_events) == 1, f'Duplicate or missing receipt for {request_id}')
+    require(not any(e['kind'] == 'send_delivery_unconfirmed' for e in final_events),
+            'The live session emitted an unconfirmed send')
+    evidence['captures']['final'] = app_socket.visible_text(panel_id)
 
 
 if __name__ == '__main__':

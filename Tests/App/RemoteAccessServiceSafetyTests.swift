@@ -2175,7 +2175,7 @@ struct RemoteAccessServiceSafetyTests {
     @MainActor
     @Test func acceptedSendWithoutProviderEchoEmitsUnconfirmedReceipt() async throws {
         let fixture = try RemoteBootstrapFixture(
-            sendConfirmationTimeout: .milliseconds(40)
+            sendConfirmationTimeout: .seconds(2)
         )
         defer { fixture.removeRuntimeFiles() }
         #expect(fixture.confirmCurrentLaunchBinding())
@@ -2206,7 +2206,7 @@ struct RemoteAccessServiceSafetyTests {
             )
         ).isAccepted)
 
-        await SessionRuntimeStoreTestSupport.waitUntil {
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 3_000_000_000) {
             guard case .page(let page) = fixture.service.facadeConversationEvents(
                 for: fixture.conversationID,
                 after: nil,
@@ -2235,6 +2235,31 @@ struct RemoteAccessServiceSafetyTests {
             }
             return payload.clientRequestID == request.clientRequestID
         })
+
+        // The expired request must not consume the next provider echo.
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_complete","turn_id":"missing-echo-turn"}"#,
+            at: "2026-08-07T10:00:05.000Z"
+        ))
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected next prompt after the unconfirmed send")
+            return
+        }
+        let next = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "next-confirmed-send",
+            expectedInputEpoch: nextEpoch, text: "A different next message"
+        )
+        #expect(fixture.service.performRemoteSend(next, device: .init(
+            name: "Test iPhone", scopes: [.read, .send], createdAt: fixture.confirmedAt
+        )).isAccepted)
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"user_message","message":"A different next message"}"#,
+            at: "2026-08-07T10:00:06.000Z"
+        ))
+        try await Self.waitForReceipt(next.clientRequestID, mode: nil, in: fixture)
     }
 
     @MainActor
@@ -3013,6 +3038,71 @@ extension RemoteAccessServiceSafetyTests {
         Data((#"{"timestamp":"\#(timestamp)","type":"event_msg","payload":\#(payload)}"# + "\n").utf8)
     }
 
+    private static func claudeUserLine(_ text: String, id: String) throws -> Data {
+        try claudeLine([
+            "type": "user", "uuid": id, "promptId": id,
+            "message": ["role": "user", "content": text], "origin": ["kind": "human"],
+        ])
+    }
+
+    private static func claudeSteerLines(_ text: String, id: String) throws -> Data {
+        var data = try claudeLine(["type": "queue-operation", "operation": "enqueue", "content": text])
+        data.append(try claudeLine([
+            "type": "queue-operation", "operation": "remove", "reason": "absorbed_mid_turn",
+            "content": text, "commandUuid": id, "deliveryId": "delivery-\(id)",
+        ]))
+        data.append(try claudeLine([
+            "type": "attachment", "uuid": "attachment-\(id)",
+            "attachment": [
+                "type": "queued_command", "prompt": text, "source_uuid": id,
+                "delivery_id": "delivery-\(id)", "commandMode": "prompt",
+                "origin": ["kind": "human"], "humanTurn": true,
+            ],
+        ]))
+        return data
+    }
+
+    private static func claudeLine(_ fields: [String: Any]) throws -> Data {
+        var record = fields
+        record["timestamp"] = "2026-08-07T10:00:05.000Z"
+        var data = try JSONSerialization.data(withJSONObject: record)
+        data.append(UInt8(ascii: "\n"))
+        return data
+    }
+
+    @MainActor
+    private static func waitForReceipt(
+        _ clientRequestID: String, mode: RemoteMessageDeliveryMode?, in fixture: RemoteBootstrapFixture
+    ) async throws {
+        await SessionRuntimeStoreTestSupport.waitUntil {
+            guard case .page(let page) = fixture.service.facadeConversationEvents(
+                for: fixture.conversationID, after: nil, limit: 100
+            ) else { return false }
+            return page.events.contains { event in
+                guard case .userMessage(let payload) = event.payload else { return false }
+                return payload.clientRequestID == clientRequestID
+            }
+        }
+        guard case .page(let page) = fixture.service.facadeConversationEvents(
+            for: fixture.conversationID, after: nil, limit: 100
+        ) else {
+            Issue.record("Expected a send receipt")
+            return
+        }
+        let receipts = page.events.compactMap { event -> ConversationUserMessagePayload? in
+            guard case .userMessage(let payload) = event.payload,
+                  payload.clientRequestID == clientRequestID else { return nil }
+            return payload
+        }
+        #expect(receipts.count == 1)
+        #expect(receipts.first?.origin == .remote)
+        #expect(receipts.first?.deliveryMode == mode)
+        #expect(!page.events.contains { event in
+            guard case .sendDeliveryUnconfirmed(let payload) = event.payload else { return false }
+            return payload.clientRequestID == clientRequestID
+        })
+    }
+
     @MainActor
     private static func waitForSummary(
         _ fixture: RemoteBootstrapFixture,
@@ -3244,8 +3334,8 @@ extension RemoteAccessServiceSafetyTests {
         #expect(delivered == ["Use 300 ms"])
         #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
         if agent == .claude {
-            observeClaude(.transcript(.userMessage(.init(text: steer.text))),
-                          fingerprint: "steer-echo", offset: 1.4)
+            try transcript.write(contentsOf: Self.claudeSteerLines(steer.text, id: "steer-echo"))
+            try await Self.waitForReceipt(steer.clientRequestID, mode: .steer, in: fixture)
             guard case .page(let page) = fixture.service.facadeConversationEvents(
                 for: fixture.conversationID, after: nil, limit: 100
             ) else {
@@ -3291,7 +3381,17 @@ extension RemoteAccessServiceSafetyTests {
         // The Mac user submitted their typing, then the turn ends: the next
         // prompt opens and the queued message is typed, once, as a prompt.
         if agent == .claude {
-            observeClaude(.transcript(.userMessage(.init(text: "typed on the mac"))), fingerprint: "user-2", offset: 2)
+            try transcript.write(contentsOf: Self.claudeSteerLines("typed on the mac", id: "mac-mid-turn"))
+            await SessionRuntimeStoreTestSupport.waitUntil {
+                guard case .page(let page) = fixture.service.facadeConversationEvents(
+                    for: fixture.conversationID, after: nil, limit: 100
+                ) else { return false }
+                return page.events.contains { event in
+                    guard case .userMessage(let payload) = event.payload else { return false }
+                    return payload.text == "typed on the mac" && payload.clientRequestID == nil
+                }
+            }
+            #expect(fixture.summary.inputControl?.turnEpoch == turnEpoch)
             observeClaude(.turnEnded(turnID: "turn-1", reason: .completed), fingerprint: "end-1", offset: 3)
         } else {
             try transcript.write(contentsOf: Self.codexLine(
@@ -3310,6 +3410,23 @@ extension RemoteAccessServiceSafetyTests {
         // provider opens the next one.
         #expect(drained.inputAvailability.allowsRemoteSend == false)
         #expect(fixture.service.performRemoteSend(queued, device: device) == .duplicate)
+        if agent == .claude {
+            try transcript.write(contentsOf: Self.claudeUserLine(queued.text, id: "queued-echo"))
+            try await Self.waitForReceipt(queued.clientRequestID, mode: .queue, in: fixture)
+            observeClaude(.turnEnded(turnID: "queued-turn", reason: .completed), fingerprint: "queued-end", offset: 4)
+            let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+            guard case .openPrompt(let epoch) = reopened.inputAvailability else {
+                Issue.record("Expected prompt after the queued turn")
+                return
+            }
+            let direct = RemoteMessageSendRequest(
+                conversationID: fixture.conversationID, clientRequestID: "direct-after-queue",
+                expectedInputEpoch: epoch, text: "One more message"
+            )
+            #expect(fixture.service.performRemoteSend(direct, device: device).isAccepted)
+            try transcript.write(contentsOf: Self.claudeUserLine(direct.text, id: "direct-echo"))
+            try await Self.waitForReceipt(direct.clientRequestID, mode: nil, in: fixture)
+        }
     }
 
     @MainActor

@@ -136,7 +136,7 @@ public struct ConversationProjector: Sendable {
         case .transcript(let payload):
             guard payload.kind.isProviderDerived else { return [] }
             emitted.append(appendProviderEvent(payload, from: observation))
-            if authorizesCurrentRuntime, case .userMessage = payload {
+            if authorizesCurrentRuntime, observation.isMidTurnInput == false, case .userMessage = payload {
                 // A user message means the prompt was consumed; treat it as an
                 // authoritative prompt-closed signal even before task_started.
                 pendingPromptStabilizationToken = nil

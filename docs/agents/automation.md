@@ -90,6 +90,37 @@ refused. It writes `remote-session-start.json` under the run's artifacts
 directory. This is state evidence from the automation socket and the gateway.
 It is not a screenshot, and it does not cover the iOS screens.
 
+### Remote input control
+
+Run the live input check against the provider whose input behavior changed:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-queue-steer-check.py --provider claude'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-queue-steer-check.py --provider codex'
+```
+
+These checks mutate disposable Toastty instances on the dedicated validation
+Mac. They use a seeded paired device over loopback HTTP and real, authenticated
+provider CLIs. They consume subscription usage. They do not drive a physical
+phone, use Tailscale, or change the installed production app. If a CLI needs
+installation or login, report that blocker; a synthetic feed is not a substitute.
+
+The Claude check creates its launch profile in a temporary app home. It allows
+only Bash commands that start with `sleep`, with a temporary working directory.
+If Claude shows a directory trust dialog, the runner prints the test window's
+PID and temporary working directory. Select Yes in that window to continue.
+Startup waits up to ten minutes. The message checks then run automatically.
+It checks one mid-turn attachment receipt, a following queued send, a direct
+send, and a late steer that is dequeued into an ordinary user turn. The Codex
+check also covers Stop and a following send. Both record CLI versions and write
+`remote-queue-steer-<provider>.json` plus app logs under the run's artifacts
+directory. A run fails if the required provider transcript path is not observed.
+The Claude check also saves its transcript files, then removes the project
+directory for its temporary working directory. Provider history and trust
+entries for that directory can remain in the validation account.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.

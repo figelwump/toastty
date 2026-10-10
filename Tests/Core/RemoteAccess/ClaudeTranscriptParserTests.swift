@@ -4,6 +4,76 @@ import Testing
 @testable import CoreState
 
 struct ClaudeTranscriptParserTests {
+    @Test func humanQueuedCommandConfirmsInputOnlyWhenAbsorbed() throws {
+        // Claude Code 2.1.296 records mid-turn input as an attachment, rather
+        // than an ordinary user record. Queue bookkeeping is not a receipt.
+        let contents = #"""
+        {"type":"user","promptId":"running-turn","uuid":"initial-user","timestamp":"2026-10-10T06:19:32.129Z","message":{"content":"Original task"}}
+        {"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-10T06:19:39.312Z","content":"Like Claude cloud"}
+        {"type":"queue-operation","operation":"remove","timestamp":"2026-10-10T06:19:44.303Z","content":"Like Claude cloud","reason":"absorbed_mid_turn","commandUuid":"command-1","deliveryId":"delivery-1"}
+        {"type":"attachment","uuid":"attachment-1","timestamp":"2026-10-10T06:19:39.102Z","attachment":{"type":"queued_command","prompt":"Like Claude cloud","source_uuid":"command-1","delivery_id":"delivery-1","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true}}
+        """#
+        let result = ClaudeTranscriptParser.parseContents(contents)
+        #expect(result.malformedLineCount == 0)
+        #expect(result.observations.map(Self.describe) == ["user:Original task", "user:Like Claude cloud"])
+        let steer = try #require(result.observations.last)
+        #expect(steer.turnID == "running-turn")
+        #expect(steer.providerIdentity == "command-1")
+        #expect(steer.fingerprint == "user:command-1")
+        #expect(steer.isMidTurnInput)
+        #expect(try JSONDecoder().decode(ProviderTranscriptObservation.self, from: JSONEncoder().encode(steer)) == steer)
+        #expect(ClaudeTranscriptParser.parseContents(contents).observations == result.observations)
+    }
+
+    @Test(arguments: [
+        #"{"commandMode":"prompt","origin":{"kind":"peer"},"humanTurn":true}"#,
+        #"{"commandMode":"task-notification","origin":{"kind":"human"},"humanTurn":true}"#,
+        #"{"commandMode":"prompt","humanTurn":true}"#,
+        #"{"commandMode":"prompt","origin":{"kind":"task-notification"}}"#,
+    ])
+    func internalQueuedCommandsAreNotUserInput(fields: String) throws {
+        var attachment = try #require(JSONSerialization.jsonObject(with: Data(fields.utf8)) as? [String: Any])
+        attachment["type"] = "queued_command"
+        attachment["prompt"] = "Internal message"
+        let data = try JSONSerialization.data(withJSONObject: [
+            "type": "attachment", "timestamp": "2026-10-10T06:19:39.102Z", "attachment": attachment,
+        ])
+        let result = ClaudeTranscriptParser.parseContents(String(decoding: data, as: UTF8.self))
+        #expect(result.observations.isEmpty)
+        #expect(result.malformedLineCount == 0)
+    }
+
+    @Test func olderHumanCommandsAndEndOfTurnDequeueHaveDistinctReceipts() {
+        // Older human attachments lack humanTurn. An unabsorbed command is
+        // dequeued into an ordinary user turn, without an attachment receipt.
+        let contents = #"""
+        {"type":"attachment","uuid":"attachment-1","timestamp":"2026-10-10T06:19:39.102Z","attachment":{"type":"queued_command","prompt":"yes","source_uuid":"command-1","commandMode":"prompt","origin":{"kind":"human"}}}
+        {"type":"attachment","uuid":"attachment-2","timestamp":"2026-10-10T06:19:40.102Z","attachment":{"type":"queued_command","prompt":"yes","delivery_id":"delivery-2","commandMode":"prompt","origin":{"kind":"human"}}}
+        {"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-10T06:19:41.102Z","content":"yes"}
+        {"type":"queue-operation","operation":"dequeue","timestamp":"2026-10-10T06:19:42.102Z","content":"yes"}
+        {"type":"user","uuid":"command-3","promptId":"next-turn","timestamp":"2026-10-10T06:19:42.102Z","message":{"content":"yes"}}
+        """#
+        let result = ClaudeTranscriptParser.parseContents(contents)
+        #expect(result.observations.map(Self.describe) == ["user:yes", "user:yes", "user:yes"])
+        #expect(result.observations.map(\.fingerprint) == ["user:command-1", "user:delivery-2", "user:command-3"])
+        #expect(result.observations.last?.turnID == "next-turn")
+    }
+
+    @Test func midTurnInputPreservesToolCompletionAndFileOrder() {
+        let contents = #"""
+        {"type":"assistant","promptId":"running-turn","uuid":"tool-start","timestamp":"2026-10-10T06:19:38.102Z","message":{"content":[{"type":"tool_use","id":"sleep-call","name":"Bash","input":{"command":"sleep 4"}}]}}
+        {"type":"attachment","uuid":"attachment","timestamp":"2026-10-10T06:19:37.102Z","attachment":{"type":"queued_command","prompt":"Use 300 ms\nThen explain ✓","source_uuid":"command","commandMode":"prompt","origin":{"kind":"human"}}}
+        {"type":"user","uuid":"tool-result","timestamp":"2026-10-10T06:19:42.102Z","message":{"content":[{"type":"tool_result","tool_use_id":"sleep-call","content":"Done"}]}}
+        {"type":"assistant","uuid":"answer","timestamp":"2026-10-10T06:19:43.102Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"STEERED-OK"}]}}
+        """#
+        let observations = ClaudeTranscriptParser.parseContents(contents).observations
+        #expect(observations.map(Self.describe) == [
+            "toolStarted:Bash:sleep-call", "user:Use 300 ms\nThen explain ✓",
+            "toolFinished:sleep-call:succeeded", "assistant(final):STEERED-OK",
+        ])
+        #expect(observations.allSatisfy { $0.turnID == "running-turn" })
+    }
+
     @Test func parsesBasicSessionInOrder() {
         let result = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.basicSession)
         #expect(result.malformedLineCount == 0)
