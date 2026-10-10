@@ -11,14 +11,14 @@ final class ToasttyMobileMarkdownUITests: XCTestCase {
         let app = openTables()
         let transcript = app.scrollViews["toastty-mobile-transcript"]
         transcript.swipeDown()
-        let component = app.staticTexts["Component"]
-        let responsibility = app.staticTexts["Responsibility"]
+        let component = app.textViews.matching(NSPredicate(format: "value == %@", "Component")).firstMatch
+        let responsibility = app.textViews.matching(NSPredicate(format: "value == %@", "Responsibility")).firstMatch
         XCTAssertTrue(component.waitForExistence(timeout: 5))
         XCTAssertTrue(responsibility.exists)
         XCTAssertEqual(component.frame.minY, responsibility.frame.minY, accuracy: 3)
         XCTAssertGreaterThan(responsibility.frame.minX, component.frame.maxX)
-        let gateway = app.staticTexts["Gateway"]
-        let routes = app.staticTexts["Routes authenticated requests to the correct workspace."]
+        let gateway = app.textViews.matching(NSPredicate(format: "value == %@", "Gateway")).firstMatch
+        let routes = app.textViews.matching(NSPredicate(format: "value == %@", "Routes authenticated requests to the correct workspace.")).firstMatch
         XCTAssertEqual(gateway.frame.minY, routes.frame.minY, accuracy: 3)
         XCTAssertEqual(gateway.frame.minX, component.frame.minX, accuracy: 3)
         attach("table-columns", app)
@@ -26,7 +26,7 @@ final class ToasttyMobileMarkdownUITests: XCTestCase {
         let wide = app.scrollViews.matching(identifier: "toastty-mobile-markdown-table").element(boundBy: 1)
         XCTAssertTrue(wide.exists)
         wide.swipeLeft()
-        XCTAssertTrue(app.staticTexts["Final column is readable."].isHittable)
+        XCTAssertTrue(app.textViews.matching(NSPredicate(format: "value == %@", "Final column is readable.")).firstMatch.isHittable)
         attach("table-horizontal-scroll", app)
     }
 
@@ -50,7 +50,7 @@ final class ToasttyMobileMarkdownUITests: XCTestCase {
         let top = max(transcript.frame.minY, navigationBar.frame.maxY) + 20
         XCTAssertGreaterThan(bottom, top, "The transcript must have visible space above the composer")
         let origin = app.coordinate(withNormalizedOffset: .zero)
-        let component = app.staticTexts["Component"]
+        let component = app.textViews.matching(NSPredicate(format: "value == %@", "Component")).firstMatch
         let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
         func visibleViewport() -> CGRect {
             let unobscuredBottom = jump.exists ? min(bottom, jump.frame.minY - 8) : bottom
@@ -88,10 +88,10 @@ final class ToasttyMobileMarkdownUITests: XCTestCase {
         XCTAssertTrue(visibleViewport().contains(endPoint))
         let start = origin.withOffset(CGVector(dx: startPoint.x, dy: startPoint.y))
         let end = origin.withOffset(CGVector(dx: endPoint.x, dy: endPoint.y))
-        for _ in 0..<3 where !app.staticTexts["Responsibility"].isHittable {
+        let responsibility = app.textViews.matching(NSPredicate(format: "value == %@", "Responsibility")).firstMatch
+        for _ in 0..<3 where !responsibility.isHittable {
             start.press(forDuration: 0.05, thenDragTo: end)
         }
-        let responsibility = app.staticTexts["Responsibility"]
         XCTAssertTrue(responsibility.isHittable)
         XCTAssertFalse(responsibility.frame.intersection(visibleViewport()).isEmpty)
         attach("table-accessibility-size", app)

@@ -1487,9 +1487,8 @@ private struct ToasttySendTailItemView: View {
 
     private var optimisticBubble: some View {
         VStack(alignment: .trailing, spacing: 7) {
-            Text(item.text)
-                .font(.body)
-                .foregroundStyle(ToasttyDesignTokens.userBubbleText)
+            ToasttySelectableText(AttributedString(item.text),
+                                  textColor: ToasttyDesignTokens.userBubbleText, lineSpacing: 0)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 ProgressView()
@@ -1509,7 +1508,7 @@ private struct ToasttySendTailItemView: View {
         .clipShape(ToasttyDesignTokens.userBubbleShape)
         .padding(.leading, 48)
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("\(item.text), Sending")
         .accessibilityIdentifier("toastty-mobile-send-optimistic-\(item.clientRequestID)")
     }
@@ -1680,16 +1679,10 @@ private struct ToasttyTranscriptRowView: View {
 
     @ViewBuilder
     private func message(text: String, isUser: Bool, metadata: String?) -> some View {
-        let containsTable = !isUser && (chunk?.blocks ?? ToasttyMarkdownText.blocks(text)).contains { block in
-            if case .table = block.style { return true }
-            return false
-        }
         let content = VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
             if isUser {
-                Text(text)
-                    .font(.body)
-                    .foregroundStyle(ToasttyDesignTokens.userBubbleText)
-                    .textSelection(.enabled)
+                ToasttySelectableText(AttributedString(text),
+                                      textColor: ToasttyDesignTokens.userBubbleText, lineSpacing: 0)
             } else {
                 ToasttyMarkdownText(
                     text: text,
@@ -1718,13 +1711,15 @@ private struct ToasttyTranscriptRowView: View {
                 .clipShape(ToasttyDesignTokens.userBubbleShape)
                 .padding(.leading, 48)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .accessibilityElement(children: .combine)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(text + (metadata.map { ", " + $0 } ?? ""))
         } else {
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // Combining the whole message hides descendants of nested
-                // horizontal scroll views from VoiceOver.
-                .accessibilityElement(children: containsTable ? .contain : .combine)
+                // Keep native text selection and links accessible within each
+                // message, including descendants of horizontal table views.
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(text + (metadata.map { ", " + $0 } ?? ""))
         }
     }
 
