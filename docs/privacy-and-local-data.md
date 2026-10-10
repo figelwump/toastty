@@ -64,7 +64,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
     also contain the exact Tailscale login used for identity binding. Persistent
     native pairing-failure state is keyed by that identity so brute-force
     lockouts survive gateway restarts. Toastty never persists the credential
-    tokens handed to browsers or native apps. The file and its parent directory
+    tokens handed to browsers or native apps for gateway access. Push-enabled
+    builds also store notification registration IDs, relay URLs and IDs, and
+    the relay send token received from each enrolled phone. These are separate
+    from gateway credentials. Pending push cleanup retains those records until
+    the relay confirms revocation. The file and its parent directory
     use owner-only permissions (0600 file in a 0700 directory).
 - `~/.toastty/remote-access/audit.json`
   - Up to 500 recent remote-access security and lifecycle events, including
@@ -269,6 +273,13 @@ running on your Mac.
   they are not written as a separate transcript and are discarded when the
   Toastty app process exits. Pi's compact `pi-telemetry.jsonl` continues to
   exclude the full conversation batches.
+- For managed Cursor sessions, the launch-scoped hooks forward prompt and final
+  response text, plus an explicit model identifier when available. Toastty
+  retains at most 20,000 conversation observations per managed session in
+  process memory. It does not replay older chats or read Cursor's chat database
+  for this feed. Prompts are limited to 64 KiB and responses to 48 KiB, with a
+  visible marker when text is truncated. The feed is not written as a separate
+  transcript and is discarded when the Toastty app process exits.
 - For managed Claude, OpenCode, MiMo Code, and Pi sessions, the same injected
   local hooks or extensions may retain a bounded direct-child identity, display
   name, and provider-reported model or effort metadata for the live sidebar.
@@ -325,8 +336,9 @@ Toastty build, can receive normalized agent conversation content, status, a
 bounded desktop status-detail excerpt, workspace/panel placement, and
 working-directory metadata. New native pairings have read and send scope by
 default. The current Mac UI can revoke one device, revoke all devices, or
-disable Remote Access; it does not expose device-scope changes. Remote Access
-activity is not sent to a Toastty cloud service. Network transport and tailnet
+disable Remote Access; it does not expose device-scope changes. Conversation
+content travels over the private tailnet. Optional iPhone notifications use
+the service described below. Network transport and tailnet
 access remain subject to the user's Tailscale account, ACLs, DNS, and Serve
 configuration. See [Remote Access](remote-access.md) for setup and revocation
 guidance.
@@ -352,6 +364,38 @@ entries. The transcript tailer likewise does not put provider transcript paths
 or filesystem error descriptions into its routine logs. Optional pending
 interaction previews and status-detail excerpts travel only in bounded gateway
 snapshots and are not copied to audit entries, logs, or diagnostics.
+
+## Optional iPhone notifications
+
+Notifications require explicit build configuration on both the Mac and iPhone
+and the user's permission on the phone. Unconfigured builds hide the controls.
+The default TestFlight Release configuration has push disabled.
+
+When enabled, the Mac sends the session title, Ready or Needs approval status,
+and identifiers for the registration, pairing, conversation, and event to the
+Cloudflare push relay configured in the build. Requests use the relay send token
+for authentication. The relay sends the alert through Apple Push Notification
+service (APNs). There is no title-hiding option. Agent-generated session titles
+may summarize your prompt. Titles can also appear on the Lock Screen, depending
+on iOS preview settings. Notification delivery sends no message bodies, tool
+output, or attached files to the relay.
+
+The relay retains the APNs device token and its hash, registration and pairing
+IDs, hashes of the management and send credentials and verification nonce,
+enrollment state with expiry and last-use times, and bounded event IDs, delivery
+outcomes, and expiry times. It also retains the APNs signing key as a Cloudflare
+secret and caches an Apple provider token. Session titles are forwarded for
+delivery, not stored in the relay database.
+
+The iPhone stores its enrollment state, APNs device token, relay credentials,
+and pending cleanup records in a non-synchronizing Keychain item. The Mac keeps
+its relay send authority in the protected device file described above. Turning
+notifications off or unpairing retains pending revocation records until the
+service accepts cleanup. Alerts already sent can still arrive.
+
+See [iPhone notifications](remote-access.md#iphone-notifications) for permission
+and revocation behavior, and the [push relay runbook](../workers/push/README.md)
+for development configuration and separate production activation requirements.
 
 ## Diagnostics upload
 
