@@ -475,10 +475,11 @@ a { color: inherit; }
 .mrow.approval { background: rgba(232, 166, 53, 0.13); }
 .mrow.error { background: rgba(224, 88, 78, 0.13); }
 .rail { position: relative; height: 20px; }
-.rail > * { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+/* Centered with auto margins, not a transform: the spinner's rotate animation would replace it. */
+.rail > * { position: absolute; inset: 0; margin: auto; }
 .rail .spin { width: 9px; height: 9px; }
 .mrow.subr .rail .spin { width: 10px; height: 10px; }
-.mrow .mk { width: 7px; height: 7px; margin: 0; }
+.mrow .mk { width: 7px; height: 7px; margin: auto; }
 .mrow .mk.ready { background: #46A57E; }
 .mrow .mk.appr { background: #E8A635; box-shadow: 0 0 0 3px rgba(232, 166, 53, 0.22); }
 .mrow .mk.sq { width: 8px; height: 8px; border-radius: 2px; }
