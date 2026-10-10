@@ -2165,7 +2165,7 @@ final class SidebarViewTests: XCTestCase {
             rootView.layoutSubtreeIfNeeded()
         }
         func hiddenBelowLabel() -> String? {
-            renderedTextValues(in: rootView).first { $0.contains("subspaces hidden below") }
+            renderedTextValues(in: rootView).first { $0.contains("task spaces hidden below") }
         }
 
         settle(height: 160)
