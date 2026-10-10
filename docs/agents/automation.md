@@ -109,6 +109,9 @@ installation or login, report that blocker; a synthetic feed is not a substitute
 
 The Claude check creates its launch profile in a temporary app home. It allows
 only Bash commands that start with `sleep`, with a temporary working directory.
+If Claude shows a directory trust dialog, the runner prints the test window's
+PID and temporary working directory. Select Yes in that window to continue.
+Startup waits up to ten minutes. The message checks then run automatically.
 It checks one mid-turn attachment receipt, a following queued send, a direct
 send, and a late steer that is dequeued into an ordinary user turn. The Codex
 check also covers Stop and a following send. Both record CLI versions and write

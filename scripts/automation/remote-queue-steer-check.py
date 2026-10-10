@@ -6,6 +6,8 @@ Run through scripts/remote/validate.sh --require-remote --validation-command
 The default provider is codex. Both checks start and stop their own isolated
 Toastty instance from the wrapper's build. They use loopback HTTP and socket
 queries, without moving focus or changing the installed production app.
+When Claude shows its directory trust dialog, the operator must select Yes
+in the isolated test window. The runner prints that window's PID and cwd.
 
 The remote host needs an installed, authenticated provider CLI. Codex uses
 its existing profile and a trusted directory under the host user's home.
@@ -196,7 +198,9 @@ def main():
             # host subscription login; no credential files are copied.
             user_home = root / 'user-home'
             (user_home / '.toastty').mkdir(parents=True)
-            argv = [cli, '--setting-sources', '', '--allowedTools', 'Bash(sleep:*)', '--tools', 'Bash', '--strict-mcp-config']
+            # Toastty profiles reject empty argv entries. The equals form
+            # disables inherited Claude settings without an empty argument.
+            argv = [cli, '--setting-sources=', '--allowedTools', 'Bash(sleep:*)', '--tools', 'Bash', '--strict-mcp-config']
             (user_home / '.toastty/agents.toml').write_text(
                 '[claude]\ndisplayName = "Claude Code"\nargv = ' + json.dumps(argv) + '\n')
             work = root / 'work'
@@ -504,8 +508,11 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
     wait_for('the gateway', gateway_ready)
     profile = app_socket.run('query', 'agent.profile.state', 'profileID=claude')
     require(profile.get('resolved'), f'Claude profile is not resolvable: {profile}')
+    require(profile.get('source') == 'configured' and profile.get('argumentCount') == 6,
+            f'The disposable Claude launch profile was not loaded: {profile}')
     _, sessions = gateway.call('GET', '/api/sessions')
     workspace_id = sessions['snapshot']['workspaces'][0]['id']
+    app_socket.run('action', 'workspace.rename', 'title=Claude E2E (disposable)', workspace=workspace_id)
 
     def launch_when_ready():
         try:
@@ -524,18 +531,23 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
     def composer():
         nonlocal trusted
         text = app_socket.visible_text(panel_id)
+        evidence['captures']['startup'] = text
         require('sign in' not in text.lower() and '/login' not in text.lower(),
                 'Claude needs an interactive subscription login')
         # Trust only this run-owned temporary directory, never another project.
-        if 'trust' in text.lower() and 'folder' in text.lower() and not trusted:
+        if 'No, exit' in text and 'Yes, I trust this folder' in text:
             require(str(work) in text, f'Unexpected trust target: {text[-600:]}')
-            app_socket.run('action', 'terminal.send-text', 'text=1', 'submit=true', panel=panel_id)
-            trusted = True
+            if not trusted:
+                step(evidence, 'waiting-for-trust', cwd=str(work), instancePID=app.pid)
+                print('Select Yes in this isolated test window to continue.', flush=True)
+                trusted = True
             return None
-        return text if '❯' in text and ('shortcuts' in text or 'Claude Code' in text) else None
+        return text if '❯' in text and 'for shortcuts' in text else None
 
-    wait_for('the Claude composer', composer, timeout=90)
-    app_socket.run('action', 'terminal.send-text', f'text={BUSY_PROMPT}', 'submit=true', panel=panel_id)
+    wait_for('the Claude composer (accept trust in the test window)', composer, timeout=600)
+    step(evidence, 'composer-ready')
+    app_socket.run('action', 'terminal.send-text', f'text={BUSY_PROMPT}', 'submit=true',
+                   f"expectedSessionID={launch['sessionID']}", panel=panel_id)
 
     def listed():
         _, body = gateway.call('GET', '/api/sessions')
