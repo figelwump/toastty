@@ -310,11 +310,17 @@ final class LiveConversationController {
         await dismissSendReceiptAction(clientRequestID)
     }
 
+    /// Readable retained content is not permission to write during the
+    /// foreground probe. The view observes readiness to retry its live edge.
+    var canAcknowledgeRead: Bool {
+        connectionPhase == .live && phase == .live
+    }
+
     /// Called by the view after it has established that the selected sheet is
     /// active and visibly at the live edge. Networking stays here so retries
     /// cannot outlive the controller or be duplicated by SwiftUI updates.
     func acknowledgeVisibleTranscript(presentationStatus: MobileSessionStatus) {
-        guard phase == .live,
+        guard canAcknowledgeRead,
               let projectionRunID,
               let projectionGeneration,
               let observedThroughSequence = cursor?.afterSequence else {
@@ -340,7 +346,7 @@ final class LiveConversationController {
         readAcknowledgementTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await runReadAcknowledgement(request, boundary: boundary)
-            if readAcknowledgementBoundary == boundary {
+            if Task.isCancelled == false, readAcknowledgementBoundary == boundary {
                 readAcknowledgementBoundary = nil
             }
         }
@@ -419,6 +425,14 @@ final class LiveConversationController {
             lastSendGateFailure = nil
         }
         connectionPhase = phase
+        if phase != .live {
+            // A retained transcript can stay readable during the foreground
+            // probe. Cancel its prior attempt so readiness can retry the same
+            // boundary without waiting for an obsolete request to finish.
+            readAcknowledgementTask?.cancel()
+            readAcknowledgementTask = nil
+            readAcknowledgementBoundary = nil
+        }
         resolvePhase()
         refreshTranscriptPresentation()
         reconcileInteractionAnswerStates()

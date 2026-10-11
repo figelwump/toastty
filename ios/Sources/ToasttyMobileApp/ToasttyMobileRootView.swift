@@ -410,6 +410,8 @@ struct ToasttyMobileRootView: View {
             interactionAnswerStates: conversationInteractionAnswerStates(for: conversationID),
             editInteractionAnswer: conversationInteractionEditAction(for: conversationID),
             submitInteractionAnswer: conversationInteractionSubmitAction(for: conversationID),
+            canAcknowledgeRead: liveConversation?.conversationID == conversationID
+                && liveConversation?.canAcknowledgeRead == true,
             onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID)
         )
         .id(conversationID)

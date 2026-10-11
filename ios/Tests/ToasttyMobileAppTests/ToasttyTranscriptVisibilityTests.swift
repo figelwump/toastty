@@ -614,6 +614,18 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         )
     }
 
+    func testConnectionReadinessRearmsVisibleBoundaryAndPreservesVisibilityRequirements() {
+        let boundary = rowID(sequence: 7)
+        let checking = key(boundary: boundary, measuredBoundary: boundary, canAcknowledgeRead: false)
+        let live = key(boundary: boundary, measuredBoundary: boundary)
+        XCTAssertFalse(checking.isEligible)
+        XCTAssertTrue(live.isEligible)
+        XCTAssertNotEqual(checking, live)
+        XCTAssertFalse(key(boundary: boundary, measuredBoundary: boundary, isVisible: false).isEligible)
+        XCTAssertFalse(key(boundary: boundary, measuredBoundary: boundary, isAtLiveEdge: false).isEligible)
+        XCTAssertFalse(key(boundary: boundary, measuredBoundary: boundary, scenePhase: .background).isEligible)
+    }
+
     private func key(
         boundary: ToasttyTranscriptRowID?,
         measuredBoundary: ToasttyTranscriptRowID?,
@@ -622,7 +634,8 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         isVisible: Bool = true,
         isAtLiveEdge: Bool = true,
         hasMeasuredScrollGeometry: Bool = true,
-        readAcknowledgementEpoch: MobileSessionStatus? = .ready
+        readAcknowledgementEpoch: MobileSessionStatus? = .ready,
+        canAcknowledgeRead: Bool = true
     ) -> TranscriptLiveEdgeVisibilityKey {
         TranscriptLiveEdgeVisibilityKey(
             phase: phase,
@@ -632,7 +645,8 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
             hasMeasuredScrollGeometry: hasMeasuredScrollGeometry,
             measuredBoundaryID: measuredBoundary,
             latestBoundaryID: boundary,
-            readAcknowledgementEpoch: readAcknowledgementEpoch
+            readAcknowledgementEpoch: readAcknowledgementEpoch,
+            canAcknowledgeRead: canAcknowledgeRead
         )
     }
 
