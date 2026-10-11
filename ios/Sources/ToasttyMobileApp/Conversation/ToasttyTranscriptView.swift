@@ -304,7 +304,9 @@ struct ToasttyTranscriptView: View {
                                 // same command and a bounded measurement window.
                                 let clock = ContinuousClock()
                                 let deadline = clock.now.advanced(by: .seconds(1))
-                                var attemptedGeneration = settled.layoutGeneration
+                                var retry = TranscriptEntryMaterializationRetry(
+                                    layoutGeneration: settled.layoutGeneration
+                                )
                                 // Each retry gets a layout interval before expiry.
                                 while true {
                                     do {
@@ -319,18 +321,19 @@ struct ToasttyTranscriptView: View {
                                           let candidate = scrollCoordinator.executionCandidate(
                                               for: command
                                           ) else { return }
-                                    guard clock.now < deadline else { break }
-                                    guard candidate.layoutGeneration != attemptedGeneration else {
+                                    switch retry.nextAction(
+                                        layoutGeneration: candidate.layoutGeneration,
+                                        isExpired: clock.now >= deadline
+                                    ) {
+                                    case .wait:
                                         continue
+                                    case .retry:
+                                        scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                                    case .expire:
+                                        scrollCoordinator.abandonHistoryMove(command)
+                                        return
                                     }
-                                    attemptedGeneration = candidate.layoutGeneration
-                                    scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
                                 }
-                                guard !Task.isCancelled, self.scrollTaskKey == scrollTaskKey else {
-                                    return
-                                }
-                                scrollCoordinator.abandonHistoryMove(command)
-                                return
                             }
                             guard scrollCoordinator.markExecuted(settled) else { continue }
                             break
@@ -1379,6 +1382,33 @@ struct TranscriptScrollCoordinator: Equatable {
             motion: motion,
             liveEdgeOwner: liveEdgeOwner
         )
+    }
+}
+
+/// A delayed continuation may consume one newer layout at expiry. Its next
+/// interval permits measurement, then retires entry instead of extending again.
+struct TranscriptEntryMaterializationRetry {
+    enum Action: Equatable {
+        case wait
+        case retry
+        case expire
+    }
+
+    private var attemptedGeneration: UInt64
+    private var usedFinalAttempt = false
+
+    init(layoutGeneration: UInt64) {
+        attemptedGeneration = layoutGeneration
+    }
+
+    mutating func nextAction(layoutGeneration: UInt64, isExpired: Bool) -> Action {
+        guard !usedFinalAttempt else { return .expire }
+        guard layoutGeneration != attemptedGeneration else {
+            return isExpired ? .expire : .wait
+        }
+        attemptedGeneration = layoutGeneration
+        usedFinalAttempt = isExpired
+        return .retry
     }
 }
 
