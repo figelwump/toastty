@@ -129,7 +129,7 @@ test('automatic iOS runs keep functional coverage; manual runs include full UI a
     ['pull_request', 'Release', '--skip-performance-budgets', 45],
     ['push', 'Debug', '--ui-tests smoke --skip-performance-budgets', 45],
     ['push', 'Release', '--skip-performance-budgets', 45],
-    ['workflow_dispatch', 'Debug', '', 60],
+    ['workflow_dispatch', 'Debug', '', 90],
     ['workflow_dispatch', 'Release', '', 45],
   ]) {
     assert.equal(evaluate(command.slice(prefix.length), eventName, configuration), selector);

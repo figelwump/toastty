@@ -298,17 +298,42 @@ struct ToasttyTranscriptView: View {
                             }
                             if let target = scrollTaskKey.materializationTarget {
                                 scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
-                                // A measurement restarts this task immediately. If it
-                                // never arrives, retire entry rather than jump later
-                                // while the user may already be reading.
-                                do {
-                                    try await Task.sleep(for: .seconds(1))
-                                } catch {
-                                    return
+                                // The first move can stop at the lazy stack's
+                                // estimated bottom without realizing this target.
+                                // Retry as that pending layout grows, using the
+                                // same command and a bounded measurement window.
+                                let clock = ContinuousClock()
+                                let deadline = clock.now.advanced(by: .seconds(1))
+                                var retry = TranscriptEntryMaterializationRetry(
+                                    layoutGeneration: settled.layoutGeneration
+                                )
+                                // Each retry gets a layout interval before expiry.
+                                while true {
+                                    do {
+                                        try await Task.sleep(
+                                            for: TranscriptScrollCoordinator.stableSettleInterval
+                                        )
+                                    } catch {
+                                        return
+                                    }
+                                    guard !Task.isCancelled,
+                                          self.scrollTaskKey == scrollTaskKey,
+                                          let candidate = scrollCoordinator.executionCandidate(
+                                              for: command
+                                          ) else { return }
+                                    switch retry.nextAction(
+                                        layoutGeneration: candidate.layoutGeneration,
+                                        isExpired: clock.now >= deadline
+                                    ) {
+                                    case .wait:
+                                        continue
+                                    case .retry:
+                                        scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                                    case .expire:
+                                        scrollCoordinator.abandonHistoryMove(command)
+                                        return
+                                    }
                                 }
-                                guard !Task.isCancelled else { return }
-                                scrollCoordinator.abandonHistoryMove(command)
-                                return
                             }
                             guard scrollCoordinator.markExecuted(settled) else { continue }
                             break
@@ -1357,6 +1382,33 @@ struct TranscriptScrollCoordinator: Equatable {
             motion: motion,
             liveEdgeOwner: liveEdgeOwner
         )
+    }
+}
+
+/// A delayed continuation may consume one newer layout at expiry. Its next
+/// interval permits measurement, then retires entry instead of extending again.
+struct TranscriptEntryMaterializationRetry {
+    enum Action: Equatable {
+        case wait
+        case retry
+        case expire
+    }
+
+    private var attemptedGeneration: UInt64
+    private var usedFinalAttempt = false
+
+    init(layoutGeneration: UInt64) {
+        attemptedGeneration = layoutGeneration
+    }
+
+    mutating func nextAction(layoutGeneration: UInt64, isExpired: Bool) -> Action {
+        guard !usedFinalAttempt else { return .expire }
+        guard layoutGeneration != attemptedGeneration else {
+            return isExpired ? .expire : .wait
+        }
+        attemptedGeneration = layoutGeneration
+        usedFinalAttempt = isExpired
+        return .retry
     }
 }
 

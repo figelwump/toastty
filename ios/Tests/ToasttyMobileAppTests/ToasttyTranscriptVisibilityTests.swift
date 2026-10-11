@@ -475,6 +475,32 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertEqual(coordinator.liveEdgeOwner, .send(1))
     }
 
+    func testEntryMaterializationRetriesOnlyNewLayoutBeforeExpiry() {
+        var retry = TranscriptEntryMaterializationRetry(layoutGeneration: 1)
+        XCTAssertEqual(retry.nextAction(layoutGeneration: 1, isExpired: false), .wait)
+        XCTAssertEqual(retry.nextAction(layoutGeneration: 2, isExpired: false), .retry)
+        XCTAssertEqual(retry.nextAction(layoutGeneration: 2, isExpired: false), .wait)
+        XCTAssertEqual(retry.nextAction(layoutGeneration: 2, isExpired: true), .expire)
+    }
+
+    func testExpiredEntryConsumesPendingLayoutOnceBeforeRetiring() {
+        var retry = TranscriptEntryMaterializationRetry(layoutGeneration: 1)
+        // A busy layout pass can delay the first continuation past expiry.
+        XCTAssertEqual(retry.nextAction(layoutGeneration: 4, isExpired: true), .retry)
+        XCTAssertEqual(retry.nextAction(layoutGeneration: 4, isExpired: true), .expire)
+        XCTAssertEqual(retry.nextAction(layoutGeneration: 5, isExpired: true), .expire)
+
+        var crossing = TranscriptEntryMaterializationRetry(layoutGeneration: 1)
+        XCTAssertEqual(crossing.nextAction(layoutGeneration: 2, isExpired: false), .retry)
+        XCTAssertEqual(crossing.nextAction(layoutGeneration: 3, isExpired: true), .retry)
+        XCTAssertEqual(crossing.nextAction(layoutGeneration: 3, isExpired: true), .expire)
+    }
+
+    func testExpiredEntryWithoutPendingLayoutRetiresWithoutAnotherMove() {
+        var retry = TranscriptEntryMaterializationRetry(layoutGeneration: 1)
+        XCTAssertEqual(retry.nextAction(layoutGeneration: 1, isExpired: true), .expire)
+    }
+
     func testEntryMaterializationRealizesReplyBeforeItsContextAndStopsWhenBothAreReady() {
         let state = entryState([
             .userMessage(text: "Previous request", origin: .local),
@@ -551,14 +577,26 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertGreaterThan(coordinator.command?.sequence ?? 0, jump?.sequence ?? 0)
     }
 
-    func testDirectInteractionCancelsAutomaticScrollOwnership() {
-        var coordinator = TranscriptScrollCoordinator()
-        coordinator.requestSend(9)
+    func testDirectInteractionCancelsPendingScrollOwnership() {
+        for startsAtResponse in [false, true] {
+            var coordinator = TranscriptScrollCoordinator()
+            if startsAtResponse {
+                coordinator.requestHistoryAnchor(
+                    ToasttyTranscriptBlockID(rowID: rowID(sequence: 213)),
+                    includesResponseContext: true
+                )
+            } else {
+                coordinator.requestSend(9)
+            }
+            let pending = coordinator.command!
 
-        coordinator.cancelForInteraction()
+            coordinator.cancelForInteraction()
 
-        XCTAssertNil(coordinator.command)
-        XCTAssertFalse(coordinator.ownsLiveEdge)
+            XCTAssertNil(coordinator.command)
+            XCTAssertFalse(coordinator.ownsLiveEdge)
+            XCTAssertNil(coordinator.executionCandidate(for: pending),
+                         "A pending entry retry must stop when the reader interacts")
+        }
     }
 
     func testTrackingWithoutDragStillResolvesFollowingAtIdle() {

@@ -50,7 +50,7 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.ios == 'true'
     runs-on: macos-26
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && matrix.configuration == 'Debug' && 60 || 45 }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && matrix.configuration == 'Debug' && 90 || 45 }}
     strategy:
       fail-fast: false
       matrix:

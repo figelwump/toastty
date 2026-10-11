@@ -15,6 +15,8 @@ const smokeTests = [
   "-only-testing:ToasttyMobileDomainTests",
   "-only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testFixtureNavigationShowsWorkspaceAndReadOnlyInteraction",
   "-only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testGatedSendClearsDraftOnlyAfterEnqueueAndShowsOptimisticBubble",
+  "-only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testReadyResponseInLongHistoryShowsPrecedingContext",
+  "-only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testReadyResponseOpensWithItsCollapsedWorkCardAboveIt",
 ];
 
 function runDispatcher(args, environment = {}) {
@@ -602,7 +604,7 @@ test("retry on failure gives each failed test one more attempt in Debug and Rele
   }
 });
 
-test("Debug smoke runs app/domain tests and exactly two fixture UI methods", () => {
+test("Debug smoke runs app/domain tests and four fixture UI methods", () => {
   const toolchain = createStubToolchain();
   const result = runDispatcher(["test", "--ui-tests", "smoke"], {
     ...toolchain.environment,

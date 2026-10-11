@@ -174,7 +174,7 @@ or fails after a successful push run. Missing, skipped, cancelled, abandoned, fa
 pending, incomplete, or unavailable evidence blocks archiving and upload.
 
 Ordinary CI runs Debug and Release app/domain correctness tests. Routine Debug
-also runs two fixture UI smoke tests. Release excludes the Debug-only UI bundle;
+also runs four fixture UI smoke tests, including both long-history entry scenarios. Release excludes the Debug-only UI bundle;
 test invocations build only the selected simulator architecture. Routine CI skips
 one provisional hardware-sensitive budget test but retains large-page correctness.
 Full UI and performance budget checks remain available through manual `Toastty CI`.
