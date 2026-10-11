@@ -1,6 +1,13 @@
 import CoreState
 import Foundation
 
+enum TerminalLocalInputKind: String {
+    case key
+    case controlC
+    case paste
+    case programmatic
+}
+
 enum TerminalLocalInterruptKind: Equatable, Sendable {
     case escape
     case controlC

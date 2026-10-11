@@ -331,6 +331,12 @@ cleared the draft on the Mac. Release asks for confirmation, then asks the Mac
 to reopen the prompt. It sends no keys to the terminal. If text is still in
 the Mac composer, the next phone message is typed after it and both are sent.
 
+The first plain Ctrl+C at an already open Claude prompt does not create a Mac
+draft lock. Later presses still lock input because they can exit the agent.
+A custom terminal binding also keeps draft protection. Ctrl+C does not release
+an existing lock: an agent dialog can consume the key without clearing the
+composer. After you clear the draft, use Release on the phone.
+
 Every Mac keystroke in a draft advances its draft epoch, and the Mac publishes
 the current epoch to phones about twice a second while someone types. A
 release names the epoch the phone saw, so a release decided before newer Mac

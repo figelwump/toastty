@@ -91,6 +91,7 @@ extension TerminalHostView {
         var isMouseCaptured: @Sendable (ghostty_surface_t) -> Bool
         var keyTranslationMods: @Sendable (ghostty_surface_t, ghostty_input_mods_e) -> ghostty_input_mods_e
         var sendKey: @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool
+        var keyIsBinding: @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool
         var setPreedit: @Sendable (ghostty_surface_t, UnsafePointer<CChar>?, uintptr_t) -> Void
         var sendText: @Sendable (ghostty_surface_t, UnsafePointer<CChar>, uintptr_t) -> Void
 
@@ -121,6 +122,7 @@ extension TerminalHostView {
             sendKey: @escaping @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool = { surface, keyEvent in
                 ghostty_surface_key(surface, keyEvent)
             },
+            keyIsBinding: @escaping @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool = { _, _ in true },
             setPreedit: @escaping @Sendable (ghostty_surface_t, UnsafePointer<CChar>?, uintptr_t) -> Void = { surface, text, length in
                 ghostty_surface_preedit(surface, text, length)
             },
@@ -137,6 +139,7 @@ extension TerminalHostView {
             self.isMouseCaptured = isMouseCaptured
             self.keyTranslationMods = keyTranslationMods
             self.sendKey = sendKey
+            self.keyIsBinding = keyIsBinding
             self.setPreedit = setPreedit
             self.sendText = sendText
         }
@@ -168,6 +171,9 @@ extension TerminalHostView {
             },
             sendKey: { surface, keyEvent in
                 ghostty_surface_key(surface, keyEvent)
+            },
+            keyIsBinding: { surface, keyEvent in
+                ghostty_surface_key_is_binding(surface, keyEvent, nil)
             },
             setPreedit: { surface, text, length in
                 ghostty_surface_preedit(surface, text, length)

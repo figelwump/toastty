@@ -32,7 +32,7 @@ final class TerminalHostView: NSView {
     /// Fired for any local keyboard or paste input so remote-access can
     /// invalidate an open remote-send epoch. Must stay O(1): the owning
     /// controller forwards a bare panel identity, no per-keystroke work here.
-    var handleLocalInput: (() -> Void)?
+    var handleLocalInput: ((TerminalLocalInputKind) -> Void)?
     private var pendingFileDrop: PreparedFileDrop?
     private var pendingVisibilitySyncGeneration = 0
     private var mouseTrackingArea: NSTrackingArea?
@@ -1015,7 +1015,7 @@ final class TerminalHostView: NSView {
 
     @objc func paste(_ sender: Any?) {
         guard let ghosttySurface else { return }
-        handleLocalInput?()
+        handleLocalInput?(.paste)
         _ = invokeGhosttyBindingAction("paste_from_clipboard", on: ghosttySurface)
     }
 
@@ -1056,10 +1056,24 @@ final class TerminalHostView: NSView {
 
     override func keyDown(with event: NSEvent) {
         let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
-        notifyLocalInterruptIfNeeded(event, action: action)
         // Repeats count too: a held key keeps changing the composer, and each
         // change must advance the remote draft epoch.
-        handleLocalInput?()
+        let isPlainControlC = markedText.length == 0
+            && event.modifierFlags.intersection([.command, .control, .option, .shift]) == .control
+            && Self.localInterruptKind(
+                keyCode: event.keyCode,
+                modifierFlags: event.modifierFlags,
+                charactersIgnoringModifiers: event.charactersIgnoringModifiers
+            ) == .controlC
+            && isUnboundKey(event, action: action)
+        if isPlainControlC {
+            // Inspect the existing prompt before the interrupt can synthesize idle.
+            handleLocalInput?(.controlC)
+            notifyLocalInterruptIfNeeded(event, action: action)
+        } else {
+            notifyLocalInterruptIfNeeded(event, action: action)
+            handleLocalInput?(.key)
+        }
         guard let ghosttySurface else {
             super.keyDown(with: event)
             return
@@ -1318,6 +1332,24 @@ final class TerminalHostView: NSView {
             trackedPressedModifierKeyCodes.removeAll(where: { $0 == keyCode })
         default:
             break
+        }
+    }
+
+    private func isUnboundKey(_ event: NSEvent, action: ghostty_input_action_e) -> Bool {
+        guard let ghosttySurface else { return false }
+        let translated = translatedKeyEvent(for: event, on: ghosttySurface)
+        var key = ghostty_input_key_s(
+            action: action,
+            mods: Self.ghosttyModifierFlags(for: event.modifierFlags),
+            consumed_mods: Self.ghosttyConsumedModifierFlags(
+                forTranslationMods: Self.ghosttyModifierFlags(for: translated.modifierFlags)
+            ),
+            keycode: UInt32(event.keyCode), text: nil,
+            unshifted_codepoint: Self.ghosttyUnshiftedCodepoint(for: event), composing: false
+        )
+        return (Self.ghosttyText(for: translated) ?? "").withCString { text in
+            key.text = text
+            return !ghosttySurfaceHooks.keyIsBinding(ghosttySurface, key)
         }
     }
 

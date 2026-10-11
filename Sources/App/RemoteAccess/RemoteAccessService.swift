@@ -520,6 +520,7 @@ final class RemoteAccessService: ObservableObject {
     private var activeSessionIDByConversationID: [RemoteConversationID: String] = [:]
     private var panelIDByConversationID: [RemoteConversationID: UUID] = [:]
     private var conversationIDByPanelID: [UUID: RemoteConversationID] = [:]
+    private var controlCPromptEpochByConversationID: [RemoteConversationID: RemoteInputEpoch] = [:]
     private struct ProviderFeedIdentity: Equatable {
         var provider: AgentKind
         var nativeSessionID: String
@@ -911,9 +912,9 @@ final class RemoteAccessService: ObservableObject {
             .store(in: &conversationTrackingCancellables)
 
         // Observe local keyboard/paste input to invalidate open remote epochs.
-        terminalRuntimeRegistry.localInputObserver = { [weak self] panelID in
-            guard let self, self.conversationTrackingGeneration == generation else { return }
-            self.noteLocalInput(panelID: panelID)
+        terminalRuntimeRegistry.localInputObserver = { [weak self] panelID, kind in
+            guard let self, self.conversationTrackingGeneration == generation else { return true }
+            return self.noteLocalInput(panelID: panelID, kind: kind)
         }
 
         sessionRuntimeStore.$sessionRegistry
@@ -2191,7 +2192,7 @@ final class RemoteAccessService: ObservableObject {
     ) {
         let current = coordinator.availability(for: conversationID)
         guard current != previous else { return }
-        ToasttyLog.debug(
+        ToasttyLog.info(
             "Remote input availability changed",
             category: .automation,
             metadata: [
@@ -2387,6 +2388,7 @@ final class RemoteAccessService: ObservableObject {
         tailersByConversationID.removeValue(forKey: conversationID)?.stop()
         projectionStore.removeConversation(conversationID)
         coordinator.removeConversation(conversationID)
+        controlCPromptEpochByConversationID.removeValue(forKey: conversationID)
         activeSessionIDByConversationID.removeValue(forKey: conversationID)
         bootstrappedPromptAuthorityByConversationID.removeValue(forKey: conversationID)
         providerFeedIdentityByConversationID.removeValue(forKey: conversationID)
@@ -3405,12 +3407,31 @@ final class RemoteAccessService: ObservableObject {
     /// invalidates any open remote epoch synchronously. The resulting network
     /// update is coalesced onto a later main-actor turn so summary construction
     /// and JSON encoding never run inside the terminal input call stack.
-    func noteLocalInput(panelID: UUID) {
-        // Production terminal input already records this through the session
-        // lifecycle tracker. Repeat it here so direct test/adapter callbacks
-        // share the same fail-closed contract; the store uses an idempotent set.
+    @discardableResult
+    func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .key) -> Bool {
+        let conversationID = conversationIDByPanelID[panelID]
+        // Only the first unbound Ctrl+C at a provider prompt can be ignored.
+        // Another press may exit the agent. Remember presses in a draft too,
+        // and do not reset this on Release (it does not send an agent key).
+        if kind == .controlC, let conversationID,
+           let projector = projectionStore.projectorState(for: conversationID),
+           projector.provider == .claude,
+           case .openPrompt(let epoch) = projector.inputAvailability {
+            let alreadyPressed = controlCPromptEpochByConversationID[conversationID] == epoch
+            controlCPromptEpochByConversationID[conversationID] = epoch
+            if !alreadyPressed, case .openPrompt = coordinator.availability(for: conversationID) {
+                sessionRuntimeStore.acknowledgePresentedProgramStatusResults(panelID: panelID)
+                ToasttyLog.info("First Ctrl+C left the open prompt unchanged", category: .automation, metadata: [
+                    "conversation_id": conversationID.rawValue.uuidString,
+                ])
+                return false
+            }
+        }
+        // Record this here as well as through the registry's lifecycle tracker
+        // so direct adapter callbacks share the same fail-closed contract.
+        // The store uses an idempotent set.
         sessionRuntimeStore.noteLocalInputForActiveSession(panelID: panelID)
-        guard let conversationID = conversationIDByPanelID[panelID] else { return }
+        guard let conversationID else { return true }
         promptStabilizationWorkByConversationID
             .removeValue(forKey: conversationID)?
             .task.cancel()
@@ -3425,13 +3446,20 @@ final class RemoteAccessService: ObservableObject {
         } else {
             logCoordinatorAvailabilityTransition(
                 for: conversationID,
-                source: "local_terminal_input",
+                source: "local_terminal_input:\(kind.rawValue)",
                 previous: previous
             )
+        }
+        if couldSteer && !coordinator.canSteer(for: conversationID) {
+            ToasttyLog.info("Local input marked the running turn", category: .automation, metadata: [
+                "conversation_id": conversationID.rawValue.uuidString,
+                "source": kind.rawValue,
+            ])
         }
         if previous.allowsRemoteSend || couldSteer != coordinator.canSteer(for: conversationID) {
             scheduleSessionListBroadcast()
         }
+        return true
     }
 
     /// Each keystroke in a Mac draft advances its epoch, and a remote release

@@ -206,7 +206,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// Notified with a panel ID on any local keyboard/paste input. Remote
     /// access registers here to invalidate open remote-send epochs. Kept as a
     /// bare closure so the hot path stays a single optional call.
-    var localInputObserver: ((UUID) -> Void)?
+    /// Returns false when the input cannot create a draft at the current prompt.
+    var localInputObserver: ((UUID, TerminalLocalInputKind) -> Bool)?
 
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
         self.sessionLifecycleTracker = sessionLifecycleTracker
@@ -1199,13 +1200,13 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         )
     }
 
-    func handleLocalInput(for panelID: UUID) {
-        noteLocalInput(panelID: panelID)
+    func handleLocalInput(for panelID: UUID, kind: TerminalLocalInputKind = .key) {
+        noteLocalInput(panelID: panelID, kind: kind)
     }
 
-    private func noteLocalInput(panelID: UUID) {
+    private func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .programmatic) {
+        guard localInputObserver?(panelID, kind) != false else { return }
         sessionLifecycleTracker?.noteLocalInputForActiveSession(panelID: panelID)
-        localInputObserver?(panelID)
     }
 
     @discardableResult
