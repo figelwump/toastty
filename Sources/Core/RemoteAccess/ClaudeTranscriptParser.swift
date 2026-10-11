@@ -181,7 +181,8 @@ private extension ClaudeTranscriptParser {
         return observations
     }
 
-    mutating func userMessageObservation(text: String, recordUUID: String?, timestamp: Date) -> ProviderTranscriptObservation {
+    mutating func userMessageObservation(text rawText: String, recordUUID: String?, timestamp: Date) -> ProviderTranscriptObservation {
+        let text = Self.unwrappingPastedContent(rawText)
         let fingerprint = recordUUID.map { "user:\($0)" }
             ?? fingerprintWithOccurrence("user:\(Self.contentHash(text)):\(currentTurnID ?? "")")
         // A user turn closes the prompt; the projector treats userMessage as an
@@ -300,6 +301,29 @@ private extension ClaudeTranscriptParser {
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+
+    /// Claude Code records a long paste as
+    /// `<pasted_content id="X">\n…\n</pasted_content id="X">`, with the
+    /// pasted text unchanged inside. Remote sends arrive as bracketed pastes,
+    /// so the user turn must carry the text that was pasted: send
+    /// confirmation compares it exactly, and the transcript shows it.
+    static func unwrappingPastedContent(_ text: String) -> String {
+        guard text.contains("<pasted_content id=\"") else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        let unwrapped = pastedContentPattern.stringByReplacingMatches(
+            in: text,
+            range: range,
+            withTemplate: "$2"
+        )
+        return unwrapped.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // Only a complete block on its own lines unwraps: the closing tag repeats
+    // the opening id, and tags quoted inside a sentence stay literal.
+    static let pastedContentPattern = try! NSRegularExpression(
+        pattern: #"^<pasted_content id="([^"\n]+)">\n(.*?)\n</pasted_content id="\1">$"#,
+        options: [.dotMatchesLineSeparators, .anchorsMatchLines]
+    )
 
     static func toolResultText(_ value: Any?) -> String {
         if let string = value as? String {

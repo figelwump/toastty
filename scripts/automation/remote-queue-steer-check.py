@@ -51,6 +51,17 @@ STOP_PROMPT = (
     'printing the iteration number after each. Do not stop early.'
 )
 AFTER_STOP_TEXT = 'Reply with exactly: AFTER-STOP-OK'
+# Claude Code records a long paste inside <pasted_content> tags. Remote sends
+# arrive as pastes, so this direct send must still confirm.
+DIRECT_TEXT = '\n\n'.join([
+    'On 1 — so you’re saying we keep a list of scripts that can be run against specific keys '
+    'to check whether they are still valid?',
+    'On 2 — when would the sync command be called? And would it require the password manager '
+    'CLI to be installed on every machine that runs it?',
+    'This paragraph only makes the message long enough to be recorded as a paste. '
+    'It has no question in it and needs no answer.',
+    'Ignore the questions above. Reply with exactly: DIRECT-OK',
+])
 
 
 def require(condition, message):
@@ -542,7 +553,10 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
                 print('Select Yes in this isolated test window to continue.', flush=True)
                 trusted = True
             return None
-        return text if '❯' in text and 'for shortcuts' in text else None
+        # The footer under an idle composer shows the shortcut hint, or the
+        # permission mode when one is active.
+        footer = 'for shortcuts' in text or 'shift+tab to cycle' in text
+        return text if '❯' in text and footer else None
 
     wait_for('the Claude composer (accept trust in the test window)', composer, timeout=600)
     step(evidence, 'composer-ready')
@@ -614,7 +628,7 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
     queued_echo = receipt('queued-1', 'queue')
     require(queued_echo['sequence'] > steered_reply['sequence'], 'Queue was delivered during the steered turn')
     reply('QUEUED-OK')
-    send('direct-1', 'Reply with exactly: DIRECT-OK')
+    send('direct-1', DIRECT_TEXT)
     receipt('direct-1', None)
     reply('DIRECT-OK')
 
@@ -661,6 +675,9 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
                 and r.get('content') == late_text for r in records), 'No late-steer dequeue record')
     require(ordinary.count(QUEUED_TEXT) == 1 and not any(a.get('prompt') == QUEUED_TEXT for a in attachments),
             'Queued input must start an ordinary next user turn')
+    pasted = [text for text in ordinary if '<pasted_content id=' in text and DIRECT_TEXT in text]
+    require(len(pasted) == 1, 'The long direct send was not recorded as a pasted_content block')
+    evidence['pastedDirectSend'] = pasted[0]
     evidence['midTurnCommand'] = next(a for a in attachments if a.get('prompt') == STEER_TEXT)
     evidence['endOfTurnDequeue'] = next(r for r in records if r.get('type') == 'queue-operation'
                                      and r.get('operation') == 'dequeue' and r.get('content') == late_text)
