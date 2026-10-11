@@ -122,13 +122,8 @@ struct ToasttyTranscriptView: View {
                 .overlay(alignment: .topLeading) {
                     #if DEBUG
                     if TranscriptFixtureScrollTrace.isEnabled {
-                        Color.clear
+                        TranscriptFixtureScrollTraceAnchor(trace: fixtureScrollTrace)
                             .frame(width: 1, height: 1)
-                            .background(TranscriptFixtureScrollTraceAnchor(trace: fixtureScrollTrace))
-                            .accessibilityElement()
-                            .accessibilityLabel("Transcript scroll trace")
-                            .accessibilityValue(fixtureScrollTrace.encodedSamples)
-                            .accessibilityIdentifier("toastty-mobile-transcript-scroll-trace")
                     }
                     #endif
                 }
@@ -146,6 +141,7 @@ struct ToasttyTranscriptView: View {
                 } action: { old, new in
                     #if DEBUG
                     fixtureScrollTrace.record(new, hasSendItems: !state.sendItems.isEmpty)
+                    fixtureScrollTrace.entryEvent("geometry \(new) command=\(String(describing: scrollCoordinator.command)) pending=\(scrollCoordinator.hasPendingHistoryMove)")
                     #endif
                     let hadMeasuredScrollGeometry = hasMeasuredScrollGeometry
                     let atLiveEdge = new.isNearLiveEdge
@@ -268,6 +264,9 @@ struct ToasttyTranscriptView: View {
                 }
                 .task(id: scrollTaskKey) {
                     guard let command = scrollTaskKey.command else { return }
+                    #if DEBUG
+                    fixtureScrollTrace.entryEvent("task \(scrollTaskKey)")
+                    #endif
                     guard scrollCoordinator.executionCandidate(for: command) != nil else { return }
                     if command.motion == .stable {
                         // Stable moves wait for one quiet layout interval. New
@@ -296,15 +295,18 @@ struct ToasttyTranscriptView: View {
                             ) else {
                                 continue
                             }
-                            if let target = scrollTaskKey.materializationTarget {
-                                scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                            #if DEBUG
+                            fixtureScrollTrace.entryEvent("settled checks=\(completedSettleChecks) quiet=\(isQuiet) candidate=\(settled)")
+                            #endif
                                 // The first move can stop at the lazy stack's
                                 // estimated bottom without realizing this target.
                                 // Retry as that pending layout grows, using the
                                 // same command and a bounded measurement window.
                                 let clock = ContinuousClock()
                                 let deadline = clock.now.advanced(by: .seconds(1))
-                                var attemptedGeneration = settled.layoutGeneration
+                                var retry = TranscriptEntryMaterializationRetry(
+                                    layoutGeneration: settled.layoutGeneration
+                                )
                                 // Each retry gets a layout interval before expiry.
                                 while true {
                                     do {
@@ -319,18 +321,22 @@ struct ToasttyTranscriptView: View {
                                           let candidate = scrollCoordinator.executionCandidate(
                                               for: command
                                           ) else { return }
-                                    guard clock.now < deadline else { break }
-                                    guard candidate.layoutGeneration != attemptedGeneration else {
+                                    let action = retry.nextAction(
+                                        layoutGeneration: candidate.layoutGeneration,
+                                        isExpired: clock.now >= deadline
+                                    )
+                                    fixtureScrollTrace.entryEvent("wake expired=\(clock.now >= deadline) generation=\(candidate.layoutGeneration) action=\(action) state=\(retry)")
+                                    switch action {
+                                    case .wait:
                                         continue
+                                    case .retry:
+                                        fixtureScrollTrace.entryEvent("materialize \(target)")
+                                scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                                    case .expire:
+                                        scrollCoordinator.abandonHistoryMove(command)
+                                        return
                                     }
-                                    attemptedGeneration = candidate.layoutGeneration
-                                    scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
                                 }
-                                guard !Task.isCancelled, self.scrollTaskKey == scrollTaskKey else {
-                                    return
-                                }
-                                scrollCoordinator.abandonHistoryMove(command)
-                                return
                             }
                             guard scrollCoordinator.markExecuted(settled) else { continue }
                             break
@@ -346,6 +352,9 @@ struct ToasttyTranscriptView: View {
                         else { return }
                     }
                     guard scrollCoordinator.command == command else { return }
+                    #if DEBUG
+                    fixtureScrollTrace.entryEvent("execute \(command) context=\(String(describing: scrollTaskKey.responseContext))")
+                    #endif
                     execute(command, responseContext: scrollTaskKey.responseContext, using: proxy)
 
                     guard command.target == .liveEdge else {
@@ -503,9 +512,13 @@ struct ToasttyTranscriptView: View {
     private func entryMeasurement(for target: ToasttyConversationScrollTarget) -> some View {
         if state.blocks.count > Self.eagerLayoutBlockLimit {
             Color.clear
-                .onGeometryChange(for: Bool.self) { geometry in
-                    geometry.size.width > 0
-                } action: { isMeasured in
+                .onGeometryChange(for: CGRect.self) { geometry in
+                    geometry.frame(in: .global)
+                } action: { frame in
+                    #if DEBUG
+                    fixtureScrollTrace.entryEvent("target \(target) frame=\(frame)")
+                    #endif
+                    let isMeasured = frame.width > 0
                     if isMeasured, !measuredEntryTargets.contains(target) {
                         measuredEntryTargets.insert(target)
                     }
@@ -1032,6 +1045,16 @@ private final class TranscriptFixtureScrollTrace {
         var intermediateDistances: [CGFloat]
     }
 
+    @ObservationIgnored private var entryEvents: [String] = []
+    @ObservationIgnored private let entryStartedAt = ProcessInfo.processInfo.systemUptime
+
+    var entryLog: String { entryEvents.joined(separator: "\n") }
+
+    func entryEvent(_ event: String) {
+        guard Self.isEnabled, entryEvents.count < 512 else { return }
+        entryEvents.append("\(ProcessInfo.processInfo.systemUptime - entryStartedAt) \(event)")
+    }
+
     private var latest: TranscriptScrollMetrics?
     private var startedAt: TimeInterval?
     private var pending: Pending?
@@ -1135,6 +1158,11 @@ private struct TranscriptFixtureScrollTraceAnchor: UIViewRepresentable {
 
     final class AnchorView: UIView {
         var onMoveToWindow: (() -> Void)?
+        var trace: TranscriptFixtureScrollTrace?
+        override var accessibilityValue: String? {
+            get { trace?.entryLog }
+            set {}
+        }
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -1145,6 +1173,10 @@ private struct TranscriptFixtureScrollTraceAnchor: UIViewRepresentable {
     func makeUIView(context: Context) -> AnchorView {
         let view = AnchorView()
         view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = true
+        view.accessibilityIdentifier = "toastty-mobile-transcript-scroll-trace"
+        view.accessibilityLabel = "Transcript scroll trace"
+        view.trace = trace
         view.onMoveToWindow = { [trace] in trace.attach(to: view) }
         return view
     }
@@ -1916,3 +1948,32 @@ private extension View {
             .accessibilityElement(children: .combine)
     }
 }
+
+/// A delayed continuation may consume one newer layout at expiry. Its next
+/// interval permits measurement, then retires entry instead of extending again.
+struct TranscriptEntryMaterializationRetry {
+    enum Action: Equatable {
+        case wait
+        case retry
+        case expire
+    }
+
+    private var attemptedGeneration: UInt64
+    private var usedFinalAttempt = false
+
+    init(layoutGeneration: UInt64) {
+        attemptedGeneration = layoutGeneration
+    }
+
+    mutating func nextAction(layoutGeneration: UInt64, isExpired: Bool) -> Action {
+        guard !usedFinalAttempt else { return .expire }
+        guard layoutGeneration != attemptedGeneration else {
+            return isExpired ? .expire : .wait
+        }
+        attemptedGeneration = layoutGeneration
+        usedFinalAttempt = isExpired
+        return .retry
+    }
+}
+
+
