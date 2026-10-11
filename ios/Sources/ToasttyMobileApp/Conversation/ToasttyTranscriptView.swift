@@ -303,15 +303,39 @@ struct ToasttyTranscriptView: View {
                                 fixtureScrollTrace.entryEvent("materialize \(target)")
                                 #endif
                                 scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
-                                // A measurement restarts this task immediately. If it
-                                // never arrives, retire entry rather than jump later
-                                // while the user may already be reading.
-                                do {
-                                    try await Task.sleep(for: .seconds(1))
-                                } catch {
+                                // The first move can stop at the lazy stack's
+                                // estimated bottom without realizing this target.
+                                // Retry as that pending layout grows, using the
+                                // same command and a bounded measurement window.
+                                let clock = ContinuousClock()
+                                let deadline = clock.now.advanced(by: .seconds(1))
+                                var attemptedGeneration = settled.layoutGeneration
+                                while clock.now < deadline {
+                                    do {
+                                        try await Task.sleep(
+                                            for: TranscriptScrollCoordinator.stableSettleInterval
+                                        )
+                                    } catch {
+                                        return
+                                    }
+                                    guard !Task.isCancelled,
+                                          self.scrollTaskKey == scrollTaskKey,
+                                          let candidate = scrollCoordinator.executionCandidate(
+                                              for: command
+                                          ) else { return }
+                                    guard clock.now < deadline else { break }
+                                    guard candidate.layoutGeneration != attemptedGeneration else {
+                                        continue
+                                    }
+                                    attemptedGeneration = candidate.layoutGeneration
+                                    #if DEBUG
+                                    fixtureScrollTrace.entryEvent("retry materialize \(target) generation=\(attemptedGeneration)")
+                                    #endif
+                                    scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                                }
+                                guard !Task.isCancelled, self.scrollTaskKey == scrollTaskKey else {
                                     return
                                 }
-                                guard !Task.isCancelled else { return }
                                 #if DEBUG
                                 fixtureScrollTrace.entryEvent("expire \(command)")
                                 #endif
