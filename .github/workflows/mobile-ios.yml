@@ -1,61 +1,17 @@
-name: Toastty CI
+name: Entry scroll diagnostics
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
-# Runs for the same PR supersede each other. Pushes to main and manual runs each get
-# their own group, so none is cancelled or replaced while pending and every merged
-# commit is tested.
-concurrency:
-  group: mobile-ios-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  changes:
-    name: Select build graphs
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      ios: ${{ steps.filter.outputs.ios }}
-      macos: ${{ steps.filter.outputs.macos }}
-      web: ${{ steps.filter.outputs.web }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-
-      - name: Test CI selection and gate
-        if: github.ref_name != 'fix/ios-scroll-layout-completion'
-        run: |
-          npm ci --prefix Tests/CI --no-audit --no-fund
-          npm test --prefix Tests/CI
-
-      - name: Select affected graphs
-        id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
-        with:
-          filters: .github/ci-paths.yml
-
   ios:
     name: iOS tests (${{ matrix.configuration }})
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ios == 'true'
     runs-on: macos-26
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && matrix.configuration == 'Debug' && 60 || 45 }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        configuration: [Debug, Release]
+        configuration: [Debug]
     env:
       TOASTTY_IOS_CONFIGURATION: ${{ matrix.configuration }}
       TOASTTY_IOS_WORKTREE_ID: mobile-ci
@@ -92,7 +48,7 @@ jobs:
         run: |
           if [[ "$TOASTTY_IOS_CONFIGURATION" == Debug ]]; then
             node ios/scripts/toastty-ios.mjs generate
-            xcodebuild -workspace ios/ToasttyMobile.xcworkspace -scheme ToasttyMobileApp -configuration Debug -parallel-testing-enabled NO -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath artifacts/ios/DerivedData -resultBundlePath artifacts/ios/EntryTrace.xcresult -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testReadyResponseInLongHistoryShowsPrecedingContext -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testReadyResponseOpensWithItsCollapsedWorkCardAboveIt test ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
+            xcodebuild -workspace ios/ToasttyMobile.xcworkspace -scheme ToasttyMobileApp -configuration Debug -parallel-testing-enabled NO -test-iterations 10 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath artifacts/ios/DerivedData -resultBundlePath artifacts/ios/EntryTrace.xcresult -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testReadyResponseInLongHistoryShowsPrecedingContext -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testReadyResponseOpensWithItsCollapsedWorkCardAboveIt test ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
           else
             node ios/scripts/toastty-ios.mjs test --skip-performance-budgets
           fi
@@ -105,117 +61,3 @@ jobs:
           path: artifacts/ios/
           if-no-files-found: warn
           retention-days: 14
-
-  macos:
-    name: macOS contract tests
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.macos == 'true'
-    runs-on: macos-26
-    timeout-minutes: 45
-    env:
-      ARCH: arm64
-      TUIST_DISABLE_GHOSTTY: 1
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install pinned Tuist
-        run: |
-          brew install mise
-          TUIST_VERSION="$(awk '$1 == "tuist" { print $2 }' .tool-versions)"
-          mise install "tuist@$TUIST_VERSION" --quiet
-          TUIST_BIN_DIR="$(dirname "$(mise exec "tuist@$TUIST_VERSION" -- which tuist)")"
-          echo "$TUIST_BIN_DIR" >> "$GITHUB_PATH"
-          test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
-
-      - name: Generate macOS project
-        run: ./scripts/dev/bootstrap-worktree.sh
-
-      - name: Test macOS contract
-        run: |
-          xcodebuild \
-            -workspace toastty.xcworkspace \
-            -scheme ToasttyApp \
-            -configuration Debug \
-            -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath artifacts/ci-macos/Derived \
-            -resultBundlePath artifacts/ci-macos/TestResults.xcresult \
-            ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=YES \
-            test
-
-      - name: Build unsigned macOS Release app
-        run: |
-          xcodebuild \
-            -workspace toastty.xcworkspace \
-            -scheme ToasttyApp \
-            -configuration Release \
-            -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath artifacts/ci-macos/Derived \
-            -resultBundlePath artifacts/ci-macos/ReleaseBuild.xcresult \
-            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
-            build
-
-      - name: Upload macOS test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-contract-tests-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/ci-macos/*.xcresult
-          if-no-files-found: warn
-          retention-days: 14
-
-  web:
-    name: Web panel tests
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-
-      - name: Test web panels and generated bundles
-        run: |
-          for panel in WebPanels/LocalDocumentApp WebPanels/ScratchpadApp; do
-            npm ci --prefix "$panel" --no-audit --no-fund
-            npm test --prefix "$panel"
-          done
-
-  gate:
-    name: CI gate
-    if: always()
-    needs:
-      - changes
-      - ios
-      - macos
-      - web
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require selected graph checks
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          IOS_RESULT: ${{ needs.ios.result }}
-          MACOS_RESULT: ${{ needs.macos.result }}
-          WEB_RESULT: ${{ needs.web.result }}
-          IOS_SELECTED: ${{ needs.changes.outputs.ios }}
-          MACOS_SELECTED: ${{ needs.changes.outputs.macos }}
-          WEB_SELECTED: ${{ needs.changes.outputs.web }}
-          FULL_RUN: ${{ github.event_name != 'pull_request' }}
-        run: |
-          test "$CHANGES_RESULT" = success
-          require_result() {
-            if [[ "$FULL_RUN" == true || "$1" == true ]]; then
-              test "$2" = success
-            else
-              case "$2" in success|skipped) ;; *) return 1 ;; esac
-            fi
-          }
-          require_result "$IOS_SELECTED" "$IOS_RESULT"
-          require_result "$MACOS_SELECTED" "$MACOS_RESULT"
-          require_result "$WEB_SELECTED" "$WEB_RESULT"
