@@ -74,6 +74,28 @@ struct ClaudeTranscriptParserTests {
         #expect(observations.allSatisfy { $0.turnID == "running-turn" })
     }
 
+    @Test func pastedContentWrappersCarryThePastedText() {
+        // Claude Code 2.1.277+ wraps a long paste, which is how remote sends
+        // arrive, in id-matched tags around the unchanged pasted text.
+        let contents = #"""
+        {"type":"user","uuid":"paste-only","timestamp":"2026-10-11T18:47:11.605Z","message":{"content":"\n\n<pasted_content id=\"c961\">\nOn 1 — so you’re saying we keep a list?\n\nYes sv is in ../sv\n</pasted_content id=\"c961\">\n"}}
+        {"type":"user","uuid":"typed-and-pasted","timestamp":"2026-10-11T18:48:11.605Z","message":{"content":[{"type":"text","text":"response from muse:\n\n[Image #1]\n\n<pasted_content id=\"a1\">\nfirst\nsecond\n</pasted_content id=\"a1\">\n\n\nthoughts?"}]}}
+        {"type":"attachment","uuid":"attachment","timestamp":"2026-10-11T18:49:11.605Z","attachment":{"type":"queued_command","prompt":"\n\n<pasted_content id=\"b2\">\nsteer\nwith lines\n</pasted_content id=\"b2\">\n","source_uuid":"command","commandMode":"prompt","origin":{"kind":"human"}}}
+        {"type":"user","uuid":"unmatched","timestamp":"2026-10-11T18:50:11.605Z","message":{"content":"<pasted_content id=\"x\">\nkept\n</pasted_content id=\"y\">"}}
+        {"type":"user","uuid":"inline","timestamp":"2026-10-11T18:51:11.605Z","message":{"content":"Show: <pasted_content id=\"x\">\nhello\n</pasted_content id=\"x\"> literally"}}
+        {"type":"user","uuid":"two-pastes","timestamp":"2026-10-11T18:52:11.605Z","message":{"content":"<pasted_content id=\"p1\">\ncost $2 \\n\n\nnext ✓\n</pasted_content id=\"p1\">\nand\n<pasted_content id=\"p2\">\nsecond\n</pasted_content id=\"p2\">"}}
+        """#
+        let observations = ClaudeTranscriptParser.parseContents(contents).observations
+        #expect(observations.map(Self.describe) == [
+            "user:On 1 — so you’re saying we keep a list?\n\nYes sv is in ../sv",
+            "user:response from muse:\n\n[Image #1]\n\nfirst\nsecond\n\n\nthoughts?",
+            "user:steer\nwith lines",
+            "user:<pasted_content id=\"x\">\nkept\n</pasted_content id=\"y\">",
+            "user:Show: <pasted_content id=\"x\">\nhello\n</pasted_content id=\"x\"> literally",
+            "user:cost $2 \\n\n\nnext ✓\nand\nsecond",
+        ])
+    }
+
     @Test func parsesBasicSessionInOrder() {
         let result = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.basicSession)
         #expect(result.malformedLineCount == 0)

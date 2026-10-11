@@ -3469,10 +3469,12 @@ extension RemoteAccessServiceSafetyTests {
             }
             let direct = RemoteMessageSendRequest(
                 conversationID: fixture.conversationID, clientRequestID: "direct-after-queue",
-                expectedInputEpoch: epoch, text: "One more message"
+                expectedInputEpoch: epoch, text: "One more message — with “quotes”\n\nand a second paragraph"
             )
             #expect(fixture.service.performRemoteSend(direct, device: device).isAccepted)
-            try transcript.write(contentsOf: Self.claudeUserLine(direct.text, id: "direct-echo"))
+            // Claude Code records a long paste inside id-matched tags.
+            let pasted = "\n\n<pasted_content id=\"c961\">\n\(direct.text)\n</pasted_content id=\"c961\">\n"
+            try transcript.write(contentsOf: Self.claudeUserLine(pasted, id: "direct-echo"))
             try await Self.waitForReceipt(direct.clientRequestID, mode: nil, in: fixture)
         }
     }
