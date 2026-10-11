@@ -553,7 +553,10 @@ def run_claude(app, gateway, app_socket, runtime_home, work, evidence):
                 print('Select Yes in this isolated test window to continue.', flush=True)
                 trusted = True
             return None
-        return text if '❯' in text and 'for shortcuts' in text else None
+        # The footer under an idle composer shows the shortcut hint, or the
+        # permission mode when one is active.
+        footer = 'for shortcuts' in text or 'shift+tab to cycle' in text
+        return text if '❯' in text and footer else None
 
     wait_for('the Claude composer (accept trust in the test window)', composer, timeout=600)
     step(evidence, 'composer-ready')
