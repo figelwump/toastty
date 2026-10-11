@@ -287,6 +287,7 @@ sv exec -- env \
 
 The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
 `sv exec` must provide `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` and `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY`; release builds fail if the generated project would embed empty diagnostics submit endpoint or upload-key settings.
+`sv exec` must also provide the production session push relay: `TUIST_TOASTTY_PUSH_RELAY_URL`, `TUIST_TOASTTY_PUSH_RELAY_ID`, and `TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT=production`. The release fails before building when they are missing or not production, and after export when the app's `Info.plist` does not contain them. Without these values, the Mac sends no iPhone session alerts.
 Before the archive is built, the release workflow verifies the generated
 third-party notices against the pinned production web-panel dependencies,
 Ghostty, Sparkle, and the checked-in Toastty license. The verified notices are

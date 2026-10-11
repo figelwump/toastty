@@ -72,18 +72,26 @@ prior encrypted secret versions.
 Bootstrap a fresh Mac worktree first. Then configure its graph before building:
 
 ```sh
-TUIST_TOASTTY_PUSH_RELAY_URL=https://toastty-push-dev.giantthings.workers.dev \
-TUIST_TOASTTY_PUSH_RELAY_ID=toastty-push-dev-v1 \
-TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT=development \
-  sv exec -- tuist generate --no-open
+sv exec -- env \
+  TUIST_TOASTTY_PUSH_RELAY_URL=https://toastty-push-dev.giantthings.workers.dev \
+  TUIST_TOASTTY_PUSH_RELAY_ID=toastty-push-dev-v1 \
+  TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT=development \
+  tuist generate --no-open
 ```
+
+Set the development values inside `sv exec`, as shown. The repository `.secrets`
+manifest forwards any `TUIST_TOASTTY_PUSH_*` values stored in `sv`, and `sv exec`
+replaces values set before it. A plain `sv exec -- tuist generate --no-open`
+builds a Mac that uses the stored relay. Store the production relay there so
+local builds pair with TestFlight and App Store iPhones.
 
 This mutates only the current worktree's generated macOS project. Follow the
 [dev-run guide](../../.agents/skills/toastty-dev-run/SKILL.md) to build and run an
 isolated host. Enable Remote Access on that host and pair the development phone.
 The configuration is compiled into the app; setting variables only at launch is
-not sufficient. Supply the same values to any later bootstrap or generation
-command, or run the configured generation above again before building.
+not sufficient. Bootstrap and other generation through `sv exec` restore the
+stored relay, so run the development generation above again after each one,
+including the bootstrap in the dev-run guide, before building.
 
 For the physical iPhone, set `TOASTTY_IOS_DEVELOPMENT_TEAM` as described below:
 
