@@ -15,7 +15,8 @@ protocol LiveConnectionRuntime: Sendable {
     func sessionsStates() async -> AsyncStream<SessionsRuntime.State>
     func connectIfNeeded() async
     func resume(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async
-    func enterBackground(lifecycleSequence: UInt64) async
+    /// Returns the remaining retention grace when the stream stays open.
+    func enterBackground(lifecycleSequence: UInt64) async -> Duration?
     func restart() async
     func suspend() async
     func openConversation(_ conversationID: RemoteConversationID) async -> ConversationRuntime
@@ -150,7 +151,7 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
         await coordinator.resume(lifecycleSequence: lifecycleSequence, backgroundedAt: backgroundedAt)
     }
 
-    func enterBackground(lifecycleSequence: UInt64) async {
+    func enterBackground(lifecycleSequence: UInt64) async -> Duration? {
         await coordinator.enterBackground(lifecycleSequence: lifecycleSequence)
     }
 
@@ -413,6 +414,18 @@ final class LiveSessionsController {
         await runtime.connectIfNeeded()
     }
 
+    func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation? {
+        guard let controller = activeConversationController,
+              controller.conversationID == conversation.id else { return nil }
+        return ToasttyComposerPresentation.make(
+            agentDisplayName: conversation.agent.displayName.capitalized,
+            authority: controller.presentedComposerAuthority,
+            suppressesConnectionNotice: suppressesConnectionDowngrade,
+            releasableLocalDraftEpoch: controller.releasableLocalDraftEpoch,
+            localDraftReleaseRefusal: controller.localDraftReleaseRefusal
+        )
+    }
+
     /// A short return probes the retained stream; a disconnected or expired
     /// stream takes the coordinator's normal fresh-snapshot path.
     func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant? = nil) async {
@@ -437,12 +450,15 @@ final class LiveSessionsController {
         await runtime.restart()
     }
 
-    func background(lifecycleSequence: UInt64) async {
+    /// Returns the remaining grace while the coordinator keeps the stream
+    /// open, or nil once it suspended instead.
+    @discardableResult
+    func background(lifecycleSequence: UInt64) async -> Duration? {
         wasBackgrounded = true
         endConnectionPresentationGracePeriod()
         // Keep the conversation controller and readable projection. The
         // coordinator chooses stream reuse or suspension and owns all cleanup.
-        await runtime.enterBackground(lifecycleSequence: lifecycleSequence)
+        return await runtime.enterBackground(lifecycleSequence: lifecycleSequence)
     }
 
     func openConversation(_ conversationID: UUID) async {
@@ -632,7 +648,11 @@ final class LiveSessionsController {
 
     func consumeCoordinatorState(_ state: ConnectionCoordinator.State) {
         coordinatorState = state
-        finishConnectionPresentationGraceIfNeeded(for: state.phase)
+        if state.latestTransportFailure != nil {
+            endConnectionPresentationGracePeriod()
+        } else {
+            finishConnectionPresentationGraceIfNeeded(for: state.phase)
+        }
         activeConversationController?.consumeConnectionState(state)
         applyPresentation()
         // Terminal admission/authorization state must be the final callback.
@@ -712,9 +732,12 @@ final class LiveSessionsController {
     private func finishConnectionPresentationGraceIfNeeded(for phase: ConnectionCoordinatorPhase) {
         guard suppressesConnectionDowngrade else { return }
         switch phase {
-        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection:
+        case .idle, .connecting, .awaitingFreshSessionSnapshot, .checkingConnection, .live:
+            // Connection and conversation observers can deliver separately.
+            // Keep the bounded grace through success so a restored connection
+            // cannot expose the previous composer gate before it catches up.
             break
-        case .live, .reconnecting, .suspended, .requiresAuthentication,
+        case .reconnecting, .suspended, .requiresAuthentication,
              .authorizationDenied, .incompatibleProtocol, .failed:
             endConnectionPresentationGracePeriod()
         }

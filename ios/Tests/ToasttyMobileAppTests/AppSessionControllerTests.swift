@@ -308,6 +308,159 @@ final class AppSessionControllerTests: XCTestCase {
         XCTAssertNotNil(spy.foregroundBackgroundTimes.first ?? nil)
     }
 
+    func testBackgroundHoldBeginsAtTheSceneEventAndLastsTheReportedGrace() async throws {
+        let spy = AppLiveSessionsSpy()
+        spy.backgroundRetention = .milliseconds(60)
+        let holder = BackgroundExecutionHolderSpy()
+        let controller = try makeBackgroundHoldController(spy: spy, holder: holder)
+        await controller.restoreIfNeeded()
+
+        controller.sceneEnteredBackground()
+        // The request precedes any actor hop so iOS cannot suspend first.
+        XCTAssertEqual(holder.begun.count, 1)
+        XCTAssertTrue(holder.ended.isEmpty)
+
+        await waitUntil { spy.backgroundSequences == [1] }
+        XCTAssertTrue(holder.ended.isEmpty)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(holder.ended, holder.begun)
+    }
+
+    func testBackgroundHoldEndsAtOnceWhenTheStreamWasSuspended() async throws {
+        let spy = AppLiveSessionsSpy()
+        spy.backgroundRetention = nil
+        let holder = BackgroundExecutionHolderSpy()
+        let controller = try makeBackgroundHoldController(spy: spy, holder: holder)
+        await controller.restoreIfNeeded()
+
+        controller.sceneEnteredBackground()
+        XCTAssertEqual(holder.begun.count, 1)
+        await waitUntil { holder.ended == holder.begun }
+    }
+
+    func testForegroundReleasesTheBackgroundHoldOnce() async throws {
+        let spy = AppLiveSessionsSpy()
+        spy.backgroundRetention = .milliseconds(40)
+        let holder = BackgroundExecutionHolderSpy()
+        let controller = try makeBackgroundHoldController(spy: spy, holder: holder)
+        await controller.restoreIfNeeded()
+
+        controller.sceneEnteredBackground()
+        await waitUntil { spy.backgroundSequences == [1] }
+        controller.sceneBecameActive()
+        XCTAssertEqual(holder.ended, holder.begun)
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(holder.ended.count, 1)
+
+        controller.sceneEnteredBackground()
+        XCTAssertEqual(holder.begun.count, 2)
+        controller.sceneBecameActive()
+        XCTAssertEqual(holder.ended, holder.begun)
+    }
+
+    func testSystemExpirationEndsTheBackgroundHold() async throws {
+        let spy = AppLiveSessionsSpy()
+        spy.backgroundRetention = .seconds(10)
+        let holder = BackgroundExecutionHolderSpy()
+        let controller = try makeBackgroundHoldController(spy: spy, holder: holder)
+        await controller.restoreIfNeeded()
+
+        controller.sceneEnteredBackground()
+        await waitUntil { spy.backgroundSequences == [1] }
+        holder.expireAll()
+        XCTAssertEqual(holder.ended, holder.begun)
+        controller.sceneBecameActive()
+        XCTAssertEqual(holder.ended.count, 1)
+    }
+
+    func testBackgroundHoldEndsAtItsCeilingWhenTheCoordinatorNeverReplies() async throws {
+        let spy = AppLiveSessionsSpy()
+        spy.holdsBackgroundReplies = true
+        let holder = BackgroundExecutionHolderSpy()
+        let controller = try makeBackgroundHoldController(spy: spy, holder: holder, ceiling: .milliseconds(50))
+        await controller.restoreIfNeeded()
+
+        controller.sceneEnteredBackground()
+        await waitUntil { spy.backgroundSequences == [1] }
+        XCTAssertTrue(holder.ended.isEmpty)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(holder.ended, holder.begun)
+
+        // The late reply has nothing left to size.
+        spy.releaseBackgroundReplies(with: .seconds(10))
+        await Task.yield()
+        XCTAssertEqual(holder.ended.count, 1)
+    }
+
+    func testReplacingTheLiveControllerRetiresItsHoldAndIgnoresItsLateReply() async throws {
+        let first = AppLiveSessionsSpy()
+        first.holdsBackgroundReplies = true
+        let second = AppLiveSessionsSpy()
+        second.backgroundRetention = .seconds(10)
+        let spies = [first, second]
+        var installs = 0
+        let holder = BackgroundExecutionHolderSpy()
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: TestAppCredentialVault(initialCredential: try Self.credential(deviceName: "Test iPhone")),
+            pairingClient: TestAppPairingClient(), scanner: TestAppPairingScanner(), deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home, initialConnectionState: .offline,
+            backgroundExecution: holder,
+            liveSessionsFactory: { _, _, _, _, _ in
+                defer { installs += 1 }
+                return spies[min(installs, spies.count - 1)]
+            }
+        )
+        await controller.restoreIfNeeded()
+        controller.sceneEnteredBackground()
+        await waitUntil { first.backgroundSequences == [1] }
+        XCTAssertEqual(holder.begun.count, 1)
+
+        await controller.retryRestoration()
+        await waitUntil { second.backgroundSequences == [1] }
+        // The outgoing controller's hold ended; the new controller holds anew.
+        XCTAssertEqual(holder.begun.count, 2)
+        XCTAssertEqual(holder.ended, [holder.begun[0]])
+
+        first.releaseBackgroundReplies(with: nil)
+        await Task.yield()
+        XCTAssertEqual(holder.ended, [holder.begun[0]])
+        controller.sceneBecameActive()
+        XCTAssertEqual(holder.ended, holder.begun)
+    }
+
+    func testUnpairedAppRequestsNoBackgroundHold() async throws {
+        let holder = BackgroundExecutionHolderSpy()
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: TestAppCredentialVault(initialCredential: nil),
+            pairingClient: TestAppPairingClient(), scanner: TestAppPairingScanner(), deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home, initialConnectionState: .offline,
+            backgroundExecution: holder,
+            liveSessionsFactory: { _, _, _, _, _ in AppLiveSessionsSpy() }
+        )
+        await controller.restoreIfNeeded()
+        XCTAssertEqual(controller.state, .unpaired)
+        controller.sceneEnteredBackground()
+        XCTAssertTrue(holder.begun.isEmpty)
+    }
+
+    private func makeBackgroundHoldController(
+        spy: AppLiveSessionsSpy,
+        holder: BackgroundExecutionHolderSpy,
+        ceiling: Duration = ConnectionCoordinator.defaultBackgroundGracePeriod
+    ) throws -> AppSessionController {
+        AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: TestAppCredentialVault(initialCredential: try Self.credential(deviceName: "Test iPhone")),
+            pairingClient: TestAppPairingClient(), scanner: TestAppPairingScanner(), deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home, initialConnectionState: .offline,
+            backgroundExecution: holder,
+            backgroundHoldCeiling: ceiling,
+            liveSessionsFactory: { _, _, _, _, _ in spy }
+        )
+    }
+
     func testInitialConnectTimeoutFallsThroughToUnreachable() async throws {
         let credential = try Self.credential(deviceName: "Hung iPhone")
         let vault = TestAppCredentialVault(initialCredential: credential)
@@ -591,6 +744,12 @@ private final class AppLiveSessionsSpy: AppLiveSessionsControlling {
     private(set) var foregroundSequences: [UInt64] = []
     private(set) var foregroundBackgroundTimes: [ContinuousClock.Instant?] = []
     private(set) var backgroundSequences: [UInt64] = []
+    /// What `background` reports: the grace the stream is retained for, or
+    /// nil when the coordinator suspended instead.
+    var backgroundRetention: Duration?
+    /// Parks `background` replies until `releaseBackgroundReplies` runs.
+    var holdsBackgroundReplies = false
+    private var heldBackgroundReplies: [CheckedContinuation<Duration?, Never>] = []
 
     func start() async { startCount += 1 }
     func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async {
@@ -598,11 +757,44 @@ private final class AppLiveSessionsSpy: AppLiveSessionsControlling {
         foregroundBackgroundTimes.append(backgroundedAt)
     }
     func refresh() async { refreshCount += 1 }
-    func background(lifecycleSequence: UInt64) async { backgroundSequences.append(lifecycleSequence) }
+    func background(lifecycleSequence: UInt64) async -> Duration? {
+        backgroundSequences.append(lifecycleSequence)
+        guard holdsBackgroundReplies else { return backgroundRetention }
+        return await withCheckedContinuation { heldBackgroundReplies.append($0) }
+    }
+    func releaseBackgroundReplies(with retention: Duration?) {
+        let replies = heldBackgroundReplies
+        heldBackgroundReplies = []
+        for reply in replies { reply.resume(returning: retention) }
+    }
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
         scopeUpdates.append(scopes)
     }
     func stopObserving() {}
+}
+
+@MainActor
+private final class BackgroundExecutionHolderSpy: BackgroundExecutionHolding {
+    private(set) var begun: [BackgroundExecutionHoldID] = []
+    private(set) var ended: [BackgroundExecutionHoldID] = []
+    private var expirations: [BackgroundExecutionHoldID: @MainActor () -> Void] = [:]
+
+    func begin(name: String, onExpiration: @escaping @MainActor () -> Void) -> BackgroundExecutionHoldID? {
+        let id = BackgroundExecutionHoldID(rawValue: begun.count + 1)
+        begun.append(id)
+        expirations[id] = onExpiration
+        return id
+    }
+
+    func end(_ id: BackgroundExecutionHoldID) {
+        ended.append(id)
+        expirations[id] = nil
+    }
+
+    /// Simulates iOS reclaiming every outstanding hold.
+    func expireAll() {
+        for handler in expirations.values { handler() }
+    }
 }
 
 private actor ScriptedRestorationVault: AppSessionCredentialVault {

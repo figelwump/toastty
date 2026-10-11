@@ -21,11 +21,14 @@ protocol AppLiveSessionsControlling: AnyObject {
     var activeConversationCursor: UInt64? { get }
     var activeConversationController: LiveConversationController? { get }
     var supportsPushNotifications: Bool { get }
+    func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation?
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void)
     func start() async
     func foreground(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) async
     func refresh() async
-    func background(lifecycleSequence: UInt64) async
+    /// Returns the remaining grace while the stream stays open, or nil once it
+    /// was suspended instead.
+    func background(lifecycleSequence: UInt64) async -> Duration?
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async
     func stopObserving()
 }
@@ -40,6 +43,7 @@ extension AppLiveSessionsControlling {
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void) {}
     var activeConversationController: LiveConversationController? { nil }
     var supportsPushNotifications: Bool { false }
+    func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation? { nil }
 }
 
 typealias AppLiveSessionsFactory = @MainActor (
@@ -68,6 +72,8 @@ final class AppSessionController {
     private let deviceName: @MainActor @Sendable () -> String
     private let liveSessionsFactory: AppLiveSessionsFactory
     private let initialConnectTimeout: Duration
+    private let backgroundExecution: (any BackgroundExecutionHolding)?
+    private let backgroundHoldCeiling: Duration
     private var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void
     private var hasRestored = false
     private var liveSessionID: UUID?
@@ -76,6 +82,9 @@ final class AppSessionController {
     private var sceneLifecycleSequence: UInt64 = 0
     private var isSceneBackgrounded = false
     private var sceneBackgroundedAt: ContinuousClock.Instant?
+    private var backgroundHold: BackgroundExecutionHoldID?
+    private var backgroundHoldGeneration: UInt64 = 0
+    private var backgroundHoldReleaseTask: Task<Void, Never>?
 
     var credentialProvider: any GatewayCredentialProvider { credentialVault }
 
@@ -133,6 +142,8 @@ final class AppSessionController {
         initialConnectionState: MobileConnectionState,
         pushController: ToasttyPushController? = nil,
         initialConnectTimeout: Duration = .seconds(10),
+        backgroundExecution: (any BackgroundExecutionHolding)? = nil,
+        backgroundHoldCeiling: Duration = ConnectionCoordinator.defaultBackgroundGracePeriod,
         onDiagnosticEvent: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in },
         liveSessionsFactory: @escaping AppLiveSessionsFactory = AppSessionController.makeLiveSessionsController
     ) {
@@ -144,6 +155,8 @@ final class AppSessionController {
         self.deviceName = deviceName
         self.liveSessionsFactory = liveSessionsFactory
         self.initialConnectTimeout = initialConnectTimeout
+        self.backgroundExecution = backgroundExecution
+        self.backgroundHoldCeiling = backgroundHoldCeiling
         self.onDiagnosticEvent = onDiagnosticEvent
         self.pushController = pushController
         state = initialState
@@ -430,13 +443,69 @@ final class AppSessionController {
         sceneLifecycleSequence &+= 1
         let sequence = sceneLifecycleSequence
         let sessionID = liveSessionID
+        // Ask for background time before any actor hop: iOS suspends the
+        // process about a second after this event and aborts its sockets.
+        // The hold is resized once the coordinator reports how long it keeps
+        // the stream, and released early when it suspended instead.
+        if liveController != nil { beginBackgroundHold() }
         Task {
-            guard sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
-            await liveController?.background(lifecycleSequence: sequence)
+            await deliverBackground(sequence: sequence, sessionID: sessionID, to: liveController)
         }
     }
 
+    /// Reports the scene background to one live controller and sizes the
+    /// current hold from its answer. A reply from a replaced controller or a
+    /// superseded scene event leaves the hold to its ceiling or its release.
+    private func deliverBackground(
+        sequence: UInt64,
+        sessionID: UUID?,
+        to controller: (any AppLiveSessionsControlling)?
+    ) async {
+        guard let controller, sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
+        let retainedFor = await controller.background(lifecycleSequence: sequence)
+        guard sequence == sceneLifecycleSequence, sessionID == liveSessionID else { return }
+        limitBackgroundHold(to: retainedFor ?? .zero)
+    }
+
+    private func beginBackgroundHold() {
+        releaseBackgroundHold()
+        guard let backgroundExecution else { return }
+        backgroundHoldGeneration &+= 1
+        let generation = backgroundHoldGeneration
+        backgroundHold = backgroundExecution.begin(name: "Toastty connection grace") { [weak self] in
+            // A late expiration must not end a newer hold.
+            guard let self, backgroundHoldGeneration == generation else { return }
+            releaseBackgroundHold()
+        }
+        // The coordinator's reply can lag behind stream teardown. Until it
+        // arrives, the hold lasts at most the grace it could ever report.
+        limitBackgroundHold(to: backgroundHoldCeiling)
+    }
+
+    private func limitBackgroundHold(to duration: Duration) {
+        guard let holdID = backgroundHold else { return }
+        guard duration > .zero else {
+            releaseBackgroundHold()
+            return
+        }
+        backgroundHoldReleaseTask?.cancel()
+        backgroundHoldReleaseTask = Task { [weak self] in
+            do { try await Task.sleep(for: duration) } catch { return }
+            guard let self, backgroundHold == holdID else { return }
+            releaseBackgroundHold()
+        }
+    }
+
+    private func releaseBackgroundHold() {
+        backgroundHoldReleaseTask?.cancel()
+        backgroundHoldReleaseTask = nil
+        guard let holdID = backgroundHold else { return }
+        backgroundHold = nil
+        backgroundExecution?.end(holdID)
+    }
+
     func sceneBecameActive() {
+        releaseBackgroundHold()
         pushController?.enteredForeground()
         pairingController?.sceneBecameActive()
         isSceneBackgrounded = false
@@ -456,6 +525,7 @@ final class AppSessionController {
     private func transitionToUnpaired() {
         initialConnectTimeoutTask?.cancel()
         initialConnectTimeoutTask = nil
+        releaseBackgroundHold()
         liveController?.stopObserving()
         liveController = nil
         liveSessionID = nil
@@ -519,6 +589,8 @@ final class AppSessionController {
                 self.updatePushConnection()
             }
         )
+        // A hold sized by the outgoing controller must not outlive it.
+        releaseBackgroundHold()
         liveController?.stopObserving()
         liveController = controller
         controller.installDiagnosticEventHandler(onDiagnosticEvent)
@@ -526,7 +598,8 @@ final class AppSessionController {
         beginInitialConnectTimeout(sessionID: sessionID)
         await controller.start()
         if isSceneBackgrounded, liveSessionID == sessionID {
-            await controller.background(lifecycleSequence: sceneLifecycleSequence)
+            beginBackgroundHold()
+            await deliverBackground(sequence: sceneLifecycleSequence, sessionID: sessionID, to: controller)
         }
         updatePushConnection()
     }

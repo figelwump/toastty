@@ -1,5 +1,7 @@
 import Foundation
 import RemoteProtocol
+import SwiftUI
+import UIKit
 import XCTest
 @testable import ToasttyMobileApp
 @testable import ToasttyMobileDomain
@@ -204,14 +206,102 @@ final class LiveSessionsControllerTests: XCTestCase {
         let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
         subject.consumeSessionsState(.init(connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live))
         subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
+        let conversation = try XCTUnwrap(home.snapshot.workspaces.first?.conversations.first)
+        await subject.openConversation(conversation.id)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+        controller.stop()
+        await subject.background(lifecycleSequence: 1)
+        await subject.foreground(lifecycleSequence: 2)
+        // Conversation authority can arrive before the connection phase.
+        controller.consume(composerState(for: conversation, failure: .coordinatorNotLive))
+        var composer = try XCTUnwrap(subject.composerPresentation(for: conversation))
+        XCTAssertTrue(composer.suppressesConnectionNotice)
+        XCTAssertFalse(composer.canSubmit(draft: "keep my draft"))
+        XCTAssertEqual(composer.placeholder, "Message Codex…")
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .checkingConnection))
+        XCTAssertEqual(home.freshness, .live)
+        // A successful probe can reach home before the restored authority.
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
+        composer = try XCTUnwrap(subject.composerPresentation(for: conversation))
+        XCTAssertTrue(composer.suppressesConnectionNotice)
+        let epoch = RemoteInputEpoch(bindingID: UUID(), counter: 1)
+        controller.consume(stateForComposer(
+            conversationID: conversation.id,
+            stamp: ConversationComposerStamp(
+                connectionGeneration: 7, streamSnapshotOrdinal: 2,
+                projectionRunID: runID, projectionGeneration: 12,
+                latestSequence: 4, inputEpoch: epoch
+            ),
+            epoch: epoch
+        ))
+        composer = try XCTUnwrap(subject.composerPresentation(for: conversation))
+        XCTAssertFalse(composer.suppressesConnectionNotice)
+        XCTAssertTrue(composer.canSubmit(draft: "keep my draft"))
+        XCTAssertEqual(home.freshness, .live)
+        XCTAssertEqual(home.snapshot.workspaces.first?.conversations.first?.title, "Alpha")
+        // Success must not leave a stale grace flag after the timer ends.
+        controller.consume(composerState(for: conversation, failure: .coordinatorNotLive))
+        for _ in 0..<150 where subject.composerPresentation(for: conversation)?.suppressesConnectionNotice == true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        composer = try XCTUnwrap(subject.composerPresentation(for: conversation))
+        XCTAssertFalse(composer.suppressesConnectionNotice)
+        XCTAssertEqual(composer.placeholder, "Reconnecting to Mac…")
+        XCTAssertEqual(home.freshness, .live)
+        subject.stopObserving()
+    }
+
+    func testRenderedComposerUpdatesWhenForegroundGraceExpires() async throws {
+        let home = HomeScreenController(runtimeMode: .fixture, snapshot: snapshot(titles: ["Alpha"]).presentation(),
+                                        connectionState: .live)
+        let subject = LiveSessionsController(runtime: LiveRuntimeSpy(), hostName: "toastty.test.ts.net", homeController: home)
+        subject.consumeSessionsState(.init(connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live))
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
+        let conversation = try XCTUnwrap(home.snapshot.workspaces.first?.conversations.first)
+        await subject.openConversation(conversation.id)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+        controller.stop()
+        controller.consume(composerState(for: conversation, failure: .coordinatorNotLive))
+        let host = UIHostingController(rootView: ForegroundProbeComposerHarness(
+            sessions: subject, home: home, conversation: conversation
+        ))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            subject.stopObserving()
+        }
+        host.view.layoutIfNeeded()
+        for _ in 0..<100 where composerTextView(in: host.view) == nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let textView = try XCTUnwrap(composerTextView(in: host.view))
+        XCTAssertEqual(textView.placeholder, "Reconnecting to Mac…")
+
         await subject.background(lifecycleSequence: 1)
         await subject.foreground(lifecycleSequence: 2)
         subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .checkingConnection))
-        XCTAssertEqual(home.freshness, .live)
-        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
-        XCTAssertEqual(home.freshness, .live)
-        XCTAssertEqual(home.snapshot.workspaces.first?.conversations.first?.title, "Alpha")
-        subject.stopObserving()
+        for _ in 0..<25 where textView.placeholder != "Message Codex…" {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(textView.placeholder, "Message Codex…")
+        XCTAssertFalse(textView.isEditable)
+        XCTAssertFalse(textView.isSelectable)
+        XCTAssertEqual(textView.text, "saved draft")
+        XCTAssertEqual(textView.accessibilityHint, "Checking connection. Composer locked.")
+        attachComposerScreenshot(window, named: "composer-short-connection-check")
+
+        for _ in 0..<150 where textView.placeholder != "Reconnecting to Mac…" {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(textView.placeholder, "Reconnecting to Mac…")
+        XCTAssertFalse(textView.isEditable)
+        XCTAssertEqual(textView.text, "saved draft")
+        XCTAssertEqual(home.freshness, .reconnecting)
+        attachComposerScreenshot(window, named: "composer-slow-connection-check")
     }
 
     func testSlowForegroundProbeExposesConnectionState() async throws {
@@ -221,13 +311,52 @@ final class LiveSessionsControllerTests: XCTestCase {
                                              homeController: home, connectionPresentationDelay: .milliseconds(1))
         subject.consumeSessionsState(.init(connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live))
         subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
+        let conversation = try XCTUnwrap(home.snapshot.workspaces.first?.conversations.first)
+        await subject.openConversation(conversation.id)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+        controller.stop()
         await subject.background(lifecycleSequence: 1)
         await subject.foreground(lifecycleSequence: 2)
         subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .checkingConnection))
+        controller.consume(composerState(for: conversation, failure: .coordinatorNotLive))
         for _ in 0..<100 where home.freshness == .live {
             try await Task.sleep(for: .milliseconds(2))
         }
         XCTAssertEqual(home.freshness, .reconnecting)
+        let composer = try XCTUnwrap(subject.composerPresentation(for: conversation))
+        XCTAssertFalse(composer.suppressesConnectionNotice)
+        XCTAssertEqual(composer.placeholder, "Reconnecting to Mac…")
+        XCTAssertFalse(composer.canSubmit(draft: "keep my draft"))
+        subject.stopObserving()
+    }
+
+    func testForegroundFailureShowsComposerNoticeBeforeGraceExpires() async throws {
+        let home = HomeScreenController(runtimeMode: .fixture, snapshot: snapshot(titles: ["Alpha"]).presentation(),
+                                        connectionState: .live)
+        let subject = LiveSessionsController(runtime: LiveRuntimeSpy(), hostName: "toastty.test.ts.net",
+                                             homeController: home, connectionPresentationDelay: .seconds(30))
+        subject.consumeSessionsState(.init(connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live))
+        subject.consumeCoordinatorState(.init(connectionGeneration: 7, phase: .live))
+        let conversation = try XCTUnwrap(home.snapshot.workspaces.first?.conversations.first)
+        await subject.openConversation(conversation.id)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+        controller.stop()
+        await subject.background(lifecycleSequence: 1)
+        await subject.foreground(lifecycleSequence: 2)
+        controller.consume(composerState(for: conversation, failure: .coordinatorNotLive))
+        XCTAssertTrue(try XCTUnwrap(subject.composerPresentation(for: conversation)).suppressesConnectionNotice)
+
+        subject.consumeCoordinatorState(.init(
+            connectionGeneration: 9, phase: .connecting, latestTransportFailure: .connectionLost
+        ))
+
+        XCTAssertNotEqual(home.freshness, .live)
+        let composer = try XCTUnwrap(subject.composerPresentation(for: conversation))
+        XCTAssertFalse(composer.suppressesConnectionNotice)
+        XCTAssertEqual(composer.placeholder, "Reconnecting to Mac…")
+        XCTAssertFalse(composer.canSubmit(draft: "keep my draft"))
+        let outcome = await controller.send("keep my draft")
+        XCTAssertEqual(outcome, .notEnqueued(.coordinatorNotLive))
         subject.stopObserving()
     }
 
@@ -708,6 +837,34 @@ final class LiveSessionsControllerTests: XCTestCase {
         )
     }
 
+    private func composerState(
+        for conversation: MobileConversation,
+        failure: ConversationSendGateFailure
+    ) -> ConversationRuntime.State {
+        ConversationRuntime.State(
+            conversationID: RemoteConversationID(rawValue: conversation.id),
+            connectionGeneration: 7,
+            phase: .live,
+            composerAuthority: ConversationComposerAuthority(gateFailure: failure),
+            sendReconciliation: SendReconciliation()
+        )
+    }
+
+    private func composerTextView(in view: UIView) -> ToasttyComposerUIKitTextView? {
+        if let textView = view as? ToasttyComposerUIKitTextView { return textView }
+        return view.subviews.lazy.compactMap { self.composerTextView(in: $0) }.first
+    }
+
+    private func attachComposerScreenshot(_ window: UIWindow, named name: String) {
+        let screenshot = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func stateForComposer(
         conversationID: UUID,
         stamp: ConversationComposerStamp,
@@ -725,6 +882,22 @@ final class LiveSessionsControllerTests: XCTestCase {
                 inputAvailability: .openPrompt(epoch: epoch)
             ),
             sendReconciliation: SendReconciliation()
+        )
+    }
+}
+
+private struct ForegroundProbeComposerHarness: View {
+    let sessions: LiveSessionsController
+    let home: HomeScreenController
+    let conversation: MobileConversation
+
+    var body: some View {
+        ToasttyConversationScreen(
+            conversationID: conversation.id,
+            controller: home,
+            composer: sessions.composerPresentation(for: conversation),
+            draft: "saved draft",
+            canAcknowledgeRead: false
         )
     }
 }
@@ -778,7 +951,10 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
         connectionRequests += 1
     }
 
-    func enterBackground(lifecycleSequence: UInt64) { backgrounds.append(lifecycleSequence) }
+    func enterBackground(lifecycleSequence: UInt64) -> Duration? {
+        backgrounds.append(lifecycleSequence)
+        return nil
+    }
     func resume(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) { resumes.append(lifecycleSequence) }
     func backgroundSequences() -> [UInt64] { backgrounds }
     func resumeSequences() -> [UInt64] { resumes }

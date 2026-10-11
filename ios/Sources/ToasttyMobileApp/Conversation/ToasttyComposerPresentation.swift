@@ -129,6 +129,9 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     let inlineFeedback: String?
     /// The running turn can be stopped from this device.
     let canInterrupt: Bool
+    /// The shared presentation grace hides brief connection checks. The
+    /// domain gate still blocks sends until the retained stream is verified.
+    let suppressesConnectionNotice: Bool
     /// The Mac draft epoch a Release would name, while a Mac draft holds the
     /// prompt closed and this device may release it.
     let releasableLocalDraftEpoch: RemoteInputEpoch?
@@ -141,6 +144,7 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         gate: ToasttyComposerGate,
         inlineFeedback: String? = nil,
         canInterrupt: Bool = false,
+        suppressesConnectionNotice: Bool = false,
         releasableLocalDraftEpoch: RemoteInputEpoch? = nil,
         localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal? = nil
     ) {
@@ -148,6 +152,8 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         self.gate = gate
         self.inlineFeedback = inlineFeedback
         self.canInterrupt = canInterrupt
+        self.suppressesConnectionNotice = suppressesConnectionNotice
+            && gate == .disabled(.connection(.reconnecting))
         let releasable = gate == .disabled(.localDraft) ? releasableLocalDraftEpoch : nil
         self.releasableLocalDraftEpoch = releasable
         self.localDraftReleaseRefusal = releasable == nil ? nil : localDraftReleaseRefusal
@@ -156,6 +162,7 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     static func make(
         agentDisplayName: String,
         authority: ConversationComposerAuthority,
+        suppressesConnectionNotice: Bool = false,
         releasableLocalDraftEpoch: RemoteInputEpoch? = nil,
         localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal? = nil
     ) -> ToasttyComposerPresentation {
@@ -164,6 +171,7 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
             gate: gate(for: authority),
             inlineFeedback: feedback(for: authority.gateFailure),
             canInterrupt: authority.canInterrupt,
+            suppressesConnectionNotice: suppressesConnectionNotice,
             releasableLocalDraftEpoch: releasableLocalDraftEpoch,
             localDraftReleaseRefusal: localDraftReleaseRefusal
         )
@@ -194,7 +202,8 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     }
 
     var placeholder: String {
-        switch gate {
+        if suppressesConnectionNotice { return "Message \(agentDisplayName)…" }
+        return switch gate {
         case .enabled:
             "Message \(agentDisplayName)…"
         case .disabled(.deviceScope):

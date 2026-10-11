@@ -188,7 +188,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             deviceName: { UIDevice.current.name },
             initialSnapshot: initialSnapshot,
             initialConnectionState: initialConnectionState,
-            pushController: push
+            pushController: push,
+            backgroundExecution: UIApplicationBackgroundExecutionHolder()
         )
     }
 

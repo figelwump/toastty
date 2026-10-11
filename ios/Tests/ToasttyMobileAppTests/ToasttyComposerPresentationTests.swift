@@ -5,6 +5,47 @@ import XCTest
 @testable import ToasttyMobileDomain
 
 final class ToasttyComposerPresentationTests: XCTestCase {
+    func testConnectionGraceHidesReconnectCopyWithoutUnlockingSendOrOtherGates() {
+        let checking = ToasttyComposerPresentation.make(
+            agentDisplayName: "Codex",
+            authority: authority(failure: .coordinatorNotLive),
+            suppressesConnectionNotice: true
+        )
+        XCTAssertTrue(checking.suppressesConnectionNotice)
+        XCTAssertEqual(checking.placeholder, "Message Codex…")
+        XCTAssertFalse(checking.canSubmit(draft: "saved draft"))
+        XCTAssertFalse(checking.canSubmit(draft: "", attachments: [
+            RemoteMessageAttachment(filename: "note.txt", data: Data("saved attachment".utf8)),
+        ]))
+        XCTAssertFalse(checking.canInterrupt)
+
+        let failures: [ConversationSendGateFailure] = [.deviceSendScopeDenied, .inputUnavailable, .transcriptNotCaughtUp]
+        for failure in failures {
+            let blocked = ToasttyComposerPresentation.make(
+                agentDisplayName: "Codex", authority: authority(failure: failure),
+                suppressesConnectionNotice: true
+            )
+            XCTAssertFalse(blocked.suppressesConnectionNotice, "Grace must only hide reconnect copy")
+            XCTAssertFalse(blocked.canSubmit(draft: "saved draft"))
+        }
+        let unavailableInputs: [CompatibleInputAvailability] = [
+            .localDraft(epoch: stamp.inputEpoch),
+            .unavailable(reason: .known(.working)),
+            .unavailable(reason: .known(.sessionWritesDisabled)),
+        ]
+        for availability in unavailableInputs {
+            let verifying = ToasttyComposerPresentation.make(
+                agentDisplayName: "Codex",
+                authority: authority(availability: availability, failure: .coordinatorNotLive),
+                suppressesConnectionNotice: true
+            )
+            XCTAssertTrue(verifying.suppressesConnectionNotice)
+            XCTAssertFalse(verifying.canSubmit(draft: "saved draft"))
+            XCTAssertFalse(verifying.canInterrupt)
+            XCTAssertFalse(verifying.canReleaseLocalDraft)
+        }
+    }
+
     func testComposerEnablesOnlyForDomainAuthorizedStampedOpenPrompt() {
         XCTAssertEqual(presentation(enabledAuthority).gate, .enabled(.prompt))
 
