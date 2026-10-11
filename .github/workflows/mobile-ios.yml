@@ -88,7 +88,13 @@ jobs:
         # Full UI and hardware-sensitive budgets remain available on manual runs.
         # Hosted runners can time out the first UI launch under load, so every
         # failed test gets one more attempt; the uploaded xcresult keeps both.
-        run: node ios/scripts/toastty-ios.mjs test --retry-tests-on-failure ${{ github.event_name != 'workflow_dispatch' && (matrix.configuration == 'Debug' && '--ui-tests smoke --skip-performance-budgets' || '--skip-performance-budgets') || '' }}
+        run: |
+          if [[ "$TOASTTY_IOS_CONFIGURATION" == Debug ]]; then
+            node ios/scripts/toastty-ios.mjs generate
+            xcodebuild -workspace ios/ToasttyMobile.xcworkspace -scheme ToasttyMobileApp -configuration Debug -parallel-testing-enabled NO -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath artifacts/ios/DerivedData -resultBundlePath artifacts/ios/EntryTrace.xcresult -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testReadyResponseInLongHistoryShowsPrecedingContext -only-testing:ToasttyMobileUITests/ToasttyMobileFixtureUITests/testReadyResponseOpensWithItsCollapsedWorkCardAboveIt test ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
+          else
+            node ios/scripts/toastty-ios.mjs test --skip-performance-budgets
+          fi
 
       - name: Upload iOS test artifacts
         if: always()
