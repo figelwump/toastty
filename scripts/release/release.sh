@@ -61,6 +61,9 @@ Required environment:
   TUIST_DEVELOPMENT_TEAM
   TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT
   TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY
+  TUIST_TOASTTY_PUSH_RELAY_URL
+  TUIST_TOASTTY_PUSH_RELAY_ID
+  TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT (must be production)
   TOASTTY_APPLE_ID
   TOASTTY_NOTARY_PASSWORD
   TOASTTY_TEAM_ID
@@ -258,6 +261,15 @@ validate_version_string() {
 ensure_clean_worktree() {
   if [[ -n "$(git -C "$ROOT_DIR" status --porcelain)" ]]; then
     fail "release builds require a clean git working tree"
+  fi
+}
+
+# Released Macs pair with TestFlight and App Store iPhones, which only hold
+# production APNs tokens. Project.swift validates the URL shape and that the
+# relay ID matches the environment; this rejects development relays.
+ensure_production_push_relay_inputs() {
+  if [[ "$TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT" != "production" ]]; then
+    fail "TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT must be production for release builds"
   fi
 }
 
@@ -459,6 +471,9 @@ generate_workspace() {
   TUIST_TOASTTY_BUILD_NUMBER="$TOASTTY_BUILD_NUMBER" \
   TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT="$TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT" \
   TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY="$TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY" \
+  TUIST_TOASTTY_PUSH_RELAY_URL="$TUIST_TOASTTY_PUSH_RELAY_URL" \
+  TUIST_TOASTTY_PUSH_RELAY_ID="$TUIST_TOASTTY_PUSH_RELAY_ID" \
+  TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT="$TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT" \
   TUIST_DISTRIBUTION_SIGNING=1 \
   TUIST_DEVELOPMENT_TEAM="$TUIST_DEVELOPMENT_TEAM" \
   tuist generate --no-open
@@ -590,12 +605,31 @@ verify_exported_app() {
   [[ -n "$exported_feed_url" ]] || fail "exported app is missing SUFeedURL"
   [[ -n "$exported_minimum_system_version" ]] || fail "exported app is missing LSMinimumSystemVersion"
   [[ -n "$exported_public_ed_key" ]] || fail "exported app is missing SUPublicEDKey"
+  verify_exported_push_relay_configuration
 
   SIGNING_IDENTITY="$(codesign -dv --verbose=4 "$EXPORTED_APP_PATH" 2>&1 | sed -n 's/^Authority=//p' | grep -m1 '^Developer ID Application:' || true)"
   [[ -n "$SIGNING_IDENTITY" ]] || fail "failed to determine exported app signing identity"
   SPARKLE_FEED_URL="$exported_feed_url"
   SPARKLE_MINIMUM_SYSTEM_VERSION="$exported_minimum_system_version"
   SPARKLE_PUBLIC_ED_KEY="$exported_public_ed_key"
+}
+
+# An empty relay URL silently disables session push, so check the shipped values.
+verify_exported_push_relay_configuration() {
+  local info_plist="$EXPORTED_APP_PATH/Contents/Info.plist"
+  local key=""
+  local expected=""
+  local actual=""
+
+  while read -r key expected; do
+    actual="$(/usr/libexec/PlistBuddy -c "Print :$key" "$info_plist" 2>/dev/null || true)"
+    [[ -n "$actual" && "$actual" == "$expected" ]] \
+      || fail "exported app $key does not match the release push relay input (got '$actual')"
+  done <<EOF_PUSH
+ToasttyPushRelayURL $TUIST_TOASTTY_PUSH_RELAY_URL
+ToasttyPushRelayID $TUIST_TOASTTY_PUSH_RELAY_ID
+ToasttyPushAPNsEnvironment $TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT
+EOF_PUSH
 }
 
 resign_exported_app_for_distribution() {
@@ -893,6 +927,9 @@ require_env TOASTTY_BUILD_NUMBER
 require_env TUIST_DEVELOPMENT_TEAM
 require_env TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT
 require_env TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY
+require_env TUIST_TOASTTY_PUSH_RELAY_URL
+require_env TUIST_TOASTTY_PUSH_RELAY_ID
+require_env TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT
 require_env TOASTTY_APPLE_ID
 require_env TOASTTY_NOTARY_PASSWORD
 require_env TOASTTY_TEAM_ID
@@ -901,6 +938,7 @@ require_env TOASTTY_SPARKLE_PRIVATE_KEY
 validate_build_number
 validate_version_string
 ensure_clean_worktree
+ensure_production_push_relay_inputs
 ensure_distribution_signing_inputs
 ensure_notarytool_available
 ensure_developer_id_identity

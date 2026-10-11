@@ -331,6 +331,9 @@ sv exec -- ./scripts/release/release.sh
 | `TUIST_DEVELOPMENT_TEAM` | none | Required team ID used by `Project.swift` and Xcode export signing. |
 | `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` | none | Required diagnostics upload endpoint embedded into the bundled release `toastty` CLI. |
 | `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY` | none | Required diagnostics upload key embedded into the bundled release `toastty` CLI. This is spam friction, not a strong secret once shipped in a binary. |
+| `TUIST_TOASTTY_PUSH_RELAY_URL` | none | Required production session push relay origin compiled into the app. An empty value disables iPhone session alerts. |
+| `TUIST_TOASTTY_PUSH_RELAY_ID` | none | Required production relay ID. It must match the relay used by the TestFlight and App Store iPhone builds. |
+| `TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT` | none | Required. Must be `production`. |
 | `TOASTTY_APPLE_ID` | none | Required Apple ID email passed to `xcrun notarytool submit`. |
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
