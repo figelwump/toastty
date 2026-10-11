@@ -56,6 +56,9 @@ public actor ConnectionCoordinator {
     private let retryPolicy: ConnectionRetryPolicy
     private let firstSnapshotSleeper: any ConnectionSleeping
     private let firstSnapshotTimeout: Duration
+    /// How long a live stream stays retained after the app backgrounds. The
+    /// app layer holds background execution for at most this long.
+    public static let defaultBackgroundGracePeriod: Duration = .seconds(10)
     private let backgroundGracePeriod: Duration
     private let foregroundProbeTimeout: Duration
     private let foregroundProbeSleeper: any ConnectionSleeping
@@ -137,7 +140,7 @@ public actor ConnectionCoordinator {
         requestIDFactory: any SendRequestIDFactory = UUIDSendRequestIDFactory(),
         firstSnapshotSleeper: any ConnectionSleeping = ContinuousConnectionSleeper(),
         firstSnapshotTimeout: Duration = .seconds(15),
-        backgroundGracePeriod: Duration = .seconds(10),
+        backgroundGracePeriod: Duration = ConnectionCoordinator.defaultBackgroundGracePeriod,
         foregroundProbeTimeout: Duration = .seconds(3),
         foregroundProbeSleeper: any ConnectionSleeping = ContinuousConnectionSleeper(),
         lifecycleNow: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
@@ -263,14 +266,18 @@ public actor ConnectionCoordinator {
         await publish()
     }
 
-    /// Keeps a live stream available for a brief app switch. This requests no
-    /// background execution time: iOS remains free to suspend the process.
-    /// Sequence numbers originate synchronously at the scene event, before
-    /// MainActor tasks or actor hops can reorder those events.
-    public func enterBackground(lifecycleSequence: UInt64) async {
-        guard acceptLifecycleSequence(lifecycleSequence) else { return }
+    /// Keeps a live stream available for a brief app switch. Returns the grace
+    /// still remaining when the stream is retained, so the caller can keep the
+    /// process running that long; iOS otherwise suspends it within about a
+    /// second and aborts its sockets. Returns nil when the stream is suspended
+    /// instead or the event is stale. Sequence numbers originate synchronously
+    /// at the scene event, before MainActor tasks or actor hops can reorder
+    /// those events.
+    @discardableResult
+    public func enterBackground(lifecycleSequence: UInt64) async -> Duration? {
+        guard acceptLifecycleSequence(lifecycleSequence) else { return nil }
         lifecycleIntent = .background
-        guard !hasTerminalFailure else { return }
+        guard !hasTerminalFailure else { return nil }
         let canRetain = activeSubscription != nil && connectionTask != nil
             && lifecycleTransitionsInFlight == 0 && connectionRetirementTask == nil
         if canRetain, state.phase == .checkingConnection, foregroundProbeID != nil {
@@ -280,11 +287,14 @@ public actor ConnectionCoordinator {
         }
         guard canRetain, state.phase == .live, backgroundGracePeriod > .zero else {
             await suspend(intent: .background)
-            return
+            return nil
         }
-        if backgroundStartedAt == nil { backgroundStartedAt = lifecycleNow() }
+        let now = lifecycleNow()
+        let startedAt = backgroundStartedAt ?? now
+        backgroundStartedAt = startedAt
         await publishComposerAuthorities()
         await publish()
+        return max(backgroundGracePeriod - startedAt.duration(to: now), .zero)
     }
 
     /// Reuses a retained stream only after a bounded ping succeeds. A longer

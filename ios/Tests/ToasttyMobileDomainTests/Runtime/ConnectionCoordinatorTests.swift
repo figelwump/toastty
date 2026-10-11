@@ -904,6 +904,31 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await fixture.coordinator.suspend()
     }
 
+    func testEnterBackgroundReportsTheRemainingGraceOnlyWhileRetaining() async throws {
+        let clock = LifecycleTestClock()
+        let pingGate = CancellationAwareGate()
+        let subscription = ScriptedSubscription(pingGate: pingGate)
+        let fixture = try await makeBackgroundFixture(subscription: subscription, clock: clock)
+        let first = await fixture.coordinator.enterBackground(lifecycleSequence: 1)
+        XCTAssertEqual(first, .seconds(10))
+
+        // A second switch during the still-unanswered probe keeps the
+        // original deadline.
+        clock.advance(by: .seconds(4))
+        await fixture.coordinator.resume(lifecycleSequence: 2)
+        try await withTimeout { try await subscription.waitForPingCount(1) }
+        let second = await fixture.coordinator.enterBackground(lifecycleSequence: 3)
+        XCTAssertEqual(second, .seconds(6))
+
+        // A stale event and a suspended stream report nothing to hold for.
+        let stale = await fixture.coordinator.enterBackground(lifecycleSequence: 3)
+        XCTAssertNil(stale)
+        await pingGate.open()
+        await fixture.coordinator.suspend()
+        let suspended = await fixture.coordinator.enterBackground(lifecycleSequence: 4)
+        XCTAssertNil(suspended)
+    }
+
     func testBackgroundDuringExpiredStreamTeardownStopsReplacementUntilForeground() async throws {
         let clock = LifecycleTestClock()
         let closeGate = CancellationAwareGate()
@@ -923,7 +948,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
         }
         await closeGate.open()
         await resume.value
-        await background.value
+        _ = await background.value
         await fixture.coordinator.connectIfNeeded()
         let state = await fixture.coordinator.currentState()
         XCTAssertEqual(state.phase, .suspended)

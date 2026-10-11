@@ -778,7 +778,10 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
         connectionRequests += 1
     }
 
-    func enterBackground(lifecycleSequence: UInt64) { backgrounds.append(lifecycleSequence) }
+    func enterBackground(lifecycleSequence: UInt64) -> Duration? {
+        backgrounds.append(lifecycleSequence)
+        return nil
+    }
     func resume(lifecycleSequence: UInt64, backgroundedAt: ContinuousClock.Instant?) { resumes.append(lifecycleSequence) }
     func backgroundSequences() -> [UInt64] { backgrounds }
     func resumeSequences() -> [UInt64] { resumes }
