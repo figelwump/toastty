@@ -2855,10 +2855,9 @@ private extension AppControlExecutor {
             "workspaceID": .string(workspaceID.uuidString),
             "annotations": .array(annotationsJSON(for: workspace)),
             "done": .bool(workspace.doneAt != nil),
-            // Related workspaces outside the caller's scope stay hidden, as
-            // they are everywhere else in the automation surface.
+            // Placement metadata does not grant automation access to the parent.
             "parentWorkspaceID": workspace.parentWorkspaceID
-                .flatMap { callerMayAutomate($0) ? .string($0.uuidString) : nil } ?? .null,
+                .map { .string($0.uuidString) } ?? .null,
             "spawningSessionID": workspace.spawningSessionID.map(AutomationJSONValue.string) ?? .null,
             "subspaceWorkspaceIDs": .array(
                 store.state.subspaceWorkspaceIDs(of: workspaceID)

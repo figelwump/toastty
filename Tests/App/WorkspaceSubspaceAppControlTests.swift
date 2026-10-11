@@ -267,13 +267,33 @@ struct WorkspaceSubspaceAppControlTests {
         }
         #expect(fixture.workspace(own.workspaceID)?.parentWorkspaceID == fixture.workspaceID)
 
-        // Snapshot hides related workspaces the caller cannot automate.
+        // Parent metadata lets the caller verify placement without granting
+        // automation access to the parent workspace.
         let snapshot = try fixture.executor.runQuery(
             id: AppControlQueryID.workspaceSnapshot.rawValue,
             args: ["workspaceID": .string(outsideChild.workspaceID.uuidString)],
             context: AutomationRequestContext(callerSessionID: "scoped", commandName: "app_control.run_query")
         )
-        #expect(snapshot["parentWorkspaceID"] == .null)
+        #expect(snapshot["parentWorkspaceID"] == .string(outside.workspaceID.uuidString))
+        #expect {
+            try fixture.executor.runQuery(
+                id: AppControlQueryID.workspaceSnapshot.rawValue,
+                args: ["workspaceID": .string(outside.workspaceID.uuidString)],
+                context: AutomationRequestContext(callerSessionID: "scoped", commandName: "app_control.run_query")
+            )
+        } throws: { error in
+            guard let socketError = error as? AutomationSocketError,
+                  case .scopeDenied(let workspaceID) = socketError else { return false }
+            return workspaceID == outside.workspaceID
+        }
+
+        _ = try fixture.createWorkspace(parent: fixture.workspaceID.uuidString)
+        let scopedParentSnapshot = try fixture.executor.runQuery(
+            id: AppControlQueryID.workspaceSnapshot.rawValue,
+            args: ["workspaceID": .string(fixture.workspaceID.uuidString)],
+            context: AutomationRequestContext(callerSessionID: "scoped", commandName: "app_control.run_query")
+        )
+        #expect(scopedParentSnapshot["subspaceWorkspaceIDs"] == .array([.string(own.workspaceID.uuidString)]))
     }
 
     @Test

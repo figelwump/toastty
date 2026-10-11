@@ -7,6 +7,7 @@ Toastty supports opt-in cooperative workspace scoping for orchestration automati
 - Unscoped sessions are unrestricted.
 - Scoped sessions are scoped at workspace granularity.
 - A scoped session can automate its current workspace and every workspace explicitly assigned to it.
+- A snapshot of the current workspace or an assigned workspace reports its parent ID even when the parent is outside the session's scope. This placement metadata does not grant automation access to the parent.
 - The current-workspace allowance is live. If the session moves to another workspace, that implicit allowance follows the session.
 - An empty explicit scope means the session is scoped to its current workspace only.
 - Sessions in the same workspace share automation access to that workspace.
