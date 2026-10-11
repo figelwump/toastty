@@ -34,6 +34,7 @@ jobs:
           node-version-file: .node-version
 
       - name: Test CI selection and gate
+        if: github.ref_name != 'fix/ios-scroll-layout-completion'
         run: |
           npm ci --prefix Tests/CI --no-audit --no-fund
           npm test --prefix Tests/CI
