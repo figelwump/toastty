@@ -1008,40 +1008,45 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     }
 
     func testReadyResponseOpensWithItsCollapsedWorkCardAboveIt() {
-        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_READY_WORK": "1"])
-        let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
-        XCTAssertTrue(scrollHomeTo(row, in: app))
-        row.tap()
+        for historyCount in [0, 200] {
+            let app = launchFixtureApp(environment: [
+                "TOASTTY_MOBILE_FIXTURE_READY_WORK": "1",
+                "TOASTTY_MOBILE_FIXTURE_READY_HISTORY": historyCount > 0 ? "1" : "0",
+            ])
+            let row = app.buttons["toastty-mobile-grouped-card-\(openPromptConversationID)"]
+            XCTAssertTrue(scrollHomeTo(row, in: app))
+            row.tap()
 
-        let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-15"]
-        let work = app.buttons["toastty-mobile-transcript-turn-12"]
-        XCTAssertTrue(message.waitForExistence(timeout: 5))
-        XCTAssertTrue(work.waitForExistence(timeout: 5))
-        let showsWorkContext = waitUntil(timeout: 5) {
-            let top = max(
-                app.scrollViews["toastty-mobile-transcript"].frame.minY,
-                app.navigationBars.firstMatch.frame.maxY
-            )
-            return work.isHittable && work.frame.minY >= top - 2
-                && work.frame.minY <= top + 16
-                // The work button's touch bounds include its vertical padding.
-                && message.frame.minY >= work.frame.maxY - 8
-                && message.frame.minY <= top + 100
+            let message = app.descendants(matching: .any)["toastty-mobile-transcript-row-\(historyCount + 15)"]
+            let work = app.buttons["toastty-mobile-transcript-turn-\(historyCount + 12)"]
+            XCTAssertTrue(message.waitForExistence(timeout: 5))
+            XCTAssertTrue(work.waitForExistence(timeout: 5))
+            let showsWorkContext = waitUntil(timeout: 5) {
+                let top = max(
+                    app.scrollViews["toastty-mobile-transcript"].frame.minY,
+                    app.navigationBars.firstMatch.frame.maxY
+                )
+                return work.isHittable && work.frame.minY >= top - 2
+                    && work.frame.minY <= top + 16
+                    // The work button's touch bounds include its vertical padding.
+                    && message.frame.minY >= work.frame.maxY - 8
+                    && message.frame.minY <= top + 100
+            }
+            print("ENTRY_WORK_FRAMES work=\(work.frame) response=\(message.frame) transcript=\(app.scrollViews["toastty-mobile-transcript"].frame) navigation=\(app.navigationBars.firstMatch.frame)")
+            attachScreenshot(named: "fixture-ready-response-with-work-card", of: app)
+            XCTAssertTrue(showsWorkContext, "The unread response should open below its visible work card")
+            XCTAssertEqual(work.value as? String, "Collapsed")
+
+            // Expanding and collapsing the card must not restart entry scrolling.
+            work.tap()
+            XCTAssertTrue(waitUntil(timeout: 5) { work.value as? String == "Expanded" })
+            work.tap()
+            XCTAssertTrue(waitUntil(timeout: 5) { work.value as? String == "Collapsed" })
+            let latest = app.buttons["toastty-mobile-transcript-jump-latest"]
+            XCTAssertTrue(latest.waitForExistence(timeout: 5))
+            latest.tap()
+            XCTAssertTrue(latest.waitForNonExistence(timeout: 5))
         }
-        print("ENTRY_WORK_FRAMES work=\(work.frame) response=\(message.frame) transcript=\(app.scrollViews["toastty-mobile-transcript"].frame) navigation=\(app.navigationBars.firstMatch.frame)")
-        attachScreenshot(named: "fixture-ready-response-with-work-card", of: app)
-        XCTAssertTrue(showsWorkContext, "The unread response should open below its visible work card")
-        XCTAssertEqual(work.value as? String, "Collapsed")
-
-        // Expanding and collapsing the card must not restart entry scrolling.
-        work.tap()
-        XCTAssertTrue(waitUntil(timeout: 5) { work.value as? String == "Expanded" })
-        work.tap()
-        XCTAssertTrue(waitUntil(timeout: 5) { work.value as? String == "Collapsed" })
-        let latest = app.buttons["toastty-mobile-transcript-jump-latest"]
-        XCTAssertTrue(latest.waitForExistence(timeout: 5))
-        latest.tap()
-        XCTAssertTrue(latest.waitForNonExistence(timeout: 5))
     }
 
     func testReadyResponseInLongHistoryShowsPrecedingContext() {
@@ -1050,7 +1055,19 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(scrollHomeTo(row, in: app))
         row.tap()
         assertReadyMessageStartsWithContext(in: app, sequence: 213)
+        // Late lazy estimates must not move a reader after the entry settles.
+        let settledAt = Date().addingTimeInterval(2.5)
+        XCTAssertTrue(waitUntil(timeout: 4) { Date() >= settledAt })
+        assertReadyMessageStartsWithContext(in: app, sequence: 213)
         attachScreenshot(named: "fixture-ready-response-long-history", of: app)
+
+        let latest = app.buttons["toastty-mobile-transcript-jump-latest"]
+        latest.tap()
+        XCTAssertTrue(latest.waitForNonExistence(timeout: 5))
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+        row.tap()
+        assertReadyMessageStartsWithContext(in: app, sequence: 213)
     }
 
     func testWorkingSessionStillOpensAtLiveEdge() {
