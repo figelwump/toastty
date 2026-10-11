@@ -121,10 +121,15 @@ let pushAPNsEnvironment = resolvedManifestEnvironmentValue(
     manifestKey: "TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT", compatibilityKey: "TOASTTY_PUSH_APNS_ENVIRONMENT", defaultValue: "development"
 )
 if !pushRelayURL.isEmpty {
-    guard let url = URL(string: pushRelayURL), url.scheme == "https", url.host?.isEmpty == false,
+    // Mirror RemotePushConfiguration's runtime checks; values it rejects disable push silently.
+    guard pushRelayURL.utf8.count <= 512, let url = URL(string: pushRelayURL), url.scheme == "https", url.host?.isEmpty == false,
           url.user == nil, url.password == nil, url.port == nil, url.query == nil, url.fragment == nil,
           url.path.isEmpty || url.path == "/" else {
         fatalError("TUIST_TOASTTY_PUSH_RELAY_URL must be an HTTPS origin.")
+    }
+    guard pushRelayID.utf8.count <= 128,
+          pushRelayID.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil else {
+        fatalError("TUIST_TOASTTY_PUSH_RELAY_ID may contain only letters, digits, '.', '_', and '-' (128 bytes max).")
     }
     guard (pushAPNsEnvironment == "development" && pushRelayID == "toastty-push-dev-v1")
         || (pushAPNsEnvironment == "production" && pushRelayID != "toastty-push-dev-v1") else {

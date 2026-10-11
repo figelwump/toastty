@@ -615,21 +615,20 @@ verify_exported_app() {
 }
 
 # An empty relay URL silently disables session push, so check the shipped values.
-verify_exported_push_relay_configuration() {
-  local info_plist="$EXPORTED_APP_PATH/Contents/Info.plist"
-  local key=""
-  local expected=""
+verify_exported_push_relay_value() {
+  local key="$1"
+  local expected="$2"
   local actual=""
 
-  while read -r key expected; do
-    actual="$(/usr/libexec/PlistBuddy -c "Print :$key" "$info_plist" 2>/dev/null || true)"
-    [[ -n "$actual" && "$actual" == "$expected" ]] \
-      || fail "exported app $key does not match the release push relay input (got '$actual')"
-  done <<EOF_PUSH
-ToasttyPushRelayURL $TUIST_TOASTTY_PUSH_RELAY_URL
-ToasttyPushRelayID $TUIST_TOASTTY_PUSH_RELAY_ID
-ToasttyPushAPNsEnvironment $TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT
-EOF_PUSH
+  actual="$(/usr/libexec/PlistBuddy -c "Print :$key" "$EXPORTED_APP_PATH/Contents/Info.plist" 2>/dev/null || true)"
+  [[ -n "$actual" && "$actual" == "$expected" ]] \
+    || fail "exported app $key does not match the release push relay input (got '$actual')"
+}
+
+verify_exported_push_relay_configuration() {
+  verify_exported_push_relay_value ToasttyPushRelayURL "$TUIST_TOASTTY_PUSH_RELAY_URL"
+  verify_exported_push_relay_value ToasttyPushRelayID "$TUIST_TOASTTY_PUSH_RELAY_ID"
+  verify_exported_push_relay_value ToasttyPushAPNsEnvironment "$TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT"
 }
 
 resign_exported_app_for_distribution() {

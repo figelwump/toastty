@@ -89,8 +89,9 @@ This mutates only the current worktree's generated macOS project. Follow the
 [dev-run guide](../../.agents/skills/toastty-dev-run/SKILL.md) to build and run an
 isolated host. Enable Remote Access on that host and pair the development phone.
 The configuration is compiled into the app; setting variables only at launch is
-not sufficient. Supply the same values to any later bootstrap or generation
-command, or run the configured generation above again before building.
+not sufficient. Bootstrap and other generation through `sv exec` restore the
+stored relay, so run the development generation above again after each one,
+including the bootstrap in the dev-run guide, before building.
 
 For the physical iPhone, set `TOASTTY_IOS_DEVELOPMENT_TEAM` as described below:
 
