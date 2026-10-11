@@ -551,14 +551,26 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         XCTAssertGreaterThan(coordinator.command?.sequence ?? 0, jump?.sequence ?? 0)
     }
 
-    func testDirectInteractionCancelsAutomaticScrollOwnership() {
-        var coordinator = TranscriptScrollCoordinator()
-        coordinator.requestSend(9)
+    func testDirectInteractionCancelsPendingScrollOwnership() {
+        for startsAtResponse in [false, true] {
+            var coordinator = TranscriptScrollCoordinator()
+            if startsAtResponse {
+                coordinator.requestHistoryAnchor(
+                    ToasttyTranscriptBlockID(rowID: rowID(sequence: 213)),
+                    includesResponseContext: true
+                )
+            } else {
+                coordinator.requestSend(9)
+            }
+            let pending = coordinator.command!
 
-        coordinator.cancelForInteraction()
+            coordinator.cancelForInteraction()
 
-        XCTAssertNil(coordinator.command)
-        XCTAssertFalse(coordinator.ownsLiveEdge)
+            XCTAssertNil(coordinator.command)
+            XCTAssertFalse(coordinator.ownsLiveEdge)
+            XCTAssertNil(coordinator.executionCandidate(for: pending),
+                         "A pending entry retry must stop when the reader interacts")
+        }
     }
 
     func testTrackingWithoutDragStillResolvesFollowingAtIdle() {
