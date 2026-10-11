@@ -411,6 +411,92 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         )
     }
 
+    func testPendingHistoryMoveWaitsForItsLatestLayoutAndExecutesOnlyOnce() {
+        var coordinator = TranscriptScrollCoordinator()
+        let response = ToasttyTranscriptBlockID(rowID: rowID(sequence: 213))
+        coordinator.requestHistoryAnchor(response, includesResponseContext: true)
+        let command = coordinator.command!
+        let earlyCandidate = coordinator.executionCandidate(for: command)!
+
+        coordinator.recordPendingHistoryLayoutChange()
+        let measuredCandidate = coordinator.executionCandidate(for: command)!
+        XCTAssertEqual(coordinator.command, command, "Layout must keep the same entry owner")
+        XCTAssertFalse(coordinator.markExecuted(earlyCandidate))
+        XCTAssertTrue(coordinator.markExecuted(measuredCandidate))
+
+        coordinator.recordPendingHistoryLayoutChange()
+        XCTAssertNil(coordinator.executionCandidate(for: command),
+                     "Late layout must not reposition a reader through the same response")
+    }
+
+    func testHistoryLayoutCannotConsumeAReplacementSendOrJump() {
+        for replaceWithSend in [true, false] {
+            var coordinator = TranscriptScrollCoordinator()
+            coordinator.requestHistoryAnchor(
+                ToasttyTranscriptBlockID(rowID: rowID(sequence: 213)),
+                includesResponseContext: true
+            )
+            let history = coordinator.command!
+            if replaceWithSend {
+                coordinator.requestSend(1)
+            } else {
+                coordinator.requestJump()
+            }
+            let replacement = coordinator.command!
+            let candidate = coordinator.executionCandidate(for: replacement)!
+            coordinator.recordPendingHistoryLayoutChange()
+            XCTAssertNil(coordinator.executionCandidate(for: history))
+            XCTAssertTrue(coordinator.markExecuted(candidate),
+                          "Entry layout must not invalidate the explicit move")
+            XCTAssertTrue(coordinator.ownsLiveEdge)
+        }
+    }
+
+    func testExpiredHistoryMoveCannotCancelAReplacementOrCompletedMove() {
+        var coordinator = TranscriptScrollCoordinator()
+        let response = ToasttyTranscriptBlockID(rowID: rowID(sequence: 213))
+        coordinator.requestHistoryAnchor(response, includesResponseContext: true)
+        let expired = coordinator.command!
+        XCTAssertTrue(coordinator.hasPendingHistoryMove)
+        coordinator.abandonHistoryMove(expired)
+        XCTAssertNil(coordinator.command)
+        XCTAssertFalse(coordinator.hasPendingHistoryMove)
+
+        coordinator.requestHistoryAnchor(response, includesResponseContext: true)
+        let completed = coordinator.command!
+        XCTAssertTrue(coordinator.markExecuted(coordinator.executionCandidate(for: completed)!))
+        coordinator.abandonHistoryMove(completed)
+        XCTAssertEqual(coordinator.command, completed)
+
+        coordinator.requestSend(1)
+        let send = coordinator.command
+        coordinator.abandonHistoryMove(expired)
+        XCTAssertEqual(coordinator.command, send)
+        XCTAssertEqual(coordinator.liveEdgeOwner, .send(1))
+    }
+
+    func testEntryMaterializationRealizesReplyBeforeItsContextAndStopsWhenBothAreReady() {
+        let state = entryState([
+            .userMessage(text: "Previous request", origin: .local),
+            .assistantMessage(text: "Latest response", phase: .final),
+        ])
+        let response = state.blocks.last!.id
+        let context = TranscriptResponseEntryContext(
+            responseID: response, items: state.blocks.map { .block($0, isWork: false) }
+        )
+        var coordinator = TranscriptScrollCoordinator()
+        coordinator.requestHistoryAnchor(response, includesResponseContext: true)
+        var key = TranscriptScrollTaskKey(
+            command: coordinator.command, response: .transcript(response),
+            responseContext: context, responseMeasured: false, contextMeasured: false
+        )
+        XCTAssertEqual(key.materializationTarget, .transcript(response))
+        key.responseMeasured = true
+        XCTAssertEqual(key.materializationTarget, .transcript(state.blocks.first!.id))
+        key.contextMeasured = true
+        XCTAssertNil(key.materializationTarget)
+    }
+
     func testLateReinforcementAfterExecutionSchedulesFollowUp() {
         var coordinator = TranscriptScrollCoordinator()
 

@@ -33,6 +33,7 @@ struct ToasttyTranscriptView: View {
     @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
     @State private var entryScrollPosition = TranscriptEntryScrollPosition()
     @State private var scrollCoordinator = TranscriptScrollCoordinator()
+    @State private var measuredEntryTargets: Set<ToasttyConversationScrollTarget> = []
     #if DEBUG
     @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
     #endif
@@ -72,6 +73,7 @@ struct ToasttyTranscriptView: View {
     }
 
     var body: some View {
+        let scrollTaskKey = self.scrollTaskKey
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
                 if showsStatusContent {
@@ -152,6 +154,11 @@ struct ToasttyTranscriptView: View {
                     measuredBoundaryID = state.rows.last?.id
                     isAtLiveEdge = atLiveEdge
                     hasReachedPhysicalLiveEdge = reachedPhysicalLiveEdge
+                    if hadMeasuredScrollGeometry,
+                       new.hasLiveEdgeLayoutChange(comparedTo: old),
+                       scrollCoordinator.hasPendingHistoryMove {
+                        scrollCoordinator.recordPendingHistoryLayoutChange()
+                    }
                     if hadMeasuredScrollGeometry,
                        new.hasLiveEdgeLayoutChange(comparedTo: old),
                        lastScrollTarget != nil,
@@ -259,8 +266,9 @@ struct ToasttyTranscriptView: View {
                 .onChange(of: scrollChangeKey, initial: true) { _, _ in
                     reconcileScrollChange()
                 }
-                .task(id: scrollCoordinator.command) {
-                    guard let command = scrollCoordinator.command else { return }
+                .task(id: scrollTaskKey) {
+                    guard let command = scrollTaskKey.command else { return }
+                    guard scrollCoordinator.executionCandidate(for: command) != nil else { return }
                     if command.motion == .stable {
                         // Stable moves wait for one quiet layout interval. New
                         // layout generations coalesce into this pending command
@@ -288,6 +296,20 @@ struct ToasttyTranscriptView: View {
                             ) else {
                                 continue
                             }
+                            if let target = scrollTaskKey.materializationTarget {
+                                scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                                // A measurement restarts this task immediately. If it
+                                // never arrives, retire entry rather than jump later
+                                // while the user may already be reading.
+                                do {
+                                    try await Task.sleep(for: .seconds(1))
+                                } catch {
+                                    return
+                                }
+                                guard !Task.isCancelled else { return }
+                                scrollCoordinator.abandonHistoryMove(command)
+                                return
+                            }
                             guard scrollCoordinator.markExecuted(settled) else { continue }
                             break
                         }
@@ -302,20 +324,7 @@ struct ToasttyTranscriptView: View {
                         else { return }
                     }
                     guard scrollCoordinator.command == command else { return }
-                    if case .responseStart(let blockID) = command.target,
-                       state.blocks.count > Self.eagerLayoutBlockLimit {
-                        let context = responseEntryContext(for: blockID, items: displayItems)
-                        if let host = context.markerHostID {
-                            // A lazy row must exist before its background target
-                            // can be resolved. Both moves keep the same owner.
-                            scrollWithoutAnimation(to: host, anchor: .top, using: proxy)
-                            try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
-                            guard Task.isCancelled == false,
-                                  scrollCoordinator.command == command
-                            else { return }
-                        }
-                    }
-                    execute(command, using: proxy)
+                    execute(command, responseContext: scrollTaskKey.responseContext, using: proxy)
 
                     guard command.target == .liveEdge else {
                         if command.target == entryScrollPosition.selectedTarget {
@@ -411,10 +420,7 @@ struct ToasttyTranscriptView: View {
         olderHistoryControl
 
         let items = displayItems
-        let entryContext: TranscriptResponseEntryContext? = entryScrollPosition.selectedTarget.flatMap { target in
-            guard case .responseStart(let blockID) = target else { return nil }
-            return responseEntryContext(for: blockID, items: items)
-        }
+        let entryContext = scrollTaskKey.responseContext
         ForEach(items) { item in
             displayItemView(item)
                 .background(alignment: .bottom) {
@@ -424,7 +430,16 @@ struct ToasttyTranscriptView: View {
                         Color.clear
                             .frame(height: Self.responseEntryContextHeight - Self.transcriptStackSpacing)
                             .id(entryContext.target)
+                            .background {
+                                entryMeasurement(for: entryContext.target)
+                            }
                             .accessibilityHidden(true)
+                    }
+                }
+                .background {
+                    if let entryContext,
+                       item.id == entryContext.target || item.id == scrollTaskKey.response {
+                        entryMeasurement(for: item.id)
                     }
                 }
                 .id(item.id)
@@ -460,6 +475,38 @@ struct ToasttyTranscriptView: View {
         Color.clear
             .frame(height: 2)
             .id(ToasttyConversationScrollTarget.liveEdge)
+    }
+
+    @ViewBuilder
+    private func entryMeasurement(for target: ToasttyConversationScrollTarget) -> some View {
+        if state.blocks.count > Self.eagerLayoutBlockLimit {
+            Color.clear
+                .onGeometryChange(for: Bool.self) { geometry in
+                    geometry.size.width > 0
+                } action: { isMeasured in
+                    if isMeasured, !measuredEntryTargets.contains(target) {
+                        measuredEntryTargets.insert(target)
+                    }
+                }
+        }
+    }
+
+    private var scrollTaskKey: TranscriptScrollTaskKey {
+        let command = scrollCoordinator.command
+        guard case .responseStart(let blockID) = command?.target else {
+            // A late entry measurement must not cancel a send or jump task.
+            return TranscriptScrollTaskKey(command: command)
+        }
+        let response = ToasttyConversationScrollTarget.transcript(blockID)
+        let context = responseEntryContext(for: blockID, items: displayItems)
+        let needsMeasurement = state.blocks.count > Self.eagerLayoutBlockLimit
+        return TranscriptScrollTaskKey(
+            command: command,
+            response: response,
+            responseContext: context,
+            responseMeasured: !needsMeasurement || measuredEntryTargets.contains(response),
+            contextMeasured: !needsMeasurement || measuredEntryTargets.contains(context.target)
+        )
     }
 
     private func sendTailItems(_ items: [ToasttySendPresentationItem]) -> some View {
@@ -736,6 +783,7 @@ struct ToasttyTranscriptView: View {
 
     private func execute(
         _ command: TranscriptScrollCoordinator.Command,
+        responseContext: TranscriptResponseEntryContext?,
         using proxy: ScrollViewProxy
     ) {
         let target: ToasttyConversationScrollTarget
@@ -748,7 +796,7 @@ struct ToasttyTranscriptView: View {
             target = .transcript(blockID)
             anchor = .top
         case .responseStart(let blockID):
-            target = responseEntryContext(for: blockID, items: displayItems).target
+            target = responseContext?.target ?? .transcript(blockID)
             anchor = .top
         }
 
@@ -1121,7 +1169,7 @@ struct TranscriptScrollCoordinator: Equatable {
     private(set) var command: Command?
     private var nextSequence: UInt64 = 0
     private var nextJumpRequest: UInt64 = 0
-    private var liveEdgeLayoutGeneration: UInt64 = 0
+    private var layoutGeneration: UInt64 = 0
     private var executedCommandSequence: UInt64?
 
     var ownsLiveEdge: Bool {
@@ -1163,6 +1211,22 @@ struct TranscriptScrollCoordinator: Equatable {
         issueLiveEdge(owner: .automatic, motion: .stable)
     }
 
+    mutating func recordPendingHistoryLayoutChange() {
+        guard hasPendingHistoryMove else { return }
+        advanceLayoutGeneration()
+    }
+
+    var hasPendingHistoryMove: Bool {
+        guard let command else { return false }
+        return command.target != .liveEdge && executedCommandSequence != command.sequence
+    }
+
+    mutating func abandonHistoryMove(_ pending: Command) {
+        guard command == pending, hasPendingHistoryMove else { return }
+        command = nil
+        executedCommandSequence = nil
+    }
+
     mutating func requestSend(_ request: UInt64) {
         issueLiveEdge(owner: .send(request), motion: .immediate)
     }
@@ -1175,7 +1239,7 @@ struct TranscriptScrollCoordinator: Equatable {
     mutating func reinforceLiveEdge() {
         let owner = liveEdgeOwner ?? .automatic
         liveEdgeOwner = owner
-        advanceLiveEdgeLayoutGeneration()
+        advanceLayoutGeneration()
 
         if let command,
            command.target == .liveEdge,
@@ -1250,7 +1314,7 @@ struct TranscriptScrollCoordinator: Equatable {
         else { return nil }
         return ExecutionCandidate(
             command: command,
-            layoutGeneration: liveEdgeLayoutGeneration
+            layoutGeneration: layoutGeneration
         )
     }
 
@@ -1258,7 +1322,7 @@ struct TranscriptScrollCoordinator: Equatable {
     /// observed by the task instead of being silently consumed.
     mutating func markExecuted(_ candidate: ExecutionCandidate) -> Bool {
         guard command == candidate.command,
-              liveEdgeLayoutGeneration == candidate.layoutGeneration,
+              layoutGeneration == candidate.layoutGeneration,
               executedCommandSequence != candidate.command.sequence
         else { return false }
         executedCommandSequence = candidate.command.sequence
@@ -1272,12 +1336,12 @@ struct TranscriptScrollCoordinator: Equatable {
 
     private mutating func issueLiveEdge(owner: LiveEdgeOwner, motion: Motion) {
         liveEdgeOwner = owner
-        advanceLiveEdgeLayoutGeneration()
+        advanceLayoutGeneration()
         issue(target: .liveEdge, motion: motion, liveEdgeOwner: owner)
     }
 
-    private mutating func advanceLiveEdgeLayoutGeneration() {
-        liveEdgeLayoutGeneration &+= 1
+    private mutating func advanceLayoutGeneration() {
+        layoutGeneration &+= 1
     }
 
     private mutating func issue(
@@ -1293,6 +1357,22 @@ struct TranscriptScrollCoordinator: Equatable {
             motion: motion,
             liveEdgeOwner: liveEdgeOwner
         )
+    }
+}
+
+struct TranscriptScrollTaskKey: Equatable {
+    let command: TranscriptScrollCoordinator.Command?
+    var response: ToasttyConversationScrollTarget?
+    var responseContext: TranscriptResponseEntryContext?
+    var responseMeasured = true
+    var contextMeasured = true
+
+    var materializationTarget: ToasttyConversationScrollTarget? {
+        guard case .responseStart = command?.target,
+              let response, let responseContext else { return nil }
+        if !responseMeasured { return response }
+        if !contextMeasured { return responseContext.markerHostID ?? responseContext.target }
+        return nil
     }
 }
 
